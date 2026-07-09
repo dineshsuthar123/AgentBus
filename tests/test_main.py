@@ -108,3 +108,19 @@ def test_cli_accepts_multi_workflow(monkeypatch, capsys):
     assert "multi done" in output
     assert seen_tasks == ["Create calculator"]
     assert seen_configs[0].workspace_dir == "workspace"
+
+
+def test_cli_show_context_prints_and_exits_without_task(monkeypatch, capsys):
+    FakeLoop.seen_configs = []
+    FakeLoop.seen_tasks = []
+    monkeypatch.setattr(main_module, "AgentLoop", FakeLoop)
+    monkeypatch.setattr(main_module, "build_context_pack", lambda config, task=None: "CTX")
+    monkeypatch.setattr(sys, "argv", ["agentbus.main", "--show-context"])
+
+    main_module.main()
+
+    output = capsys.readouterr().out
+
+    assert "CTX" in output
+    assert "Task:" not in output
+    assert FakeLoop.seen_tasks == []

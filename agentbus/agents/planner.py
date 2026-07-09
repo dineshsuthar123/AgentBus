@@ -29,7 +29,13 @@ class PlannerAgent(BaseAgent):
             model=model,
         )
 
-    def plan(self, user_task: str, file_list: str | None = None) -> dict:
+    def plan(
+        self,
+        user_task: str,
+        file_list: str | None = None,
+        context_pack: str | None = None,
+    ) -> dict:
+        context = context_pack or f"Current file list:\n{file_list or 'No file list available.'}"
         prompt = f"""
 You are the AgentBus Planner Agent.
 Return ONLY valid JSON with this shape:
@@ -50,8 +56,8 @@ Return ONLY valid JSON with this shape:
 User task:
 {user_task}
 
-Current file list:
-{file_list or "No file list available."}
+Repo context:
+{context}
 """
         output = self.generate_json(prompt)
         return PlannerOutput(**output).model_dump()

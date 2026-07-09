@@ -46,6 +46,18 @@ Multi-agent mode runs a local Planner -> Coder -> Verifier -> Reviewer workflow:
 python -m agentbus.main --workflow multi "Create calculator.py with tests"
 ```
 
+Print the local repo context pack without running an agent:
+
+```bash
+python -m agentbus.main --workspace workspace --show-context
+```
+
+Print context first, then continue into the selected workflow:
+
+```bash
+python -m agentbus.main --workflow multi --show-context "Create calculator tests"
+```
+
 Useful overrides:
 
 ```bash
@@ -56,12 +68,32 @@ python -m agentbus.main "Create hello.py and run it" --model qwen2.5-coder:7b --
 
 The multi-agent workflow is intentionally small and local:
 
-- Planner creates a structured goal, implementation steps, test strategy, and done criteria.
+- Planner receives a compact repo context pack, then creates a structured goal, implementation steps, test strategy, and done criteria.
 - Coder reuses the existing AgentBus loop and tools to execute the plan.
-- Verifier runs a safe test command, defaulting to `python -m pytest` when `tests/` exists in the workspace.
+- Verifier runs a detected safe test command when one is available.
 - Reviewer checks the original task, plan, git diff, and verifier output, then approves or requests fixes.
 
 If the reviewer rejects the result, AgentBus allows one retry through the Coder and Verifier before producing the final summary.
+
+## Repo Context Builder
+
+Before multi-agent planning, AgentBus scans the configured workspace and builds a compact text summary for the agents. The context pack includes:
+
+- Workspace overview, files, directories, and ignored generated folders.
+- Detected languages, frameworks, and package managers.
+- Important files, config files, entrypoints, and test files.
+- A suggested test command and confidence.
+- Obvious task-relevant file names when the task mentions them.
+- Safety notes for workspace-only file access and `shell=False` commands.
+
+Detection is heuristic-based and dependency-free. Examples:
+
+- `requirements.txt`, `pyproject.toml`, `pytest.ini`, or Python tests suggest Python and `python -m pytest`.
+- `package.json` with a `test` script suggests Node.js and `npm test`.
+- `pom.xml` suggests Maven Java and `mvn test`.
+- `build.gradle` or `build.gradle.kts` suggests Gradle and `gradle test`.
+- `go.mod` suggests Go and `go test ./...`.
+- `Cargo.toml` suggests Rust and `cargo test`.
 
 The runner also reads these environment variables:
 
@@ -88,6 +120,7 @@ AgentBus is intentionally local and conservative:
 
 - AgentBus is a local runner, not a multi-tenant service.
 - The multi-agent workflow supports one reviewer retry for now.
+- Repo context is heuristic-based; it does not read whole file contents, build embeddings, or infer complex architecture.
 - There is no web dashboard, authentication, billing, cloud deployment, or Kubernetes integration.
 - There is no complex vector memory or GitHub PR automation yet.
 - Model quality and latency depend on the local Ollama model and machine.

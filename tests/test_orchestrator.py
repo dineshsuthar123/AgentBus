@@ -20,7 +20,11 @@ PLAN = {
 
 
 class FakePlanner:
-    def plan(self, user_task, file_list=None):
+    def __init__(self):
+        self.context_pack = None
+
+    def plan(self, user_task, file_list=None, context_pack=None):
+        self.context_pack = context_pack
         return PLAN
 
 
@@ -87,6 +91,7 @@ def log_events(tmp_path):
 
 def test_orchestrator_happy_path_uses_agents_and_logs(tmp_path):
     coder = FakeCoder()
+    planner = FakePlanner()
     reviewer = FakeReviewer(
         [
             {
@@ -99,7 +104,7 @@ def test_orchestrator_happy_path_uses_agents_and_logs(tmp_path):
     )
     orchestrator = MultiAgentOrchestrator(
         config=config(tmp_path),
-        planner=FakePlanner(),
+        planner=planner,
         coder=coder,
         reviewer=reviewer,
         verifier=FakeVerifier(),
@@ -109,9 +114,14 @@ def test_orchestrator_happy_path_uses_agents_and_logs(tmp_path):
 
     assert result.approved is True
     assert result.retry_performed is False
+    assert planner.context_pack is not None
+    assert "Repo Context Pack" in planner.context_pack
     assert len(coder.calls) == 1
     assert "Approved by reviewer" in result.final_summary
     assert "planner_started" in log_events(tmp_path)
+    assert "repo_scan_started" in log_events(tmp_path)
+    assert "test_command_detected" in log_events(tmp_path)
+    assert "context_pack_created" in log_events(tmp_path)
     assert "orchestration_finished" in log_events(tmp_path)
 
 

@@ -1,6 +1,9 @@
 import argparse
 
 from agentbus.config import AgentBusConfig
+from agentbus.repo.context_pack import ContextPackBuilder
+from agentbus.repo.scanner import RepoScanner
+from agentbus.repo.test_detection import TestCommandDetector
 from agentbus.runtime.loop import AgentLoop
 from agentbus.runtime.orchestrator import MultiAgentOrchestrator
 
@@ -17,6 +20,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", help="Override the Ollama model name.")
     parser.add_argument("--workspace", help="Override the workspace directory.")
     parser.add_argument("--max-steps", type=int, help="Override the maximum step count.")
+    parser.add_argument(
+        "--show-context",
+        action="store_true",
+        help="Print the repo context pack before running, or exit if no task is provided.",
+    )
     return parser.parse_args()
 
 
@@ -26,17 +34,25 @@ def main():
     print("AgentBus Local Runner")
     print("---------------------")
 
-    task = args.task or input("Task: ").strip()
-
-    if not task:
-        print("No task provided.")
-        return
-
     config = AgentBusConfig.from_env().with_overrides(
         model_name=args.model,
         workspace_dir=args.workspace,
         max_steps=args.max_steps,
     )
+
+    task = args.task
+
+    if args.show_context:
+        print(build_context_pack(config, task))
+
+        if not task:
+            return
+
+    task = task or input("Task: ").strip()
+
+    if not task:
+        print("No task provided.")
+        return
 
     print(f"Task: {task}")
     print(f"Workspace: {config.workspace_dir}")
@@ -63,6 +79,12 @@ def main():
 
     print("\nFinal result:")
     print(result)
+
+
+def build_context_pack(config: AgentBusConfig, task: str | None = None) -> str:
+    scan_result = RepoScanner(workspace=config.workspace_dir).scan()
+    test_detection = TestCommandDetector(workspace=config.workspace_dir).detect()
+    return ContextPackBuilder().build(scan_result, test_detection, user_task=task)
 
 
 if __name__ == "__main__":
