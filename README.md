@@ -58,6 +58,18 @@ Print context first, then continue into the selected workflow:
 python -m agentbus.main --workflow multi --show-context "Create calculator tests"
 ```
 
+Create a task branch and commit approved changes:
+
+```bash
+python -m agentbus.main --workflow multi --create-branch --commit "Add calculator tests"
+```
+
+Create a branch, commit, push, and open a GitHub PR:
+
+```bash
+python -m agentbus.main --workflow multi --create-branch --commit --open-pr "Add calculator tests"
+```
+
 Useful overrides:
 
 ```bash
@@ -95,6 +107,18 @@ Detection is heuristic-based and dependency-free. Examples:
 - `go.mod` suggests Go and `go test ./...`.
 - `Cargo.toml` suggests Rust and `cargo test`.
 
+## Git And PR Workflow
+
+AgentBus can optionally manage a local engineering workflow after the multi-agent reviewer approves the work:
+
+- `--create-branch` creates a safe task branch before coding.
+- `--branch-name` supplies an explicit branch name.
+- `--commit` commits approved changes after verifier success and reviewer approval.
+- `--open-pr` pushes the branch and opens a GitHub PR with the `gh` CLI.
+- `--pr-base` selects the PR base branch, defaulting to `main`.
+
+PR creation is opt-in only. AgentBus does not open a PR unless `--open-pr` is passed explicitly, and it requires a successful commit first. The generated PR body includes the user task, planner summary, verifier result, reviewer summary, changed files, test command, and safety notes.
+
 The runner also reads these environment variables:
 
 - `AGENTBUS_MODEL`
@@ -114,6 +138,8 @@ AgentBus is intentionally local and conservative:
 - Commands must be JSON arrays of strings and run with `shell=False`.
 - Only a small command allowlist is available.
 - Obvious destructive commands, destructive arguments, shell syntax, and remote access helpers are blocked.
+- Git automation uses safe `git` subprocess calls with `shell=False`.
+- AgentBus does not reset, clean, rebase, force push, deploy, or apply infrastructure.
 - Run logs are JSONL files in the configured runs directory and do not include environment variables or secrets.
 
 ## Current Limitations
@@ -122,6 +148,7 @@ AgentBus is intentionally local and conservative:
 - The multi-agent workflow supports one reviewer retry for now.
 - Repo context is heuristic-based; it does not read whole file contents, build embeddings, or infer complex architecture.
 - There is no web dashboard, authentication, billing, cloud deployment, or Kubernetes integration.
-- There is no complex vector memory or GitHub PR automation yet.
+- There is no complex vector memory yet.
+- PR creation depends on the GitHub CLI being installed and authenticated.
 - Model quality and latency depend on the local Ollama model and machine.
 - The command allowlist is intentionally narrow, so some legitimate workflows may need explicit tool support before they are available.
