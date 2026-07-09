@@ -1,0 +1,61 @@
+from typing import Literal
+
+from pydantic import BaseModel
+
+from agentbus.agents.base import BaseAgent
+from agentbus.config import AgentBusConfig
+
+
+class PlanStep(BaseModel):
+    id: str
+    title: str
+    description: str
+    risk: Literal["low", "medium", "high"]
+
+
+class PlannerOutput(BaseModel):
+    goal: str
+    steps: list[PlanStep]
+    test_strategy: str
+    done_criteria: list[str]
+
+
+class PlannerAgent(BaseAgent):
+    def __init__(self, config: AgentBusConfig | None = None, model=None):
+        super().__init__(
+            name="planner",
+            role="Break a user task into a small, testable local implementation plan.",
+            config=config,
+            model=model,
+        )
+
+    def plan(self, user_task: str, file_list: str | None = None) -> dict:
+        prompt = f"""
+You are the AgentBus Planner Agent.
+Return ONLY valid JSON with this shape:
+{{
+  "goal": "...",
+  "steps": [
+    {{
+      "id": "step-1",
+      "title": "...",
+      "description": "...",
+      "risk": "low|medium|high"
+    }}
+  ],
+  "test_strategy": "...",
+  "done_criteria": ["..."]
+}}
+
+User task:
+{user_task}
+
+Current file list:
+{file_list or "No file list available."}
+"""
+        output = self.generate_json(prompt)
+        return PlannerOutput(**output).model_dump()
+
+    def summarize(self, plan: dict) -> str:
+        step_count = len(plan.get("steps", []))
+        return f"{plan.get('goal', 'No goal')} ({step_count} steps)"

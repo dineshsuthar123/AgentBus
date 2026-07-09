@@ -1,6 +1,6 @@
 # AgentBus
 
-AgentBus Local Runner is a local single-agent coding runtime for small software engineering tasks. It asks an Ollama-hosted coding model for JSON actions, executes a small set of workspace-scoped tools, records a machine-readable run log, and stops when the model returns a finish action or the configured step limit is reached.
+AgentBus Local Runner is a local coding runtime for small software engineering tasks. It asks an Ollama-hosted coding model for JSON actions, executes a small set of workspace-scoped tools, records machine-readable run logs, and stops when the work is finished or the configured step limit is reached.
 
 ## Setup
 
@@ -26,7 +26,9 @@ python -m pytest
 
 ## Run The CLI
 
-Interactive mode:
+Single-agent mode is the default. It sends the task directly to one AgentBus tool-using loop.
+
+Interactive single-agent mode:
 
 ```bash
 python -m agentbus.main
@@ -38,11 +40,28 @@ Command-line task:
 python -m agentbus.main "Create hello.py and run it"
 ```
 
+Multi-agent mode runs a local Planner -> Coder -> Verifier -> Reviewer workflow:
+
+```bash
+python -m agentbus.main --workflow multi "Create calculator.py with tests"
+```
+
 Useful overrides:
 
 ```bash
 python -m agentbus.main "Create hello.py and run it" --model qwen2.5-coder:7b --workspace workspace --max-steps 15
 ```
+
+## Multi-Agent Workflow
+
+The multi-agent workflow is intentionally small and local:
+
+- Planner creates a structured goal, implementation steps, test strategy, and done criteria.
+- Coder reuses the existing AgentBus loop and tools to execute the plan.
+- Verifier runs a safe test command, defaulting to `python -m pytest` when `tests/` exists in the workspace.
+- Reviewer checks the original task, plan, git diff, and verifier output, then approves or requests fixes.
+
+If the reviewer rejects the result, AgentBus allows one retry through the Coder and Verifier before producing the final summary.
 
 The runner also reads these environment variables:
 
@@ -67,7 +86,8 @@ AgentBus is intentionally local and conservative:
 
 ## Current Limitations
 
-- AgentBus is a local single-agent runner, not a multi-tenant service.
+- AgentBus is a local runner, not a multi-tenant service.
+- The multi-agent workflow supports one reviewer retry for now.
 - There is no web dashboard, authentication, billing, cloud deployment, or Kubernetes integration.
 - There is no complex vector memory or GitHub PR automation yet.
 - Model quality and latency depend on the local Ollama model and machine.

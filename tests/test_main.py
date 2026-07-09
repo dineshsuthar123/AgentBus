@@ -1,4 +1,5 @@
 import sys
+from types import SimpleNamespace
 
 from agentbus import main as main_module
 
@@ -62,3 +63,48 @@ def test_cli_prompts_when_no_task(monkeypatch, capsys):
     assert "Task: Interactive task" in output
     assert "fake result" in output
     assert FakeLoop.seen_tasks == ["Interactive task"]
+
+
+def test_cli_accepts_multi_workflow(monkeypatch, capsys):
+    seen_configs = []
+    seen_tasks = []
+
+    class FakeOrchestrator:
+        def __init__(self, config):
+            seen_configs.append(config)
+
+        def run(self, task):
+            seen_tasks.append(task)
+            return SimpleNamespace(
+                planner_summary="Create calculator (1 steps)",
+                verifier_result={
+                    "command": ["python", "-m", "pytest"],
+                    "passed": True,
+                },
+                approved=True,
+                final_summary="multi done",
+            )
+
+    monkeypatch.setattr(main_module, "MultiAgentOrchestrator", FakeOrchestrator)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "agentbus.main",
+            "--workflow",
+            "multi",
+            "Create calculator",
+        ],
+    )
+
+    main_module.main()
+
+    output = capsys.readouterr().out
+
+    assert "Workflow: multi" in output
+    assert "Planner: Create calculator (1 steps)" in output
+    assert "Verifier: passed" in output
+    assert "Reviewer approved: True" in output
+    assert "multi done" in output
+    assert seen_tasks == ["Create calculator"]
+    assert seen_configs[0].workspace_dir == "workspace"

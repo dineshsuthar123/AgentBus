@@ -1,4 +1,5 @@
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -54,31 +55,38 @@ class CommandTools:
         }
 
     def run_command(self, command: list[str], timeout: int | None = None) -> str:
+        return self.run_command_result(command, timeout=timeout)["output"]
+
+    def run_command_result(self, command: list[str], timeout: int | None = None) -> dict:
         if not isinstance(command, list) or not all(
             isinstance(arg, str) for arg in command
         ):
-            return "Blocked: command must be list[str]."
+            return _blocked_result(command, "Blocked: command must be list[str].")
 
         if not command:
-            return "Blocked: empty command."
+            return _blocked_result(command, "Blocked: empty command.")
 
         timeout = timeout or self.timeout_seconds
         executable = Path(command[0]).name.lower().replace(".exe", "")
+        execution_command = list(command)
 
         if executable not in self.allowed_commands:
-            return f"Blocked command executable: {command[0]}"
+            return _blocked_result(command, f"Blocked command executable: {command[0]}")
 
         for arg in command:
             normalized = str(arg).lower()
             if normalized in self.blocked_args:
-                return f"Blocked unsafe argument: {arg}"
+                return _blocked_result(command, f"Blocked unsafe argument: {arg}")
 
             if any(token in normalized for token in self.blocked_shell_tokens):
-                return f"Blocked shell syntax in argument: {arg}"
+                return _blocked_result(command, f"Blocked shell syntax in argument: {arg}")
+
+        if executable in {"python", "python3"}:
+            execution_command[0] = sys.executable
 
         try:
             result = subprocess.run(
-                command,
+                execution_command,
                 cwd=self.workspace,
                 capture_output=True,
                 text=True,
@@ -88,18 +96,47 @@ class CommandTools:
 
             stdout = result.stdout.strip()
             stderr = result.stderr.strip()
+            output = _format_output(result.returncode, stdout, stderr)
 
-            return (
-                f"Exit code: {result.returncode}\n"
-                f"STDOUT:\n{stdout if stdout else '[empty]'}\n"
-                f"STDERR:\n{stderr if stderr else '[empty]'}"
-            )
+            return {
+                "command": command,
+                "exit_code": result.returncode,
+                "passed": result.returncode == 0,
+                "stdout": stdout,
+                "stderr": stderr,
+                "output": output,
+                "blocked": False,
+            }
 
         except subprocess.TimeoutExpired:
-            return f"Command timed out after {timeout} seconds."
+            return _blocked_result(
+                command,
+                f"Command timed out after {timeout} seconds.",
+                blocked=False,
+            )
 
         except FileNotFoundError:
-            return f"Command not found: {command[0]}"
+            return _blocked_result(command, f"Command not found: {command[0]}")
 
         except Exception as e:
-            return f"Command error: {str(e)}"
+            return _blocked_result(command, f"Command error: {str(e)}")
+
+
+def _format_output(exit_code: int, stdout: str, stderr: str) -> str:
+    return (
+        f"Exit code: {exit_code}\n"
+        f"STDOUT:\n{stdout if stdout else '[empty]'}\n"
+        f"STDERR:\n{stderr if stderr else '[empty]'}"
+    )
+
+
+def _blocked_result(command, message: str, blocked: bool = True) -> dict:
+    return {
+        "command": command if isinstance(command, list) else [],
+        "exit_code": None,
+        "passed": False,
+        "stdout": "",
+        "stderr": message,
+        "output": message,
+        "blocked": blocked,
+    }
