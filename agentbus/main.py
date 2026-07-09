@@ -25,6 +25,23 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print the repo context pack before running, or exit if no task is provided.",
     )
+    parser.add_argument(
+        "--create-branch",
+        action="store_true",
+        help="Create a safe task branch before running the multi-agent workflow.",
+    )
+    parser.add_argument("--branch-name", help="Explicit branch name to create.")
+    parser.add_argument(
+        "--commit",
+        action="store_true",
+        help="Commit approved multi-agent changes after verification.",
+    )
+    parser.add_argument(
+        "--open-pr",
+        action="store_true",
+        help="Push the committed branch and open a GitHub PR. Requires gh CLI.",
+    )
+    parser.add_argument("--pr-base", default="main", help="Base branch for PR creation.")
     return parser.parse_args()
 
 
@@ -60,16 +77,31 @@ def main():
     print(f"Workflow: {args.workflow}")
 
     if args.workflow == "multi":
-        orchestrator = MultiAgentOrchestrator(config=config)
+        orchestrator = MultiAgentOrchestrator(
+            config=config,
+            create_branch=args.create_branch,
+            branch_name=args.branch_name,
+            commit_changes=args.commit,
+            open_pr=args.open_pr,
+            pr_base=args.pr_base,
+        )
         result = orchestrator.run(task)
 
         print(f"Planner: {result.planner_summary}")
+        print(f"Branch: {result.git_branch or '[unchanged]'}")
+        print(f"Changed files: {result.changed_files or []}")
         print(
             "Verifier: "
             f"{'passed' if result.verifier_result['passed'] else 'failed'} "
             f"({result.verifier_result['command']})"
         )
         print(f"Reviewer approved: {result.approved}")
+        if result.commit_hash:
+            print(f"Commit: {result.commit_hash}")
+        if result.pr_url:
+            print(f"PR: {result.pr_url}")
+        if result.pr_error:
+            print(f"PR error: {result.pr_error}")
         print("\nFinal result:")
         print(result.final_summary)
         return
