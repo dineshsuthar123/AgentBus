@@ -1,5 +1,6 @@
 import json
 
+from agentbus.config import AgentBusConfig
 from agentbus.memory.run_log import RunLogger
 from agentbus.models.ollama import OllamaModel
 from agentbus.runtime.prompts import SYSTEM_PROMPT
@@ -12,20 +13,33 @@ from agentbus.tools.git_tools import GitTools
 class AgentLoop:
     def __init__(
         self,
-        workspace: str = "workspace",
-        model_name: str = "qwen2.5-coder:7b",
-        max_history_chars: int = 25_000,
+        workspace: str | None = None,
+        model_name: str | None = None,
+        max_history_chars: int | None = None,
+        config: AgentBusConfig | None = None,
     ):
-        self.workspace = workspace
-        self.model = OllamaModel(model=model_name)
-        self.fs = FileSystemTools(workspace=workspace)
-        self.cmd = CommandTools(workspace=workspace)
-        self.git = GitTools(workspace=workspace)
-        self.logger = RunLogger()
-        self.max_history_chars = max_history_chars
+        config = config or AgentBusConfig.from_env()
+        config = config.with_overrides(
+            model_name=model_name,
+            workspace_dir=workspace,
+            max_steps=None,
+        )
 
-    def run(self, user_task: str, max_steps: int = 12) -> str:
+        self.config = config
+        self.workspace = config.workspace_dir
+        self.model = OllamaModel(config=config)
+        self.fs = FileSystemTools(workspace=self.workspace)
+        self.cmd = CommandTools(
+            workspace=self.workspace,
+            timeout_seconds=config.command_timeout_seconds,
+        )
+        self.git = GitTools(workspace=self.workspace)
+        self.logger = RunLogger(log_dir=config.runs_dir)
+        self.max_history_chars = max_history_chars or config.max_history_chars
+
+    def run(self, user_task: str, max_steps: int | None = None) -> str:
         history = ""
+        max_steps = max_steps or self.config.max_steps
 
         self.logger.log("run_started", {
             "task": user_task,
@@ -33,24 +47,41 @@ class AgentLoop:
         })
 
         for step in range(1, max_steps + 1):
+            self.logger.log("step_started", {
+                "step": step,
+            })
+
             prompt = self._build_prompt(user_task, history)
 
             raw_action = None
+            action = None
 
             try:
                 raw_action = self.model.generate_json(prompt)
                 action = AgentAction(**raw_action)
-                observation = self._execute(action)
-
             except Exception as e:
-                observation = f"Runtime/model error: {str(e)}"
-                action = None
+                observation = f"Model output error: {str(e)}"
+                self.logger.log("model_error", {
+                    "step": step,
+                    "error": str(e),
+                    "raw_action": raw_action,
+                })
+            else:
+                self.logger.log("model_action", {
+                    "step": step,
+                    "action": raw_action,
+                })
 
-            self.logger.log("step", {
-                "step": step,
-                "raw_action": raw_action,
-                "observation": observation,
-            })
+                try:
+                    observation = self._execute(action)
+                except Exception as e:
+                    observation = f"Tool error: {str(e)}"
+
+                self.logger.log("tool_observation", {
+                    "step": step,
+                    "observation": observation,
+                })
+
 
             history += self._format_history(step, raw_action, observation)
             history = self._trim_history(history)

@@ -3,8 +3,9 @@ from pathlib import Path
 
 
 class CommandTools:
-    def __init__(self, workspace: str = "workspace"):
+    def __init__(self, workspace: str = "workspace", timeout_seconds: int = 90):
         self.workspace = Path(workspace).resolve()
+        self.timeout_seconds = timeout_seconds
 
         self.allowed_commands = {
             "python",
@@ -34,12 +35,34 @@ class CommandTools:
             "wget",
             "scp",
             "ssh",
+            "clean",
+            "reset",
+            "--hard",
+            "--force",
+            "--delete",
+            "-rf",
+            "-fr",
         }
 
-    def run_command(self, command: list[str], timeout: int = 90) -> str:
+        self.blocked_shell_tokens = {
+            "&&",
+            "||",
+            "|",
+            ">",
+            "<",
+            ";",
+        }
+
+    def run_command(self, command: list[str], timeout: int | None = None) -> str:
+        if not isinstance(command, list) or not all(
+            isinstance(arg, str) for arg in command
+        ):
+            return "Blocked: command must be list[str]."
+
         if not command:
             return "Blocked: empty command."
 
+        timeout = timeout or self.timeout_seconds
         executable = Path(command[0]).name.lower().replace(".exe", "")
 
         if executable not in self.allowed_commands:
@@ -49,6 +72,9 @@ class CommandTools:
             normalized = str(arg).lower()
             if normalized in self.blocked_args:
                 return f"Blocked unsafe argument: {arg}"
+
+            if any(token in normalized for token in self.blocked_shell_tokens):
+                return f"Blocked shell syntax in argument: {arg}"
 
         try:
             result = subprocess.run(

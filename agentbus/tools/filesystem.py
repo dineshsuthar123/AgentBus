@@ -7,6 +7,9 @@ class FileSystemTools:
         self.workspace.mkdir(parents=True, exist_ok=True)
 
     def _safe_path(self, path: str) -> Path:
+        if Path(path).is_absolute():
+            raise ValueError(f"Unsafe absolute path blocked: {path}")
+
         target = (self.workspace / path).resolve()
 
         try:

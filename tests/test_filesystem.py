@@ -20,6 +20,13 @@ def test_blocks_path_traversal(tmp_path):
         fs.write_file("../evil.txt", "bad")
 
 
+def test_blocks_absolute_path(tmp_path):
+    fs = FileSystemTools(workspace=str(tmp_path / "workspace"))
+
+    with pytest.raises(ValueError):
+        fs.write_file(str(tmp_path / "evil.txt"), "bad")
+
+
 def test_list_files(tmp_path):
     fs = FileSystemTools(workspace=str(tmp_path))
 
