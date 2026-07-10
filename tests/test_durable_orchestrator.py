@@ -2,7 +2,9 @@ import pytest
 
 from agentbus.config import AgentBusConfig
 from agentbus.execution.models import RunStatus, TaskStatus
+from agentbus.execution.models import FailureCategory
 from agentbus.execution.state_store import StateStore, StateStoreError
+from agentbus.models.errors import ModelAuthenticationError
 from agentbus.runtime.orchestrator import MultiAgentOrchestrator
 
 
@@ -49,6 +51,18 @@ class FakeCoder:
             }
         )
         return f"implemented {plan['steps'][0]['id']}"
+
+
+class FailingProviderCoder(FakeCoder):
+    def execute(self, user_task, plan, reviewer_feedback=None):
+        super().execute(user_task, plan, reviewer_feedback)
+        raise ModelAuthenticationError(
+            "Azure OpenAI authentication failed.",
+            provider="azure",
+            model="coder-deployment",
+            request_id="safe-request-id",
+            metadata={"api_key": "must-not-persist"},
+        )
 
 
 class FakeVerifier:
@@ -224,6 +238,38 @@ def test_durable_reviewer_rejection_prevents_commit_and_pr(tmp_path):
 
     assert report.status == RunStatus.FAILED
     assert report.reviewer_status == "rejected"
+    assert git_repository.commits == []
+    assert git_repository.pushes == []
+    assert pr_client.calls == []
+
+
+def test_durable_provider_failure_is_classified_and_prevents_git_finalization(
+    tmp_path,
+):
+    git_repository = FakeGitRepository()
+    pr_client = FakePRClient()
+    coder = FailingProviderCoder()
+    one_step = {**PLAN, "steps": [PLAN["steps"][0]]}
+    runner, store = orchestrator(
+        tmp_path,
+        planner=FakePlanner(one_step),
+        coder=coder,
+        git_repository=git_repository,
+        pr_client=pr_client,
+        commit_changes=True,
+        open_pr=True,
+    )
+
+    run_id = runner.create_durable_run("Create calculator")
+    report = runner.run_durable(run_id)
+    attempt = store.list_attempts(run_id, "step-1")[0]
+
+    assert report.status == RunStatus.FAILED
+    assert attempt.error_category == FailureCategory.POLICY_VIOLATION
+    assert attempt.metadata["provider_failure"]["provider"] == "azure"
+    assert attempt.metadata["provider_failure"]["model"] == "coder-deployment"
+    assert "must-not-persist" not in str(attempt.metadata)
+    assert len(coder.calls) == 1
     assert git_repository.commits == []
     assert git_repository.pushes == []
     assert pr_client.calls == []

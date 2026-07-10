@@ -15,6 +15,7 @@ from agentbus.git.repository import GitRepository, GitRepositoryError
 from agentbus.github.pr import GitHubPullRequestClient
 from agentbus.github.pr_body import build_pr_body
 from agentbus.memory.run_log import RunLogger
+from agentbus.models.router import ModelRouter, model_request_context
 from agentbus.repo.context_pack import ContextPackBuilder
 from agentbus.repo.scanner import RepoScanner
 from agentbus.repo.test_detection import TestCommandDetector
@@ -66,13 +67,28 @@ class MultiAgentOrchestrator:
         allow_existing_changes: bool = False,
         state_store: StateStore | None = None,
         durable_crash_hook=None,
+        model_router: ModelRouter | None = None,
     ):
         self.config = config or AgentBusConfig.from_env()
-        self.planner = planner or PlannerAgent(config=self.config)
-        self.coder = coder or CoderAgent(config=self.config)
-        self.reviewer = reviewer or ReviewerAgent(config=self.config)
-        self.verifier = verifier or Verifier(config=self.config)
         self.logger = logger or RunLogger(log_dir=self.config.runs_dir)
+        self.model_router = model_router or ModelRouter(
+            self.config,
+            logger=self.logger,
+        )
+        self.model_router.set_logger(self.logger)
+        self.planner = planner or PlannerAgent(
+            config=self.config,
+            model_router=self.model_router,
+        )
+        self.coder = coder or CoderAgent(
+            config=self.config,
+            model_router=self.model_router,
+        )
+        self.reviewer = reviewer or ReviewerAgent(
+            config=self.config,
+            model_router=self.model_router,
+        )
+        self.verifier = verifier or Verifier(config=self.config)
         self.scanner = scanner or RepoScanner(workspace=self.config.workspace_dir)
         self.test_detector = test_detector or TestCommandDetector(
             workspace=self.config.workspace_dir
@@ -95,20 +111,28 @@ class MultiAgentOrchestrator:
         self.durable_crash_hook = durable_crash_hook
 
     def run(self, user_task: str) -> OrchestrationResult:
-        self.logger.log("run_started", {"workflow": "multi", "task": user_task})
+        self.logger.log(
+            "run_started",
+            {
+                "workflow": "multi",
+                "task_chars": len(user_task),
+            },
+        )
 
         git_branch = self._prepare_git_workflow(user_task)
         context_pack = self._build_context_pack(user_task)
         self.logger.log("planner_started", {})
-        plan = self.planner.plan(user_task, context_pack=context_pack)
-        self.logger.log("planner_output", plan)
+        with model_request_context(run_id=self.logger.run_id):
+            plan = self.planner.plan(user_task, context_pack=context_pack)
+        self.logger.log("planner_output", _plan_log_metadata(plan))
 
         coder_summaries = []
         self.logger.log("coder_started", {"attempt": 1})
-        coder_summaries.append(self.coder.execute(user_task, plan))
+        with model_request_context(run_id=self.logger.run_id):
+            coder_summaries.append(self.coder.execute(user_task, plan))
 
         verifier_result = self.verifier.verify()
-        self.logger.log("verifier_output", verifier_result)
+        self.logger.log("verifier_output", _verifier_log_metadata(verifier_result))
 
         reviewer_result = self._review(user_task, plan, verifier_result)
         retry_performed = False
@@ -119,19 +143,25 @@ class MultiAgentOrchestrator:
                 "retry_started",
                 {
                     "reason": "reviewer_rejected",
-                    "required_fixes": reviewer_result.get("required_fixes", []),
+                    "required_fix_count": len(
+                        reviewer_result.get("required_fixes", [])
+                    ),
                 },
             )
             self.logger.log("coder_started", {"attempt": 2})
-            coder_summaries.append(
-                self.coder.execute(
-                    user_task,
-                    plan,
-                    reviewer_feedback=reviewer_result,
+            with model_request_context(run_id=self.logger.run_id):
+                coder_summaries.append(
+                    self.coder.execute(
+                        user_task,
+                        plan,
+                        reviewer_feedback=reviewer_result,
+                    )
                 )
-            )
             verifier_result = self.verifier.verify()
-            self.logger.log("verifier_output", verifier_result)
+            self.logger.log(
+                "verifier_output",
+                _verifier_log_metadata(verifier_result),
+            )
             reviewer_result = self._review(user_task, plan, verifier_result)
 
         approved = bool(reviewer_result["approved"])
@@ -164,10 +194,10 @@ class MultiAgentOrchestrator:
             {
                 "approved": approved,
                 "retry_performed": retry_performed,
-                "summary": final_summary,
+                "summary_chars": len(final_summary),
             },
         )
-        self.logger.log("run_finished", {"summary": final_summary})
+        self.logger.log("run_finished", {"summary_chars": len(final_summary)})
         return result
 
     @property
@@ -180,9 +210,14 @@ class MultiAgentOrchestrator:
         """Plan and persist an opt-in durable run without executing a task."""
         run_id = uuid.uuid4().hex
         self.logger = RunLogger(log_dir=self.config.runs_dir, run_id=run_id)
+        self.model_router.set_logger(self.logger)
         self.logger.log(
             "run_started",
-            {"workflow": "multi", "durable": True, "task": user_task},
+            {
+                "workflow": "multi",
+                "durable": True,
+                "task_chars": len(user_task),
+            },
         )
         git_branch = self._prepare_git_workflow(user_task)
         initial_head = None
@@ -191,8 +226,9 @@ class MultiAgentOrchestrator:
 
         context_pack = self._build_context_pack(user_task)
         self.logger.log("planner_started", {})
-        plan = self.planner.plan(user_task, context_pack=context_pack)
-        self.logger.log("planner_output", plan)
+        with model_request_context(run_id=run_id):
+            plan = self.planner.plan(user_task, context_pack=context_pack)
+        self.logger.log("planner_output", _plan_log_metadata(plan))
         metadata = {
             "git": {
                 "requested": self._git_workflow_requested(),
@@ -202,14 +238,16 @@ class MultiAgentOrchestrator:
                 "pr_base": self.pr_base,
                 "branch": git_branch,
                 "initial_head": initial_head,
-            }
+            },
+            "model_routing": self.config.safe_model_summary(),
+            "planner_model_result": _last_model_result(self.planner),
         }
         engine = self._durable_engine(run_id)
         engine.create_run(
             user_task,
             plan,
             workflow_type="multi",
-            model=self.config.model_name,
+            model=self.config.resolve_model("coder"),
             workspace=self.config.workspace_dir,
             context_summary=context_pack,
             metadata=metadata,
@@ -583,19 +621,22 @@ class MultiAgentOrchestrator:
         verifier_result: dict[str, Any],
     ) -> dict[str, Any]:
         git_diff = self.git.git_diff()
-        reviewer_result = self.reviewer.review(
-            user_task=user_task,
-            plan=plan,
-            git_diff=git_diff,
-            test_output=verifier_result.get("output"),
-        )
+        with model_request_context(run_id=self.logger.run_id):
+            reviewer_result = self.reviewer.review(
+                user_task=user_task,
+                plan=plan,
+                git_diff=git_diff,
+                test_output=verifier_result.get("output"),
+            )
         self.logger.log(
             "reviewer_output",
             {
                 "approved": reviewer_result["approved"],
-                "issues": reviewer_result.get("issues", []),
-                "summary": reviewer_result.get("summary", ""),
-                "required_fixes": reviewer_result.get("required_fixes", []),
+                "issue_count": len(reviewer_result.get("issues", [])),
+                "summary_chars": len(reviewer_result.get("summary", "")),
+                "required_fix_count": len(
+                    reviewer_result.get("required_fixes", [])
+                ),
             },
         )
         return reviewer_result
@@ -617,3 +658,32 @@ class MultiAgentOrchestrator:
     def _planner_summary(self, plan: dict[str, Any]) -> str:
         step_count = len(plan.get("steps", []))
         return f"{plan.get('goal', 'No goal')} ({step_count} steps)"
+
+
+def _last_model_result(agent) -> dict[str, Any] | None:
+    result = getattr(getattr(agent, "model", None), "last_result", None)
+    return result.event_metadata() if result is not None else None
+
+
+def _plan_log_metadata(plan: dict[str, Any]) -> dict[str, Any]:
+    steps = plan.get("steps", [])
+    return {
+        "goal_chars": len(str(plan.get("goal", ""))),
+        "step_count": len(steps) if isinstance(steps, list) else 0,
+        "risks": [
+            step.get("risk")
+            for step in steps
+            if isinstance(step, dict) and step.get("risk")
+        ],
+    }
+
+
+def _verifier_log_metadata(result: dict[str, Any]) -> dict[str, Any]:
+    output = result.get("output")
+    return {
+        "passed": bool(result.get("passed")),
+        "command": result.get("command", []),
+        "exit_code": result.get("exit_code"),
+        "reason_chars": len(str(result.get("reason", ""))),
+        "output_chars": len(output) if isinstance(output, str) else 0,
+    }

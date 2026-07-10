@@ -36,3 +36,21 @@ def test_run_log_redacts_secret_shaped_values(tmp_path):
     event = json.loads(content)
     assert event["data"]["token"] == "[REDACTED]"
     assert "hunter2" not in content
+
+
+def test_run_log_redacts_url_queries_and_bearer_tokens(tmp_path):
+    logger = RunLogger(log_dir=str(tmp_path), run_id="safe-url-run")
+    logger.log(
+        "security_event",
+        {
+            "message": (
+                "Bearer token-value "
+                "https://example.test/path?sig=credential-value"
+            )
+        },
+    )
+
+    content = logger.log_file.read_text(encoding="utf-8")
+    assert "token-value" not in content
+    assert "credential-value" not in content
+    assert "[REDACTED]" in content

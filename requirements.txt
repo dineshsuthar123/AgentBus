@@ -1,3 +1,5 @@
 requests
 pydantic>=2
+openai>=1.66
+jsonschema>=4
 pytest

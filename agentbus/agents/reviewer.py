@@ -1,19 +1,25 @@
 import json
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from agentbus.agents.base import BaseAgent
 from agentbus.config import AgentBusConfig
+from agentbus.models.router import ModelRouter
+from agentbus.models.types import ModelRole
 
 
 class ReviewIssue(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     severity: Literal["low", "medium", "high"]
     message: str
     file: str | None = None
 
 
 class ReviewerOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     approved: bool
     issues: list[ReviewIssue]
     summary: str
@@ -21,12 +27,19 @@ class ReviewerOutput(BaseModel):
 
 
 class ReviewerAgent(BaseAgent):
-    def __init__(self, config: AgentBusConfig | None = None, model=None):
+    def __init__(
+        self,
+        config: AgentBusConfig | None = None,
+        model=None,
+        model_router: ModelRouter | None = None,
+    ):
         super().__init__(
             name="reviewer",
             role="Review local changes against the task, plan, diff, and tests.",
             config=config,
             model=model,
+            model_role=ModelRole.REVIEWER,
+            model_router=model_router,
         )
 
     def review(
@@ -64,5 +77,5 @@ Git diff:
 Test output:
 {test_output or "No test output available."}
 """
-        output = self.generate_json(prompt)
+        output = self.generate_json(prompt, schema=ReviewerOutput)
         return ReviewerOutput(**output).model_dump()

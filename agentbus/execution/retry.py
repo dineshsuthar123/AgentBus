@@ -1,11 +1,22 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 from pydantic import ValidationError
 
 from agentbus.execution.models import FailureCategory, RetryPolicy
+from agentbus.models.errors import (
+    ModelOutputError,
+    ModelProviderError,
+    ModelRateLimitError,
+    ModelSchemaValidationError,
+    ModelServiceUnavailableError,
+    ModelTimeoutError,
+    ModelTransportError,
+)
+from agentbus.security.redaction import redact_text
 
 
 class TaskExecutionError(RuntimeError):
@@ -26,6 +37,7 @@ class FailureClassification:
     category: FailureCategory
     retryable: bool | None
     message: str
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -39,31 +51,71 @@ class FailureClassifier:
     """Maps executor failures into stable categories without inspecting secrets."""
 
     def classify(self, error: Exception) -> FailureClassification:
+        if isinstance(error, (ModelSchemaValidationError, ModelOutputError)):
+            return FailureClassification(
+                FailureCategory.MODEL_OUTPUT_ERROR,
+                False,
+                error.safe_message,
+                error.safe_metadata(),
+            )
+
+        if isinstance(
+            error,
+            (
+                ModelTimeoutError,
+                ModelTransportError,
+                ModelRateLimitError,
+                ModelServiceUnavailableError,
+            ),
+        ):
+            return FailureClassification(
+                FailureCategory.MODEL_TRANSPORT_ERROR,
+                error.retryable,
+                error.safe_message,
+                error.safe_metadata(),
+            )
+
+        if isinstance(error, ModelProviderError):
+            return FailureClassification(
+                FailureCategory.POLICY_VIOLATION,
+                False,
+                error.safe_message,
+                error.safe_metadata(),
+            )
+
         if isinstance(error, TaskExecutionError):
-            return FailureClassification(error.category, error.retryable, str(error))
+            return FailureClassification(
+                error.category,
+                error.retryable,
+                redact_text(str(error)) or error.category.value,
+            )
 
         if isinstance(error, (json.JSONDecodeError, ValidationError)):
             return FailureClassification(
                 FailureCategory.MODEL_OUTPUT_ERROR,
                 None,
-                str(error),
+                redact_text(str(error)) or "Model output validation failed.",
             )
 
         if isinstance(error, (ConnectionError, TimeoutError)):
             return FailureClassification(
                 FailureCategory.MODEL_TRANSPORT_ERROR,
                 None,
-                str(error),
+                redact_text(str(error)) or "Model transport failed.",
             )
 
         if isinstance(error, (PermissionError, ValueError)):
             return FailureClassification(
                 FailureCategory.POLICY_VIOLATION,
                 False,
-                str(error),
+                redact_text(str(error)) or "Policy validation failed.",
             )
 
-        return FailureClassification(FailureCategory.UNKNOWN, None, str(error))
+        return FailureClassification(
+            FailureCategory.UNKNOWN,
+            None,
+            redact_text(str(error)) or "Unknown task execution failure.",
+        )
 
 
 class RetryController:

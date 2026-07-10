@@ -152,6 +152,54 @@ def test_cli_resume_uses_persisted_workspace_without_prompt(monkeypatch, capsys,
     assert "Status: pending" in capsys.readouterr().out
 
 
+def test_cli_resume_restores_persisted_provider_and_role_routes(
+    monkeypatch,
+    capsys,
+    tmp_path,
+):
+    settings = config(tmp_path)
+    store = StateStore(settings.state_database_path)
+    DurableExecutionEngine(store).create_run(
+        "CLI task",
+        simple_plan(),
+        model="coder-deployment",
+        workspace=settings.workspace_dir,
+        run_id="azure-run",
+        metadata={
+            "model_routing": {
+                "provider": "azure",
+                "fallback_provider": "ollama",
+                "fallback_enabled": False,
+                "routes": {
+                    "default": {"model": "default-deployment"},
+                    "planner": {"model": "planner-deployment"},
+                    "coder": {"model": "coder-deployment"},
+                    "reviewer": {"model": "reviewer-deployment"},
+                },
+            }
+        },
+    )
+    patch_config(monkeypatch, settings)
+    seen = {}
+
+    class FakeOrchestrator:
+        def __init__(self, config, state_store):
+            seen["config"] = config
+            self.store = state_store
+
+        def resume_durable(self, run_id):
+            return DurableExecutionEngine(self.store).get_report(run_id)
+
+    monkeypatch.setattr(main_module, "MultiAgentOrchestrator", FakeOrchestrator)
+    monkeypatch.setattr(sys, "argv", ["agentbus.main", "--resume", "azure-run"])
+
+    assert main_module.main() == 0
+    assert seen["config"].provider_name == "azure"
+    assert seen["config"].resolve_model("planner") == "planner-deployment"
+    assert seen["config"].resolve_model("coder") == "coder-deployment"
+    assert "Status: pending" in capsys.readouterr().out
+
+
 def test_cli_approve_and_reject_persist_decisions(monkeypatch, capsys, tmp_path):
     settings = config(tmp_path)
     store, engine = create_run(settings, run_id="approve-run", risk="high")

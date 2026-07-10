@@ -1,7 +1,10 @@
+import inspect
 import json
 
 from agentbus.agents.base import BaseAgent
 from agentbus.config import AgentBusConfig
+from agentbus.models.router import ModelRouter
+from agentbus.models.types import ModelRole
 from agentbus.runtime.loop import AgentLoop
 
 
@@ -11,12 +14,15 @@ class CoderAgent(BaseAgent):
         config: AgentBusConfig | None = None,
         model=None,
         loop_factory=AgentLoop,
+        model_router: ModelRouter | None = None,
     ):
         super().__init__(
             name="coder",
             role="Execute an approved local coding plan using AgentBus tools.",
             config=config,
             model=model,
+            model_role=ModelRole.CODER,
+            model_router=model_router,
         )
         self.loop_factory = loop_factory
 
@@ -27,7 +33,10 @@ class CoderAgent(BaseAgent):
         reviewer_feedback: dict | None = None,
     ) -> str:
         task = self._build_task(user_task, plan, reviewer_feedback)
-        loop = self.loop_factory(config=self.config)
+        loop_arguments = {"config": self.config}
+        if _accepts_keyword(self.loop_factory, "model"):
+            loop_arguments["model"] = self.model
+        loop = self.loop_factory(**loop_arguments)
         return loop.run(task)
 
     def _build_task(
@@ -56,3 +65,15 @@ Plan:
 {feedback}
 Use the existing tools, run verification where practical, inspect git diff before finishing, and finish with a concise summary.
 """
+
+
+def _accepts_keyword(factory, keyword: str) -> bool:
+    try:
+        parameters = inspect.signature(factory).parameters.values()
+    except (TypeError, ValueError):
+        return True
+    return any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        or parameter.name == keyword
+        for parameter in parameters
+    )

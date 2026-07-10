@@ -1,6 +1,6 @@
 # AgentBus
 
-AgentBus Local Runner is a local coding runtime for small software engineering tasks. It asks an Ollama-hosted coding model for JSON actions, executes a small set of workspace-scoped tools, records machine-readable run logs, and stops when the work is finished or the configured step limit is reached.
+AgentBus Local Runner is a provider-independent coding runtime for small software engineering tasks. It can use local Ollama models or Azure OpenAI deployments for structured agent actions, executes a small set of workspace-scoped tools, records machine-readable run logs, and stops when the work is finished or the configured step limit is reached. Ollama remains the default and requires no Azure configuration.
 
 ## Setup
 
@@ -17,6 +17,77 @@ Install Ollama and pull the default local model:
 ```bash
 ollama pull qwen2.5-coder:7b
 ```
+
+## Model Providers
+
+AgentBus agents depend on a central model-provider contract rather than an SDK. The router resolves provider, role, model/deployment, timeout, provider-call retry policy, and optional fallback. Provider adapters return normalized values, request IDs, latency, finish status, and token usage where available. SDK objects and remote response IDs are never durable workflow truth.
+
+Supported providers:
+
+- `ollama` is the local/offline default and preserves `AGENTBUS_MODEL` plus `AGENTBUS_OLLAMA_URL` behavior.
+- `azure` uses the official OpenAI Python SDK against the Azure OpenAI v1 base URL.
+
+List providers and inspect redacted routing configuration without making a network request:
+
+```bash
+python -m agentbus.main --list-providers
+python -m agentbus.main --show-model-config
+python -m agentbus.main --check-provider ollama
+python -m agentbus.main --check-provider azure
+```
+
+`--check-provider` is local-only unless `--live` is supplied explicitly. The first real Azure smoke test should be run only after credentials and deployments are configured:
+
+```bash
+python -m agentbus.main --check-provider azure --live
+```
+
+The live check sends one minimal structured request. It prints only provider, deployment, latency, request ID, and usage metadata; it does not start a task or modify workspace files.
+
+### Azure OpenAI Setup
+
+Create an Azure OpenAI resource and at least one compatible model deployment, then set environment variables in the process that launches AgentBus. AgentBus does not load `.env` automatically. A placeholder-only template is available in `.env.example`.
+
+PowerShell example:
+
+```powershell
+$env:AGENTBUS_PROVIDER = "azure"
+$env:AZURE_OPENAI_ENDPOINT = "https://YOUR-RESOURCE.openai.azure.com"
+$env:AZURE_OPENAI_API_KEY = "YOUR-KEY"
+$env:AZURE_OPENAI_AUTH_MODE = "api_key"
+$env:AZURE_OPENAI_API_MODE = "responses"
+$env:AZURE_OPENAI_DEFAULT_DEPLOYMENT = "YOUR-DEFAULT-DEPLOYMENT"
+$env:AZURE_OPENAI_PLANNER_DEPLOYMENT = "YOUR-PLANNER-DEPLOYMENT"
+$env:AZURE_OPENAI_CODER_DEPLOYMENT = "YOUR-CODER-DEPLOYMENT"
+$env:AZURE_OPENAI_REVIEWER_DEPLOYMENT = "YOUR-REVIEWER-DEPLOYMENT"
+```
+
+The endpoint is normalized to `https://<resource>.openai.azure.com/openai/v1/`; do not append deployment paths, query-string API keys, or a dated `api-version`. The configured deployment name, not a public model family name, is sent as the API `model` argument.
+
+Role resolution uses a role-specific deployment first and `AZURE_OPENAI_DEFAULT_DEPLOYMENT` second. Planner, coder, reviewer, summarizer, and default routes are independent. A missing role and default deployment produces a configuration error before a request is sent.
+
+Responses API mode is the default. `AZURE_OPENAI_API_MODE=chat_completions` is an explicit alternative; AgentBus never silently switches modes. Not every Azure model or deployment supports every API or structured-output capability.
+
+Planner plans, reviewer decisions, and tool actions supply Pydantic schemas. AgentBus requests schema-constrained output when supported and always validates the result locally again. Malformed output, missing required fields, invalid enum values, and forbidden extra fields fail closed. Dictionary JSON Schemas are also validated locally with `jsonschema`.
+
+### Retry And Fallback
+
+Provider-call retries are separate from durable task-attempt retries. Only normalized transient failures such as timeouts, connection failures, rate limits, and temporary service errors are retried. AgentBus honors bounded `Retry-After` values or uses capped exponential backoff with jitter. Authentication, authorization, configuration, deployment-not-found, content-policy, bad-request, and schema-validation errors are not provider-retried.
+
+Fallback is disabled by default. The only supported automatic fallback path is Azure to Ollama, enabled explicitly with:
+
+```powershell
+$env:AGENTBUS_FALLBACK_PROVIDER = "ollama"
+$env:AGENTBUS_ENABLE_PROVIDER_FALLBACK = "true"
+```
+
+Fallback occurs only after transient Azure retries are exhausted. It never occurs for authentication, authorization, missing configuration, deployment-not-found, invalid schema/request, content-policy, tool-safety, path, command, or approval failures. Fallback is logged explicitly and does not bypass verifier, reviewer, durable state, or human approval gates.
+
+### Usage Metadata
+
+When a provider exposes usage, AgentBus records input, output, total, and cached token counts together with provider, deployment, role, latency, request ID, retry count, and fallback provenance. Durable attempts store these safe fields as JSON metadata, avoiding a database schema migration. `UsageLedger` can aggregate by run, task, role, provider, and deployment. AgentBus does not estimate monetary cost because Azure pricing varies by deployment, model, region, and agreement.
+
+See [Azure OpenAI Provider](docs/providers/azure-openai.md) for setup and troubleshooting and [ADR 0002](docs/adr/0002-model-provider-routing.md) for design rationale.
 
 ## Run Tests
 
@@ -80,6 +151,12 @@ Useful overrides:
 
 ```bash
 python -m agentbus.main "Create hello.py and run it" --model qwen2.5-coder:7b --workspace workspace --max-steps 15
+```
+
+Provider and role overrides:
+
+```bash
+python -m agentbus.main --provider azure --model default-deployment --planner-model planner-deployment --coder-model coder-deployment --reviewer-model reviewer-deployment --model-timeout 120 --workflow multi "Create calculator.py with tests"
 ```
 
 ## Multi-Agent Workflow
@@ -215,6 +292,28 @@ The runner also reads these environment variables:
 - `AGENTBUS_MAX_STEPS`
 - `AGENTBUS_COMMAND_TIMEOUT`
 - `AGENTBUS_MAX_HISTORY_CHARS`
+- `AGENTBUS_PROVIDER`
+- `AGENTBUS_FALLBACK_PROVIDER`
+- `AGENTBUS_ENABLE_PROVIDER_FALLBACK`
+- `AGENTBUS_MODEL_TIMEOUT_SECONDS`
+- `AGENTBUS_MODEL_MAX_RETRIES`
+- `AGENTBUS_MODEL_RETRY_BASE_SECONDS`
+- `AGENTBUS_MODEL_RETRY_MAX_SECONDS`
+- `AGENTBUS_PLANNER_MODEL`
+- `AGENTBUS_CODER_MODEL`
+- `AGENTBUS_REVIEWER_MODEL`
+- `AGENTBUS_SUMMARIZER_MODEL`
+- `AZURE_OPENAI_ENDPOINT`
+- `AZURE_OPENAI_API_KEY`
+- `AZURE_OPENAI_AUTH_MODE`
+- `AZURE_OPENAI_API_MODE`
+- `AZURE_OPENAI_DEFAULT_DEPLOYMENT`
+- `AZURE_OPENAI_PLANNER_DEPLOYMENT`
+- `AZURE_OPENAI_CODER_DEPLOYMENT`
+- `AZURE_OPENAI_REVIEWER_DEPLOYMENT`
+- `AZURE_OPENAI_SUMMARIZER_DEPLOYMENT`
+- `AZURE_OPENAI_TIMEOUT_SECONDS`
+- `AZURE_OPENAI_MAX_RETRIES`
 
 ## Safety Model
 
@@ -228,6 +327,8 @@ AgentBus is intentionally local and conservative:
 - Git automation uses safe `git` subprocess calls with `shell=False`.
 - AgentBus does not reset, clean, rebase, force push, deploy, or apply infrastructure.
 - Run logs are JSONL files in the configured runs directory and do not include environment variables or secrets.
+- API keys are held only in provider configuration/client state and are excluded from config repr, diagnostics, logs, durable metadata, and exceptions.
+- Full model prompts, model responses, file contents, and command output are not written to normal provider audit events.
 
 ## Current Limitations
 
@@ -241,5 +342,8 @@ AgentBus is intentionally local and conservative:
 - There is no web dashboard, authentication, billing, cloud deployment, or Kubernetes integration.
 - There is no complex vector memory yet.
 - PR creation depends on the GitHub CLI being installed and authenticated.
-- Model quality and latency depend on the local Ollama model and machine.
+- Model quality, capability, quota, and latency depend on the selected local model or Azure deployment.
+- Azure authentication supports API keys in this checkpoint. Entra ID and managed identity are a future enhancement.
+- AgentBus does not discover or provision Azure resources/deployments and does not automatically switch API modes.
+- Some Azure deployments do not support Responses API or strict structured outputs; select a compatible deployment or configure `chat_completions` explicitly.
 - The command allowlist is intentionally narrow, so some legitimate workflows may need explicit tool support before they are available.

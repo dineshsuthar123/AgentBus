@@ -214,6 +214,11 @@ class DurableExecutionEngine:
                 failure_category=classification.category,
                 error_message=classification.message,
                 retryable=classification.retryable,
+                metadata=(
+                    {"provider_failure": classification.metadata}
+                    if classification.metadata
+                    else {}
+                ),
             )
 
         self._persist_execution_result(attempt, task_record, result)

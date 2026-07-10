@@ -7,6 +7,7 @@ from agentbus.execution.models import (
     TaskExecutionContext,
     TaskExecutionResult,
 )
+from agentbus.models.router import model_request_context
 
 
 class MultiAgentTaskExecutor:
@@ -20,20 +21,26 @@ class MultiAgentTaskExecutor:
         self.git_repository = git_repository
 
     def execute(self, context: TaskExecutionContext) -> TaskExecutionResult:
+        _drain_model_results(self.coder)
+        _drain_model_results(self.reviewer)
         plan = self._task_plan(context)
         reviewer_feedback = self._previous_reviewer_feedback(context)
-        coder_summary = self.coder.execute(
-            context.run.original_task,
-            plan,
-            reviewer_feedback=reviewer_feedback,
-        )
-        verifier_result = self.verifier.verify()
-        reviewer_result = self.reviewer.review(
-            user_task=context.run.original_task,
-            plan=plan,
-            git_diff=self.git_tools.git_diff(),
-            test_output=verifier_result.get("output"),
-        )
+        with model_request_context(
+            run_id=context.run.run_id,
+            task_id=context.task.task_id,
+        ):
+            coder_summary = self.coder.execute(
+                context.run.original_task,
+                plan,
+                reviewer_feedback=reviewer_feedback,
+            )
+            verifier_result = self.verifier.verify()
+            reviewer_result = self.reviewer.review(
+                user_task=context.run.original_task,
+                plan=plan,
+                git_diff=self.git_tools.git_diff(),
+                test_output=verifier_result.get("output"),
+            )
         verifier_status = "passed" if verifier_result.get("passed") else "failed"
         reviewer_status = "approved" if reviewer_result.get("approved") else "rejected"
         changed_files = self._changed_files()
@@ -50,6 +57,10 @@ class MultiAgentTaskExecutor:
                 "exit_code": verifier_result.get("exit_code"),
                 "reason": verifier_result.get("reason"),
             },
+            "model_requests": [
+                *(_drain_model_results(self.coder)),
+                *(_drain_model_results(self.reviewer)),
+            ],
         }
 
         if not verifier_result.get("passed"):
@@ -122,3 +133,11 @@ class MultiAgentTaskExecutor:
         if not self.git_repository.is_git_repo():
             return []
         return self.git_repository.changed_files()
+
+
+def _drain_model_results(agent) -> list[dict[str, Any]]:
+    model = getattr(agent, "model", None)
+    drain = getattr(model, "drain_results", None)
+    if drain is None:
+        return []
+    return [result.event_metadata() for result in drain()]

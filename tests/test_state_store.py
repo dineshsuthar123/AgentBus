@@ -92,13 +92,20 @@ def test_events_are_json_and_sensitive_values_are_redacted(tmp_path):
     store.record_event(
         "run-1",
         "security_test",
-        {"token": "top-secret", "message": "password=hunter2"},
+        {
+            "token": "top-secret",
+            "message": (
+                "password=hunter2 "
+                "https://example.test/path?sig=credential-value"
+            ),
+        },
     )
 
     event = store.list_events("run-1")[-1]
 
     assert event["payload"]["token"] == "[REDACTED]"
     assert "hunter2" not in json.dumps(event["payload"])
+    assert "credential-value" not in json.dumps(event["payload"])
 
 
 def test_approval_persists(tmp_path):

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 import sqlite3
 import uuid
 from contextlib import contextmanager
@@ -33,6 +32,7 @@ from agentbus.execution.transitions import (
     validate_run_transition,
     validate_task_transition,
 )
+from agentbus.security.redaction import is_sensitive_key, redact_text
 
 
 class StateStoreError(RuntimeError):
@@ -51,20 +51,6 @@ class AttemptNotFoundError(StateStoreError):
     pass
 
 
-_SENSITIVE_KEYS = {
-    "authorization",
-    "cookie",
-    "credentials",
-    "environment",
-    "env",
-    "password",
-    "secret",
-    "token",
-}
-_SECRET_PATTERN = re.compile(
-    r"(?i)\b(api[_-]?key|password|secret|token)\s*[:=]\s*([^\s,;]+)"
-)
-_BEARER_PATTERN = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+")
 _MAX_TEXT_CHARS = 20_000
 
 
@@ -1071,16 +1057,11 @@ def _require_id(value: str, entity: str) -> None:
 def _safe_text(value: str | None) -> str | None:
     if value is None:
         return None
-    text = str(value)
-    text = _SECRET_PATTERN.sub(lambda match: f"{match.group(1)}=[REDACTED]", text)
-    text = _BEARER_PATTERN.sub("Bearer [REDACTED]", text)
-    if len(text) > _MAX_TEXT_CHARS:
-        return text[:_MAX_TEXT_CHARS] + "\n[truncated]"
-    return text
+    return redact_text(str(value), max_chars=_MAX_TEXT_CHARS)
 
 
 def _sanitize(value: Any, key: str | None = None, depth: int = 0) -> Any:
-    if key and any(marker in key.lower() for marker in _SENSITIVE_KEYS):
+    if key and is_sensitive_key(key):
         return "[REDACTED]"
     if depth > 12:
         return "[maximum depth reached]"

@@ -91,3 +91,19 @@ def test_http_failure(monkeypatch):
 
     with pytest.raises(ModelOutputError, match="Ollama request failed"):
         model().generate_json("prompt")
+
+
+def test_ollama_dictionary_schema_is_validated_locally(monkeypatch):
+    def fake_post(url, json, timeout):
+        return FakeResponse({"response": '{"status":"invalid"}'})
+
+    monkeypatch.setattr("agentbus.models.ollama.requests.post", fake_post)
+    schema = {
+        "type": "object",
+        "properties": {"status": {"const": "ok"}},
+        "required": ["status"],
+        "additionalProperties": False,
+    }
+
+    with pytest.raises(ModelOutputError, match="JSON Schema"):
+        model().generate_json("prompt", schema=schema)

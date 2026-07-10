@@ -1,12 +1,16 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from agentbus.agents.base import BaseAgent
 from agentbus.config import AgentBusConfig
+from agentbus.models.router import ModelRouter
+from agentbus.models.types import ModelRole
 
 
 class PlanStep(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     id: str
     title: str
     description: str
@@ -19,6 +23,8 @@ class PlanStep(BaseModel):
 
 
 class PlannerOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     goal: str
     steps: list[PlanStep]
     test_strategy: str
@@ -26,12 +32,19 @@ class PlannerOutput(BaseModel):
 
 
 class PlannerAgent(BaseAgent):
-    def __init__(self, config: AgentBusConfig | None = None, model=None):
+    def __init__(
+        self,
+        config: AgentBusConfig | None = None,
+        model=None,
+        model_router: ModelRouter | None = None,
+    ):
         super().__init__(
             name="planner",
             role="Break a user task into a small, testable local implementation plan.",
             config=config,
             model=model,
+            model_role=ModelRole.PLANNER,
+            model_router=model_router,
         )
 
     def plan(
@@ -69,7 +82,7 @@ User task:
 Repo context:
 {context}
 """
-        output = self.generate_json(prompt)
+        output = self.generate_json(prompt, schema=PlannerOutput)
         return PlannerOutput(**output).model_dump(exclude_none=True)
 
     def summarize(self, plan: dict) -> str:
