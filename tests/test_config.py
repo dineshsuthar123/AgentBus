@@ -8,6 +8,8 @@ ENV_VARS = [
     "AGENTBUS_OLLAMA_URL",
     "AGENTBUS_WORKSPACE",
     "AGENTBUS_RUNS_DIR",
+    "AGENTBUS_STATE_DIR",
+    "AGENTBUS_STATE_DB",
     "AGENTBUS_MAX_STEPS",
     "AGENTBUS_COMMAND_TIMEOUT",
     "AGENTBUS_MAX_HISTORY_CHARS",
@@ -24,6 +26,7 @@ def test_default_config(monkeypatch):
     assert config.ollama_url == "http://localhost:11434/api/generate"
     assert config.workspace_dir == "workspace"
     assert config.runs_dir == "runs"
+    assert config.state_database_path.as_posix() == ".agentbus/state.db"
     assert config.max_steps == 12
     assert config.command_timeout_seconds == 90
     assert config.max_history_chars == 25_000
@@ -34,6 +37,8 @@ def test_env_overrides(monkeypatch):
     monkeypatch.setenv("AGENTBUS_OLLAMA_URL", "http://localhost:1234/api/generate")
     monkeypatch.setenv("AGENTBUS_WORKSPACE", "custom-workspace")
     monkeypatch.setenv("AGENTBUS_RUNS_DIR", "custom-runs")
+    monkeypatch.setenv("AGENTBUS_STATE_DIR", "custom-state")
+    monkeypatch.setenv("AGENTBUS_STATE_DB", "durable.sqlite3")
     monkeypatch.setenv("AGENTBUS_MAX_STEPS", "3")
     monkeypatch.setenv("AGENTBUS_COMMAND_TIMEOUT", "4")
     monkeypatch.setenv("AGENTBUS_MAX_HISTORY_CHARS", "500")
@@ -44,6 +49,7 @@ def test_env_overrides(monkeypatch):
     assert config.ollama_url == "http://localhost:1234/api/generate"
     assert config.workspace_dir == "custom-workspace"
     assert config.runs_dir == "custom-runs"
+    assert config.state_database_path.as_posix() == "custom-state/durable.sqlite3"
     assert config.max_steps == 3
     assert config.command_timeout_seconds == 4
     assert config.max_history_chars == 500

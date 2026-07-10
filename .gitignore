@@ -15,7 +15,11 @@ env/
 
 # Logs / local runs
 runs/
+.agentbus/
 *.log
+
+# Local conversation notes
+saved_chat_note.txt
 
 # Local workspace outputs
 workspace/

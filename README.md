@@ -46,6 +46,12 @@ Multi-agent mode runs a local Planner -> Coder -> Verifier -> Reviewer workflow:
 python -m agentbus.main --workflow multi "Create calculator.py with tests"
 ```
 
+Durable multi-agent mode persists a validated task graph before coding starts:
+
+```bash
+python -m agentbus.main --workflow multi --durable "Create calculator.py with tests"
+```
+
 Print the local repo context pack without running an agent:
 
 ```bash
@@ -87,6 +93,85 @@ The multi-agent workflow is intentionally small and local:
 
 If the reviewer rejects the result, AgentBus allows one retry through the Coder and Verifier before producing the final summary.
 
+## Durable Execution
+
+Durable mode is an opt-in extension of the existing multi-agent workflow. Regular mode keeps the original in-process Planner -> Coder -> Verifier -> Reviewer behavior. Durable mode uses the same agents and safety-controlled tools, but converts planner steps into a persistent graph and executes one task at a time through a SQLite-backed state machine.
+
+The durable sequence is:
+
+1. Build the repo context and obtain structured planner output.
+2. Validate task IDs, dependencies, and cycle freedom.
+3. Persist the run, graph, and all initial task records atomically.
+4. Mark one dependency-ready task as running and create its attempt before invoking the coder.
+5. Run the existing Coder, Verifier, and Reviewer for that graph task.
+6. Persist the result, retry if policy allows, or block dependent tasks.
+7. Commit and optionally open a PR only after every graph task succeeds.
+
+Planner steps may include an optional `dependencies` list. If no planner step supplies dependencies, AgentBus preserves compatibility by creating a sequential graph: `step-1 -> step-2 -> step-3`. Execution is deterministic and sequential in this checkpoint; no background worker or parallel task execution is started.
+
+### Durable State
+
+SQLite is the source of truth for recovery. The default database is `.agentbus/state.db`, relative to the AgentBus process directory and separate from the default `workspace` target. Configure another location with:
+
+```bash
+set AGENTBUS_STATE_DIR=C:\agentbus-state
+set AGENTBUS_STATE_DB=state.db
+```
+
+`AGENTBUS_STATE_DB` may also be an absolute database path. When the target repository is the process directory, point `AGENTBUS_STATE_DIR` outside that repository if runtime files must not live there. `.agentbus/` is ignored by this repository.
+
+The database stores runs, task specifications and statuses, attempts, artifact references, approvals, and compact events. JSONL files in `runs/` remain useful audit output, but AgentBus does not reconstruct recovery state from them. Secret-shaped keys and values are redacted from both stores, strings are bounded, and full environment dumps are not recorded.
+
+### Resume And Inspect
+
+Durable creation prints the run ID before task execution. State-only operations do not prompt for a new task and do not run a model:
+
+```bash
+python -m agentbus.main --list-runs
+python -m agentbus.main --show-run <run-id>
+python -m agentbus.main --resume <run-id>
+python -m agentbus.main --cancel-run <run-id> --reason "Work no longer needed"
+```
+
+On resume, a task left `running` is reconciled from its latest persisted attempt:
+
+- A still-running attempt becomes `interrupted`.
+- A succeeded attempt whose task status was not yet updated is promoted to a succeeded task.
+- An interrupted or failed attempt is retried only when its category and remaining attempt budget allow it.
+- A succeeded, rejected, failed, blocked, or cancelled task is never selected for execution again.
+
+Each retry creates a new attempt row and preserves numbering across process recreation. Retry delay is persisted as deterministic metadata for future scheduling; the current CLI does not sleep or launch a background retry worker. Model output and transport failures, command failures, verifier failures, reviewer corrections, and interruptions may be retried. Policy violations and unsafe tool validation failures are not blindly retried. The planner default is two attempts per task, bounded again by the engine retry policy.
+
+If a process stops after a tool has changed the workspace but before task success is persisted, AgentBus records the attempt as interrupted and may retry it. This checkpoint does not provide filesystem rollback or exactly-once semantics for arbitrary external side effects. Task executors should therefore be restart-tolerant.
+
+### Approval Gates
+
+Low-risk tasks run normally. Medium-risk tasks are recorded in ready events but do not block by default. A high-risk task transitions to `waiting_for_approval` before the coder or any tool is invoked. Only an explicit CLI action can persist a decision:
+
+```bash
+python -m agentbus.main --approve <run-id>:<task-id> --reason "Reviewed locally"
+python -m agentbus.main --resume <run-id>
+```
+
+Reject unsafe work with:
+
+```bash
+python -m agentbus.main --reject <run-id>:<task-id> --reason "Unsafe migration"
+```
+
+Rejection marks the task rejected, propagates blocked state to its dependents, fails the run when no valid progress remains, and prevents Git commit or PR finalization. Model output cannot create an approval.
+
+### Durable Git Safety
+
+The existing Git flags work with durable mode:
+
+```bash
+python -m agentbus.main --workflow multi --durable --create-branch --commit "Add calculator tests"
+python -m agentbus.main --workflow multi --durable --create-branch --commit --open-pr "Add calculator tests"
+```
+
+Branch creation may occur before planning when requested. Commit and PR options are persisted with the run, but finalization occurs only after the durable status is `succeeded` and the latest verifier and reviewer statuses are both successful. PR creation remains explicitly opt-in and still requires a successful commit. A clean Git HEAD that moved after a commit-start event can be reconciled after a crash, preventing a second commit from being created during resume.
+
 ## Repo Context Builder
 
 Before multi-agent planning, AgentBus scans the configured workspace and builds a compact text summary for the agents. The context pack includes:
@@ -125,6 +210,8 @@ The runner also reads these environment variables:
 - `AGENTBUS_OLLAMA_URL`
 - `AGENTBUS_WORKSPACE`
 - `AGENTBUS_RUNS_DIR`
+- `AGENTBUS_STATE_DIR`
+- `AGENTBUS_STATE_DB`
 - `AGENTBUS_MAX_STEPS`
 - `AGENTBUS_COMMAND_TIMEOUT`
 - `AGENTBUS_MAX_HISTORY_CHARS`
@@ -146,6 +233,10 @@ AgentBus is intentionally local and conservative:
 
 - AgentBus is a local runner, not a multi-tenant service.
 - The multi-agent workflow supports one reviewer retry for now.
+- Durable graph execution is sequential and runs in the foreground; there is no scheduler, daemon, distributed lease, or parallel execution.
+- Durable recovery cannot roll back partially completed filesystem or command side effects. Interrupted tasks may run again within their bounded attempt policy.
+- Tasks share one workspace. Per-task Git worktrees and isolated merge coordination are not implemented yet.
+- SQLite schema version 1 is guarded explicitly; future schema changes require registered migrations.
 - Repo context is heuristic-based; it does not read whole file contents, build embeddings, or infer complex architecture.
 - There is no web dashboard, authentication, billing, cloud deployment, or Kubernetes integration.
 - There is no complex vector memory yet.

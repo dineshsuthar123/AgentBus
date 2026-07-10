@@ -34,6 +34,8 @@ def test_planner_agent_parses_valid_model_output():
 
     assert plan["goal"] == "Create calculator functions"
     assert plan["steps"][0]["risk"] == "low"
+    assert "dependencies" not in plan["steps"][0]
+    assert "done_criteria" not in plan["steps"][0]
     assert "create calculator" in model.prompts[0]
 
 

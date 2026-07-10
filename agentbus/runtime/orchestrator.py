@@ -1,3 +1,4 @@
+import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -5,6 +6,9 @@ from agentbus.agents.coder import CoderAgent
 from agentbus.agents.planner import PlannerAgent
 from agentbus.agents.reviewer import ReviewerAgent
 from agentbus.config import AgentBusConfig
+from agentbus.execution.engine import DurableExecutionEngine
+from agentbus.execution.models import ExecutionReport, RunStatus
+from agentbus.execution.state_store import StateStore
 from agentbus.git.branching import generate_branch_name
 from agentbus.git.commit_message import generate_commit_message
 from agentbus.git.repository import GitRepository, GitRepositoryError
@@ -15,6 +19,7 @@ from agentbus.repo.context_pack import ContextPackBuilder
 from agentbus.repo.scanner import RepoScanner
 from agentbus.repo.test_detection import TestCommandDetector
 from agentbus.runtime.verifier import Verifier
+from agentbus.runtime.durable_workflow import MultiAgentTaskExecutor
 from agentbus.tools.git_tools import GitTools
 
 
@@ -59,6 +64,8 @@ class MultiAgentOrchestrator:
         git_repository: GitRepository | None = None,
         pr_client: GitHubPullRequestClient | None = None,
         allow_existing_changes: bool = False,
+        state_store: StateStore | None = None,
+        durable_crash_hook=None,
     ):
         self.config = config or AgentBusConfig.from_env()
         self.planner = planner or PlannerAgent(config=self.config)
@@ -84,6 +91,8 @@ class MultiAgentOrchestrator:
         self.open_pr = open_pr
         self.pr_base = pr_base
         self.allow_existing_changes = allow_existing_changes
+        self._state_store = state_store
+        self.durable_crash_hook = durable_crash_hook
 
     def run(self, user_task: str) -> OrchestrationResult:
         self.logger.log("run_started", {"workflow": "multi", "task": user_task})
@@ -160,6 +169,269 @@ class MultiAgentOrchestrator:
         )
         self.logger.log("run_finished", {"summary": final_summary})
         return result
+
+    @property
+    def state_store(self) -> StateStore:
+        if self._state_store is None:
+            self._state_store = StateStore(self.config.state_database_path)
+        return self._state_store
+
+    def create_durable_run(self, user_task: str) -> str:
+        """Plan and persist an opt-in durable run without executing a task."""
+        run_id = uuid.uuid4().hex
+        self.logger = RunLogger(log_dir=self.config.runs_dir, run_id=run_id)
+        self.logger.log(
+            "run_started",
+            {"workflow": "multi", "durable": True, "task": user_task},
+        )
+        git_branch = self._prepare_git_workflow(user_task)
+        initial_head = None
+        if self._git_workflow_requested() and self.git_repository.is_git_repo():
+            initial_head = self.git_repository.head_commit()
+
+        context_pack = self._build_context_pack(user_task)
+        self.logger.log("planner_started", {})
+        plan = self.planner.plan(user_task, context_pack=context_pack)
+        self.logger.log("planner_output", plan)
+        metadata = {
+            "git": {
+                "requested": self._git_workflow_requested(),
+                "create_branch": self.create_branch,
+                "commit_changes": self.commit_changes,
+                "open_pr": self.open_pr,
+                "pr_base": self.pr_base,
+                "branch": git_branch,
+                "initial_head": initial_head,
+            }
+        }
+        engine = self._durable_engine(run_id)
+        engine.create_run(
+            user_task,
+            plan,
+            workflow_type="multi",
+            model=self.config.model_name,
+            workspace=self.config.workspace_dir,
+            context_summary=context_pack,
+            metadata=metadata,
+            run_id=run_id,
+        )
+        return run_id
+
+    def run_durable(self, run_id: str, *, resume: bool = False) -> ExecutionReport:
+        """Execute or resume a persisted multi-agent run and finalize Git safely."""
+        engine = self._durable_engine(run_id)
+        report = engine.resume(run_id) if resume else engine.run_until_blocked(run_id)
+        if report.status == RunStatus.SUCCEEDED:
+            report = self._finalize_durable_git(run_id)
+        return report
+
+    def resume_durable(self, run_id: str) -> ExecutionReport:
+        return self.run_durable(run_id, resume=True)
+
+    def get_durable_report(self, run_id: str) -> ExecutionReport:
+        return self._durable_engine(run_id, executor=False).get_report(run_id)
+
+    def _durable_engine(
+        self,
+        run_id: str,
+        *,
+        executor: bool = True,
+    ) -> DurableExecutionEngine:
+        logger = RunLogger(log_dir=self.config.runs_dir, run_id=run_id)
+        task_executor = None
+        if executor:
+            task_executor = MultiAgentTaskExecutor(
+                coder=self.coder,
+                verifier=self.verifier,
+                reviewer=self.reviewer,
+                git_tools=self.git,
+                git_repository=self.git_repository,
+            )
+        return DurableExecutionEngine(
+            self.state_store,
+            task_executor,
+            logger=logger,
+            crash_hook=self.durable_crash_hook,
+        )
+
+    def _finalize_durable_git(self, run_id: str) -> ExecutionReport:
+        run = self.state_store.get_run(run_id)
+        git_options = run.metadata.get("git", {})
+        if not git_options.get("requested"):
+            return self.get_durable_report(run_id)
+        if run.status != RunStatus.SUCCEEDED:
+            return self.get_durable_report(run_id)
+        if run.verifier_status != "passed" or run.reviewer_status != "approved":
+            self.state_store.update_run_details(
+                run_id,
+                finalization_error=(
+                    "Git finalization blocked because verifier and reviewer status "
+                    "are not both successful."
+                ),
+                event_type="git_finalization_blocked",
+            )
+            return self.get_durable_report(run_id)
+
+        changed_files = self.git_repository.changed_files()
+        self.state_store.update_run_details(
+            run_id,
+            changed_files=changed_files,
+            event_type="changed_files_detected",
+        )
+        run = self.state_store.get_run(run_id)
+        commit_identifier = run.commit_identifier
+
+        if git_options.get("commit_changes") and not commit_identifier:
+            if changed_files:
+                message = generate_commit_message(run.original_task, changed_files)
+                self.state_store.record_event(
+                    run_id,
+                    "commit_creation_started",
+                    {"message": message, "changed_file_count": len(changed_files)},
+                )
+                try:
+                    commit_identifier = self.git_repository.commit(message)
+                except GitRepositoryError as exc:
+                    self.state_store.update_run_details(
+                        run_id,
+                        finalization_error=str(exc),
+                        event_type="commit_creation_outcome_unknown",
+                    )
+                    return self.get_durable_report(run_id)
+            else:
+                current_head = self.git_repository.head_commit()
+                initial_head = git_options.get("initial_head")
+                if (
+                    initial_head
+                    and current_head != initial_head
+                    and self._has_unresolved_commit_creation(run_id)
+                ):
+                    # A crash may occur after git commit succeeds but before SQLite
+                    # records the identifier. A moved clean HEAD is reconciled rather
+                    # than creating a duplicate commit.
+                    commit_identifier = current_head
+                else:
+                    self.state_store.update_run_details(
+                        run_id,
+                        finalization_error="No changed files are available to commit.",
+                        event_type="commit_creation_skipped",
+                    )
+                    return self.get_durable_report(run_id)
+
+            self.state_store.update_run_details(
+                run_id,
+                commit_identifier=commit_identifier,
+                event_type="commit_created",
+                clear_finalization_error=True,
+            )
+
+        run = self.state_store.get_run(run_id)
+        if not git_options.get("open_pr") or run.pr_url:
+            return self.get_durable_report(run_id)
+        if not git_options.get("commit_changes") or not run.commit_identifier:
+            self.state_store.update_run_details(
+                run_id,
+                finalization_error="PR creation requires a successful commit.",
+                event_type="pr_creation_failed",
+            )
+            return self.get_durable_report(run_id)
+
+        if self._has_unresolved_pr_creation(run_id):
+            self.state_store.update_run_details(
+                run_id,
+                finalization_error=(
+                    "A previous PR creation attempt has an unknown outcome. "
+                    "Inspect the remote before retrying to avoid a duplicate PR."
+                ),
+                event_type="pr_creation_recovery_blocked",
+            )
+            return self.get_durable_report(run_id)
+
+        branch = git_options.get("branch") or self.git_repository.current_branch()
+        title = generate_commit_message(run.original_task, run.changed_files)
+        body = build_pr_body(
+            user_task=run.original_task,
+            planner_summary=self._planner_summary(run.planner_output),
+            verifier_result={"passed": True, "command": [], "reason": "Durable run"},
+            reviewer_result={"approved": True, "summary": "Durable tasks approved"},
+            changed_files=run.changed_files,
+            test_command=None,
+        )
+        self.state_store.record_event(
+            run_id,
+            "pr_creation_started",
+            {"base": git_options.get("pr_base", "main"), "head": branch},
+        )
+        try:
+            self.git_repository.push_branch(branch)
+            pr_result = self.pr_client.create_pr(
+                title=title,
+                body=body,
+                base=git_options.get("pr_base", "main"),
+                head=branch,
+            )
+        except Exception as exc:
+            self.state_store.update_run_details(
+                run_id,
+                finalization_error=str(exc),
+                event_type="pr_creation_outcome_unknown",
+            )
+            return self.get_durable_report(run_id)
+
+        if not pr_result.startswith("http"):
+            self.state_store.update_run_details(
+                run_id,
+                finalization_error=pr_result,
+                event_type="pr_creation_failed",
+            )
+            return self.get_durable_report(run_id)
+        self.state_store.update_run_details(
+            run_id,
+            pr_url=pr_result,
+            event_type="pr_created",
+            clear_finalization_error=True,
+        )
+        return self.get_durable_report(run_id)
+
+    def _has_unresolved_pr_creation(self, run_id: str) -> bool:
+        return self._has_unresolved_external_event(
+            run_id,
+            started="pr_creation_started",
+            resolved={"pr_created", "pr_creation_failed"},
+        )
+
+    def _has_unresolved_commit_creation(self, run_id: str) -> bool:
+        return self._has_unresolved_external_event(
+            run_id,
+            started="commit_creation_started",
+            resolved={"commit_created"},
+        )
+
+    def _has_unresolved_external_event(
+        self,
+        run_id: str,
+        *,
+        started: str,
+        resolved: set[str],
+    ) -> bool:
+        events = self.state_store.list_events(run_id)
+        last_started = max(
+            (
+                event["event_id"]
+                for event in events
+                if event["event_type"] == started
+            ),
+            default=0,
+        )
+        last_resolved = max(
+            (
+                event["event_id"]
+                for event in events
+                if event["event_type"] in resolved
+            ),
+            default=0,
+        )
+        return last_started > last_resolved
 
     def _git_workflow_requested(self) -> bool:
         return self.create_branch or self.commit_changes or self.open_pr

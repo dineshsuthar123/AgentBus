@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass, replace
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -8,6 +9,8 @@ class AgentBusConfig:
     ollama_url: str = "http://localhost:11434/api/generate"
     workspace_dir: str = "workspace"
     runs_dir: str = "runs"
+    state_dir: str = ".agentbus"
+    state_db: str = "state.db"
     max_steps: int = 12
     command_timeout_seconds: int = 90
     max_history_chars: int = 25_000
@@ -19,6 +22,8 @@ class AgentBusConfig:
             ollama_url=os.getenv("AGENTBUS_OLLAMA_URL", cls.ollama_url),
             workspace_dir=os.getenv("AGENTBUS_WORKSPACE", cls.workspace_dir),
             runs_dir=os.getenv("AGENTBUS_RUNS_DIR", cls.runs_dir),
+            state_dir=os.getenv("AGENTBUS_STATE_DIR", cls.state_dir),
+            state_db=os.getenv("AGENTBUS_STATE_DB", cls.state_db),
             max_steps=_env_int("AGENTBUS_MAX_STEPS", cls.max_steps),
             command_timeout_seconds=_env_int(
                 "AGENTBUS_COMMAND_TIMEOUT",
@@ -49,6 +54,13 @@ class AgentBusConfig:
             updates["max_steps"] = max_steps
 
         return replace(self, **updates)
+
+    @property
+    def state_database_path(self) -> Path:
+        database = Path(self.state_db).expanduser()
+        if database.is_absolute():
+            return database
+        return Path(self.state_dir).expanduser() / database
 
 
 def _env_int(name: str, default: int) -> int:

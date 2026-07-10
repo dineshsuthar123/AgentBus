@@ -23,6 +23,13 @@ class GitRepository:
     def current_branch(self) -> str:
         return self._run(["git", "branch", "--show-current"])
 
+    def head_commit(self, short: bool = True) -> str:
+        command = ["git", "rev-parse"]
+        if short:
+            command.append("--short")
+        command.append("HEAD")
+        return self._run(command)
+
     def has_uncommitted_changes(self) -> bool:
         return bool(self._run(["git", "status", "--porcelain"]))
 

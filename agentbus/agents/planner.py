@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from agentbus.agents.base import BaseAgent
 from agentbus.config import AgentBusConfig
@@ -11,6 +11,11 @@ class PlanStep(BaseModel):
     title: str
     description: str
     risk: Literal["low", "medium", "high"]
+    dependencies: list[str] | None = None
+    assigned_role: str = "coder"
+    maximum_attempts: int = Field(default=2, ge=1)
+    expected_outputs: list[str] = Field(default_factory=list)
+    done_criteria: list[str] | None = None
 
 
 class PlannerOutput(BaseModel):
@@ -46,7 +51,12 @@ Return ONLY valid JSON with this shape:
       "id": "step-1",
       "title": "...",
       "description": "...",
-      "risk": "low|medium|high"
+      "risk": "low|medium|high",
+      "dependencies": ["optional-prerequisite-step-id"],
+      "assigned_role": "coder",
+      "maximum_attempts": 2,
+      "expected_outputs": ["..."],
+      "done_criteria": ["..."]
     }}
   ],
   "test_strategy": "...",
@@ -60,7 +70,7 @@ Repo context:
 {context}
 """
         output = self.generate_json(prompt)
-        return PlannerOutput(**output).model_dump()
+        return PlannerOutput(**output).model_dump(exclude_none=True)
 
     def summarize(self, plan: dict) -> str:
         step_count = len(plan.get("steps", []))
