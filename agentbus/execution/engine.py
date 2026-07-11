@@ -108,6 +108,7 @@ class DurableExecutionEngine:
             RunStatus.SUCCEEDED,
             RunStatus.FAILED,
             RunStatus.CANCELLED,
+            RunStatus.WAITING_FOR_REVIEW,
         }:
             return self._report(snapshot)
 
@@ -129,6 +130,7 @@ class DurableExecutionEngine:
                 RunStatus.FAILED,
                 RunStatus.CANCELLED,
                 RunStatus.WAITING_FOR_APPROVAL,
+                RunStatus.WAITING_FOR_REVIEW,
             }:
                 return report
 
@@ -145,6 +147,7 @@ class DurableExecutionEngine:
             RunStatus.FAILED,
             RunStatus.CANCELLED,
             RunStatus.WAITING_FOR_APPROVAL,
+            RunStatus.WAITING_FOR_REVIEW,
         }:
             return self._report(snapshot)
         if snapshot.run.status == RunStatus.PENDING:
@@ -231,6 +234,7 @@ class DurableExecutionEngine:
             RunStatus.SUCCEEDED,
             RunStatus.FAILED,
             RunStatus.CANCELLED,
+            RunStatus.WAITING_FOR_REVIEW,
         }:
             return self.get_report(run_id)
         self.store.record_event(
@@ -402,11 +406,13 @@ class DurableExecutionEngine:
                 )
             self.store.record_artifact(artifact)
 
+        current_run = self.store.get_run(run_id)
+        changed_files = sorted(set(current_run.changed_files) | set(result.changed_files))
         self.store.update_run_details(
             run_id,
             verifier_status=result.verifier_status,
             reviewer_status=result.reviewer_status,
-            changed_files=result.changed_files if result.changed_files else None,
+            changed_files=changed_files if changed_files else None,
             event_type="task_execution_observed",
         )
 
@@ -723,6 +729,15 @@ class DurableExecutionEngine:
         snapshot = self.store.load_snapshot(run_id)
         statuses = {task.task_id: task.status for task in snapshot.tasks}
         if graph.all_succeeded(statuses):
+            final_review = snapshot.run.metadata.get("final_review", {})
+            if isinstance(final_review, dict) and final_review.get("required"):
+                self.store.update_run_status(
+                    run_id,
+                    RunStatus.WAITING_FOR_REVIEW,
+                    event_type="final_review_required",
+                )
+                self._log("final_review_required", run_id)
+                return
             self.store.update_run_status(
                 run_id,
                 RunStatus.SUCCEEDED,
@@ -763,7 +778,11 @@ class DurableExecutionEngine:
 
     def _fail_run(self, run_id: str, reason: str) -> None:
         run = self.store.get_run(run_id)
-        if run.status not in {RunStatus.RUNNING, RunStatus.WAITING_FOR_APPROVAL}:
+        if run.status not in {
+            RunStatus.RUNNING,
+            RunStatus.WAITING_FOR_APPROVAL,
+            RunStatus.WAITING_FOR_REVIEW,
+        }:
             return
         self.store.update_run_status(
             run_id,
@@ -814,6 +833,48 @@ class DurableExecutionEngine:
         terminal_count = len(successful) + len(failed) + len(blocked) + sum(
             task.status == TaskStatus.CANCELLED for task in snapshot.tasks
         )
+        final_review = snapshot.run.metadata.get("final_review", {})
+        if not isinstance(final_review, dict):
+            final_review = {}
+        workspace_repository = snapshot.run.metadata.get("workspace_repository", {})
+        if not isinstance(workspace_repository, dict):
+            workspace_repository = {}
+        reviewer_summary = final_review.get("summary")
+        reviewer_issues = final_review.get("issues", [])
+        required_fixes = final_review.get("required_fixes", [])
+        if not reviewer_summary:
+            latest_review = next(
+                (
+                    attempt.metadata.get("task_review")
+                    or attempt.metadata.get("reviewer_feedback")
+                    for attempt in reversed(snapshot.attempts)
+                    if attempt.metadata.get("task_review")
+                    or attempt.metadata.get("reviewer_feedback")
+                ),
+                {},
+            )
+            if isinstance(latest_review, dict):
+                reviewer_summary = latest_review.get("summary")
+                reviewer_issues = latest_review.get("issues", [])
+                required_fixes = latest_review.get("required_fixes", [])
+        task_failures = []
+        for task_id in failed:
+            attempt = next(
+                (
+                    item
+                    for item in reversed(snapshot.attempts)
+                    if item.task_id == task_id and item.error_category is not None
+                ),
+                None,
+            )
+            if attempt is not None:
+                task_failures.append(
+                    {
+                        "task_id": task_id,
+                        "category": attempt.error_category.value,
+                        "message": attempt.error_message or "Task attempt failed.",
+                    }
+                )
         return ExecutionReport(
             run_id=snapshot.run.run_id,
             original_task=snapshot.run.original_task,
@@ -840,6 +901,16 @@ class DurableExecutionEngine:
             pr_url=snapshot.run.pr_url,
             finalization_error=snapshot.run.finalization_error,
             failure_reason=snapshot.run.failure_reason,
+            workspace=snapshot.run.workspace,
+            git_top_level=workspace_repository.get("git_top_level"),
+            reviewer_summary=reviewer_summary,
+            reviewer_issues=(reviewer_issues if isinstance(reviewer_issues, list) else []),
+            required_fixes=(required_fixes if isinstance(required_fixes, list) else []),
+            task_failures=task_failures,
+            side_effects_persisted=bool(
+                snapshot.run.changed_files
+                and snapshot.run.status in {RunStatus.FAILED, RunStatus.CANCELLED}
+            ),
             resume_command=(
                 f"python -m agentbus.main --resume {snapshot.run.run_id}"
                 if snapshot.run.status
@@ -847,6 +918,7 @@ class DurableExecutionEngine:
                     RunStatus.PENDING,
                     RunStatus.RUNNING,
                     RunStatus.WAITING_FOR_APPROVAL,
+                    RunStatus.WAITING_FOR_REVIEW,
                 }
                 else None
             ),

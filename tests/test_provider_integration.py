@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+
 from agentbus.config import AgentBusConfig
 from agentbus.execution.engine import DurableExecutionEngine
 from agentbus.execution.models import RunStatus
@@ -101,6 +103,15 @@ def config(tmp_path, *, fallback=False):
 
 def build_runner(tmp_path, scripts, *, fallback=False):
     settings = config(tmp_path, fallback=fallback)
+    workspace = settings.workspace_path
+    workspace.mkdir(parents=True)
+    subprocess.run(
+        ["git", "init", "-q", str(workspace)],
+        check=True,
+        capture_output=True,
+        text=True,
+        shell=False,
+    )
     providers = {}
 
     def builder(route):
@@ -150,7 +161,13 @@ def test_offline_azure_durable_smoke_routes_roles_retries_and_persists_usage(
                 "issues": [],
                 "summary": "review approved",
                 "required_fixes": [],
-            }
+            },
+            {
+                "approved": True,
+                "issues": [],
+                "summary": "final review approved",
+                "required_fixes": [],
+            },
         ],
     }
     runner, store, router, providers, verifier = build_runner(tmp_path, scripts)
@@ -160,14 +177,14 @@ def test_offline_azure_durable_smoke_routes_roles_retries_and_persists_usage(
     attempt = store.list_attempts(run_id, "step-1")[0]
 
     assert report.status == RunStatus.SUCCEEDED
-    assert verifier.calls == 1
+    assert verifier.calls == 2
     assert len(providers[("azure", "coder")].calls) == 2
     assert attempt.metadata["model_requests"][0]["provider"] == "azure"
     assert attempt.metadata["model_requests"][0]["model"] == "coder-deployment"
     assert attempt.metadata["model_requests"][0]["retry_count"] == 1
     assert attempt.metadata["model_requests"][1]["model"] == "reviewer-deployment"
     assert attempt.metadata["model_requests"][1]["usage"]["total_tokens"] == 7
-    assert router.usage_ledger.total(run_id=run_id).total_tokens == 21
+    assert router.usage_ledger.total(run_id=run_id).total_tokens == 28
 
     calls_before_resume = sum(len(item.calls) for item in providers.values())
     resumed = runner.resume_durable(run_id)
@@ -204,7 +221,13 @@ def test_offline_fallback_smoke_exhausts_azure_then_uses_ollama_and_gates(
                 "issues": [],
                 "summary": "review approved fallback",
                 "required_fixes": [],
-            }
+            },
+            {
+                "approved": True,
+                "issues": [],
+                "summary": "final review approved fallback",
+                "required_fixes": [],
+            },
         ],
     }
     runner, store, _, providers, verifier = build_runner(
@@ -221,8 +244,8 @@ def test_offline_fallback_smoke_exhausts_azure_then_uses_ollama_and_gates(
     assert report.status == RunStatus.SUCCEEDED
     assert len(providers[("azure", "coder")].calls) == 2
     assert len(providers[("ollama", "coder")].calls) == 1
-    assert verifier.calls == 1
-    assert len(providers[("azure", "reviewer")].calls) == 1
+    assert verifier.calls == 2
+    assert len(providers[("azure", "reviewer")].calls) == 2
     assert coder_result["provider"] == "ollama"
     assert coder_result["fallback_used"] is True
     assert coder_result["original_provider"] == "azure"
@@ -257,7 +280,13 @@ def test_fallback_cannot_bypass_high_risk_approval(tmp_path):
                 "issues": [],
                 "summary": "approved",
                 "required_fixes": [],
-            }
+            },
+            {
+                "approved": True,
+                "issues": [],
+                "summary": "final approved",
+                "required_fixes": [],
+            },
         ],
     }
     runner, store, _, providers, _ = build_runner(

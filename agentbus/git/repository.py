@@ -1,24 +1,57 @@
+from __future__ import annotations
+
+import hashlib
+import os
 import re
 import subprocess
 from pathlib import Path
+from typing import Iterable
 
 
 class GitRepositoryError(RuntimeError):
     """Raised when a safe git operation cannot be completed."""
 
 
+class WorkspaceRepositoryMismatch(GitRepositoryError):
+    """Raised when Git resolves the workspace to an unintended parent repository."""
+
+
 class GitRepository:
     def __init__(self, workspace: str = "workspace", timeout_seconds: int = 60):
-        self.workspace = Path(workspace).resolve()
+        self.workspace = Path(workspace).expanduser().resolve()
         self.timeout_seconds = timeout_seconds
+        self._validated_top_level: Path | None = None
+
+    def discover_top_level(self) -> Path:
+        output = self._run_unvalidated(["git", "rev-parse", "--show-toplevel"])
+        return Path(output).expanduser().resolve()
+
+    def validate_workspace(self) -> Path:
+        if not self.workspace.is_dir():
+            raise GitRepositoryError(
+                f"Configured workspace does not exist: {self.workspace}"
+            )
+
+        top_level = self.discover_top_level()
+        if os.path.normcase(str(top_level)) != os.path.normcase(str(self.workspace)):
+            raise WorkspaceRepositoryMismatch(
+                "Configured workspace is not the Git repository root. "
+                f"Workspace: {self.workspace}. Detected Git top-level: {top_level}. "
+                "Git would walk into a parent repository, so AgentBus refused the "
+                "operation. Initialize or select an isolated target repository."
+            )
+
+        self._validated_top_level = top_level
+        return top_level
 
     def is_git_repo(self) -> bool:
         try:
-            result = self._run(["git", "rev-parse", "--is-inside-work-tree"])
+            self.validate_workspace()
+        except WorkspaceRepositoryMismatch:
+            raise
         except GitRepositoryError:
             return False
-
-        return result == "true"
+        return True
 
     def current_branch(self) -> str:
         return self._run(["git", "branch", "--show-current"])
@@ -31,7 +64,7 @@ class GitRepository:
         return self._run(command)
 
     def has_uncommitted_changes(self) -> bool:
-        return bool(self._run(["git", "status", "--porcelain"]))
+        return bool(self._status_output())
 
     def create_branch(self, branch_name: str) -> str:
         self._validate_branch_name(branch_name)
@@ -44,64 +77,115 @@ class GitRepository:
         return f"Checked out branch: {branch_name}"
 
     def diff_summary(self) -> str:
-        status = self._run(["git", "status", "--short"])
-        diff_stat = self._run(["git", "diff", "--stat"])
-        staged_stat = self._run(["git", "diff", "--cached", "--stat"])
+        status = self._run(
+            ["git", "status", "--short", "--untracked-files=all", "--", "."]
+        )
+        diff_stat = self._run(["git", "diff", "--stat", "--", "."])
+        staged_stat = self._run(
+            ["git", "diff", "--cached", "--stat", "--", "."]
+        )
         summary = "\n".join(part for part in [status, staged_stat, diff_stat] if part)
         return summary or "No changes."
 
-    def full_diff(self, max_chars: int = 30_000) -> str:
-        staged = self._run(["git", "diff", "--cached", "--no-color"])
-        unstaged = self._run(["git", "diff", "--no-color"])
-        diff = "\n".join(part for part in [staged, unstaged] if part)
+    def full_diff(
+        self,
+        max_chars: int = 30_000,
+        paths: Iterable[str] | None = None,
+    ) -> str:
+        selected = self._normalize_paths(paths)
+        if paths is not None and not selected:
+            self.validate_workspace()
+            return "No diff."
+        pathspec = selected or ["."]
+        staged = self._run(
+            ["git", "diff", "--cached", "--no-color", "--", *pathspec]
+        )
+        unstaged = self._run(["git", "diff", "--no-color", "--", *pathspec])
+        parts = [part for part in [staged, unstaged] if part]
 
+        changed = set(selected or self.changed_files())
+        tracked = set(self._tracked_files(changed))
+        for path in sorted(changed - tracked):
+            parts.append(self._untracked_diff(path))
+
+        diff = "\n".join(part for part in parts if part)
         if not diff:
             return "No diff."
-
         if len(diff) > max_chars:
             return diff[:max_chars] + "\n\n[diff truncated]"
-
         return diff
 
     def changed_files(self) -> list[str]:
-        output = self._run(["git", "status", "--porcelain"])
-        files = []
-
-        for line in output.splitlines():
-            if not line:
+        fields = self._status_output().split("\0")
+        files: list[str] = []
+        index = 0
+        while index < len(fields):
+            field = fields[index]
+            index += 1
+            if not field:
                 continue
+            if len(field) < 4:
+                continue
+            status = field[:2]
+            path = field[3:]
+            files.append(self._normalize_relative_path(path))
+            if "R" in status or "C" in status:
+                index += 1  # With -z, the following field is the original path.
+        return sorted(set(files))
 
-            path = line[3:]
-            if " -> " in path:
-                path = path.split(" -> ", 1)[1]
-            files.append(path)
+    def worktree_snapshot(self) -> dict[str, str]:
+        snapshot: dict[str, str] = {}
+        for relative in self.changed_files():
+            path = self.workspace / relative
+            if path.is_file():
+                snapshot[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+            elif path.exists():
+                snapshot[relative] = "directory"
+            else:
+                snapshot[relative] = "deleted"
+        return snapshot
 
-        return files
+    def changed_since(self, snapshot: dict[str, str]) -> list[str]:
+        current = self.worktree_snapshot()
+        return sorted(
+            path
+            for path in set(snapshot) | set(current)
+            if snapshot.get(path) != current.get(path)
+        )
 
-    def commit(self, message: str) -> str:
+    def commit(self, message: str, paths: Iterable[str] | None = None) -> str:
         if not message.strip():
             raise GitRepositoryError("Commit message must not be empty.")
 
-        self._run(["git", "add", "--all"])
-
-        staged = subprocess.run(
-            ["git", "diff", "--cached", "--quiet"],
-            cwd=self.workspace,
-            capture_output=True,
-            text=True,
-            timeout=self.timeout_seconds,
-            shell=False,
-        )
+        selected = self._normalize_paths(paths)
+        if paths is not None and not selected:
+            raise GitRepositoryError("No changed files are available to commit.")
+        pathspec = selected or ["."]
+        self._run(["git", "add", "--all", "--", *pathspec])
+        self.validate_workspace()
+        try:
+            staged = subprocess.run(
+                ["git", "diff", "--cached", "--quiet", "--", *pathspec],
+                cwd=self.workspace,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout_seconds,
+                shell=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise GitRepositoryError(f"Unable to inspect staged changes: {exc}") from exc
 
         if staged.returncode == 0:
             raise GitRepositoryError("No staged changes to commit.")
-
-        if staged.returncode not in {0, 1}:
+        if staged.returncode != 1:
             raise GitRepositoryError(
                 f"Unable to inspect staged changes: {staged.stderr.strip()}"
             )
 
-        self._run(["git", "commit", "-m", message])
+        commit_command = ["git", "commit", "-m", message]
+        if paths is not None:
+            commit_command.extend(["--only", "--", *pathspec])
+        self._run(commit_command)
         return self._run(["git", "rev-parse", "--short", "HEAD"])
 
     def remote_url(self) -> str | None:
@@ -117,32 +201,101 @@ class GitRepository:
         return f"Pushed branch: {branch}"
 
     def _run(self, command: list[str]) -> str:
-        result = subprocess.run(
-            command,
-            cwd=self.workspace,
-            capture_output=True,
-            text=True,
-            timeout=self.timeout_seconds,
-            shell=False,
-        )
+        self.validate_workspace()
+        return self._run_unvalidated(command)
+
+    def _run_unvalidated(self, command: list[str]) -> str:
+        try:
+            result = subprocess.run(
+                command,
+                cwd=self.workspace,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout_seconds,
+                shell=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise GitRepositoryError(
+                f"Git command could not run ({' '.join(command)}): {exc}"
+            ) from exc
 
         if result.returncode != 0:
             error = result.stderr.strip() or result.stdout.strip()
             raise GitRepositoryError(
                 f"Git command failed ({' '.join(command)}): {error}"
             )
+        return result.stdout.rstrip("\r\n")
 
-        return result.stdout.strip()
+    def _status_output(self) -> str:
+        return self._run(
+            [
+                "git",
+                "status",
+                "--porcelain=v1",
+                "-z",
+                "--untracked-files=all",
+                "--",
+                ".",
+            ]
+        )
+
+    def _tracked_files(self, paths: set[str]) -> list[str]:
+        if not paths:
+            return []
+        output = self._run(["git", "ls-files", "-z", "--", *sorted(paths)])
+        return [path for path in output.split("\0") if path]
+
+    def _untracked_diff(self, relative: str) -> str:
+        path = self.workspace / relative
+        if not path.is_file():
+            return ""
+        try:
+            with path.open("rb") as handle:
+                data = handle.read(30_001)
+        except OSError as exc:
+            return f"diff unavailable for {relative}: {exc}"
+        truncated = len(data) > 30_000
+        data = data[:30_000]
+        if b"\0" in data:
+            return f"diff --git a/{relative} b/{relative}\nBinary file {relative} added"
+        text = data.decode("utf-8", errors="replace")
+        lines = text.splitlines()
+        body = "\n".join(f"+{line}" for line in lines)
+        if truncated:
+            body += "\n+[untracked file content truncated]"
+        return (
+            f"diff --git a/{relative} b/{relative}\n"
+            "new file mode 100644\n"
+            "--- /dev/null\n"
+            f"+++ b/{relative}\n"
+            f"@@ -0,0 +1,{len(lines)} @@\n{body}"
+        )
+
+    def _normalize_paths(self, paths: Iterable[str] | None) -> list[str]:
+        if paths is None:
+            return []
+        return sorted({self._normalize_relative_path(path) for path in paths})
+
+    def _normalize_relative_path(self, value: str) -> str:
+        candidate = Path(value)
+        if candidate.is_absolute():
+            try:
+                candidate = candidate.resolve().relative_to(self.workspace)
+            except ValueError as exc:
+                raise GitRepositoryError(
+                    f"Git returned a path outside the workspace: {value}"
+                ) from exc
+        normalized = candidate.as_posix()
+        if normalized == ".." or normalized.startswith("../"):
+            raise GitRepositoryError(f"Path escapes the workspace: {value}")
+        return normalized
 
     def _validate_branch_name(self, branch_name: str) -> None:
         if not branch_name or branch_name.startswith("-"):
             raise GitRepositoryError("Branch name is invalid.")
-
         if ".." in branch_name or "@{" in branch_name:
             raise GitRepositoryError("Branch name contains unsafe git syntax.")
-
         if branch_name.endswith("/") or branch_name.endswith("."):
             raise GitRepositoryError("Branch name has an invalid ending.")
-
         if not re.fullmatch(r"[A-Za-z0-9._/-]+", branch_name):
             raise GitRepositoryError("Branch name contains unsafe characters.")

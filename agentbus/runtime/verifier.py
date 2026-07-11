@@ -15,17 +15,17 @@ class Verifier:
         test_detector: TestCommandDetector | None = None,
     ):
         self.config = config or AgentBusConfig.from_env()
-        self.workspace = Path(self.config.workspace_dir).resolve()
+        self.workspace = self.config.workspace_path
         self.command = command
         self.test_detector = test_detector or TestCommandDetector(
-            workspace=self.config.workspace_dir
+            workspace=str(self.workspace)
         )
         self.command_tools = command_tools or CommandTools(
-            workspace=self.config.workspace_dir,
+            workspace=str(self.workspace),
             timeout_seconds=self.config.command_timeout_seconds,
         )
 
-    def verify(self) -> dict[str, Any]:
+    def verify(self, *, require_command: bool = False) -> dict[str, Any]:
         detection = None
         command = self.command
 
@@ -36,11 +36,16 @@ class Verifier:
         if command is None:
             return {
                 "command": [],
-                "exit_code": 0,
-                "passed": True,
+                "exit_code": 1 if require_command else 0,
+                "passed": not require_command,
                 "output": "No tests detected.",
                 "reason": (
-                    detection.get("reason", "No test command detected")
+                    (
+                        "Final verification requires a detected or configured test "
+                        "command."
+                        if require_command
+                        else detection.get("reason", "No test command detected")
+                    )
                     if detection
                     else "No test command detected"
                 ),

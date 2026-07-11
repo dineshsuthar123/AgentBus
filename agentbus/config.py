@@ -354,6 +354,10 @@ class AgentBusConfig:
         }
 
     @property
+    def workspace_path(self) -> Path:
+        return Path(self.workspace_dir).expanduser().resolve()
+
+    @property
     def state_database_path(self) -> Path:
         database = Path(self.state_db).expanduser()
         if database.is_absolute():

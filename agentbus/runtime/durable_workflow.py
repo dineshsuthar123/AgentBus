@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import uuid
+from pathlib import Path
 from typing import Any
 
 from agentbus.execution.models import (
     FailureCategory,
+    ExecutionArtifact,
     TaskExecutionContext,
     TaskExecutionResult,
 )
@@ -13,18 +16,33 @@ from agentbus.models.router import model_request_context
 class MultiAgentTaskExecutor:
     """Adapts one durable graph task to the existing agent workflow."""
 
-    def __init__(self, *, coder, verifier, reviewer, git_tools, git_repository):
+    def __init__(
+        self,
+        *,
+        coder,
+        verifier,
+        reviewer,
+        git_tools,
+        git_repository,
+        workspace: str | None = None,
+    ):
         self.coder = coder
         self.verifier = verifier
         self.reviewer = reviewer
         self.git_tools = git_tools
         self.git_repository = git_repository
+        repository_workspace = getattr(git_repository, "workspace", None)
+        selected_workspace = workspace or repository_workspace
+        if selected_workspace is None:
+            raise ValueError("Durable task executor requires an explicit workspace.")
+        self.workspace = Path(selected_workspace).expanduser().resolve()
 
     def execute(self, context: TaskExecutionContext) -> TaskExecutionResult:
         _drain_model_results(self.coder)
         _drain_model_results(self.reviewer)
         plan = self._task_plan(context)
         reviewer_feedback = self._previous_reviewer_feedback(context)
+        before = self._snapshot()
         with model_request_context(
             run_id=context.run.run_id,
             task_id=context.task.task_id,
@@ -35,17 +53,19 @@ class MultiAgentTaskExecutor:
                 reviewer_feedback=reviewer_feedback,
             )
             verifier_result = self.verifier.verify()
-            reviewer_result = self.reviewer.review(
-                user_task=context.run.original_task,
-                plan=plan,
-                git_diff=self.git_tools.git_diff(),
-                test_output=verifier_result.get("output"),
+            changed_files = self._changed_since(before)
+            task_diff = self._task_diff(changed_files)
+            reviewer_result = self._review_task(
+                context,
+                plan,
+                changed_files,
+                task_diff,
+                coder_summary,
+                verifier_result,
             )
         verifier_status = "passed" if verifier_result.get("passed") else "failed"
-        reviewer_status = "approved" if reviewer_result.get("approved") else "rejected"
-        changed_files = self._changed_files()
         metadata = {
-            "reviewer_feedback": {
+            "task_review": {
                 "approved": bool(reviewer_result.get("approved")),
                 "issues": reviewer_result.get("issues", []),
                 "summary": reviewer_result.get("summary", ""),
@@ -57,11 +77,29 @@ class MultiAgentTaskExecutor:
                 "exit_code": verifier_result.get("exit_code"),
                 "reason": verifier_result.get("reason"),
             },
+            # Retained for retry feedback compatibility with persisted attempts.
+            "reviewer_feedback": {
+                "approved": bool(reviewer_result.get("approved")),
+                "issues": reviewer_result.get("issues", []),
+                "summary": reviewer_result.get("summary", ""),
+                "required_fixes": reviewer_result.get("required_fixes", []),
+            },
             "model_requests": [
                 *(_drain_model_results(self.coder)),
                 *(_drain_model_results(self.reviewer)),
             ],
         }
+        artifacts = [
+            ExecutionArtifact(
+                artifact_id=uuid.uuid4().hex,
+                run_id=context.run.run_id,
+                task_id=context.task.task_id,
+                artifact_type="workspace_file",
+                identifier=path,
+                metadata={"attempt_number": context.attempt_number},
+            )
+            for path in changed_files
+        ]
 
         if not verifier_result.get("passed"):
             return TaskExecutionResult(
@@ -70,8 +108,8 @@ class MultiAgentTaskExecutor:
                 failure_category=FailureCategory.VERIFIER_FAILURE,
                 error_message="The verifier command did not pass.",
                 retryable=True,
+                artifacts=artifacts,
                 verifier_status=verifier_status,
-                reviewer_status=reviewer_status,
                 changed_files=changed_files,
                 metadata=metadata,
             )
@@ -83,8 +121,8 @@ class MultiAgentTaskExecutor:
                 failure_category=FailureCategory.REVIEWER_REJECTION,
                 error_message="The reviewer requested corrections.",
                 retryable=True,
+                artifacts=artifacts,
                 verifier_status=verifier_status,
-                reviewer_status=reviewer_status,
                 changed_files=changed_files,
                 metadata=metadata,
             )
@@ -92,8 +130,8 @@ class MultiAgentTaskExecutor:
         return TaskExecutionResult(
             succeeded=True,
             summary=coder_summary,
+            artifacts=artifacts,
             verifier_status=verifier_status,
-            reviewer_status=reviewer_status,
             changed_files=changed_files,
             metadata=metadata,
         )
@@ -133,6 +171,51 @@ class MultiAgentTaskExecutor:
         if not self.git_repository.is_git_repo():
             return []
         return self.git_repository.changed_files()
+
+    def _snapshot(self) -> dict[str, str]:
+        snapshot = getattr(self.git_repository, "worktree_snapshot", None)
+        if snapshot is None:
+            return {}
+        return snapshot()
+
+    def _changed_since(self, before: dict[str, str]) -> list[str]:
+        changed_since = getattr(self.git_repository, "changed_since", None)
+        if changed_since is None:
+            return self._changed_files()
+        return changed_since(before)
+
+    def _task_diff(self, changed_files: list[str]) -> str:
+        full_diff = getattr(self.git_repository, "full_diff", None)
+        if full_diff is None:
+            return self.git_tools.git_diff()
+        return full_diff(max_chars=30_000, paths=changed_files)
+
+    def _review_task(
+        self,
+        context: TaskExecutionContext,
+        plan: dict[str, Any],
+        changed_files: list[str],
+        task_diff: str,
+        coder_summary: str,
+        verifier_result: dict[str, Any],
+    ) -> dict[str, Any]:
+        review_task = getattr(self.reviewer, "review_task", None)
+        if review_task is not None:
+            return review_task(
+                original_task=context.run.original_task,
+                task_spec=plan["steps"][0],
+                expected_outputs=context.task.expected_outputs,
+                artifacts=changed_files,
+                task_diff=task_diff,
+                coder_summary=coder_summary,
+                verifier_result=verifier_result,
+            )
+        return self.reviewer.review(
+            user_task=context.run.original_task,
+            plan=plan,
+            git_diff=task_diff,
+            test_output=verifier_result.get("output"),
+        )
 
 
 def _drain_model_results(agent) -> list[dict[str, Any]]:

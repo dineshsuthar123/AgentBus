@@ -13,12 +13,18 @@ RUN_TRANSITIONS: dict[RunStatus, set[RunStatus]] = {
     RunStatus.PENDING: {RunStatus.RUNNING, RunStatus.FAILED, RunStatus.CANCELLED},
     RunStatus.RUNNING: {
         RunStatus.WAITING_FOR_APPROVAL,
+        RunStatus.WAITING_FOR_REVIEW,
         RunStatus.SUCCEEDED,
         RunStatus.FAILED,
         RunStatus.CANCELLED,
     },
     RunStatus.WAITING_FOR_APPROVAL: {
         RunStatus.RUNNING,
+        RunStatus.FAILED,
+        RunStatus.CANCELLED,
+    },
+    RunStatus.WAITING_FOR_REVIEW: {
+        RunStatus.SUCCEEDED,
         RunStatus.FAILED,
         RunStatus.CANCELLED,
     },

@@ -20,6 +20,7 @@ class RunStatus(str, Enum):
     PENDING = "pending"
     RUNNING = "running"
     WAITING_FOR_APPROVAL = "waiting_for_approval"
+    WAITING_FOR_REVIEW = "waiting_for_review"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -256,3 +257,10 @@ class ExecutionReport(DomainModel):
     finalization_error: str | None = None
     failure_reason: str | None = None
     resume_command: str | None = None
+    workspace: str | None = None
+    git_top_level: str | None = None
+    reviewer_summary: str | None = None
+    reviewer_issues: list[dict[str, Any]] = Field(default_factory=list)
+    required_fixes: list[str] = Field(default_factory=list)
+    task_failures: list[dict[str, str]] = Field(default_factory=list)
+    side_effects_persisted: bool = False

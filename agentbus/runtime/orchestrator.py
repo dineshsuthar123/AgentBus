@@ -1,3 +1,4 @@
+import inspect
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -63,6 +64,7 @@ class MultiAgentOrchestrator:
         open_pr: bool = False,
         pr_base: str = "main",
         git_repository: GitRepository | None = None,
+        git_tools: GitTools | None = None,
         pr_client: GitHubPullRequestClient | None = None,
         allow_existing_changes: bool = False,
         state_store: StateStore | None = None,
@@ -70,6 +72,7 @@ class MultiAgentOrchestrator:
         model_router: ModelRouter | None = None,
     ):
         self.config = config or AgentBusConfig.from_env()
+        self.workspace = self.config.workspace_path
         self.logger = logger or RunLogger(log_dir=self.config.runs_dir)
         self.model_router = model_router or ModelRouter(
             self.config,
@@ -89,17 +92,19 @@ class MultiAgentOrchestrator:
             model_router=self.model_router,
         )
         self.verifier = verifier or Verifier(config=self.config)
-        self.scanner = scanner or RepoScanner(workspace=self.config.workspace_dir)
+        self.scanner = scanner or RepoScanner(workspace=str(self.workspace))
         self.test_detector = test_detector or TestCommandDetector(
-            workspace=self.config.workspace_dir
+            workspace=str(self.workspace)
         )
-        self.context_builder = context_builder or ContextPackBuilder()
-        self.git = GitTools(workspace=self.config.workspace_dir)
+        self.context_builder = context_builder or ContextPackBuilder(
+            workspace=str(self.workspace)
+        )
+        self.git = git_tools or GitTools(workspace=str(self.workspace))
         self.git_repository = git_repository or GitRepository(
-            workspace=self.config.workspace_dir
+            workspace=str(self.workspace)
         )
         self.pr_client = pr_client or GitHubPullRequestClient(
-            workspace=self.config.workspace_dir
+            workspace=str(self.workspace)
         )
         self.create_branch = create_branch
         self.branch_name = branch_name
@@ -219,6 +224,9 @@ class MultiAgentOrchestrator:
                 "task_chars": len(user_task),
             },
         )
+        git_top_level = self._validate_workspace_repository()
+        snapshot = getattr(self.git_repository, "worktree_snapshot", None)
+        workspace_baseline = snapshot() if snapshot is not None else {}
         git_branch = self._prepare_git_workflow(user_task)
         initial_head = None
         if self._git_workflow_requested() and self.git_repository.is_git_repo():
@@ -241,6 +249,12 @@ class MultiAgentOrchestrator:
             },
             "model_routing": self.config.safe_model_summary(),
             "planner_model_result": _last_model_result(self.planner),
+            "workspace_repository": {
+                "workspace": str(self.workspace),
+                "git_top_level": str(git_top_level),
+            },
+            "final_review": {"required": True, "status": "pending"},
+            "workspace_baseline": workspace_baseline,
         }
         engine = self._durable_engine(run_id)
         engine.create_run(
@@ -248,7 +262,7 @@ class MultiAgentOrchestrator:
             plan,
             workflow_type="multi",
             model=self.config.resolve_model("coder"),
-            workspace=self.config.workspace_dir,
+            workspace=str(self.workspace),
             context_summary=context_pack,
             metadata=metadata,
             run_id=run_id,
@@ -259,6 +273,8 @@ class MultiAgentOrchestrator:
         """Execute or resume a persisted multi-agent run and finalize Git safely."""
         engine = self._durable_engine(run_id)
         report = engine.resume(run_id) if resume else engine.run_until_blocked(run_id)
+        if report.status == RunStatus.WAITING_FOR_REVIEW:
+            report = self._run_final_review(run_id)
         if report.status == RunStatus.SUCCEEDED:
             report = self._finalize_durable_git(run_id)
         return report
@@ -284,6 +300,7 @@ class MultiAgentOrchestrator:
                 reviewer=self.reviewer,
                 git_tools=self.git,
                 git_repository=self.git_repository,
+                workspace=str(self.workspace),
             )
         return DurableExecutionEngine(
             self.state_store,
@@ -291,6 +308,130 @@ class MultiAgentOrchestrator:
             logger=logger,
             crash_hook=self.durable_crash_hook,
         )
+
+    def _run_final_review(self, run_id: str) -> ExecutionReport:
+        run = self.state_store.get_run(run_id)
+        if run.status != RunStatus.WAITING_FOR_REVIEW:
+            return self.get_durable_report(run_id)
+
+        persisted_review = run.metadata.get("final_review", {})
+        if isinstance(persisted_review, dict):
+            persisted_status = persisted_review.get("status")
+            if persisted_status in {
+                "approved",
+                "rejected",
+                "blocked_by_verification",
+            }:
+                approved = persisted_status == "approved"
+                self.state_store.update_run_status(
+                    run_id,
+                    RunStatus.SUCCEEDED if approved else RunStatus.FAILED,
+                    failure_reason=(
+                        None
+                        if approved
+                        else (
+                            "Final verification failed."
+                            if persisted_status == "blocked_by_verification"
+                            else "Final reviewer rejected the run."
+                        )
+                    ),
+                    event_type="final_review_state_reconciled",
+                )
+                return self.get_durable_report(run_id)
+
+        baseline = run.metadata.get("workspace_baseline", {})
+        changed_since = getattr(self.git_repository, "changed_since", None)
+        changed_files = (
+            changed_since(baseline)
+            if changed_since is not None and isinstance(baseline, dict)
+            else run.changed_files or self.git_repository.changed_files()
+        )
+        verifier_result = self._verify_final()
+        verifier_status = "passed" if verifier_result.get("passed") else "failed"
+        if not verifier_result.get("passed"):
+            self.state_store.update_run_details(
+                run_id,
+                verifier_status=verifier_status,
+                reviewer_status="not_run",
+                changed_files=changed_files,
+                metadata_updates={
+                    "final_review": {
+                        "required": True,
+                        "status": "blocked_by_verification",
+                        "summary": "Final verification failed before review.",
+                        "issues": [],
+                        "required_fixes": [
+                            verifier_result.get("reason")
+                            or "Make the final verification command pass."
+                        ],
+                    }
+                },
+                event_type="final_verification_failed",
+            )
+            self.state_store.update_run_status(
+                run_id,
+                RunStatus.FAILED,
+                failure_reason="Final verification failed.",
+                event_type="durable_run_final_verification_failed",
+            )
+            return self.get_durable_report(run_id)
+
+        full_diff = getattr(self.git_repository, "full_diff", None)
+        git_diff = (
+            full_diff(max_chars=30_000, paths=changed_files)
+            if full_diff is not None
+            else self.git.git_diff()
+        )
+        with model_request_context(run_id=run_id):
+            reviewer_result = self.reviewer.review(
+                user_task=run.original_task,
+                plan=run.planner_output,
+                git_diff=git_diff,
+                test_output=verifier_result.get("output"),
+            )
+        approved = bool(reviewer_result.get("approved"))
+        self.state_store.update_run_details(
+            run_id,
+            verifier_status=verifier_status,
+            reviewer_status="approved" if approved else "rejected",
+            changed_files=changed_files,
+            metadata_updates={
+                "final_review": {
+                    "required": True,
+                    "status": "approved" if approved else "rejected",
+                    "summary": reviewer_result.get("summary", ""),
+                    "issues": reviewer_result.get("issues", []),
+                    "required_fixes": reviewer_result.get("required_fixes", []),
+                },
+                "final_reviewer_model_result": _last_model_result(self.reviewer),
+            },
+            event_type="final_review_completed",
+        )
+        self.state_store.update_run_status(
+            run_id,
+            RunStatus.SUCCEEDED if approved else RunStatus.FAILED,
+            failure_reason=None if approved else "Final reviewer rejected the run.",
+            event_type=(
+                "durable_run_succeeded"
+                if approved
+                else "durable_run_final_review_rejected"
+            ),
+        )
+        return self.get_durable_report(run_id)
+
+    def _verify_final(self) -> dict[str, Any]:
+        verify = self.verifier.verify
+        if "require_command" in inspect.signature(verify).parameters:
+            return verify(require_command=True)
+        return verify()
+
+    def _validate_workspace_repository(self):
+        validate = getattr(self.git_repository, "validate_workspace", None)
+        if validate is not None:
+            return validate()
+        if not self.git_repository.is_git_repo():
+            raise GitRepositoryError("Workspace is not a git repository.")
+        return self.workspace
 
     def _finalize_durable_git(self, run_id: str) -> ExecutionReport:
         run = self.state_store.get_run(run_id)
@@ -310,7 +451,9 @@ class MultiAgentOrchestrator:
             )
             return self.get_durable_report(run_id)
 
-        changed_files = self.git_repository.changed_files()
+        changed_files = run.changed_files
+        current_changes = set(self.git_repository.changed_files())
+        pending_files = [path for path in changed_files if path in current_changes]
         self.state_store.update_run_details(
             run_id,
             changed_files=changed_files,
@@ -320,15 +463,18 @@ class MultiAgentOrchestrator:
         commit_identifier = run.commit_identifier
 
         if git_options.get("commit_changes") and not commit_identifier:
-            if changed_files:
-                message = generate_commit_message(run.original_task, changed_files)
+            if pending_files:
+                message = generate_commit_message(run.original_task, pending_files)
                 self.state_store.record_event(
                     run_id,
                     "commit_creation_started",
-                    {"message": message, "changed_file_count": len(changed_files)},
+                    {"message": message, "changed_file_count": len(pending_files)},
                 )
                 try:
-                    commit_identifier = self.git_repository.commit(message)
+                    commit_identifier = self._commit_changed_files(
+                        message,
+                        pending_files,
+                    )
                 except GitRepositoryError as exc:
                     self.state_store.update_run_details(
                         run_id,
@@ -430,6 +576,12 @@ class MultiAgentOrchestrator:
             clear_finalization_error=True,
         )
         return self.get_durable_report(run_id)
+
+    def _commit_changed_files(self, message: str, changed_files: list[str]) -> str:
+        commit = self.git_repository.commit
+        if "paths" in inspect.signature(commit).parameters:
+            return commit(message, paths=changed_files)
+        return commit(message)
 
     def _has_unresolved_pr_creation(self, run_id: str) -> bool:
         return self._has_unresolved_external_event(

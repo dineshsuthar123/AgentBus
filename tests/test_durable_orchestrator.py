@@ -95,6 +95,14 @@ class FakeReviewer:
             "required_fixes": [] if self.approved else ["Fix implementation"],
         }
 
+    def review_task(self, **kwargs):
+        return {
+            "approved": True,
+            "issues": [],
+            "summary": "Current task approved",
+            "required_fixes": [],
+        }
+
 
 class FakeGitRepository:
     def __init__(self):
@@ -124,6 +132,15 @@ class FakeGitRepository:
         if not self.dirty:
             return []
         return ["calculator.py", "tests/test_calculator.py"]
+
+    def worktree_snapshot(self):
+        return {}
+
+    def changed_since(self, snapshot):
+        return self.changed_files()
+
+    def full_diff(self, max_chars=30_000, paths=None):
+        return "fake target repository diff"
 
     def commit(self, message):
         self.commits.append(message)
@@ -238,9 +255,104 @@ def test_durable_reviewer_rejection_prevents_commit_and_pr(tmp_path):
 
     assert report.status == RunStatus.FAILED
     assert report.reviewer_status == "rejected"
+    assert report.successful_tasks == ["step-1"]
+    assert report.failed_tasks == []
+    attempt = runner.state_store.list_attempts(run_id, "step-1")[0]
+    assert attempt.status.value == "succeeded"
+    assert report.changed_files == ["calculator.py", "tests/test_calculator.py"]
+    assert report.side_effects_persisted is True
+    store_artifacts = runner.state_store.load_snapshot(run_id).artifacts
+    assert store_artifacts
+    assert {artifact.identifier for artifact in store_artifacts} == {
+        "calculator.py",
+        "tests/test_calculator.py",
+    }
     assert git_repository.commits == []
     assert git_repository.pushes == []
     assert pr_client.calls == []
+
+
+def test_task_reviews_are_scoped_and_final_review_runs_last(tmp_path):
+    timeline = []
+
+    class TimelineCoder(FakeCoder):
+        def execute(self, user_task, plan, reviewer_feedback=None):
+            timeline.append(f"coder:{plan['steps'][0]['id']}")
+            return super().execute(user_task, plan, reviewer_feedback)
+
+    class TimelineVerifier(FakeVerifier):
+        def verify(self):
+            timeline.append("verify")
+            return super().verify()
+
+    class TimelineReviewer(FakeReviewer):
+        def review_task(self, **kwargs):
+            task_id = kwargs["task_spec"]["id"]
+            timeline.append(f"task-review:{task_id}")
+            assert len(kwargs["task_spec"].get("dependencies", [])) <= 1
+            return super().review_task(**kwargs)
+
+        def review(self, user_task, plan, git_diff, test_output=None):
+            timeline.append("final-review")
+            return super().review(user_task, plan, git_diff, test_output)
+
+    runner, _ = orchestrator(
+        tmp_path,
+        coder=TimelineCoder(),
+        verifier=TimelineVerifier(),
+        reviewer=TimelineReviewer(),
+    )
+
+    report = runner.run_durable(runner.create_durable_run("Create calculator"))
+
+    assert report.status == RunStatus.SUCCEEDED
+    assert timeline == [
+        "coder:step-1",
+        "verify",
+        "task-review:step-1",
+        "coder:step-2",
+        "verify",
+        "task-review:step-2",
+        "verify",
+        "final-review",
+    ]
+
+
+def test_resume_reconciles_persisted_final_review_without_rerunning_it(
+    tmp_path,
+    monkeypatch,
+):
+    reviewer = FakeReviewer()
+    verifier = FakeVerifier()
+    one_step = {**PLAN, "steps": [PLAN["steps"][0]]}
+    runner, store = orchestrator(
+        tmp_path,
+        planner=FakePlanner(one_step),
+        reviewer=reviewer,
+        verifier=verifier,
+    )
+    run_id = runner.create_durable_run("Create calculator")
+    original_update = store.update_run_status
+    crash_once = {"pending": True}
+
+    def crash_before_final_status(*args, **kwargs):
+        if kwargs.get("event_type") == "durable_run_succeeded" and crash_once["pending"]:
+            crash_once["pending"] = False
+            raise StateStoreError("simulated final status interruption")
+        return original_update(*args, **kwargs)
+
+    monkeypatch.setattr(store, "update_run_status", crash_before_final_status)
+    with pytest.raises(StateStoreError, match="simulated final status interruption"):
+        runner.run_durable(run_id)
+
+    review_calls = reviewer.calls
+    verifier_calls = verifier.calls
+    report = runner.resume_durable(run_id)
+
+    assert report.status == RunStatus.SUCCEEDED
+    assert reviewer.calls == review_calls
+    assert verifier.calls == verifier_calls
+    assert report.successful_tasks == ["step-1"]
 
 
 def test_durable_provider_failure_is_classified_and_prevents_git_finalization(

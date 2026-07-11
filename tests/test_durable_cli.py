@@ -127,6 +127,49 @@ def test_cli_show_run_is_read_only_and_prints_status(monkeypatch, capsys, tmp_pa
     assert "Tasks: 0/1 succeeded" in output
 
 
+def test_execution_report_renders_safe_durable_diagnostics():
+    report = ExecutionReport(
+        run_id="diagnostic-run",
+        original_task="Task",
+        status=RunStatus.FAILED,
+        graph_progress=GraphProgress(
+            total=1,
+            succeeded=0,
+            failed=1,
+            blocked=0,
+            waiting_for_approval=0,
+            remaining=0,
+        ),
+        workspace="C:/target",
+        git_top_level="C:/target",
+        changed_files=["calculator.py"],
+        reviewer_status="rejected",
+        reviewer_summary="Tests need correction",
+        reviewer_issues=[
+            {"severity": "high", "message": "Missing edge case", "file": "calculator.py"}
+        ],
+        required_fixes=["Add the edge case"],
+        task_failures=[
+            {
+                "task_id": "step-1",
+                "category": "reviewer_rejection",
+                "message": "Reviewer requested corrections.",
+            }
+        ],
+        side_effects_persisted=True,
+    )
+
+    output = main_module.render_execution_report(report)
+
+    assert "Workspace: C:/target" in output
+    assert "Detected Git top-level: C:/target" in output
+    assert "Reviewer summary: Tests need correction" in output
+    assert "Reviewer issue [high] (calculator.py): Missing edge case" in output
+    assert "Required fix: Add the edge case" in output
+    assert "Task failure: step-1 [reviewer_rejection]" in output
+    assert "Filesystem rollback: not performed" in output
+
+
 def test_cli_resume_uses_persisted_workspace_without_prompt(monkeypatch, capsys, tmp_path):
     settings = config(tmp_path)
     create_run(settings)

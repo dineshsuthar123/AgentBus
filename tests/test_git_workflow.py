@@ -43,14 +43,14 @@ def test_git_repository_uses_safe_command_construction(monkeypatch, tmp_path):
         assert capture_output is True
         assert text is True
         assert shell is False
-        return FakeCompleted(stdout="true\n")
+        return FakeCompleted(stdout=f"{tmp_path}\n")
 
     monkeypatch.setattr("agentbus.git.repository.subprocess.run", fake_run)
 
     repo = GitRepository(str(tmp_path))
 
     assert repo.is_git_repo() is True
-    assert commands == [["git", "rev-parse", "--is-inside-work-tree"]]
+    assert commands == [["git", "rev-parse", "--show-toplevel"]]
 
 
 def test_git_repository_parses_changed_files(monkeypatch, tmp_path):
@@ -58,10 +58,12 @@ def test_git_repository_parses_changed_files(monkeypatch, tmp_path):
     monkeypatch.setattr(
         repo,
         "_run",
-        lambda command: " M app.py\n?? tests/test_app.py\nR  old.py -> new.py",
+        lambda command: (
+            " M app.py\0?? tests/test_app.py\0R  new.py\0old.py\0"
+        ),
     )
 
-    assert repo.changed_files() == ["app.py", "tests/test_app.py", "new.py"]
+    assert repo.changed_files() == ["app.py", "new.py", "tests/test_app.py"]
 
 
 def test_pr_body_builder_includes_required_sections():

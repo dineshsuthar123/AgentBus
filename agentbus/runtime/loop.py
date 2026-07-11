@@ -31,7 +31,7 @@ class AgentLoop:
         )
 
         self.config = config
-        self.workspace = config.workspace_dir
+        self.workspace = str(config.workspace_path)
         self.model_router = model_router
         if model is not None:
             self.model = model

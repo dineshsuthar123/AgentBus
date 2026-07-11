@@ -8,6 +8,7 @@ from agentbus.config import AgentBusConfig
 from agentbus.execution.engine import DurableExecutionEngine, DurableExecutionError
 from agentbus.execution.models import ExecutionReport, RunStatus
 from agentbus.execution.state_store import StateStore, StateStoreError
+from agentbus.git.repository import GitRepositoryError
 from agentbus.memory.run_log import RunLogger
 from agentbus.models.errors import ModelProviderError
 from agentbus.models.router import ModelRouter
@@ -185,7 +186,13 @@ def main() -> int:
 
     try:
         operation_result = _handle_durable_operation(args, config)
-    except (StateStoreError, DurableExecutionError, ModelProviderError, ValueError) as exc:
+    except (
+        StateStoreError,
+        DurableExecutionError,
+        GitRepositoryError,
+        ModelProviderError,
+        ValueError,
+    ) as exc:
         print(f"Error: {exc}")
         return 1
     if operation_result is not None:
@@ -234,6 +241,7 @@ def main() -> int:
             except (
                 StateStoreError,
                 DurableExecutionError,
+                GitRepositoryError,
                 ModelProviderError,
                 ValueError,
             ) as exc:
@@ -244,7 +252,7 @@ def main() -> int:
 
         try:
             result = orchestrator.run(task)
-        except (ModelProviderError, ValueError) as exc:
+        except (GitRepositoryError, ModelProviderError, ValueError) as exc:
             print(f"Error: {exc}")
             return 1
 
@@ -577,6 +585,26 @@ def render_execution_report(report: ExecutionReport) -> str:
         lines.append(f"Verifier: {report.verifier_status}")
     if report.reviewer_status:
         lines.append(f"Reviewer: {report.reviewer_status}")
+    lines.append(f"Workspace: {report.workspace or '[not recorded]'}")
+    lines.append(
+        f"Detected Git top-level: {report.git_top_level or '[not recorded]'}"
+    )
+    if report.reviewer_summary:
+        lines.append(f"Reviewer summary: {report.reviewer_summary}")
+    for issue in report.reviewer_issues:
+        severity = issue.get("severity", "unknown")
+        location = f" ({issue['file']})" if issue.get("file") else ""
+        lines.append(
+            f"Reviewer issue [{severity}]{location}: {issue.get('message', '')}"
+        )
+    for required_fix in report.required_fixes:
+        lines.append(f"Required fix: {required_fix}")
+    for failure in report.task_failures:
+        lines.append(
+            "Task failure: "
+            f"{failure.get('task_id')} [{failure.get('category')}] "
+            f"{failure.get('message')}"
+        )
     if report.changed_files:
         lines.append("Changed files: " + ", ".join(report.changed_files))
     if report.commit_identifier:
@@ -587,6 +615,11 @@ def render_execution_report(report: ExecutionReport) -> str:
         lines.append(f"Git/PR error: {report.finalization_error}")
     if report.failure_reason:
         lines.append(f"Reason: {report.failure_reason}")
+    if report.side_effects_persisted:
+        lines.append(
+            "Filesystem rollback: not performed; created or modified files remain "
+            "in the target workspace for inspection and manual cleanup."
+        )
     if report.resume_command:
         lines.append(f"Resume: {report.resume_command}")
     return "\n".join(lines)
@@ -597,9 +630,14 @@ def _report_exit_code(report: ExecutionReport) -> int:
 
 
 def build_context_pack(config: AgentBusConfig, task: str | None = None) -> str:
-    scan_result = RepoScanner(workspace=config.workspace_dir).scan()
-    test_detection = TestCommandDetector(workspace=config.workspace_dir).detect()
-    return ContextPackBuilder().build(scan_result, test_detection, user_task=task)
+    workspace = str(config.workspace_path)
+    scan_result = RepoScanner(workspace=workspace).scan()
+    test_detection = TestCommandDetector(workspace=workspace).detect()
+    return ContextPackBuilder(workspace=workspace).build(
+        scan_result,
+        test_detection,
+        user_task=task,
+    )
 
 
 if __name__ == "__main__":

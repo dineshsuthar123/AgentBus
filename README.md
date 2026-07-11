@@ -180,9 +180,10 @@ The durable sequence is:
 2. Validate task IDs, dependencies, and cycle freedom.
 3. Persist the run, graph, and all initial task records atomically.
 4. Mark one dependency-ready task as running and create its attempt before invoking the coder.
-5. Run the existing Coder, Verifier, and Reviewer for that graph task.
+5. Run the Coder and Verifier, then review only that task's specification, expected outputs, artifacts, and bounded task diff.
 6. Persist the result, retry if policy allows, or block dependent tasks.
-7. Commit and optionally open a PR only after every graph task succeeds.
+7. After every graph task succeeds, run final verification and one mandatory whole-run review.
+8. Commit and optionally open a PR only after the final reviewer approves.
 
 Planner steps may include an optional `dependencies` list. If no planner step supplies dependencies, AgentBus preserves compatibility by creating a sequential graph: `step-1 -> step-2 -> step-3`. Execution is deterministic and sequential in this checkpoint; no background worker or parallel task execution is started.
 
@@ -221,6 +222,8 @@ Each retry creates a new attempt row and preserves numbering across process recr
 
 If a process stops after a tool has changed the workspace but before task success is persisted, AgentBus records the attempt as interrupted and may retry it. This checkpoint does not provide filesystem rollback or exactly-once semantics for arbitrary external side effects. Task executors should therefore be restart-tolerant.
 
+Failed and rejected runs do not automatically reset, clean, delete, or roll back workspace files. Their reports retain created and modified file paths and state that edits remain for inspection. A future cleanup workflow may recommend bounded manual actions, but AgentBus never executes destructive cleanup automatically.
+
 ### Approval Gates
 
 Low-risk tasks run normally. Medium-risk tasks are recorded in ready events but do not block by default. A high-risk task transitions to `waiting_for_approval` before the coder or any tool is invoked. Only an explicit CLI action can persist a decision:
@@ -247,7 +250,9 @@ python -m agentbus.main --workflow multi --durable --create-branch --commit "Add
 python -m agentbus.main --workflow multi --durable --create-branch --commit --open-pr "Add calculator tests"
 ```
 
-Branch creation may occur before planning when requested. Commit and PR options are persisted with the run, but finalization occurs only after the durable status is `succeeded` and the latest verifier and reviewer statuses are both successful. PR creation remains explicitly opt-in and still requires a successful commit. A clean Git HEAD that moved after a commit-start event can be reconciled after a crash, preventing a second commit from being created during resume.
+The configured durable workspace is canonicalized to an absolute path and must equal `git rev-parse --show-toplevel` when that command is run inside the workspace. A nested directory that would make Git walk into a parent repository is rejected with `WorkspaceRepositoryMismatch`; AgentBus never collects diffs or changed files from that parent. Changed paths are target-repository-relative, diff input is bounded, and durable commits stage only files attributed to the run.
+
+Branch creation may occur before planning when requested. Commit and PR options are persisted with the run, but finalization occurs only after every task succeeds, final verification passes, and the mandatory whole-run reviewer approves. A final rejection fails the run without rewriting successful task or attempt history. PR creation remains explicitly opt-in and still requires a successful commit. A clean Git HEAD that moved after a commit-start event can be reconciled after a crash, preventing a second commit from being created during resume.
 
 ## Repo Context Builder
 

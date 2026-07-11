@@ -79,3 +79,57 @@ Test output:
 """
         output = self.generate_json(prompt, schema=ReviewerOutput)
         return ReviewerOutput(**output).model_dump()
+
+    def review_task(
+        self,
+        *,
+        original_task: str,
+        task_spec: dict,
+        expected_outputs: list[str],
+        artifacts: list[str],
+        task_diff: str,
+        coder_summary: str,
+        verifier_result: dict,
+    ) -> dict:
+        prompt = f"""
+You are the AgentBus task-level Reviewer Agent.
+Return ONLY valid JSON with this shape:
+{{
+  "approved": true,
+  "issues": [
+    {{
+      "severity": "low|medium|high",
+      "message": "...",
+      "file": "optional/path"
+    }}
+  ],
+  "summary": "...",
+  "required_fixes": ["..."]
+}}
+
+Review only the current task against its own expected outputs and done criteria.
+Do not reject it because downstream, dependent, or later tasks are incomplete.
+
+Original task context:
+{original_task}
+
+Current TaskSpec:
+{json.dumps(task_spec, indent=2)}
+
+Expected outputs:
+{json.dumps(expected_outputs, indent=2)}
+
+Current task artifacts:
+{json.dumps(artifacts, indent=2)}
+
+Current task diff and observations:
+{task_diff}
+
+Coder summary:
+{coder_summary}
+
+Current task verifier result:
+{json.dumps(verifier_result, indent=2)}
+"""
+        output = self.generate_json(prompt, schema=ReviewerOutput)
+        return ReviewerOutput(**output).model_dump()
