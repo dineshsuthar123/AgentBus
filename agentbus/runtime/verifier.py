@@ -28,6 +28,7 @@ class Verifier:
     def verify(self, *, require_command: bool = False) -> dict[str, Any]:
         detection = None
         command = self.command
+        auto_detected = command is None
 
         if command is None:
             detection = self.test_detector.detect()
@@ -51,7 +52,27 @@ class Verifier:
                 ),
             }
 
-        result = self.command_tools.run_command_result(command)
+        execution_command = list(command)
+        pytest_cache_disabled = False
+        if auto_detected and command == ["python", "-m", "pytest"]:
+            execution_command = [
+                "python",
+                "-B",
+                "-m",
+                "pytest",
+                "-p",
+                "no:cacheprovider",
+            ]
+            pytest_cache_disabled = True
+        executable = Path(execution_command[0]).name.lower().replace(".exe", "")
+        python_verification = executable in {"python", "python3", "pytest"}
+        environment_overrides = (
+            {"PYTHONDONTWRITEBYTECODE": "1"} if python_verification else None
+        )
+        result = self.command_tools.run_command_result(
+            execution_command,
+            environment_overrides=environment_overrides,
+        )
         return {
             "command": result["command"],
             "exit_code": result["exit_code"],
@@ -62,4 +83,6 @@ class Verifier:
                 if detection
                 else "Explicit verifier command"
             ),
+            "artifact_suppression_active": python_verification,
+            "pytest_cache_disabled": pytest_cache_disabled,
         }

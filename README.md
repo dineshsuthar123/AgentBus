@@ -254,6 +254,38 @@ The configured durable workspace is canonicalized to an absolute path and must e
 
 Branch creation may occur before planning when requested. Commit and PR options are persisted with the run, but finalization occurs only after every task succeeds, final verification passes, and the mandatory whole-run reviewer approves. A final rejection fails the run without rewriting successful task or attempt history. PR creation remains explicitly opt-in and still requires a successful commit. A clean Git HEAD that moved after a commit-start event can be reconciled after a crash, preventing a second commit from being created during resume.
 
+### Generated Artifact Hygiene
+
+AgentBus applies one conservative repository-relative artifact policy to Python, Node, Java/build, editor, OS, and AgentBus runtime outputs. Reports distinguish the complete run-attributed audit inventory from relevant review files, generated artifacts, Git-ignored paths, review exclusions, and commit-eligible files. Normal untracked source and unknown files remain visible; they are never hidden merely because they are untracked.
+
+Auto-detected pytest verification runs as `python -B -m pytest -p no:cacheprovider` with `PYTHONDONTWRITEBYTECODE=1` in an isolated copy of the inherited child environment. This prevents Python bytecode and pytest cache noise without mutating `os.environ`. Explicit verifier commands keep their original arguments; Python commands still receive the safe bytecode environment policy.
+
+Known untracked or Git-ignored generated outputs are excluded from semantic review. Tracked generated-looking files remain visible to the reviewer because the repository has intentionally versioned them. Commit selection is stricter: only relevant run-attributed paths are passed to path-scoped Git commit operations, generated artifacts are never staged, and unrelated staged or pre-existing changes remain untouched.
+
+Recommended repository exclusions include:
+
+```gitignore
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+node_modules/
+coverage/
+.next/
+dist/
+target/
+build/
+.gradle/
+.agentbus/
+runs/
+```
+
+Artifact classification never deletes files. AgentBus prevents avoidable creation, filters safe generated noise from review and commits, and reports paths for inspection. Cleanup remains an explicit manual or future opt-in operation because a matching path may contain user-owned data. This is not filesystem rollback or sandbox isolation.
+
 ## Repo Context Builder
 
 Before multi-agent planning, AgentBus scans the configured workspace and builds a compact text summary for the agents. The context pack includes:

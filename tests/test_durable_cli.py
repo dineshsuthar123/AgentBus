@@ -143,6 +143,12 @@ def test_execution_report_renders_safe_durable_diagnostics():
         workspace="C:/target",
         git_top_level="C:/target",
         changed_files=["calculator.py"],
+        relevant_changed_files=["calculator.py"],
+        generated_artifacts=["__pycache__/calculator.pyc"],
+        ignored_files=[".pytest_cache"],
+        commit_eligible_files=["calculator.py"],
+        review_excluded_files=[".pytest_cache", "__pycache__/calculator.pyc"],
+        verifier_artifact_suppression_active=True,
         reviewer_status="rejected",
         reviewer_summary="Tests need correction",
         reviewer_issues=[
@@ -167,6 +173,12 @@ def test_execution_report_renders_safe_durable_diagnostics():
     assert "Reviewer issue [high] (calculator.py): Missing edge case" in output
     assert "Required fix: Add the edge case" in output
     assert "Task failure: step-1 [reviewer_rejection]" in output
+    assert "Relevant changed files: calculator.py" in output
+    assert "Generated artifacts detected: __pycache__/calculator.pyc" in output
+    assert "Ignored files detected: .pytest_cache" in output
+    assert "Files eligible for commit: calculator.py" in output
+    assert "Files excluded from review: .pytest_cache, __pycache__/calculator.pyc" in output
+    assert "Verifier artifact suppression: active" in output
     assert "Filesystem rollback: not performed" in output
 
 

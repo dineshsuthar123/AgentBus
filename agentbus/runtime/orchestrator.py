@@ -12,7 +12,12 @@ from agentbus.execution.models import ExecutionReport, RunStatus
 from agentbus.execution.state_store import StateStore
 from agentbus.git.branching import generate_branch_name
 from agentbus.git.commit_message import generate_commit_message
-from agentbus.git.repository import GitRepository, GitRepositoryError
+from agentbus.git.repository import (
+    GitRepository,
+    GitRepositoryError,
+    RepositoryChangeSet,
+    WorkspaceRepositoryMismatch,
+)
 from agentbus.github.pr import GitHubPullRequestClient
 from agentbus.github.pr_body import build_pr_body
 from agentbus.memory.run_log import RunLogger
@@ -339,6 +344,7 @@ class MultiAgentOrchestrator:
                 )
                 return self.get_durable_report(run_id)
 
+        verifier_result = self._verify_final()
         baseline = run.metadata.get("workspace_baseline", {})
         changed_since = getattr(self.git_repository, "changed_since", None)
         changed_files = (
@@ -346,7 +352,7 @@ class MultiAgentOrchestrator:
             if changed_since is not None and isinstance(baseline, dict)
             else run.changed_files or self.git_repository.changed_files()
         )
-        verifier_result = self._verify_final()
+        changes = self._repository_changes(changed_files)
         verifier_status = "passed" if verifier_result.get("passed") else "failed"
         if not verifier_result.get("passed"):
             self.state_store.update_run_details(
@@ -355,6 +361,10 @@ class MultiAgentOrchestrator:
                 reviewer_status="not_run",
                 changed_files=changed_files,
                 metadata_updates={
+                    "artifact_hygiene": changes.to_metadata(),
+                    "verifier_artifact_suppression_active": bool(
+                        verifier_result.get("artifact_suppression_active")
+                    ),
                     "final_review": {
                         "required": True,
                         "status": "blocked_by_verification",
@@ -376,18 +386,19 @@ class MultiAgentOrchestrator:
             )
             return self.get_durable_report(run_id)
 
-        full_diff = getattr(self.git_repository, "full_diff", None)
+        review_diff = getattr(self.git_repository, "review_diff", None)
         git_diff = (
-            full_diff(max_chars=30_000, paths=changed_files)
-            if full_diff is not None
-            else self.git.git_diff()
+            review_diff(max_chars=30_000, paths=changes.changed_files)
+            if review_diff is not None
+            else self._fallback_review_diff(changes)
         )
         with model_request_context(run_id=run_id):
-            reviewer_result = self.reviewer.review(
+            reviewer_result = self._call_reviewer(
                 user_task=run.original_task,
                 plan=run.planner_output,
                 git_diff=git_diff,
                 test_output=verifier_result.get("output"),
+                changes=changes,
             )
         approved = bool(reviewer_result.get("approved"))
         self.state_store.update_run_details(
@@ -396,6 +407,10 @@ class MultiAgentOrchestrator:
             reviewer_status="approved" if approved else "rejected",
             changed_files=changed_files,
             metadata_updates={
+                "artifact_hygiene": changes.to_metadata(),
+                "verifier_artifact_suppression_active": bool(
+                    verifier_result.get("artifact_suppression_active")
+                ),
                 "final_review": {
                     "required": True,
                     "status": "approved" if approved else "rejected",
@@ -452,8 +467,11 @@ class MultiAgentOrchestrator:
             return self.get_durable_report(run_id)
 
         changed_files = run.changed_files
+        changes = self._repository_changes(changed_files)
         current_changes = set(self.git_repository.changed_files())
-        pending_files = [path for path in changed_files if path in current_changes]
+        pending_files = [
+            path for path in changes.commit_files if path in current_changes
+        ]
         self.state_store.update_run_details(
             run_id,
             changed_files=changed_files,
@@ -497,7 +515,10 @@ class MultiAgentOrchestrator:
                 else:
                     self.state_store.update_run_details(
                         run_id,
-                        finalization_error="No changed files are available to commit.",
+                        finalization_error=(
+                            "No relevant changed files are available to commit; "
+                            "generated and ignored artifacts were skipped."
+                        ),
                         event_type="commit_creation_skipped",
                     )
                     return self.get_durable_report(run_id)
@@ -532,13 +553,13 @@ class MultiAgentOrchestrator:
             return self.get_durable_report(run_id)
 
         branch = git_options.get("branch") or self.git_repository.current_branch()
-        title = generate_commit_message(run.original_task, run.changed_files)
+        title = generate_commit_message(run.original_task, changes.commit_files)
         body = build_pr_body(
             user_task=run.original_task,
             planner_summary=self._planner_summary(run.planner_output),
             verifier_result={"passed": True, "command": [], "reason": "Durable run"},
             reviewer_result={"approved": True, "summary": "Durable tasks approved"},
-            changed_files=run.changed_files,
+            changed_files=changes.commit_files,
             test_command=None,
         )
         self.state_store.record_event(
@@ -582,6 +603,86 @@ class MultiAgentOrchestrator:
         if "paths" in inspect.signature(commit).parameters:
             return commit(message, paths=changed_files)
         return commit(message)
+
+    def _repository_changes(self, paths: list[str]) -> RepositoryChangeSet:
+        if not paths:
+            return RepositoryChangeSet(
+                changed_files=[],
+                relevant_files=[],
+                generated_files=[],
+                ignored_files=[],
+                tracked_generated_files=[],
+                review_files=[],
+                review_excluded_files=[],
+                commit_files=[],
+            )
+        change_set = getattr(self.git_repository, "change_set", None)
+        if change_set is not None:
+            return change_set(paths)
+        return RepositoryChangeSet(
+            changed_files=paths,
+            relevant_files=paths,
+            generated_files=[],
+            ignored_files=[],
+            tracked_generated_files=[],
+            review_files=paths,
+            review_excluded_files=[],
+            commit_files=paths,
+        )
+
+    def _all_changed_files(self) -> list[str]:
+        all_changed = getattr(self.git_repository, "all_changed_files", None)
+        try:
+            if all_changed is not None:
+                return all_changed()
+            return self.git_repository.changed_files()
+        except WorkspaceRepositoryMismatch:
+            raise
+        except GitRepositoryError:
+            return []
+
+    def _fallback_review_diff(self, changes: RepositoryChangeSet) -> str:
+        full_diff = getattr(self.git_repository, "full_diff", None)
+        if full_diff is not None:
+            try:
+                return full_diff(max_chars=30_000, paths=changes.review_files)
+            except WorkspaceRepositoryMismatch:
+                raise
+            except GitRepositoryError:
+                pass
+        return self.git.git_diff()
+
+    def _call_reviewer(
+        self,
+        *,
+        user_task: str,
+        plan: dict[str, Any],
+        git_diff: str,
+        test_output: str | None,
+        changes: RepositoryChangeSet,
+    ) -> dict[str, Any]:
+        arguments = {
+            "user_task": user_task,
+            "plan": plan,
+            "git_diff": git_diff,
+            "test_output": test_output,
+            "relevant_changed_files": changes.relevant_files,
+            "generated_artifacts": changes.generated_files,
+            "ignored_files": changes.ignored_files,
+            "tracked_generated_artifacts": changes.tracked_generated_files,
+        }
+        parameters = inspect.signature(self.reviewer.review).parameters.values()
+        if not any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters
+        ):
+            supported = {parameter.name for parameter in parameters}
+            arguments = {
+                name: value
+                for name, value in arguments.items()
+                if name in supported
+            }
+        return self.reviewer.review(**arguments)
 
     def _has_unresolved_pr_creation(self, run_id: str) -> bool:
         return self._has_unresolved_external_event(
@@ -678,7 +779,8 @@ class MultiAgentOrchestrator:
         if not self._git_workflow_requested():
             return [], None, None, None
 
-        changed_files = self.git_repository.changed_files()
+        changed_files = self._all_changed_files()
+        changes = self._repository_changes(changed_files)
         self.logger.log("changed_files_detected", {"files": changed_files})
 
         if not approved or not verifier_result.get("passed"):
@@ -686,8 +788,13 @@ class MultiAgentOrchestrator:
 
         commit_hash = None
         if self.commit_changes:
-            message = generate_commit_message(user_task, changed_files)
-            commit_hash = self.git_repository.commit(message)
+            if not changes.commit_files:
+                raise GitRepositoryError(
+                    "No relevant changed files are available to commit; generated "
+                    "and ignored artifacts were skipped."
+                )
+            message = generate_commit_message(user_task, changes.commit_files)
+            commit_hash = self._commit_changed_files(message, changes.commit_files)
             self.logger.log(
                 "commit_created",
                 {
@@ -705,13 +812,13 @@ class MultiAgentOrchestrator:
             return changed_files, commit_hash, None, error
 
         branch = git_branch or self.git_repository.current_branch()
-        title = generate_commit_message(user_task, changed_files)
+        title = generate_commit_message(user_task, changes.commit_files)
         body = build_pr_body(
             user_task=user_task,
             planner_summary=self._planner_summary(plan),
             verifier_result=verifier_result,
             reviewer_result=reviewer_result,
-            changed_files=changed_files,
+            changed_files=changes.commit_files,
             test_command=verifier_result.get("command"),
         )
 
@@ -772,13 +879,16 @@ class MultiAgentOrchestrator:
         plan: dict[str, Any],
         verifier_result: dict[str, Any],
     ) -> dict[str, Any]:
-        git_diff = self.git.git_diff()
+        changed_files = self._all_changed_files()
+        changes = self._repository_changes(changed_files)
+        git_diff = self._fallback_review_diff(changes)
         with model_request_context(run_id=self.logger.run_id):
-            reviewer_result = self.reviewer.review(
+            reviewer_result = self._call_reviewer(
                 user_task=user_task,
                 plan=plan,
                 git_diff=git_diff,
                 test_output=verifier_result.get("output"),
+                changes=changes,
             )
         self.logger.log(
             "reviewer_output",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import uuid
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,7 @@ from agentbus.execution.models import (
     TaskExecutionResult,
 )
 from agentbus.models.router import model_request_context
+from agentbus.git.repository import RepositoryChangeSet
 
 
 class MultiAgentTaskExecutor:
@@ -54,11 +56,12 @@ class MultiAgentTaskExecutor:
             )
             verifier_result = self.verifier.verify()
             changed_files = self._changed_since(before)
-            task_diff = self._task_diff(changed_files)
+            changes = self._change_set(changed_files)
+            task_diff = self._task_diff(changes)
             reviewer_result = self._review_task(
                 context,
                 plan,
-                changed_files,
+                changes,
                 task_diff,
                 coder_summary,
                 verifier_result,
@@ -76,7 +79,14 @@ class MultiAgentTaskExecutor:
                 "command": verifier_result.get("command", []),
                 "exit_code": verifier_result.get("exit_code"),
                 "reason": verifier_result.get("reason"),
+                "artifact_suppression_active": bool(
+                    verifier_result.get("artifact_suppression_active")
+                ),
+                "pytest_cache_disabled": bool(
+                    verifier_result.get("pytest_cache_disabled")
+                ),
             },
+            "artifact_hygiene": changes.to_metadata(),
             # Retained for retry feedback compatibility with persisted attempts.
             "reviewer_feedback": {
                 "approved": bool(reviewer_result.get("approved")),
@@ -89,6 +99,9 @@ class MultiAgentTaskExecutor:
                 *(_drain_model_results(self.reviewer)),
             ],
         }
+        generated = set(changes.generated_files)
+        ignored = set(changes.ignored_files)
+        tracked_generated = set(changes.tracked_generated_files)
         artifacts = [
             ExecutionArtifact(
                 artifact_id=uuid.uuid4().hex,
@@ -96,7 +109,14 @@ class MultiAgentTaskExecutor:
                 task_id=context.task.task_id,
                 artifact_type="workspace_file",
                 identifier=path,
-                metadata={"attempt_number": context.attempt_number},
+                metadata={
+                    "attempt_number": context.attempt_number,
+                    "generated": path in generated,
+                    "ignored": path in ignored,
+                    "tracked_generated": path in tracked_generated,
+                    "review_eligible": path in set(changes.review_files),
+                    "commit_eligible": path in set(changes.commit_files),
+                },
             )
             for path in changed_files
         ]
@@ -184,32 +204,54 @@ class MultiAgentTaskExecutor:
             return self._changed_files()
         return changed_since(before)
 
-    def _task_diff(self, changed_files: list[str]) -> str:
+    def _change_set(self, changed_files: list[str]) -> RepositoryChangeSet:
+        change_set = getattr(self.git_repository, "change_set", None)
+        if change_set is not None:
+            return change_set(changed_files)
+        return RepositoryChangeSet(
+            changed_files=changed_files,
+            relevant_files=changed_files,
+            generated_files=[],
+            ignored_files=[],
+            tracked_generated_files=[],
+            review_files=changed_files,
+            review_excluded_files=[],
+            commit_files=changed_files,
+        )
+
+    def _task_diff(self, changes: RepositoryChangeSet) -> str:
+        review_diff = getattr(self.git_repository, "review_diff", None)
+        if review_diff is not None:
+            return review_diff(max_chars=30_000, paths=changes.changed_files)
         full_diff = getattr(self.git_repository, "full_diff", None)
         if full_diff is None:
             return self.git_tools.git_diff()
-        return full_diff(max_chars=30_000, paths=changed_files)
+        return full_diff(max_chars=30_000, paths=changes.review_files)
 
     def _review_task(
         self,
         context: TaskExecutionContext,
         plan: dict[str, Any],
-        changed_files: list[str],
+        changes: RepositoryChangeSet,
         task_diff: str,
         coder_summary: str,
         verifier_result: dict[str, Any],
     ) -> dict[str, Any]:
         review_task = getattr(self.reviewer, "review_task", None)
         if review_task is not None:
-            return review_task(
-                original_task=context.run.original_task,
-                task_spec=plan["steps"][0],
-                expected_outputs=context.task.expected_outputs,
-                artifacts=changed_files,
-                task_diff=task_diff,
-                coder_summary=coder_summary,
-                verifier_result=verifier_result,
-            )
+            arguments = {
+                "original_task": context.run.original_task,
+                "task_spec": plan["steps"][0],
+                "expected_outputs": context.task.expected_outputs,
+                "artifacts": changes.review_files,
+                "task_diff": task_diff,
+                "coder_summary": coder_summary,
+                "verifier_result": verifier_result,
+                "generated_artifacts": changes.generated_files,
+                "ignored_files": changes.ignored_files,
+                "tracked_generated_artifacts": changes.tracked_generated_files,
+            }
+            return review_task(**_supported_arguments(review_task, arguments))
         return self.reviewer.review(
             user_task=context.run.original_task,
             plan=plan,
@@ -224,3 +266,11 @@ def _drain_model_results(agent) -> list[dict[str, Any]]:
     if drain is None:
         return []
     return [result.event_metadata() for result in drain()]
+
+
+def _supported_arguments(callable_object, arguments: dict[str, Any]) -> dict[str, Any]:
+    parameters = inspect.signature(callable_object).parameters.values()
+    if any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters):
+        return arguments
+    supported = {parameter.name for parameter in parameters}
+    return {name: value for name, value in arguments.items() if name in supported}

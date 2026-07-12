@@ -607,6 +607,34 @@ def render_execution_report(report: ExecutionReport) -> str:
         )
     if report.changed_files:
         lines.append("Changed files: " + ", ".join(report.changed_files))
+    lines.append(
+        "Relevant changed files: "
+        + (", ".join(report.relevant_changed_files) or "[none]")
+    )
+    lines.append(
+        "Generated artifacts detected: "
+        + (", ".join(report.generated_artifacts) or "[none]")
+    )
+    if report.tracked_generated_artifacts:
+        lines.append(
+            "Tracked generated artifacts requiring review: "
+            + ", ".join(report.tracked_generated_artifacts)
+        )
+    lines.append(
+        "Ignored files detected: " + (", ".join(report.ignored_files) or "[none]")
+    )
+    lines.append(
+        "Files eligible for commit: "
+        + (", ".join(report.commit_eligible_files) or "[none]")
+    )
+    lines.append(
+        "Files excluded from review: "
+        + (", ".join(report.review_excluded_files) or "[none]")
+    )
+    lines.append(
+        "Verifier artifact suppression: "
+        + ("active" if report.verifier_artifact_suppression_active else "inactive")
+    )
     if report.commit_identifier:
         lines.append(f"Commit: {report.commit_identifier}")
     if report.pr_url:

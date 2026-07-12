@@ -48,6 +48,10 @@ class ReviewerAgent(BaseAgent):
         plan: dict,
         git_diff: str,
         test_output: str | None = None,
+        relevant_changed_files: list[str] | None = None,
+        generated_artifacts: list[str] | None = None,
+        ignored_files: list[str] | None = None,
+        tracked_generated_artifacts: list[str] | None = None,
     ) -> dict:
         prompt = f"""
 You are the AgentBus Reviewer Agent.
@@ -74,6 +78,9 @@ Planner output:
 Git diff:
 {git_diff}
 
+Repository change classification:
+{_artifact_note(relevant_changed_files, generated_artifacts, ignored_files, tracked_generated_artifacts)}
+
 Test output:
 {test_output or "No test output available."}
 """
@@ -90,6 +97,9 @@ Test output:
         task_diff: str,
         coder_summary: str,
         verifier_result: dict,
+        generated_artifacts: list[str] | None = None,
+        ignored_files: list[str] | None = None,
+        tracked_generated_artifacts: list[str] | None = None,
     ) -> dict:
         prompt = f"""
 You are the AgentBus task-level Reviewer Agent.
@@ -122,6 +132,9 @@ Expected outputs:
 Current task artifacts:
 {json.dumps(artifacts, indent=2)}
 
+Repository change classification:
+{_artifact_note(artifacts, generated_artifacts, ignored_files, tracked_generated_artifacts)}
+
 Current task diff and observations:
 {task_diff}
 
@@ -133,3 +146,35 @@ Current task verifier result:
 """
         output = self.generate_json(prompt, schema=ReviewerOutput)
         return ReviewerOutput(**output).model_dump()
+
+
+def _artifact_note(
+    relevant: list[str] | None,
+    generated: list[str] | None,
+    ignored: list[str] | None,
+    tracked_generated: list[str] | None,
+) -> str:
+    relevant = list(relevant or [])[:50]
+    generated = list(generated or [])[:50]
+    ignored = list(ignored or [])[:50]
+    tracked_generated = list(tracked_generated or [])[:50]
+    excluded_generated = [
+        path for path in generated if path not in set(tracked_generated)
+    ]
+    return json.dumps(
+        {
+            "relevant_changed_files": relevant,
+            "generated_artifacts_detected": generated,
+            "untracked_generated_artifacts_excluded_from_semantic_diff": (
+                excluded_generated
+            ),
+            "git_ignored_files_excluded_from_semantic_diff": ignored,
+            "tracked_generated_artifacts_kept_in_semantic_diff": tracked_generated,
+            "review_policy": (
+                "Do not reject solely because known untracked or ignored generated "
+                "artifacts are listed separately and excluded from the proposed commit. "
+                "Tracked generated artifacts remain reviewable and require scrutiny."
+            ),
+        },
+        indent=2,
+    )

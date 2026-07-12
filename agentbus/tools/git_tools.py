@@ -11,7 +11,7 @@ class GitTools:
 
     def git_diff(self) -> str:
         try:
-            return self.repository.full_diff(max_chars=self.max_diff_chars)
+            return self.repository.review_diff(max_chars=self.max_diff_chars)
         except WorkspaceRepositoryMismatch:
             raise
         except Exception as exc:

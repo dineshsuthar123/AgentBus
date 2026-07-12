@@ -875,6 +875,32 @@ class DurableExecutionEngine:
                         "message": attempt.error_message or "Task attempt failed.",
                     }
                 )
+        hygiene_lists = {
+            "relevant_changed_files": set(),
+            "generated_artifacts": set(),
+            "ignored_files": set(),
+            "commit_eligible_files": set(),
+            "review_excluded_files": set(),
+            "tracked_generated_artifacts": set(),
+        }
+        suppression_active = bool(
+            snapshot.run.metadata.get("verifier_artifact_suppression_active")
+        )
+        hygiene_sources = [snapshot.run.metadata.get("artifact_hygiene", {})]
+        for attempt in snapshot.attempts:
+            hygiene_sources.append(attempt.metadata.get("artifact_hygiene", {}))
+            verifier_metadata = attempt.metadata.get("verifier", {})
+            if isinstance(verifier_metadata, dict):
+                suppression_active = suppression_active or bool(
+                    verifier_metadata.get("artifact_suppression_active")
+                )
+        for source in hygiene_sources:
+            if not isinstance(source, dict):
+                continue
+            for key, values in hygiene_lists.items():
+                raw_values = source.get(key, [])
+                if isinstance(raw_values, list):
+                    values.update(item for item in raw_values if isinstance(item, str))
         return ExecutionReport(
             run_id=snapshot.run.run_id,
             original_task=snapshot.run.original_task,
@@ -897,6 +923,15 @@ class DurableExecutionEngine:
             verifier_status=snapshot.run.verifier_status,
             reviewer_status=snapshot.run.reviewer_status,
             changed_files=snapshot.run.changed_files,
+            relevant_changed_files=sorted(hygiene_lists["relevant_changed_files"]),
+            generated_artifacts=sorted(hygiene_lists["generated_artifacts"]),
+            ignored_files=sorted(hygiene_lists["ignored_files"]),
+            commit_eligible_files=sorted(hygiene_lists["commit_eligible_files"]),
+            review_excluded_files=sorted(hygiene_lists["review_excluded_files"]),
+            tracked_generated_artifacts=sorted(
+                hygiene_lists["tracked_generated_artifacts"]
+            ),
+            verifier_artifact_suppression_active=suppression_active,
             commit_identifier=snapshot.run.commit_identifier,
             pr_url=snapshot.run.pr_url,
             finalization_error=snapshot.run.finalization_error,

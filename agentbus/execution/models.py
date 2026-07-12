@@ -252,6 +252,13 @@ class ExecutionReport(DomainModel):
     verifier_status: str | None = None
     reviewer_status: str | None = None
     changed_files: list[str] = Field(default_factory=list)
+    relevant_changed_files: list[str] = Field(default_factory=list)
+    generated_artifacts: list[str] = Field(default_factory=list)
+    ignored_files: list[str] = Field(default_factory=list)
+    commit_eligible_files: list[str] = Field(default_factory=list)
+    review_excluded_files: list[str] = Field(default_factory=list)
+    tracked_generated_artifacts: list[str] = Field(default_factory=list)
+    verifier_artifact_suppression_active: bool = False
     commit_identifier: str | None = None
     pr_url: str | None = None
     finalization_error: str | None = None

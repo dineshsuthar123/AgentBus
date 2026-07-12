@@ -4,8 +4,14 @@ import hashlib
 import os
 import re
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
+
+from agentbus.repo.artifact_policy import (
+    ArtifactPolicyError,
+    GeneratedArtifactPolicy,
+)
 
 
 class GitRepositoryError(RuntimeError):
@@ -16,10 +22,48 @@ class WorkspaceRepositoryMismatch(GitRepositoryError):
     """Raised when Git resolves the workspace to an unintended parent repository."""
 
 
+@dataclass(frozen=True)
+class GitStatusEntry:
+    path: str
+    status: str
+    tracked: bool
+    ignored: bool
+
+
+@dataclass(frozen=True)
+class RepositoryChangeSet:
+    changed_files: list[str]
+    relevant_files: list[str]
+    generated_files: list[str]
+    ignored_files: list[str]
+    tracked_generated_files: list[str]
+    review_files: list[str]
+    review_excluded_files: list[str]
+    commit_files: list[str]
+
+    def to_metadata(self) -> dict[str, list[str]]:
+        return {
+            "changed_files": self.changed_files,
+            "relevant_changed_files": self.relevant_files,
+            "generated_artifacts": self.generated_files,
+            "ignored_files": self.ignored_files,
+            "tracked_generated_artifacts": self.tracked_generated_files,
+            "review_files": self.review_files,
+            "review_excluded_files": self.review_excluded_files,
+            "commit_eligible_files": self.commit_files,
+        }
+
+
 class GitRepository:
-    def __init__(self, workspace: str = "workspace", timeout_seconds: int = 60):
+    def __init__(
+        self,
+        workspace: str = "workspace",
+        timeout_seconds: int = 60,
+        artifact_policy: GeneratedArtifactPolicy | None = None,
+    ):
         self.workspace = Path(workspace).expanduser().resolve()
         self.timeout_seconds = timeout_seconds
+        self.artifact_policy = artifact_policy or GeneratedArtifactPolicy()
         self._validated_top_level: Path | None = None
 
     def discover_top_level(self) -> Path:
@@ -64,7 +108,7 @@ class GitRepository:
         return self._run(command)
 
     def has_uncommitted_changes(self) -> bool:
-        return bool(self._status_output())
+        return bool(self._status_output(include_ignored=False))
 
     def create_branch(self, branch_name: str) -> str:
         self._validate_branch_name(branch_name)
@@ -115,27 +159,79 @@ class GitRepository:
             return diff[:max_chars] + "\n\n[diff truncated]"
         return diff
 
+    def raw_diff(
+        self,
+        max_chars: int = 30_000,
+        paths: Iterable[str] | None = None,
+    ) -> str:
+        return self.full_diff(max_chars=max_chars, paths=paths)
+
+    def review_diff(
+        self,
+        max_chars: int = 30_000,
+        paths: Iterable[str] | None = None,
+    ) -> str:
+        changes = self.change_set(paths)
+        return self.full_diff(max_chars=max_chars, paths=changes.review_files)
+
     def changed_files(self) -> list[str]:
-        fields = self._status_output().split("\0")
-        files: list[str] = []
-        index = 0
-        while index < len(fields):
-            field = fields[index]
-            index += 1
-            if not field:
-                continue
-            if len(field) < 4:
-                continue
-            status = field[:2]
-            path = field[3:]
-            files.append(self._normalize_relative_path(path))
-            if "R" in status or "C" in status:
-                index += 1  # With -z, the following field is the original path.
-        return sorted(set(files))
+        return sorted(
+            entry.path for entry in self._status_entries() if not entry.ignored
+        )
+
+    def ignored_files(self) -> list[str]:
+        return sorted(entry.path for entry in self._status_entries() if entry.ignored)
+
+    def all_changed_files(self) -> list[str]:
+        return sorted({entry.path for entry in self._status_entries()})
+
+    def relevant_changed_files(
+        self,
+        paths: Iterable[str] | None = None,
+    ) -> list[str]:
+        return self.change_set(paths).relevant_files
+
+    def generated_changed_files(
+        self,
+        paths: Iterable[str] | None = None,
+    ) -> list[str]:
+        return self.change_set(paths).generated_files
+
+    def change_set(self, paths: Iterable[str] | None = None) -> RepositoryChangeSet:
+        entries = self._status_entries()
+        entry_by_path = {entry.path: entry for entry in entries}
+        selected = (
+            self._normalize_paths(paths)
+            if paths is not None
+            else sorted(entry_by_path)
+        )
+        tracked = set(self._tracked_files(set(selected)))
+        ignored = {
+            path
+            for path in selected
+            if entry_by_path.get(path) is not None and entry_by_path[path].ignored
+        }
+        generated = {
+            path for path in selected if self.artifact_policy.is_generated(path)
+        }
+        tracked_generated = generated & tracked
+        relevant = (set(selected) - ignored - generated) | tracked_generated
+        review_excluded = (generated - tracked_generated) | ignored
+        commit_files = set(selected) - ignored - generated
+        return RepositoryChangeSet(
+            changed_files=sorted(selected),
+            relevant_files=sorted(relevant),
+            generated_files=sorted(generated),
+            ignored_files=sorted(ignored),
+            tracked_generated_files=sorted(tracked_generated),
+            review_files=sorted(relevant),
+            review_excluded_files=sorted(review_excluded),
+            commit_files=sorted(commit_files),
+        )
 
     def worktree_snapshot(self) -> dict[str, str]:
         snapshot: dict[str, str] = {}
-        for relative in self.changed_files():
+        for relative in self.all_changed_files():
             path = self.workspace / relative
             if path.is_file():
                 snapshot[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -157,10 +253,16 @@ class GitRepository:
         if not message.strip():
             raise GitRepositoryError("Commit message must not be empty.")
 
-        selected = self._normalize_paths(paths)
-        if paths is not None and not selected:
-            raise GitRepositoryError("No changed files are available to commit.")
-        pathspec = selected or ["."]
+        requested = self._normalize_paths(paths)
+        if paths is not None and not requested:
+            raise GitRepositoryError("No relevant changed files are available to commit.")
+        selected = self.change_set(requested if paths is not None else None).commit_files
+        if not selected:
+            raise GitRepositoryError(
+                "No relevant changed files are available to commit; generated and "
+                "ignored artifacts were skipped."
+            )
+        pathspec = selected
         self._run(["git", "add", "--all", "--", *pathspec])
         self.validate_workspace()
         try:
@@ -182,9 +284,7 @@ class GitRepository:
                 f"Unable to inspect staged changes: {staged.stderr.strip()}"
             )
 
-        commit_command = ["git", "commit", "-m", message]
-        if paths is not None:
-            commit_command.extend(["--only", "--", *pathspec])
+        commit_command = ["git", "commit", "-m", message, "--only", "--", *pathspec]
         self._run(commit_command)
         return self._run(["git", "rev-parse", "--short", "HEAD"])
 
@@ -226,18 +326,41 @@ class GitRepository:
             )
         return result.stdout.rstrip("\r\n")
 
-    def _status_output(self) -> str:
-        return self._run(
-            [
-                "git",
-                "status",
-                "--porcelain=v1",
-                "-z",
-                "--untracked-files=all",
-                "--",
-                ".",
-            ]
-        )
+    def _status_output(self, *, include_ignored: bool = True) -> str:
+        command = [
+            "git",
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+        ]
+        if include_ignored:
+            command.append("--ignored=matching")
+        command.extend(["--", "."])
+        return self._run(command)
+
+    def _status_entries(self) -> list[GitStatusEntry]:
+        fields = self._status_output(include_ignored=True).split("\0")
+        entries: list[GitStatusEntry] = []
+        index = 0
+        while index < len(fields):
+            field = fields[index]
+            index += 1
+            if not field or len(field) < 4:
+                continue
+            status = field[:2]
+            path = self._normalize_relative_path(field[3:])
+            entries.append(
+                GitStatusEntry(
+                    path=path,
+                    status=status,
+                    tracked=status not in {"??", "!!"},
+                    ignored=status == "!!",
+                )
+            )
+            if "R" in status or "C" in status:
+                index += 1  # With -z, the following field is the original path.
+        return entries
 
     def _tracked_files(self, paths: set[str]) -> list[str]:
         if not paths:
@@ -249,6 +372,8 @@ class GitRepository:
         path = self.workspace / relative
         if not path.is_file():
             return ""
+        if self.artifact_policy.is_generated(relative):
+            return f"Generated artifact content omitted: {relative}"
         try:
             with path.open("rb") as handle:
                 data = handle.read(30_001)
@@ -286,9 +411,10 @@ class GitRepository:
                     f"Git returned a path outside the workspace: {value}"
                 ) from exc
         normalized = candidate.as_posix()
-        if normalized == ".." or normalized.startswith("../"):
-            raise GitRepositoryError(f"Path escapes the workspace: {value}")
-        return normalized
+        try:
+            return self.artifact_policy.normalize(normalized)
+        except ArtifactPolicyError as exc:
+            raise GitRepositoryError(str(exc)) from exc
 
     def _validate_branch_name(self, branch_name: str) -> None:
         if not branch_name or branch_name.startswith("-"):

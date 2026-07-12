@@ -14,7 +14,18 @@ def test_verifier_detects_tests_and_runs_pytest_safely(tmp_path):
 
     result = Verifier(config=config).verify()
 
-    assert result["command"] == ["python", "-m", "pytest"]
+    assert result["command"] == [
+        "python",
+        "-B",
+        "-m",
+        "pytest",
+        "-p",
+        "no:cacheprovider",
+    ]
     assert result["exit_code"] == 0
     assert result["passed"] is True
     assert "passed" in result["output"]
+    assert result["artifact_suppression_active"] is True
+    assert result["pytest_cache_disabled"] is True
+    assert not list(workspace.rglob("*.pyc"))
+    assert not (workspace / ".pytest_cache").exists()
