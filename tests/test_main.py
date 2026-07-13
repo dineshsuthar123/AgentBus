@@ -20,6 +20,10 @@ class FakeLoop:
 def test_cli_uses_command_line_task(monkeypatch, capsys):
     FakeLoop.seen_configs = []
     FakeLoop.seen_tasks = []
+    monkeypatch.setenv("AGENTBUS_PROVIDER", "azure")
+    monkeypatch.setenv("AZURE_OPENAI_DEFAULT_DEPLOYMENT", "agentbus-main")
+    monkeypatch.setenv("AZURE_OPENAI_CODER_DEPLOYMENT", "agentbus-main")
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "cli-secret-must-not-appear")
     monkeypatch.setattr(main_module, "AgentLoop", FakeLoop)
     monkeypatch.setattr(
         sys,
@@ -27,6 +31,8 @@ def test_cli_uses_command_line_task(monkeypatch, capsys):
         [
             "agentbus.main",
             "Create hello.py",
+            "--provider",
+            "ollama",
             "--model",
             "test-model",
             "--workspace",
@@ -43,8 +49,13 @@ def test_cli_uses_command_line_task(monkeypatch, capsys):
 
     assert "Task: Create hello.py" in output
     assert "Workspace: test-workspace" in output
+    assert "Provider: ollama" in output
     assert "Model: test-model" in output
+    assert "agentbus-main" not in output
+    assert "cli-secret-must-not-appear" not in output
     assert "fake result" in output
+    assert config.provider_name == "ollama"
+    assert config.resolve_model("coder") == "test-model"
     assert config.max_steps == 2
     assert FakeLoop.seen_tasks == ["Create hello.py"]
 

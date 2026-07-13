@@ -1,4 +1,6 @@
+import os
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -9,6 +11,7 @@ from agentbus.evaluation.fixtures import (
     FixtureWorkspace,
 )
 from agentbus.evaluation.models import EvaluationCase
+from agentbus.evaluation.runner import EvaluationRunner
 from agentbus.git.repository import GitRepository
 
 
@@ -30,6 +33,16 @@ def make_case(source):
 def test_fixture_manager_creates_fresh_isolated_git_repository_per_run(tmp_path):
     source = make_source(tmp_path / "source")
     manager = FixtureRepositoryManager(tmp_path, tmp_path / "owned")
+    first_runner = EvaluationRunner(results_dir=tmp_path / "results-one")
+    second_runner = EvaluationRunner(results_dir=tmp_path / "results-two")
+
+    os_temp = Path(tempfile.gettempdir()).resolve()
+    expected_owned_root = (os_temp / "agentbus-eval-fixtures").resolve()
+    assert Path(tempfile.tempdir).resolve() == os_temp
+    assert ".pytest_tmp" not in os_temp.parts
+    assert first_runner.fixture_manager.owned_root == expected_owned_root
+    assert second_runner.fixture_manager.owned_root == expected_owned_root
+    assert os.path.commonpath([expected_owned_root, os_temp]) == str(os_temp)
 
     first = manager.create(make_case(source), "run-one")
     second = manager.create(make_case(source), "run-two")
