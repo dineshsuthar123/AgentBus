@@ -123,6 +123,13 @@ Durable multi-agent mode persists a validated task graph before coding starts:
 python -m agentbus.main --workflow multi --durable "Create calculator.py with tests"
 ```
 
+Parallel durable mode is explicit and bounded. Each active task receives an isolated
+Git worktree:
+
+```bash
+python -m agentbus.main --workflow multi --durable --parallel --max-workers 3 --workspace C:\path\to\repo "Implement independent backend and documentation tasks"
+```
+
 Print the local repo context pack without running an agent:
 
 ```bash
@@ -172,20 +179,20 @@ If the reviewer rejects the result, AgentBus allows one retry through the Coder 
 
 ## Durable Execution
 
-Durable mode is an opt-in extension of the existing multi-agent workflow. Regular mode keeps the original in-process Planner -> Coder -> Verifier -> Reviewer behavior. Durable mode uses the same agents and safety-controlled tools, but converts planner steps into a persistent graph and executes one task at a time through a SQLite-backed state machine.
+Durable mode is an opt-in extension of the existing multi-agent workflow. Regular mode keeps the original in-process Planner -> Coder -> Verifier -> Reviewer behavior. Durable mode uses the same agents and safety-controlled tools, but converts planner steps into a persistent SQLite-backed graph. Sequential durable execution remains the default. Explicit parallel mode adds a bounded foreground scheduler, transactional worker leases, isolated Git worktrees, and deterministic commit integration.
 
 The durable sequence is:
 
 1. Build the repo context and obtain structured planner output.
 2. Validate task IDs, dependencies, and cycle freedom.
 3. Persist the run, graph, and all initial task records atomically.
-4. Mark one dependency-ready task as running and create its attempt before invoking the coder.
+4. Select dependency-ready and approval-safe tasks, one at a time by default or up to the explicit parallel worker bound.
 5. Run the Coder and Verifier, then review only that task's specification, expected outputs, artifacts, and bounded task diff.
-6. Persist the result, retry if policy allows, or block dependent tasks.
+6. Persist the result, retry if policy allows, or in parallel mode create one scoped task commit and integrate it in deterministic graph order.
 7. After every graph task succeeds, run final verification and one mandatory whole-run review.
 8. Commit and optionally open a PR only after the final reviewer approves.
 
-Planner steps may include an optional `dependencies` list. If no planner step supplies dependencies, AgentBus preserves compatibility by creating a sequential graph: `step-1 -> step-2 -> step-3`. Execution is deterministic and sequential in this checkpoint; no background worker or parallel task execution is started.
+Planner steps may include an optional `dependencies` list. If no planner step supplies dependencies, AgentBus preserves compatibility by creating a sequential graph: `step-1 -> step-2 -> step-3`. Parallelism is therefore available only when the validated plan contains independent ready tasks. No daemon or background worker is started; the bounded scheduler runs in the foreground.
 
 ### Durable State
 
@@ -198,7 +205,17 @@ set AGENTBUS_STATE_DB=state.db
 
 `AGENTBUS_STATE_DB` may also be an absolute database path. When the target repository is the process directory, point `AGENTBUS_STATE_DIR` outside that repository if runtime files must not live there. `.agentbus/` is ignored by this repository.
 
-The database stores runs, task specifications and statuses, attempts, artifact references, approvals, and compact events. JSONL files in `runs/` remain useful audit output, but AgentBus does not reconstruct recovery state from them. Secret-shaped keys and values are redacted from both stores, strings are bounded, and full environment dumps are not recorded.
+The database stores runs, task specifications and statuses, attempts, artifact references, approvals, worktrees, worker leases, task commits, integration attempts, and compact events. Schema version 2 is reached through a transactional version-1 migration; existing rows are preserved and a failed migration rolls back. `StateStore.backup()` provides an explicit SQLite backup operation before migration. JSONL files in `runs/` remain useful audit output, but AgentBus does not reconstruct recovery state from them. Secret-shaped keys and values are redacted from both stores, strings are bounded, and full environment dumps are not recorded.
+
+### Isolated Parallel Execution
+
+At parallel run creation, AgentBus validates that the configured workspace is the exact Git top-level and captures its full base commit SHA. It creates an AgentBus-owned integration worktree and one worktree per active task under a canonical root outside the target repository. Coder, filesystem, command, Git, verifier, and task-review operations receive only the task worktree path. The source checkout, its current branch, staged files, and unrelated changes are never used as the task execution surface.
+
+The scheduler starts at most `min(AGENTBUS_MAX_WORKERS, ready tasks)` local threads. Each task must first acquire a persisted SQLite lease through a short `BEGIN IMMEDIATE` transaction. A task has at most one active non-expired lease. Heartbeats renew ownership, expiry permits reclamation, and every reclamation increments a monotonically increasing fencing token. A stale worker cannot persist task success with an old token. Providers are constructed per worker; only the locked usage ledger is shared.
+
+A successful worker creates exactly one path-scoped task commit containing commit-eligible run-attributed files. Generated and ignored artifacts remain excluded. Task commits are cherry-picked into the integration worktree by topological level and then stable task ID. Downstream tasks are based only on an integration commit that already contains every successful dependency. A conflict is recorded with bounded repository-relative file names, the AgentBus-owned cherry-pick is aborted, and the run halts without modifying the user's checkout or guessing a resolution.
+
+After all task commits integrate, final verification and the mandatory whole-run reviewer run against the integration worktree. Only an accepted integration may create the requested user-facing branch ref, commit identifier, push, or PR. The branch ref points at the verified integration commit but is not checked out or merged into the user's branch.
 
 ### Resume And Inspect
 
@@ -207,11 +224,15 @@ Durable creation prints the run ID before task execution. State-only operations 
 ```bash
 python -m agentbus.main --list-runs
 python -m agentbus.main --show-run <run-id>
+python -m agentbus.main --show-scheduler <run-id>
+python -m agentbus.main --list-worktrees <run-id>
+python -m agentbus.main --list-workers <run-id>
+python -m agentbus.main --recover-leases <run-id>
 python -m agentbus.main --resume <run-id>
 python -m agentbus.main --cancel-run <run-id> --reason "Work no longer needed"
 ```
 
-On resume, a task left `running` is reconciled from its latest persisted attempt:
+On sequential resume, a task left `running` is reconciled from its latest persisted attempt. On parallel resume, AgentBus first expires stale leases, leaves tasks with valid leases untouched, validates persisted worktrees, recovers a task commit created before state persistence when its history is unambiguous, and resumes interrupted integration safely:
 
 - A still-running attempt becomes `interrupted`.
 - A succeeded attempt whose task status was not yet updated is promoted to a succeeded task.
@@ -220,9 +241,15 @@ On resume, a task left `running` is reconciled from its latest persisted attempt
 
 Each retry creates a new attempt row and preserves numbering across process recreation. Retry delay is persisted as deterministic metadata for future scheduling; the current CLI does not sleep or launch a background retry worker. Model output and transport failures, command failures, verifier failures, reviewer corrections, and interruptions may be retried. Policy violations and unsafe tool validation failures are not blindly retried. The planner default is two attempts per task, bounded again by the engine retry policy.
 
-If a process stops after a tool has changed the workspace but before task success is persisted, AgentBus records the attempt as interrupted and may retry it. This checkpoint does not provide filesystem rollback or exactly-once semantics for arbitrary external side effects. Task executors should therefore be restart-tolerant.
+If a process stops after a tool has changed a worktree but before task success is persisted, AgentBus records the attempt as interrupted and may retry it. A single clean task commit directly above the persisted worktree base can be recovered without rerunning its coder. This checkpoint provides recoverable local execution and duplicate-execution prevention under persisted local lease rules; it does not provide distributed exactly-once execution or transactional rollback for arbitrary external side effects. Task executors should therefore remain restart-tolerant.
 
 Failed and rejected runs do not automatically reset, clean, delete, or roll back workspace files. Their reports retain created and modified file paths and state that edits remain for inspection. A future cleanup workflow may recommend bounded manual actions, but AgentBus never executes destructive cleanup automatically.
+
+Worktree cleanup is also explicit. The following command considers only persisted AgentBus-owned worktrees for the named run, validates repository ownership, marks each cleanup request, and removes only clean worktrees. Dirty, missing, mismatched, or unknown paths are refused and reported. No force option is used.
+
+```bash
+python -m agentbus.main --cleanup-worktrees <run-id>
+```
 
 ### Approval Gates
 
@@ -252,7 +279,7 @@ python -m agentbus.main --workflow multi --durable --create-branch --commit --op
 
 The configured durable workspace is canonicalized to an absolute path and must equal `git rev-parse --show-toplevel` when that command is run inside the workspace. A nested directory that would make Git walk into a parent repository is rejected with `WorkspaceRepositoryMismatch`; AgentBus never collects diffs or changed files from that parent. Changed paths are target-repository-relative, diff input is bounded, and durable commits stage only files attributed to the run.
 
-Branch creation may occur before planning when requested. Commit and PR options are persisted with the run, but finalization occurs only after every task succeeds, final verification passes, and the mandatory whole-run reviewer approves. A final rejection fails the run without rewriting successful task or attempt history. PR creation remains explicitly opt-in and still requires a successful commit. A clean Git HEAD that moved after a commit-start event can be reconciled after a crash, preventing a second commit from being created during resume.
+In sequential mode, branch creation may occur before planning when requested. In parallel mode, no user-facing branch is created until the integrated result passes final verification and review. Commit and PR options are persisted with the run, and final rejection fails the run without rewriting successful task, attempt, task-commit, or integration history. PR creation remains explicitly opt-in. A clean Git HEAD that moved after a sequential commit-start event can be reconciled after a crash, preventing a second commit from being created during resume.
 
 ### Generated Artifact Hygiene
 
@@ -329,6 +356,13 @@ The runner also reads these environment variables:
 - `AGENTBUS_MAX_STEPS`
 - `AGENTBUS_COMMAND_TIMEOUT`
 - `AGENTBUS_MAX_HISTORY_CHARS`
+- `AGENTBUS_PARALLEL_EXECUTION` (default `false`)
+- `AGENTBUS_MAX_WORKERS` (default `1`)
+- `AGENTBUS_WORKER_LEASE_SECONDS` (default `120`)
+- `AGENTBUS_WORKER_HEARTBEAT_SECONDS` (default `30`, less than half the lease)
+- `AGENTBUS_WORKTREE_ROOT` (default is a workspace-specific sibling path)
+- `AGENTBUS_KEEP_WORKTREES` (default `true`)
+- `AGENTBUS_INTEGRATION_STRATEGY` (currently `cherry-pick` only)
 - `AGENTBUS_PROVIDER`
 - `AGENTBUS_FALLBACK_PROVIDER`
 - `AGENTBUS_ENABLE_PROVIDER_FALLBACK`
@@ -371,10 +405,12 @@ AgentBus is intentionally local and conservative:
 
 - AgentBus is a local runner, not a multi-tenant service.
 - The multi-agent workflow supports one reviewer retry for now.
-- Durable graph execution is sequential and runs in the foreground; there is no scheduler, daemon, distributed lease, or parallel execution.
-- Durable recovery cannot roll back partially completed filesystem or command side effects. Interrupted tasks may run again within their bounded attempt policy.
-- Tasks share one workspace. Per-task Git worktrees and isolated merge coordination are not implemented yet.
-- SQLite schema version 1 is guarded explicitly; future schema changes require registered migrations.
+- Parallel execution is bounded, local, foreground, and opt-in. There is no daemon, remote queue, multi-host consensus, distributed lease, or speculative execution.
+- Durable recovery cannot roll back arbitrary filesystem, command, network, or other external side effects. Interrupted tasks may run again within their bounded attempt policy unless a safe task commit is recovered.
+- Parallel mode requires an isolated target Git repository root. Non-Git workspaces and nested directories that resolve to a parent repository are refused.
+- Integration conflicts halt for explicit human action; AgentBus does not automatically resolve, reset, clean, merge into, or check out the user's branch.
+- Worktrees and internal refs are retained for diagnostics by default. Cleanup is explicit and refuses dirty or unowned paths.
+- SQLite schema version 2 has an explicit migration from version 1. Future schema changes still require registered transactional migrations.
 - Repo context is heuristic-based; it does not read whole file contents, build embeddings, or infer complex architecture.
 - There is no web dashboard, authentication, billing, cloud deployment, or Kubernetes integration.
 - There is no complex vector memory yet.

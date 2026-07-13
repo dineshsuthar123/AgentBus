@@ -232,3 +232,33 @@ def test_explicit_absolute_workspace_propagates_to_runtime_components(tmp_path):
     assert executor.git_repository.workspace == workspace
     assert executor.workspace == workspace
     assert store.get_run(run_id).workspace == str(workspace)
+
+
+def test_parallel_worker_runtime_propagates_isolated_absolute_workspace(tmp_path):
+    source = init_repository(tmp_path / "source")
+    worker_workspace = (tmp_path / "worktrees" / "task-A").resolve()
+    worker_workspace.mkdir(parents=True)
+    settings = AgentBusConfig(
+        workspace_dir=str(source),
+        runs_dir=str(tmp_path / "runs"),
+        state_dir=str(tmp_path / "state"),
+        parallel_execution=True,
+        worktree_root=str(tmp_path / "worktrees"),
+    )
+    runner = MultiAgentOrchestrator(config=settings)
+
+    executor = runner._parallel_task_executor(worker_workspace)
+    loop = AgentLoop(config=executor.coder.config, model=object())
+
+    assert executor.workspace == worker_workspace
+    assert executor.git_repository.workspace == worker_workspace
+    assert executor.git_tools.workspace == worker_workspace
+    assert executor.coder.config.workspace_path == worker_workspace
+    assert executor.reviewer.config.workspace_path == worker_workspace
+    assert executor.verifier.workspace == worker_workspace
+    assert executor.verifier.command_tools.workspace == worker_workspace
+    assert executor.verifier.test_detector.workspace == worker_workspace
+    assert Path(loop.workspace) == worker_workspace
+    assert loop.fs.workspace == worker_workspace
+    assert loop.cmd.workspace == worker_workspace
+    assert loop.git.workspace == worker_workspace

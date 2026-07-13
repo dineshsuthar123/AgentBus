@@ -1,10 +1,14 @@
 import json
 import uuid
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from agentbus.security.redaction import sanitize_json
+
+
+_LOG_WRITE_LOCK = threading.Lock()
 
 
 class RunLogger:
@@ -24,5 +28,6 @@ class RunLogger:
             "data": sanitize_json(data),
         }
 
-        with self.log_file.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(event, ensure_ascii=False, allow_nan=False) + "\n")
+        with _LOG_WRITE_LOCK:
+            with self.log_file.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(event, ensure_ascii=False, allow_nan=False) + "\n")

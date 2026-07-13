@@ -144,6 +144,23 @@ def test_tracked_generated_file_is_reviewed_but_not_commit_eligible(tmp_path):
     assert "__pycache__/tracked.pyc" in repository.review_diff()
 
 
+def test_commit_range_diff_keeps_tracked_generated_files_visible(tmp_path):
+    workspace = init_repository(tmp_path / "repo")
+    cache = workspace / "__pycache__" / "tracked.pyc"
+    cache.parent.mkdir()
+    cache.write_bytes(b"\x00baseline")
+    run_git(workspace, "add", "__pycache__/tracked.pyc")
+    run_git(workspace, "commit", "-m", "track generated fixture")
+    base = run_git(workspace, "rev-parse", "HEAD").strip()
+    cache.write_bytes(b"\x00modified")
+    run_git(workspace, "add", "__pycache__/tracked.pyc")
+    run_git(workspace, "commit", "-m", "update generated fixture")
+
+    diff = GitRepository(str(workspace)).commit_diff(base)
+
+    assert "__pycache__/tracked.pyc" in diff
+
+
 def test_path_scoped_commit_skips_generated_artifacts(tmp_path):
     workspace = init_repository(tmp_path / "repo")
     (workspace / "calculator.py").write_text("def add(a, b): return a + b\n", encoding="utf-8")

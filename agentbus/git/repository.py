@@ -115,6 +115,21 @@ class GitRepository:
         self._run(["git", "switch", "-c", branch_name])
         return f"Created branch: {branch_name}"
 
+    def create_branch_at(self, branch_name: str, commit_sha: str) -> str:
+        self._validate_branch_name(branch_name)
+        resolved = self._run(["git", "rev-parse", "--verify", f"{commit_sha}^{{commit}}"])
+        self._run(["git", "branch", branch_name, resolved])
+        return f"Created branch: {branch_name} at {resolved}"
+
+    def branch_commit(self, branch_name: str) -> str | None:
+        self._validate_branch_name(branch_name)
+        try:
+            return self._run(
+                ["git", "rev-parse", "--verify", f"refs/heads/{branch_name}^{{commit}}"]
+            )
+        except GitRepositoryError:
+            return None
+
     def checkout_branch(self, branch_name: str) -> str:
         self._validate_branch_name(branch_name)
         self._run(["git", "switch", branch_name])
@@ -173,6 +188,34 @@ class GitRepository:
     ) -> str:
         changes = self.change_set(paths)
         return self.full_diff(max_chars=max_chars, paths=changes.review_files)
+
+    def changed_files_between(self, base_commit: str, head: str = "HEAD") -> list[str]:
+        output = self._run(
+            ["git", "diff", "--name-only", "-z", f"{base_commit}..{head}", "--", "."]
+        )
+        return sorted(
+            self._normalize_relative_path(path)
+            for path in output.split("\0")
+            if path
+        )
+
+    def commit_diff(
+        self,
+        base_commit: str,
+        head: str = "HEAD",
+        *,
+        max_chars: int = 30_000,
+    ) -> str:
+        changed = self.changed_files_between(base_commit, head)
+        review_files = self.change_set(changed).review_files
+        if not review_files:
+            return "No diff."
+        diff = self._run(
+            ["git", "diff", "--no-color", f"{base_commit}..{head}", "--", *review_files]
+        )
+        if len(diff) > max_chars:
+            return diff[:max_chars] + "\n\n[diff truncated]"
+        return diff or "No diff."
 
     def changed_files(self) -> list[str]:
         return sorted(

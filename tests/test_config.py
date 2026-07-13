@@ -13,6 +13,13 @@ ENV_VARS = [
     "AGENTBUS_MAX_STEPS",
     "AGENTBUS_COMMAND_TIMEOUT",
     "AGENTBUS_MAX_HISTORY_CHARS",
+    "AGENTBUS_PARALLEL_EXECUTION",
+    "AGENTBUS_MAX_WORKERS",
+    "AGENTBUS_WORKER_LEASE_SECONDS",
+    "AGENTBUS_WORKER_HEARTBEAT_SECONDS",
+    "AGENTBUS_WORKTREE_ROOT",
+    "AGENTBUS_KEEP_WORKTREES",
+    "AGENTBUS_INTEGRATION_STRATEGY",
     "AGENTBUS_PROVIDER",
     "AGENTBUS_FALLBACK_PROVIDER",
     "AGENTBUS_ENABLE_PROVIDER_FALLBACK",
@@ -51,6 +58,10 @@ def test_default_config(monkeypatch):
     assert config.provider_name == "ollama"
     assert config.enable_provider_fallback is False
     assert config.fallback_provider_name == "ollama"
+    assert config.parallel_execution is False
+    assert config.max_workers == 1
+    assert config.keep_worktrees is True
+    assert config.integration_strategy == "cherry-pick"
 
 
 def test_env_overrides(monkeypatch):
@@ -74,6 +85,44 @@ def test_env_overrides(monkeypatch):
     assert config.max_steps == 3
     assert config.command_timeout_seconds == 4
     assert config.max_history_chars == 500
+
+
+def test_parallel_environment_configuration_and_canonical_worktree_root(
+    monkeypatch, tmp_path
+):
+    worktree_root = tmp_path / "runtime" / ".." / "worktrees"
+    monkeypatch.setenv("AGENTBUS_PARALLEL_EXECUTION", "true")
+    monkeypatch.setenv("AGENTBUS_MAX_WORKERS", "3")
+    monkeypatch.setenv("AGENTBUS_WORKER_LEASE_SECONDS", "90")
+    monkeypatch.setenv("AGENTBUS_WORKER_HEARTBEAT_SECONDS", "20")
+    monkeypatch.setenv("AGENTBUS_WORKTREE_ROOT", str(worktree_root))
+    monkeypatch.setenv("AGENTBUS_KEEP_WORKTREES", "false")
+    monkeypatch.setenv("AGENTBUS_INTEGRATION_STRATEGY", "CHERRY-PICK")
+
+    config = AgentBusConfig.from_env()
+
+    assert config.parallel_execution is True
+    assert config.max_workers == 3
+    assert config.worker_lease_seconds == 90
+    assert config.worker_heartbeat_seconds == 20
+    assert config.worktree_root_path == (tmp_path / "worktrees").resolve()
+    assert config.keep_worktrees is False
+    assert config.integration_strategy == "cherry-pick"
+
+
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"max_workers": 0},
+        {"worker_lease_seconds": 0},
+        {"worker_heartbeat_seconds": 0},
+        {"worker_lease_seconds": 60, "worker_heartbeat_seconds": 30},
+        {"integration_strategy": "merge"},
+    ],
+)
+def test_invalid_parallel_configuration_is_rejected(updates):
+    with pytest.raises(ValueError):
+        AgentBusConfig(**updates)
 
 
 def test_invalid_env_int(monkeypatch):

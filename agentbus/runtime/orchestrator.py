@@ -1,6 +1,7 @@
 import inspect
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from agentbus.agents.coder import CoderAgent
@@ -8,8 +9,12 @@ from agentbus.agents.planner import PlannerAgent
 from agentbus.agents.reviewer import ReviewerAgent
 from agentbus.config import AgentBusConfig
 from agentbus.execution.engine import DurableExecutionEngine
+from agentbus.execution.integration import IntegrationCoordinator
+from agentbus.execution.leases import LeaseService
 from agentbus.execution.models import ExecutionReport, RunStatus
-from agentbus.execution.state_store import StateStore
+from agentbus.execution.scheduler import ParallelExecutionScheduler
+from agentbus.execution.state_store import StateStore, StateStoreError
+from agentbus.execution.worker import LocalTaskWorker
 from agentbus.git.branching import generate_branch_name
 from agentbus.git.commit_message import generate_commit_message
 from agentbus.git.repository import (
@@ -21,13 +26,20 @@ from agentbus.git.repository import (
 from agentbus.github.pr import GitHubPullRequestClient
 from agentbus.github.pr_body import build_pr_body
 from agentbus.memory.run_log import RunLogger
-from agentbus.models.router import ModelRouter, model_request_context
+from agentbus.models.router import (
+    ModelProviderFactory,
+    ModelRouter,
+    model_request_context,
+)
 from agentbus.repo.context_pack import ContextPackBuilder
 from agentbus.repo.scanner import RepoScanner
 from agentbus.repo.test_detection import TestCommandDetector
 from agentbus.runtime.verifier import Verifier
 from agentbus.runtime.durable_workflow import MultiAgentTaskExecutor
 from agentbus.tools.git_tools import GitTools
+from agentbus.worktrees.manager import GitWorktreeManager
+from agentbus.worktrees.errors import WorktreeError
+from agentbus.worktrees.models import WorktreePurpose
 
 
 @dataclass
@@ -75,6 +87,10 @@ class MultiAgentOrchestrator:
         state_store: StateStore | None = None,
         durable_crash_hook=None,
         model_router: ModelRouter | None = None,
+        parallel_executor_factory=None,
+        parallel_final_verifier=None,
+        parallel_final_reviewer=None,
+        worker_crash_hook=None,
     ):
         self.config = config or AgentBusConfig.from_env()
         self.workspace = self.config.workspace_path
@@ -119,6 +135,10 @@ class MultiAgentOrchestrator:
         self.allow_existing_changes = allow_existing_changes
         self._state_store = state_store
         self.durable_crash_hook = durable_crash_hook
+        self.parallel_executor_factory = parallel_executor_factory
+        self.parallel_final_verifier = parallel_final_verifier
+        self.parallel_final_reviewer = parallel_final_reviewer
+        self.worker_crash_hook = worker_crash_hook
 
     def run(self, user_task: str) -> OrchestrationResult:
         self.logger.log(
@@ -230,9 +250,13 @@ class MultiAgentOrchestrator:
             },
         )
         git_top_level = self._validate_workspace_repository()
+        parallel_enabled = bool(self.config.parallel_execution)
+        base_commit = (
+            self.git_repository.head_commit(short=False) if parallel_enabled else None
+        )
         snapshot = getattr(self.git_repository, "worktree_snapshot", None)
         workspace_baseline = snapshot() if snapshot is not None else {}
-        git_branch = self._prepare_git_workflow(user_task)
+        git_branch = None if parallel_enabled else self._prepare_git_workflow(user_task)
         initial_head = None
         if self._git_workflow_requested() and self.git_repository.is_git_repo():
             initial_head = self.git_repository.head_commit()
@@ -250,6 +274,7 @@ class MultiAgentOrchestrator:
                 "open_pr": self.open_pr,
                 "pr_base": self.pr_base,
                 "branch": git_branch,
+                "branch_name": self.branch_name,
                 "initial_head": initial_head,
             },
             "model_routing": self.config.safe_model_summary(),
@@ -260,6 +285,18 @@ class MultiAgentOrchestrator:
             },
             "final_review": {"required": True, "status": "pending"},
             "workspace_baseline": workspace_baseline,
+            "parallel_execution": {
+                "enabled": parallel_enabled,
+                "max_workers": self.config.max_workers,
+                "lease_seconds": self.config.worker_lease_seconds,
+                "heartbeat_seconds": self.config.worker_heartbeat_seconds,
+                "worktree_root": str(self.config.worktree_root_path),
+                "keep_worktrees": self.config.keep_worktrees,
+                "integration_strategy": self.config.integration_strategy,
+                "base_commit": base_commit,
+                "workers_used": [],
+                "integration_order": [],
+            },
         }
         engine = self._durable_engine(run_id)
         engine.create_run(
@@ -276,6 +313,16 @@ class MultiAgentOrchestrator:
 
     def run_durable(self, run_id: str, *, resume: bool = False) -> ExecutionReport:
         """Execute or resume a persisted multi-agent run and finalize Git safely."""
+        persisted = self.state_store.get_run(run_id)
+        parallel = persisted.metadata.get("parallel_execution", {})
+        if isinstance(parallel, dict) and parallel.get("enabled"):
+            scheduler = self._parallel_scheduler(run_id)
+            report = scheduler.run(run_id, resume=resume)
+            if report.status == RunStatus.WAITING_FOR_REVIEW:
+                report = self._run_parallel_final_review(run_id)
+            if report.status == RunStatus.SUCCEEDED:
+                report = self._finalize_parallel_git(run_id)
+            return report
         engine = self._durable_engine(run_id)
         report = engine.resume(run_id) if resume else engine.run_until_blocked(run_id)
         if report.status == RunStatus.WAITING_FOR_REVIEW:
@@ -312,6 +359,77 @@ class MultiAgentOrchestrator:
             task_executor,
             logger=logger,
             crash_hook=self.durable_crash_hook,
+        )
+
+    def _parallel_scheduler(self, run_id: str) -> ParallelExecutionScheduler:
+        run = self.state_store.get_run(run_id)
+        parallel = run.metadata.get("parallel_execution", {})
+        if not isinstance(parallel, dict):
+            raise GitRepositoryError("Persisted parallel execution metadata is invalid.")
+        manager = GitWorktreeManager(
+            self.workspace,
+            parallel.get("worktree_root") or self.config.worktree_root_path,
+            self.state_store,
+        )
+        leases = LeaseService(
+            self.state_store,
+            lease_seconds=float(
+                parallel.get("lease_seconds", self.config.worker_lease_seconds)
+            ),
+        )
+        integration = IntegrationCoordinator(self.state_store, manager)
+
+        def worker_factory(worker_id: str) -> LocalTaskWorker:
+            return LocalTaskWorker(
+                worker_id=worker_id,
+                store=self.state_store,
+                lease_service=leases,
+                worktree_manager=manager,
+                executor_factory=self._parallel_task_executor,
+                heartbeat_seconds=float(
+                    parallel.get(
+                        "heartbeat_seconds", self.config.worker_heartbeat_seconds
+                    )
+                ),
+                crash_hook=self.worker_crash_hook,
+            )
+
+        return ParallelExecutionScheduler(
+            store=self.state_store,
+            worktree_manager=manager,
+            lease_service=leases,
+            integration=integration,
+            worker_factory=worker_factory,
+            max_workers=int(parallel.get("max_workers", 1)),
+        )
+
+    def _parallel_task_executor(self, workspace: Path):
+        if self.parallel_executor_factory is not None:
+            return self.parallel_executor_factory(workspace)
+        config = self.config.with_overrides(
+            workspace_dir=str(workspace), parallel_execution=False
+        )
+        logger = RunLogger(log_dir=config.runs_dir)
+        factory = ModelProviderFactory(
+            config,
+            builders=dict(self.model_router.provider_factory.builders),
+        )
+        router = ModelRouter(
+            config,
+            provider_factory=factory,
+            logger=logger,
+            usage_ledger=self.model_router.usage_ledger,
+            sleeper=self.model_router.sleeper,
+            jitter=self.model_router.jitter,
+        )
+        repository = GitRepository(str(workspace))
+        return MultiAgentTaskExecutor(
+            coder=CoderAgent(config=config, model_router=router),
+            verifier=Verifier(config=config),
+            reviewer=ReviewerAgent(config=config, model_router=router),
+            git_tools=GitTools(str(workspace)),
+            git_repository=repository,
+            workspace=str(workspace),
         )
 
     def _run_final_review(self, run_id: str) -> ExecutionReport:
@@ -432,6 +550,284 @@ class MultiAgentOrchestrator:
                 else "durable_run_final_review_rejected"
             ),
         )
+        return self.get_durable_report(run_id)
+
+    def _run_parallel_final_review(self, run_id: str) -> ExecutionReport:
+        run = self.state_store.get_run(run_id)
+        if run.status != RunStatus.WAITING_FOR_REVIEW:
+            return self.get_durable_report(run_id)
+        persisted_review = run.metadata.get("final_review", {})
+        if isinstance(persisted_review, dict) and persisted_review.get("status") in {
+            "approved",
+            "rejected",
+            "blocked_by_verification",
+        }:
+            approved = persisted_review.get("status") == "approved"
+            self.state_store.update_run_status(
+                run_id,
+                RunStatus.SUCCEEDED if approved else RunStatus.FAILED,
+                failure_reason=None if approved else "Parallel final acceptance failed.",
+                event_type="final_review_state_reconciled",
+            )
+            return self.get_durable_report(run_id)
+        parallel = run.metadata.get("parallel_execution", {})
+        if not isinstance(parallel, dict):
+            raise GitRepositoryError("Persisted parallel execution metadata is invalid.")
+        worktree_id = parallel.get("integration_worktree_id")
+        base_commit = parallel.get("base_commit")
+        if not isinstance(worktree_id, str) or not worktree_id:
+            raise GitRepositoryError(
+                "Parallel run is missing its persisted integration worktree ID."
+            )
+        if not isinstance(base_commit, str) or not base_commit:
+            raise GitRepositoryError("Parallel run is missing its exact base commit.")
+        try:
+            manager = GitWorktreeManager(
+                self.workspace,
+                parallel.get("worktree_root") or self.config.worktree_root_path,
+                self.state_store,
+            )
+            integration_worktree = self.state_store.get_worktree(worktree_id)
+            if (
+                integration_worktree.run_id != run_id
+                or integration_worktree.purpose != WorktreePurpose.INTEGRATION
+            ):
+                raise GitRepositoryError(
+                    "Persisted integration worktree ownership does not match the run."
+                )
+            integration_path = manager.validate(integration_worktree)
+        except (StateStoreError, WorktreeError) as exc:
+            raise GitRepositoryError(
+                f"Unable to validate the persisted integration worktree: {exc}"
+            ) from exc
+        repository = GitRepository(str(integration_path))
+        repository.validate_workspace()
+        verifier, reviewer = self._parallel_final_runtime(integration_path)
+        self.state_store.record_event(
+            run_id,
+            "final_integration_verification_started",
+            {"integration_worktree": str(integration_path)},
+        )
+        verify = verifier.verify
+        verifier_result = (
+            verify(require_command=True)
+            if "require_command" in inspect.signature(verify).parameters
+            else verify()
+        )
+        changed_files = repository.changed_files_between(base_commit)
+        changes = repository.change_set(changed_files)
+        integration_commit = repository.head_commit(short=False)
+        parallel = {**parallel, "integration_commit": integration_commit}
+        if not verifier_result.get("passed"):
+            self.state_store.update_run_details(
+                run_id,
+                verifier_status="failed",
+                reviewer_status="not_run",
+                changed_files=changed_files,
+                metadata_updates={
+                    "parallel_execution": parallel,
+                    "artifact_hygiene": changes.to_metadata(),
+                    "verifier_artifact_suppression_active": bool(
+                        verifier_result.get("artifact_suppression_active")
+                    ),
+                    "final_review": {
+                        "required": True,
+                        "status": "blocked_by_verification",
+                        "summary": "Integrated final verification failed.",
+                        "issues": [],
+                        "required_fixes": [
+                            verifier_result.get("reason")
+                            or "Make integrated verification pass."
+                        ],
+                    },
+                },
+                event_type="final_integration_verification_failed",
+            )
+            self.state_store.update_run_status(
+                run_id,
+                RunStatus.FAILED,
+                failure_reason="Integrated final verification failed.",
+                event_type="durable_run_final_verification_failed",
+            )
+            return self.get_durable_report(run_id)
+        git_diff = repository.commit_diff(base_commit, max_chars=30_000)
+        with model_request_context(run_id=run_id):
+            reviewer_result = self._call_reviewer(
+                user_task=run.original_task,
+                plan=run.planner_output,
+                git_diff=git_diff,
+                test_output=verifier_result.get("output"),
+                changes=changes,
+                reviewer=reviewer,
+            )
+        approved = bool(reviewer_result.get("approved"))
+        self.state_store.update_run_details(
+            run_id,
+            verifier_status="passed",
+            reviewer_status="approved" if approved else "rejected",
+            changed_files=changed_files,
+            metadata_updates={
+                "parallel_execution": parallel,
+                "artifact_hygiene": changes.to_metadata(),
+                "verifier_artifact_suppression_active": bool(
+                    verifier_result.get("artifact_suppression_active")
+                ),
+                "final_review": {
+                    "required": True,
+                    "status": "approved" if approved else "rejected",
+                    "summary": reviewer_result.get("summary", ""),
+                    "issues": reviewer_result.get("issues", []),
+                    "required_fixes": reviewer_result.get("required_fixes", []),
+                },
+            },
+            event_type="final_integration_review_completed",
+        )
+        self.state_store.update_run_status(
+            run_id,
+            RunStatus.SUCCEEDED if approved else RunStatus.FAILED,
+            failure_reason=None if approved else "Final reviewer rejected integrated work.",
+            event_type=(
+                "durable_run_succeeded"
+                if approved
+                else "durable_run_final_review_rejected"
+            ),
+        )
+        return self.get_durable_report(run_id)
+
+    def _parallel_final_runtime(self, workspace: Path):
+        verifier = self.parallel_final_verifier
+        reviewer = self.parallel_final_reviewer
+        if verifier is not None and reviewer is not None:
+            return verifier, reviewer
+        config = self.config.with_overrides(
+            workspace_dir=str(workspace), parallel_execution=False
+        )
+        factory = ModelProviderFactory(
+            config, builders=dict(self.model_router.provider_factory.builders)
+        )
+        router = ModelRouter(
+            config,
+            provider_factory=factory,
+            logger=RunLogger(log_dir=config.runs_dir),
+            usage_ledger=self.model_router.usage_ledger,
+            sleeper=self.model_router.sleeper,
+            jitter=self.model_router.jitter,
+        )
+        return (
+            verifier or Verifier(config=config),
+            reviewer or ReviewerAgent(config=config, model_router=router),
+        )
+
+    def _finalize_parallel_git(self, run_id: str) -> ExecutionReport:
+        run = self.state_store.get_run(run_id)
+        git_options = run.metadata.get("git", {})
+        parallel = run.metadata.get("parallel_execution", {})
+        if not isinstance(git_options, dict) or not isinstance(parallel, dict):
+            return self.get_durable_report(run_id)
+        if not git_options.get("requested"):
+            return self.get_durable_report(run_id)
+        if run.verifier_status != "passed" or run.reviewer_status != "approved":
+            return self.get_durable_report(run_id)
+        integration_commit = parallel.get("integration_commit")
+        if not isinstance(integration_commit, str) or not integration_commit:
+            self.state_store.update_run_details(
+                run_id,
+                finalization_error="Parallel run has no persisted integration commit.",
+                event_type="git_finalization_blocked",
+            )
+            return self.get_durable_report(run_id)
+        branch = parallel.get("final_branch")
+        if git_options.get("create_branch") and not branch:
+            branch = git_options.get("branch_name") or generate_branch_name(
+                run.original_task
+            )
+            existing_commit = self.git_repository.branch_commit(branch)
+            if existing_commit is not None and existing_commit != integration_commit:
+                self.state_store.update_run_details(
+                    run_id,
+                    finalization_error=(
+                        f"Branch '{branch}' already exists at an unrelated commit."
+                    ),
+                    event_type="branch_creation_failed",
+                )
+                return self.get_durable_report(run_id)
+            if existing_commit is None:
+                try:
+                    self.git_repository.create_branch_at(branch, integration_commit)
+                except GitRepositoryError as exc:
+                    self.state_store.update_run_details(
+                        run_id,
+                        finalization_error=str(exc),
+                        event_type="branch_creation_failed",
+                    )
+                    return self.get_durable_report(run_id)
+            parallel = {**parallel, "final_branch": branch}
+            self.state_store.update_run_details(
+                run_id,
+                metadata_updates={"parallel_execution": parallel},
+                event_type="branch_created",
+            )
+        if git_options.get("commit_changes") and not run.commit_identifier:
+            self.state_store.update_run_details(
+                run_id,
+                commit_identifier=integration_commit,
+                event_type="integration_commit_published",
+            )
+        run = self.state_store.get_run(run_id)
+        if not git_options.get("open_pr") or run.pr_url:
+            return self.get_durable_report(run_id)
+        if self._has_unresolved_pr_creation(run_id):
+            return self.get_durable_report(run_id)
+        if not branch:
+            self.state_store.update_run_details(
+                run_id,
+                finalization_error=(
+                    "Parallel PR creation requires --create-branch so the verified "
+                    "integration commit has an explicit user-facing ref."
+                ),
+                event_type="pr_creation_failed",
+            )
+            return self.get_durable_report(run_id)
+        title = generate_commit_message(run.original_task, run.changed_files)
+        body = build_pr_body(
+            user_task=run.original_task,
+            planner_summary=self._planner_summary(run.planner_output),
+            verifier_result={"passed": True, "command": [], "reason": "Integrated run"},
+            reviewer_result={"approved": True, "summary": "Integrated run approved"},
+            changed_files=run.changed_files,
+            test_command=None,
+        )
+        try:
+            self.state_store.record_event(
+                run_id,
+                "pr_creation_started",
+                {"base": git_options.get("pr_base", "main"), "head": branch},
+            )
+            self.git_repository.push_branch(branch)
+            pr_result = self.pr_client.create_pr(
+                title=title,
+                body=body,
+                base=git_options.get("pr_base", "main"),
+                head=branch,
+            )
+        except Exception as exc:
+            self.state_store.update_run_details(
+                run_id,
+                finalization_error=str(exc),
+                event_type="pr_creation_outcome_unknown",
+            )
+            return self.get_durable_report(run_id)
+        if pr_result.startswith("http"):
+            self.state_store.update_run_details(
+                run_id,
+                pr_url=pr_result,
+                event_type="pr_created",
+                clear_finalization_error=True,
+            )
+        else:
+            self.state_store.update_run_details(
+                run_id, finalization_error=pr_result, event_type="pr_creation_failed"
+            )
         return self.get_durable_report(run_id)
 
     def _verify_final(self) -> dict[str, Any]:
@@ -660,7 +1056,9 @@ class MultiAgentOrchestrator:
         git_diff: str,
         test_output: str | None,
         changes: RepositoryChangeSet,
+        reviewer=None,
     ) -> dict[str, Any]:
+        selected_reviewer = reviewer or self.reviewer
         arguments = {
             "user_task": user_task,
             "plan": plan,
@@ -671,7 +1069,7 @@ class MultiAgentOrchestrator:
             "ignored_files": changes.ignored_files,
             "tracked_generated_artifacts": changes.tracked_generated_files,
         }
-        parameters = inspect.signature(self.reviewer.review).parameters.values()
+        parameters = inspect.signature(selected_reviewer.review).parameters.values()
         if not any(
             parameter.kind == inspect.Parameter.VAR_KEYWORD
             for parameter in parameters
@@ -682,7 +1080,7 @@ class MultiAgentOrchestrator:
                 for name, value in arguments.items()
                 if name in supported
             }
-        return self.reviewer.review(**arguments)
+        return selected_reviewer.review(**arguments)
 
     def _has_unresolved_pr_creation(self, run_id: str) -> bool:
         return self._has_unresolved_external_event(

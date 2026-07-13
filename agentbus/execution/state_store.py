@@ -25,7 +25,7 @@ from agentbus.execution.models import (
     TaskStatus,
     utc_now,
 )
-from agentbus.execution.schema import SCHEMA_SQL, SCHEMA_VERSION
+from agentbus.execution.schema import MIGRATIONS, SCHEMA_SQL, SCHEMA_VERSION
 from agentbus.execution.transitions import (
     InvalidStateTransition,
     validate_attempt_transition,
@@ -33,6 +33,14 @@ from agentbus.execution.transitions import (
     validate_task_transition,
 )
 from agentbus.security.redaction import is_sensitive_key, redact_text
+from agentbus.worktrees.models import (
+    IntegrationRecord,
+    MergeStatus,
+    TaskCommitRecord,
+    WorktreePurpose,
+    WorktreeRecord,
+    WorktreeStatus,
+)
 
 
 class StateStoreError(RuntimeError):
@@ -130,10 +138,7 @@ class StateStore:
                             f"{existing} > {SCHEMA_VERSION}."
                         )
                     if existing < SCHEMA_VERSION:
-                        raise StateStoreError(
-                            "No migration is registered from state schema "
-                            f"{existing} to {SCHEMA_VERSION}."
-                        )
+                        self._apply_migrations(connection, existing)
                     connection.executescript(SCHEMA_SQL)
                 connection.commit()
         except StateStoreError:
@@ -142,6 +147,51 @@ class StateStore:
             raise StateStoreError(
                 f"Unable to initialize state database '{self.database_path}'."
             ) from exc
+
+    def _apply_migrations(
+        self,
+        connection: sqlite3.Connection,
+        existing: int,
+    ) -> None:
+        current = existing
+        while current < SCHEMA_VERSION:
+            statements = MIGRATIONS.get(current)
+            if not statements:
+                raise StateStoreError(
+                    "No migration is registered from state schema "
+                    f"{current} to {current + 1}."
+                )
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                for statement in statements:
+                    connection.execute(statement)
+                connection.execute(
+                    "UPDATE schema_metadata SET value = ? WHERE key = ?",
+                    (str(current + 1), "schema_version"),
+                )
+                connection.commit()
+            except sqlite3.Error as exc:
+                connection.rollback()
+                raise StateStoreError(
+                    f"State schema migration {current} -> {current + 1} failed."
+                ) from exc
+            current += 1
+
+    def backup(self, destination: str | Path) -> Path:
+        target = Path(destination).expanduser().resolve()
+        if target == self.database_path:
+            raise StateStoreError("State database backup must use a different path.")
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with self._connection() as source:
+                backup = sqlite3.connect(target)
+                try:
+                    source.backup(backup)
+                finally:
+                    backup.close()
+        except (OSError, sqlite3.Error) as exc:
+            raise StateStoreError(f"Unable to back up state database to '{target}'.") from exc
+        return target
 
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
@@ -675,6 +725,112 @@ class StateStore:
             )
         return self.get_attempt(attempt_id)
 
+    def complete_fenced_task_commit(
+        self,
+        *,
+        attempt_id: str,
+        lease_id: str,
+        worker_id: str,
+        fencing_token: int,
+        commit: TaskCommitRecord,
+        summary: str,
+        metadata: dict[str, Any] | None = None,
+        now: datetime | None = None,
+    ) -> TaskCommitRecord:
+        """Atomically persist worker success only while its lease remains valid."""
+        completed_at = now or utc_now()
+        with self._write_transaction() as connection:
+            lease = connection.execute(
+                "SELECT * FROM worker_leases WHERE lease_id = ?", (lease_id,)
+            ).fetchone()
+            if (
+                lease is None
+                or lease["run_id"] != commit.run_id
+                or lease["task_id"] != commit.task_id
+                or lease["worker_id"] != worker_id
+                or lease["fencing_token"] != fencing_token
+                or lease["status"] != "active"
+                or _parse_timestamp(lease["expires_at"]) <= completed_at
+            ):
+                raise StateStoreError(
+                    "Worker lease is stale; task success and commit were not persisted."
+                )
+            attempt = connection.execute(
+                "SELECT * FROM attempts WHERE attempt_id = ?", (attempt_id,)
+            ).fetchone()
+            if attempt is None:
+                raise AttemptNotFoundError(f"Attempt '{attempt_id}' was not found.")
+            if (
+                attempt["run_id"] != commit.run_id
+                or attempt["task_id"] != commit.task_id
+                or attempt["status"] != AttemptStatus.RUNNING.value
+            ):
+                raise StateStoreError("Attempt is not the active fenced task attempt.")
+            self._require_task_row(connection, commit.run_id, commit.task_id)
+            task = connection.execute(
+                "SELECT status FROM tasks WHERE run_id = ? AND task_id = ?",
+                (commit.run_id, commit.task_id),
+            ).fetchone()
+            validate_task_transition(
+                TaskStatus(task["status"]), TaskStatus.INTEGRATION_PENDING
+            )
+            connection.execute(
+                """UPDATE attempts SET status = ?, completed_at = ?,
+                   observation_summary = ?, metadata_json = ? WHERE attempt_id = ?""",
+                (
+                    AttemptStatus.SUCCEEDED.value,
+                    _timestamp(completed_at),
+                    _safe_text(summary),
+                    _dump_json(metadata or {}),
+                    attempt_id,
+                ),
+            )
+            connection.execute(
+                """INSERT INTO task_commits(
+                       run_id, task_id, commit_sha, parent_sha, worktree_id,
+                       changed_files_json, created_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(run_id, task_id) DO NOTHING""",
+                (
+                    commit.run_id,
+                    commit.task_id,
+                    commit.commit_sha,
+                    commit.parent_sha,
+                    commit.worktree_id,
+                    _dump_json(commit.changed_files),
+                    _timestamp(commit.created_at),
+                ),
+            )
+            persisted = connection.execute(
+                "SELECT commit_sha FROM task_commits WHERE run_id = ? AND task_id = ?",
+                (commit.run_id, commit.task_id),
+            ).fetchone()
+            if persisted["commit_sha"] != commit.commit_sha:
+                raise StateStoreError("Task already has a different persisted commit.")
+            connection.execute(
+                "UPDATE tasks SET status = ?, updated_at = ? WHERE run_id = ? AND task_id = ?",
+                (
+                    TaskStatus.INTEGRATION_PENDING.value,
+                    _timestamp(completed_at),
+                    commit.run_id,
+                    commit.task_id,
+                ),
+            )
+            self._insert_event(
+                connection,
+                commit.run_id,
+                commit.task_id,
+                "task_commit_created",
+                {
+                    "commit_sha": commit.commit_sha,
+                    "worktree_id": commit.worktree_id,
+                    "worker_id": worker_id,
+                    "lease_id": lease_id,
+                    "fencing_token": fencing_token,
+                },
+            )
+        return self.get_task_commit(commit.run_id, commit.task_id)  # type: ignore[return-value]
+
     def get_attempt(self, attempt_id: str) -> TaskAttempt:
         _require_id(attempt_id, "attempt")
         with self._connection() as connection:
@@ -845,6 +1001,292 @@ class StateStore:
                 (run_id, task_id),
             ).fetchone()
         return self._approval_from_row(row) if row is not None else None
+
+    def record_worktree(self, record: WorktreeRecord) -> WorktreeRecord:
+        with self._write_transaction() as connection:
+            self._require_run_row(connection, record.run_id)
+            if record.task_id is not None:
+                self._require_task_row(connection, record.run_id, record.task_id)
+            connection.execute(
+                """
+                INSERT INTO worktrees(
+                    worktree_id, run_id, task_id, path, repository_root, base_commit,
+                    branch_ref, purpose, status, worker_id, result_commit, created_at,
+                    updated_at, metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record.worktree_id,
+                    record.run_id,
+                    record.task_id,
+                    record.path,
+                    record.repository_root,
+                    record.base_commit,
+                    record.branch_ref,
+                    record.purpose.value,
+                    record.status.value,
+                    record.worker_id,
+                    record.result_commit,
+                    _timestamp(record.created_at),
+                    _timestamp(record.updated_at),
+                    _dump_json(record.metadata),
+                ),
+            )
+            self._insert_event(
+                connection,
+                record.run_id,
+                record.task_id,
+                "worktree_creation_started",
+                {
+                    "worktree_id": record.worktree_id,
+                    "purpose": record.purpose.value,
+                },
+            )
+        return self.get_worktree(record.worktree_id)
+
+    def get_worktree(self, worktree_id: str) -> WorktreeRecord:
+        _require_id(worktree_id, "worktree")
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM worktrees WHERE worktree_id = ?", (worktree_id,)
+            ).fetchone()
+        if row is None:
+            raise StateStoreError(f"Worktree '{worktree_id}' was not found.")
+        return self._worktree_from_row(row)
+
+    def list_worktrees(
+        self,
+        run_id: str | None = None,
+        *,
+        task_id: str | None = None,
+    ) -> list[WorktreeRecord]:
+        query = "SELECT * FROM worktrees"
+        clauses: list[str] = []
+        parameters: list[Any] = []
+        if run_id is not None:
+            clauses.append("run_id = ?")
+            parameters.append(run_id)
+        if task_id is not None:
+            clauses.append("task_id = ?")
+            parameters.append(task_id)
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY created_at, worktree_id"
+        with self._connection() as connection:
+            rows = connection.execute(query, parameters).fetchall()
+        return [self._worktree_from_row(row) for row in rows]
+
+    def update_worktree(
+        self,
+        worktree_id: str,
+        *,
+        status: WorktreeStatus | None = None,
+        worker_id: str | None = None,
+        result_commit: str | None = None,
+        metadata_updates: dict[str, Any] | None = None,
+        event_type: str = "worktree_updated",
+    ) -> WorktreeRecord:
+        with self._write_transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM worktrees WHERE worktree_id = ?", (worktree_id,)
+            ).fetchone()
+            if row is None:
+                raise StateStoreError(f"Worktree '{worktree_id}' was not found.")
+            metadata = _load_json(row["metadata_json"], "worktree metadata")
+            if metadata_updates:
+                metadata.update(_sanitize(metadata_updates))
+            now = utc_now()
+            connection.execute(
+                """
+                UPDATE worktrees SET status = COALESCE(?, status),
+                    worker_id = COALESCE(?, worker_id),
+                    result_commit = COALESCE(?, result_commit), metadata_json = ?,
+                    updated_at = ? WHERE worktree_id = ?
+                """,
+                (
+                    status.value if status else None,
+                    worker_id,
+                    result_commit,
+                    _dump_json(metadata),
+                    _timestamp(now),
+                    worktree_id,
+                ),
+            )
+            self._insert_event(
+                connection,
+                row["run_id"],
+                row["task_id"],
+                event_type,
+                {"worktree_id": worktree_id, "status": status.value if status else row["status"]},
+            )
+        return self.get_worktree(worktree_id)
+
+    def record_task_commit(self, record: TaskCommitRecord) -> TaskCommitRecord:
+        with self._write_transaction() as connection:
+            connection.execute(
+                """
+                INSERT INTO task_commits(
+                    run_id, task_id, commit_sha, parent_sha, worktree_id,
+                    changed_files_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(run_id, task_id) DO NOTHING
+                """,
+                (
+                    record.run_id,
+                    record.task_id,
+                    record.commit_sha,
+                    record.parent_sha,
+                    record.worktree_id,
+                    _dump_json(record.changed_files),
+                    _timestamp(record.created_at),
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM task_commits WHERE run_id = ? AND task_id = ?",
+                (record.run_id, record.task_id),
+            ).fetchone()
+            if row["commit_sha"] != record.commit_sha:
+                raise StateStoreError(
+                    f"Task '{record.task_id}' already has a different persisted commit."
+                )
+            self._insert_event(
+                connection,
+                record.run_id,
+                record.task_id,
+                "task_commit_created",
+                {"commit_sha": record.commit_sha, "worktree_id": record.worktree_id},
+            )
+        return self.get_task_commit(record.run_id, record.task_id)
+
+    def get_task_commit(self, run_id: str, task_id: str) -> TaskCommitRecord | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM task_commits WHERE run_id = ? AND task_id = ?",
+                (run_id, task_id),
+            ).fetchone()
+        return self._task_commit_from_row(row) if row is not None else None
+
+    def list_task_commits(self, run_id: str) -> list[TaskCommitRecord]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """SELECT c.* FROM task_commits c
+                   JOIN tasks t ON t.run_id = c.run_id AND t.task_id = c.task_id
+                   WHERE c.run_id = ? ORDER BY t.position, c.task_id""",
+                (run_id,),
+            ).fetchall()
+        return [self._task_commit_from_row(row) for row in rows]
+
+    def record_integration(self, record: IntegrationRecord) -> IntegrationRecord:
+        with self._write_transaction() as connection:
+            connection.execute(
+                """
+                INSERT INTO integration_attempts(
+                    integration_id, run_id, task_id, task_commit, base_commit,
+                    resulting_commit, status, conflict_files_json, error_message,
+                    created_at, completed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record.integration_id,
+                    record.run_id,
+                    record.task_id,
+                    record.task_commit,
+                    record.base_commit,
+                    record.resulting_commit,
+                    record.status.value,
+                    _dump_json(record.conflict_files),
+                    _safe_text(record.error_message),
+                    _timestamp(record.created_at),
+                    _timestamp(record.completed_at),
+                ),
+            )
+            self._insert_event(
+                connection,
+                record.run_id,
+                record.task_id,
+                "integration_started",
+                {"integration_id": record.integration_id, "task_commit": record.task_commit},
+            )
+        return self.get_integration(record.integration_id)
+
+    def update_integration(
+        self,
+        integration_id: str,
+        *,
+        status: MergeStatus,
+        resulting_commit: str | None = None,
+        conflict_files: list[str] | None = None,
+        error_message: str | None = None,
+    ) -> IntegrationRecord:
+        with self._write_transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM integration_attempts WHERE integration_id = ?",
+                (integration_id,),
+            ).fetchone()
+            if row is None:
+                raise StateStoreError(f"Integration '{integration_id}' was not found.")
+            now = utc_now()
+            connection.execute(
+                """UPDATE integration_attempts SET status = ?, resulting_commit = ?,
+                   conflict_files_json = ?, error_message = ?, completed_at = ?
+                   WHERE integration_id = ?""",
+                (
+                    status.value,
+                    resulting_commit,
+                    _dump_json(conflict_files or []),
+                    _safe_text(error_message),
+                    _timestamp(now),
+                    integration_id,
+                ),
+            )
+            event = {
+                MergeStatus.INTEGRATED: "integration_succeeded",
+                MergeStatus.INTEGRATION_CONFLICT: "integration_conflict",
+                MergeStatus.INTEGRATION_FAILED: "integration_failed",
+            }.get(status, "integration_updated")
+            self._insert_event(
+                connection,
+                row["run_id"],
+                row["task_id"],
+                event,
+                {
+                    "integration_id": integration_id,
+                    "resulting_commit": resulting_commit,
+                    "conflict_files": conflict_files or [],
+                },
+            )
+        return self.get_integration(integration_id)
+
+    def get_integration(self, integration_id: str) -> IntegrationRecord:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM integration_attempts WHERE integration_id = ?",
+                (integration_id,),
+            ).fetchone()
+        if row is None:
+            raise StateStoreError(f"Integration '{integration_id}' was not found.")
+        return self._integration_from_row(row)
+
+    def list_integrations(self, run_id: str) -> list[IntegrationRecord]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT * FROM integration_attempts WHERE run_id = ? ORDER BY created_at, integration_id",
+                (run_id,),
+            ).fetchall()
+        return [self._integration_from_row(row) for row in rows]
+
+    def list_worker_lease_rows(self, run_id: str | None = None) -> list[dict[str, Any]]:
+        query = """SELECT lease_id, run_id, task_id, worker_id, status, heartbeat_at,
+                          expires_at, fencing_token
+                   FROM worker_leases"""
+        parameters: tuple[str, ...] = ()
+        if run_id is not None:
+            query += " WHERE run_id = ?"
+            parameters = (run_id,)
+        query += " ORDER BY acquired_at, fencing_token"
+        with self._connection() as connection:
+            rows = connection.execute(query, parameters).fetchall()
+        return [dict(row) for row in rows]
 
     def load_snapshot(self, run_id: str) -> RunSnapshot:
         """Read a consistent run snapshot from one SQLite read transaction."""
@@ -1038,6 +1480,53 @@ class StateStore:
             decision=ApprovalOutcome(row["decision"]),
             reason=row["reason"],
             created_at=_parse_timestamp(row["created_at"]),
+        )
+
+    @staticmethod
+    def _worktree_from_row(row: sqlite3.Row) -> WorktreeRecord:
+        return WorktreeRecord(
+            worktree_id=row["worktree_id"],
+            run_id=row["run_id"],
+            task_id=row["task_id"],
+            path=row["path"],
+            repository_root=row["repository_root"],
+            base_commit=row["base_commit"],
+            branch_ref=row["branch_ref"],
+            purpose=WorktreePurpose(row["purpose"]),
+            status=WorktreeStatus(row["status"]),
+            worker_id=row["worker_id"],
+            result_commit=row["result_commit"],
+            created_at=_parse_timestamp(row["created_at"]),
+            updated_at=_parse_timestamp(row["updated_at"]),
+            metadata=_load_json(row["metadata_json"], "worktree metadata"),
+        )
+
+    @staticmethod
+    def _task_commit_from_row(row: sqlite3.Row) -> TaskCommitRecord:
+        return TaskCommitRecord(
+            run_id=row["run_id"],
+            task_id=row["task_id"],
+            commit_sha=row["commit_sha"],
+            parent_sha=row["parent_sha"],
+            worktree_id=row["worktree_id"],
+            changed_files=_load_json(row["changed_files_json"], "task commit files"),
+            created_at=_parse_timestamp(row["created_at"]),
+        )
+
+    @staticmethod
+    def _integration_from_row(row: sqlite3.Row) -> IntegrationRecord:
+        return IntegrationRecord(
+            integration_id=row["integration_id"],
+            run_id=row["run_id"],
+            task_id=row["task_id"],
+            task_commit=row["task_commit"],
+            base_commit=row["base_commit"],
+            resulting_commit=row["resulting_commit"],
+            status=MergeStatus(row["status"]),
+            conflict_files=_load_json(row["conflict_files_json"], "conflict files"),
+            error_message=row["error_message"],
+            created_at=_parse_timestamp(row["created_at"]),
+            completed_at=_parse_timestamp(row["completed_at"]),
         )
 
 

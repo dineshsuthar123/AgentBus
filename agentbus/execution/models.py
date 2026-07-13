@@ -32,7 +32,10 @@ class TaskStatus(str, Enum):
     RUNNING = "running"
     WAITING_FOR_APPROVAL = "waiting_for_approval"
     RETRYABLE = "retryable"
+    INTEGRATION_PENDING = "integration_pending"
+    INTEGRATING = "integrating"
     SUCCEEDED = "succeeded"
+    INTEGRATION_CONFLICT = "integration_conflict"
     FAILED = "failed"
     REJECTED = "rejected"
     BLOCKED = "blocked"
@@ -271,3 +274,17 @@ class ExecutionReport(DomainModel):
     required_fixes: list[str] = Field(default_factory=list)
     task_failures: list[dict[str, str]] = Field(default_factory=list)
     side_effects_persisted: bool = False
+    parallel_mode_enabled: bool = False
+    configured_max_workers: int = 1
+    workers_used: list[str] = Field(default_factory=list)
+    current_leases: list[dict[str, Any]] = Field(default_factory=list)
+    expired_leases: list[dict[str, Any]] = Field(default_factory=list)
+    task_worktrees: dict[str, str] = Field(default_factory=dict)
+    task_commits: dict[str, str] = Field(default_factory=dict)
+    original_base_commit: str | None = None
+    integration_order: list[str] = Field(default_factory=list)
+    integration_commit: str | None = None
+    final_branch: str | None = None
+    integration_conflicts: list[dict[str, Any]] = Field(default_factory=list)
+    retained_worktrees: list[str] = Field(default_factory=list)
+    cleanup_recommendations: list[str] = Field(default_factory=list)

@@ -25,6 +25,13 @@ class AgentBusConfig:
     max_steps: int = 12
     command_timeout_seconds: int = 90
     max_history_chars: int = 25_000
+    parallel_execution: bool = False
+    max_workers: int = 1
+    worker_lease_seconds: float = 120.0
+    worker_heartbeat_seconds: float = 30.0
+    worktree_root: str | None = None
+    keep_worktrees: bool = True
+    integration_strategy: str = "cherry-pick"
 
     provider_name: str = "ollama"
     fallback_provider_name: str = "ollama"
@@ -76,6 +83,26 @@ class AgentBusConfig:
                 cls.max_history_chars,
                 minimum=1,
             ),
+            parallel_execution=_env_bool(
+                "AGENTBUS_PARALLEL_EXECUTION", cls.parallel_execution
+            ),
+            max_workers=_env_int("AGENTBUS_MAX_WORKERS", cls.max_workers, minimum=1),
+            worker_lease_seconds=_env_float(
+                "AGENTBUS_WORKER_LEASE_SECONDS",
+                cls.worker_lease_seconds,
+                minimum=0.001,
+            ),
+            worker_heartbeat_seconds=_env_float(
+                "AGENTBUS_WORKER_HEARTBEAT_SECONDS",
+                cls.worker_heartbeat_seconds,
+                minimum=0.001,
+            ),
+            worktree_root=_env_text("AGENTBUS_WORKTREE_ROOT"),
+            keep_worktrees=_env_bool("AGENTBUS_KEEP_WORKTREES", cls.keep_worktrees),
+            integration_strategy=(
+                _env_text("AGENTBUS_INTEGRATION_STRATEGY")
+                or cls.integration_strategy
+            ).lower(),
             provider_name=(
                 _env_text("AGENTBUS_PROVIDER") or cls.provider_name
             ).lower(),
@@ -159,6 +186,10 @@ class AgentBusConfig:
         reviewer_model: str | None = None,
         summarizer_model: str | None = None,
         model_timeout_seconds: float | None = None,
+        parallel_execution: bool | None = None,
+        max_workers: int | None = None,
+        worktree_root: str | None = None,
+        keep_worktrees: bool | None = None,
     ) -> "AgentBusConfig":
         updates: dict[str, Any] = {}
         effective_provider = (provider_name or self.provider_name).lower()
@@ -187,6 +218,14 @@ class AgentBusConfig:
             updates["summarizer_model"] = summarizer_model
         if model_timeout_seconds is not None:
             updates["model_timeout_seconds"] = model_timeout_seconds
+        if parallel_execution is not None:
+            updates["parallel_execution"] = parallel_execution
+        if max_workers is not None:
+            updates["max_workers"] = max_workers
+        if worktree_root is not None:
+            updates["worktree_root"] = worktree_root
+        if keep_worktrees is not None:
+            updates["keep_worktrees"] = keep_worktrees
 
         return replace(self, **updates)
 
@@ -206,6 +245,19 @@ class AgentBusConfig:
             raise ValueError("AGENTBUS_COMMAND_TIMEOUT must be greater than 0")
         if self.max_history_chars <= 0:
             raise ValueError("AGENTBUS_MAX_HISTORY_CHARS must be greater than 0")
+        if self.max_workers < 1:
+            raise ValueError("AGENTBUS_MAX_WORKERS must be at least 1")
+        if self.worker_lease_seconds <= 0:
+            raise ValueError("AGENTBUS_WORKER_LEASE_SECONDS must be greater than 0")
+        if self.worker_heartbeat_seconds <= 0:
+            raise ValueError("AGENTBUS_WORKER_HEARTBEAT_SECONDS must be greater than 0")
+        if self.worker_heartbeat_seconds >= self.worker_lease_seconds / 2:
+            raise ValueError(
+                "AGENTBUS_WORKER_HEARTBEAT_SECONDS must be less than half the "
+                "worker lease duration"
+            )
+        if self.integration_strategy != "cherry-pick":
+            raise ValueError("AGENTBUS_INTEGRATION_STRATEGY must be 'cherry-pick'")
         if not math.isfinite(self.model_timeout_seconds) or self.model_timeout_seconds <= 0:
             raise ValueError("AGENTBUS_MODEL_TIMEOUT_SECONDS must be greater than 0")
         if self.model_max_retries < 0:
@@ -356,6 +408,13 @@ class AgentBusConfig:
     @property
     def workspace_path(self) -> Path:
         return Path(self.workspace_dir).expanduser().resolve()
+
+    @property
+    def worktree_root_path(self) -> Path:
+        if self.worktree_root:
+            return Path(self.worktree_root).expanduser().resolve()
+        workspace = self.workspace_path
+        return (workspace.parent / ".agentbus-worktrees" / workspace.name).resolve()
 
     @property
     def state_database_path(self) -> Path:

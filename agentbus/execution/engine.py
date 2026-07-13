@@ -507,7 +507,12 @@ class DurableExecutionEngine:
             },
         )
 
-    def _recover_running_tasks(self, run_id: str) -> None:
+    def _recover_running_tasks(
+        self,
+        run_id: str,
+        *,
+        skip_task_ids: set[str] | None = None,
+    ) -> None:
         snapshot = self.store.load_snapshot(run_id)
         if snapshot.run.status in {
             RunStatus.SUCCEEDED,
@@ -515,8 +520,11 @@ class DurableExecutionEngine:
             RunStatus.CANCELLED,
         }:
             return
+        protected_tasks = skip_task_ids or set()
         for task in snapshot.tasks:
             if task.status != TaskStatus.RUNNING:
+                continue
+            if task.task_id in protected_tasks:
                 continue
             attempts = snapshot.attempts_for(task.task_id)
             latest = attempts[-1] if attempts else None
@@ -821,6 +829,7 @@ class DurableExecutionEngine:
             task.task_id
             for task in snapshot.tasks
             if task.status in {TaskStatus.FAILED, TaskStatus.REJECTED}
+            or task.status == TaskStatus.INTEGRATION_CONFLICT
         ]
         blocked = [
             task.task_id for task in snapshot.tasks if task.status == TaskStatus.BLOCKED
@@ -887,8 +896,14 @@ class DurableExecutionEngine:
             snapshot.run.metadata.get("verifier_artifact_suppression_active")
         )
         hygiene_sources = [snapshot.run.metadata.get("artifact_hygiene", {})]
+        observed_changed_files = set(snapshot.run.changed_files)
         for attempt in snapshot.attempts:
             hygiene_sources.append(attempt.metadata.get("artifact_hygiene", {}))
+            raw_changed = attempt.metadata.get("changed_files", [])
+            if isinstance(raw_changed, list):
+                observed_changed_files.update(
+                    item for item in raw_changed if isinstance(item, str)
+                )
             verifier_metadata = attempt.metadata.get("verifier", {})
             if isinstance(verifier_metadata, dict):
                 suppression_active = suppression_active or bool(
@@ -901,6 +916,34 @@ class DurableExecutionEngine:
                 raw_values = source.get(key, [])
                 if isinstance(raw_values, list):
                     values.update(item for item in raw_values if isinstance(item, str))
+        parallel = snapshot.run.metadata.get("parallel_execution", {})
+        if not isinstance(parallel, dict):
+            parallel = {}
+        worktrees = self.store.list_worktrees(snapshot.run.run_id)
+        leases = self.store.list_worker_lease_rows(snapshot.run.run_id)
+        task_commits = self.store.list_task_commits(snapshot.run.run_id)
+        for task_commit in task_commits:
+            observed_changed_files.update(task_commit.changed_files)
+        integrations = self.store.list_integrations(snapshot.run.run_id)
+        active_leases = [item for item in leases if item["status"] == "active"]
+        expired_leases = [item for item in leases if item["status"] == "expired"]
+        task_worktrees = {
+            item.task_id: item.path
+            for item in worktrees
+            if item.task_id is not None and item.status.value != "removed"
+        }
+        retained = [
+            item.path for item in worktrees if item.status.value != "removed"
+        ]
+        conflicts = [
+            {
+                "task_id": item.task_id,
+                "conflict_files": item.conflict_files,
+                "error_message": item.error_message,
+            }
+            for item in integrations
+            if item.status.value == "integration_conflict"
+        ]
         return ExecutionReport(
             run_id=snapshot.run.run_id,
             original_task=snapshot.run.original_task,
@@ -922,7 +965,7 @@ class DurableExecutionEngine:
             },
             verifier_status=snapshot.run.verifier_status,
             reviewer_status=snapshot.run.reviewer_status,
-            changed_files=snapshot.run.changed_files,
+            changed_files=sorted(observed_changed_files),
             relevant_changed_files=sorted(hygiene_lists["relevant_changed_files"]),
             generated_artifacts=sorted(hygiene_lists["generated_artifacts"]),
             ignored_files=sorted(hygiene_lists["ignored_files"]),
@@ -943,8 +986,29 @@ class DurableExecutionEngine:
             required_fixes=(required_fixes if isinstance(required_fixes, list) else []),
             task_failures=task_failures,
             side_effects_persisted=bool(
-                snapshot.run.changed_files
+                observed_changed_files
                 and snapshot.run.status in {RunStatus.FAILED, RunStatus.CANCELLED}
+            ),
+            parallel_mode_enabled=bool(parallel.get("enabled", False)),
+            configured_max_workers=int(parallel.get("max_workers", 1)),
+            workers_used=list(parallel.get("workers_used", [])),
+            current_leases=active_leases,
+            expired_leases=expired_leases,
+            task_worktrees=task_worktrees,
+            task_commits={item.task_id: item.commit_sha for item in task_commits},
+            original_base_commit=parallel.get("base_commit"),
+            integration_order=list(parallel.get("integration_order", [])),
+            integration_commit=parallel.get("integration_commit"),
+            final_branch=parallel.get("final_branch"),
+            integration_conflicts=conflicts,
+            retained_worktrees=retained,
+            cleanup_recommendations=(
+                [
+                    "Inspect retained worktrees, then use the explicit cleanup command "
+                    "for clean AgentBus-owned paths."
+                ]
+                if retained
+                else []
             ),
             resume_command=(
                 f"python -m agentbus.main --resume {snapshot.run.run_id}"

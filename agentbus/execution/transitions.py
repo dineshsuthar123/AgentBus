@@ -48,6 +48,7 @@ TASK_TRANSITIONS: dict[TaskStatus, set[TaskStatus]] = {
     },
     TaskStatus.RUNNING: {
         TaskStatus.SUCCEEDED,
+        TaskStatus.INTEGRATION_PENDING,
         TaskStatus.RETRYABLE,
         TaskStatus.FAILED,
         TaskStatus.CANCELLED,
@@ -64,7 +65,20 @@ TASK_TRANSITIONS: dict[TaskStatus, set[TaskStatus]] = {
         TaskStatus.BLOCKED,
         TaskStatus.CANCELLED,
     },
+    TaskStatus.INTEGRATION_PENDING: {
+        TaskStatus.INTEGRATING,
+        TaskStatus.FAILED,
+        TaskStatus.CANCELLED,
+    },
+    TaskStatus.INTEGRATING: {
+        TaskStatus.INTEGRATION_PENDING,
+        TaskStatus.SUCCEEDED,
+        TaskStatus.INTEGRATION_CONFLICT,
+        TaskStatus.FAILED,
+        TaskStatus.CANCELLED,
+    },
     TaskStatus.SUCCEEDED: set(),
+    TaskStatus.INTEGRATION_CONFLICT: set(),
     TaskStatus.FAILED: set(),
     TaskStatus.REJECTED: set(),
     TaskStatus.BLOCKED: set(),

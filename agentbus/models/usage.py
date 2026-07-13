@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from threading import Lock
 
 from agentbus.models.types import ModelResult, ModelUsage
 
@@ -15,6 +16,7 @@ class UsageRecord:
 class UsageLedger:
     def __init__(self):
         self._records: list[UsageRecord] = []
+        self._lock = Lock()
 
     def record(
         self,
@@ -23,7 +25,8 @@ class UsageLedger:
         run_id: str | None = None,
         task_id: str | None = None,
     ) -> None:
-        self._records.append(UsageRecord(result, run_id, task_id))
+        with self._lock:
+            self._records.append(UsageRecord(result, run_id, task_id))
 
     def total(
         self,
@@ -35,7 +38,9 @@ class UsageLedger:
         model: str | None = None,
     ) -> ModelUsage:
         usage = ModelUsage()
-        for record in self._records:
+        with self._lock:
+            records = list(self._records)
+        for record in records:
             if run_id is not None and record.run_id != run_id:
                 continue
             if task_id is not None and record.task_id != task_id:
@@ -50,4 +55,5 @@ class UsageLedger:
         return usage
 
     def records(self) -> list[UsageRecord]:
-        return list(self._records)
+        with self._lock:
+            return list(self._records)

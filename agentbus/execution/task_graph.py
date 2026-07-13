@@ -19,6 +19,7 @@ FAILED_DEPENDENCY_STATUSES = {
     TaskStatus.REJECTED,
     TaskStatus.BLOCKED,
     TaskStatus.CANCELLED,
+    TaskStatus.INTEGRATION_CONFLICT,
 }
 
 
@@ -210,6 +211,7 @@ class TaskGraph:
                 TaskStatus.REJECTED,
                 TaskStatus.BLOCKED,
                 TaskStatus.CANCELLED,
+                TaskStatus.INTEGRATION_CONFLICT,
             }
             and any(
                 statuses.get(dependency_id) in FAILED_DEPENDENCY_STATUSES
@@ -231,6 +233,27 @@ class TaskGraph:
         return all(
             statuses.get(task.task_id) == TaskStatus.SUCCEEDED for task in self.tasks
         )
+
+    def topological_levels(self) -> list[list[TaskSpec]]:
+        remaining = {task.task_id: set(task.dependency_ids) for task in self.tasks}
+        levels: list[list[TaskSpec]] = []
+        completed: set[str] = set()
+        while remaining:
+            ready_ids = sorted(
+                task_id
+                for task_id, dependencies in remaining.items()
+                if dependencies <= completed
+            )
+            if not ready_ids:
+                raise TaskGraphValidationError("Task graph cannot be topologically ordered.")
+            levels.append([self._by_id[task_id] for task_id in ready_ids])
+            completed.update(ready_ids)
+            for task_id in ready_ids:
+                remaining.pop(task_id)
+        return levels
+
+    def topological_order(self) -> list[TaskSpec]:
+        return [task for level in self.topological_levels() for task in level]
 
     def to_dict(self) -> dict[str, Any]:
         return {

@@ -1,13 +1,21 @@
 from __future__ import annotations
 
 import subprocess
+import threading
+from concurrent.futures import ThreadPoolExecutor
+
+import pytest
 
 from agentbus.config import AgentBusConfig
 from agentbus.execution.engine import DurableExecutionEngine
 from agentbus.execution.models import RunStatus
 from agentbus.execution.state_store import StateStore
 from agentbus.models.errors import ModelServiceUnavailableError
-from agentbus.models.router import ModelProviderFactory, ModelRouter
+from agentbus.models.router import (
+    ModelProviderFactory,
+    ModelRouter,
+    model_request_context,
+)
 from agentbus.models.types import ModelResult, ModelUsage
 from agentbus.runtime.orchestrator import MultiAgentOrchestrator
 
@@ -139,6 +147,105 @@ def build_runner(tmp_path, scripts, *, fallback=False):
         model_router=router,
     )
     return runner, store, router, providers, verifier
+
+
+@pytest.mark.parametrize("provider_name", ["azure", "ollama"])
+def test_parallel_worker_providers_are_isolated_and_usage_is_task_attributed(
+    tmp_path, provider_name
+):
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    worker_a = tmp_path / "worktrees" / "task-A"
+    worker_b = tmp_path / "worktrees" / "task-B"
+    worker_a.mkdir(parents=True)
+    worker_b.mkdir(parents=True)
+    settings = AgentBusConfig(
+        provider_name=provider_name,
+        model_name="ollama-fake",
+        workspace_dir=str(workspace),
+        runs_dir=str(tmp_path / "runs"),
+        state_dir=str(tmp_path / "state"),
+        parallel_execution=True,
+        max_workers=2,
+        worktree_root=str(tmp_path / "worktrees"),
+        model_max_retries=0,
+        azure_openai_endpoint="https://sample.openai.azure.com",
+        azure_openai_api_key="offline-fake-key",
+        azure_openai_default_deployment="default-deployment",
+        azure_openai_coder_deployment="coder-deployment",
+        azure_openai_reviewer_deployment="reviewer-deployment",
+    )
+    barrier = threading.Barrier(2)
+    lock = threading.Lock()
+    provider_instances = []
+
+    class ConcurrentProvider:
+        def __init__(self, route):
+            self.route = route
+
+        @property
+        def provider_name(self):
+            return self.route.provider
+
+        @property
+        def model_name(self):
+            return self.route.model
+
+        def generate_json(self, prompt, **kwargs):
+            barrier.wait(timeout=10)
+            return ModelResult(
+                value={"ok": True},
+                provider=self.route.provider,
+                model=self.route.model,
+                role=self.route.role,
+                request_id=f"offline-{self.route.provider}-{id(self)}",
+                usage=ModelUsage(input_tokens=3, output_tokens=2, total_tokens=5),
+                finish_status="completed",
+                latency_seconds=0.01,
+            )
+
+        def generate_text(self, prompt, **kwargs):
+            return self.generate_json(prompt, **kwargs)
+
+    def builder(route):
+        instance = ConcurrentProvider(route)
+        with lock:
+            provider_instances.append(instance)
+        return instance
+
+    factory = ModelProviderFactory(
+        settings,
+        builders={"azure": builder, "ollama": builder},
+    )
+    router = ModelRouter(
+        settings,
+        provider_factory=factory,
+        sleeper=lambda delay: None,
+        jitter=lambda: 0,
+    )
+    runner = MultiAgentOrchestrator(config=settings, model_router=router)
+    executors = [
+        runner._parallel_task_executor(worker_a),
+        runner._parallel_task_executor(worker_b),
+    ]
+
+    def invoke(index):
+        task_id = f"task-{'AB'[index]}"
+        with model_request_context(run_id="parallel-provider-run", task_id=task_id):
+            return executors[index].coder.model.generate_json("offline request")
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(invoke, range(2)))
+
+    assert results == [{"ok": True}, {"ok": True}]
+    assert len(provider_instances) == 2
+    assert provider_instances[0] is not provider_instances[1]
+    assert router.usage_ledger.total(
+        run_id="parallel-provider-run", task_id="task-A"
+    ).total_tokens == 5
+    assert router.usage_ledger.total(
+        run_id="parallel-provider-run", task_id="task-B"
+    ).total_tokens == 5
 
 
 def test_offline_azure_durable_smoke_routes_roles_retries_and_persists_usage(
