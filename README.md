@@ -95,6 +95,69 @@ See [Azure OpenAI Provider](docs/providers/azure-openai.md) for setup and troubl
 python -m pytest
 ```
 
+## Evaluation And Regression Harness
+
+Unit tests establish component behavior, but they do not show whether the complete AgentBus runtime can finish a repository task with the right files, passing tests, bounded model usage, durable recovery, and a successful final review. The evaluation harness runs compact software-engineering cases through the existing agents, durable engine, scheduler, worktrees, verifier, and reviewer, then checks the result with deterministic assertions. A model review is recorded, but it is not the sole correctness oracle.
+
+The default `core-offline` suite uses exact, route-aware fake provider responses and fresh local Git repositories. It requires no provider, credentials, or network access:
+
+```powershell
+.venv\Scripts\python.exe -m agentbus.eval list
+.venv\Scripts\python.exe -m agentbus.eval run --suite core-offline
+.venv\Scripts\python.exe -m agentbus.eval run --suite core-offline --variant durable-parallel-fake
+```
+
+Use `--case <case-id>` or `--tag <tag>` to filter cases, `--fail-fast` to stop after the first failed case, `--json` for machine-readable output, and `--preserve-fixtures` to retain disposable repositories for debugging. Result JSON is written separately from durable runtime state under `.agentbus/evaluations` by default. Failed evaluation runs persist completed case results incrementally.
+
+### Assertions And Scoring
+
+Cases can assert run, verifier, and reviewer outcomes; required, forbidden, and changed files; exact or pattern-based contents; test commands; generated-artifact exclusion; repository boundaries; commit and PR behavior; approval gates; task execution counts; conflicts; source immutability; secret patterns; and request, token, time, and retry limits. Diagnostics retain expected and observed values.
+
+The default score totals 100 points:
+
+| Dimension | Weight |
+| --- | ---: |
+| Functional correctness | 30 |
+| Test success | 20 |
+| Scope discipline | 15 |
+| Safety compliance | 15 |
+| Recovery and integration | 10 |
+| Review outcome | 5 |
+| Efficiency | 5 |
+
+Each applicable dimension receives its weight multiplied by its assertion pass rate. Missing optional dimensions are neutral. Any hard safety assertion failure sets the score to zero and fails the case regardless of its other points. Raw quality, execution, provider, and Git metrics are stored alongside the score; AgentBus does not infer monetary cost from hardcoded prices.
+
+### Baselines And Regression Gates
+
+Save a passing run as a named baseline and compare later runs:
+
+```powershell
+.venv\Scripts\python.exe -m agentbus.eval baseline save <run-id> --name main
+.venv\Scripts\python.exe -m agentbus.eval baseline compare <new-run-id> --name main
+.venv\Scripts\python.exe -m agentbus.eval compare <baseline-run-id> <new-run-id>
+.venv\Scripts\python.exe -m agentbus.eval show <run-id>
+.venv\Scripts\python.exe -m agentbus.eval export <run-id> --output report.json
+```
+
+Replacing a baseline requires `--replace`. Comparison fails on configured regressions such as a previously passing or verifier-passing case failing, a safety violation, excessive score loss, more unrelated files, or token, latency, and retry growth beyond thresholds. Quality and safety transitions are critical; timing and usage thresholds are configurable because host and provider performance varies.
+
+### Live Evaluation Safety
+
+Live Ollama and Azure variants are opt-in. A live run requires an explicitly selected live suite, a live variant, and `--live`; otherwise it fails before provider construction. The CLI prints the provider, role deployment summary, estimated maximum calls, and hard request/token limits before execution. Every provider call is locally reserved against request, conservative token, and wall-clock budgets before network access. Evaluation never pushes, opens a PR, or deploys infrastructure, and provider fallback occurs only when the selected variant enables it.
+
+```powershell
+$env:AGENTBUS_EVAL_MAX_REQUESTS = "8"
+$env:AGENTBUS_EVAL_MAX_TOKENS = "2000"
+$env:AGENTBUS_EVAL_TIMEOUT_SECONDS = "180"
+.venv\Scripts\python.exe -m agentbus.eval run --suite azure-smoke --variant durable-azure --live
+```
+
+The live Azure suite is intentionally not part of normal tests and should be run only after deployment and credential configuration. Evaluation result metadata is sanitized and excludes task prompts, API keys, environment dumps, source snapshots, and SDK objects. Configuration fingerprints include prompt templates, action schemas, routing, retry/fallback, and workflow settings without secrets.
+
+Fixture repositories are copied into marker-owned temporary directories and initialized as independent Git repositories. Cleanup validates the exact ownership marker and never resets, cleans, or deletes an unknown repository. `AGENTBUS_EVAL_PRESERVE_FIXTURES=true` retains fixtures; `AGENTBUS_EVAL_RESULTS_DIR` and `AGENTBUS_EVAL_FIXTURE_ROOT` override storage locations.
+
+Current limitations: evaluation cases run sequentially, fixtures are deliberately small and local, live results can vary by model and service conditions, and no pricing model is included. Passing these fixtures does not guarantee correctness, security, or reliability on arbitrary production repositories. See [ADR 0005](docs/adr/0005-evaluation-and-regression-harness.md) for the design and future benchmark path.
+
 ## Run The CLI
 
 Single-agent mode is the default. It sends the task directly to one AgentBus tool-using loop.

@@ -91,6 +91,7 @@ class MultiAgentOrchestrator:
         parallel_final_verifier=None,
         parallel_final_reviewer=None,
         worker_crash_hook=None,
+        integration_crash_hook=None,
     ):
         self.config = config or AgentBusConfig.from_env()
         self.workspace = self.config.workspace_path
@@ -139,6 +140,7 @@ class MultiAgentOrchestrator:
         self.parallel_final_verifier = parallel_final_verifier
         self.parallel_final_reviewer = parallel_final_reviewer
         self.worker_crash_hook = worker_crash_hook
+        self.integration_crash_hook = integration_crash_hook
 
     def run(self, user_task: str) -> OrchestrationResult:
         self.logger.log(
@@ -377,7 +379,11 @@ class MultiAgentOrchestrator:
                 parallel.get("lease_seconds", self.config.worker_lease_seconds)
             ),
         )
-        integration = IntegrationCoordinator(self.state_store, manager)
+        integration = IntegrationCoordinator(
+            self.state_store,
+            manager,
+            crash_hook=self.integration_crash_hook,
+        )
 
         def worker_factory(worker_id: str) -> LocalTaskWorker:
             return LocalTaskWorker(
