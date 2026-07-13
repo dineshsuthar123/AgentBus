@@ -85,7 +85,15 @@ def builtin_variants() -> dict[str, EvaluationVariant]:
 
 
 def builtin_suites() -> dict[str, EvaluationSuite]:
-    suites = [core_offline_suite(), azure_smoke_suite()]
+    from agentbus.evaluation.benchmarks import load_manifest, suite_from_manifest
+
+    suites = [
+        core_offline_suite(),
+        release_offline_suite(),
+        azure_smoke_suite(),
+        release_azure_smoke_suite(),
+        suite_from_manifest(load_manifest()),
+    ]
     return {suite.suite_id: suite for suite in suites}
 
 
@@ -386,6 +394,54 @@ def azure_smoke_suite() -> EvaluationSuite:
                 metadata={"limits": {"max_requests": 6, "max_tokens": 1500, "max_elapsed_seconds": 180}},
             ),
         ],
+    )
+
+
+def release_offline_suite() -> EvaluationSuite:
+    core = core_offline_suite()
+    return core.model_copy(
+        update={
+            "suite_id": "release-offline",
+            "title": "AgentBus v0.1 offline release acceptance",
+            "description": (
+                "Deterministic package/CLI preflight plus all core feature, scope, "
+                "safety, recovery, approval, parallel, and conflict cases."
+            ),
+            "tags": {"offline", "ci", "release"},
+            "metadata": {"release_surface_checks": True},
+        },
+        deep=True,
+    )
+
+
+def release_azure_smoke_suite() -> EvaluationSuite:
+    smoke = azure_smoke_suite().cases[0].model_copy(
+        update={
+            "case_id": "release-azure-calculator",
+            "title": "AgentBus release Azure calculator smoke",
+            "timeout_seconds": 180,
+            "metadata": {
+                "limits": {
+                    "max_requests": 8,
+                    "max_tokens": 2000,
+                    "max_elapsed_seconds": 180,
+                    "max_retries": 1,
+                },
+                "release_smoke": True,
+            },
+            "tags": {"live", "azure", "release"},
+        }
+    )
+    return EvaluationSuite(
+        suite_id="release-azure-smoke",
+        title="Opt-in AgentBus release Azure smoke",
+        description=(
+            "One bounded local fixture. Fallback, pushes, and PR creation remain disabled."
+        ),
+        default_variant="durable-azure",
+        tags={"live", "azure", "release"},
+        cases=[smoke],
+        metadata={"recommended_repeat": 2, "fallback_required": False},
     )
 
 

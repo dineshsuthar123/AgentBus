@@ -1,0 +1,53 @@
+{
+  "manifest_version": 1,
+  "repositories": [
+    {
+      "benchmark_id": "click-cli-runner-test",
+      "repository_url": "https://github.com/pallets/click.git",
+      "commit_sha": "934813e4d421071a1b3db3973c02fe2721359a6e",
+      "spdx_license": "BSD-3-Clause",
+      "license_review": {
+        "status": "approved",
+        "reviewed_on": "2026-07-14",
+        "source_url": "https://github.com/pallets/click/blob/934813e4d421071a1b3db3973c02fe2721359a6e/LICENSE.txt"
+      },
+      "task": {
+        "prompt": "Add tests/test_agentbus_smoke.py with a focused regression test that defines a small Click command, invokes it through CliRunner, and verifies its successful output. Do not modify package source files.",
+        "expected_files": [
+          "tests/test_agentbus_smoke.py"
+        ],
+        "content_expectations": [
+          {
+            "path": "tests/test_agentbus_smoke.py",
+            "pattern": "CliRunner"
+          }
+        ]
+      },
+      "expected_test_command": [
+        "python",
+        "-B",
+        "-m",
+        "pytest",
+        "-p",
+        "no:cacheprovider",
+        "tests/test_agentbus_smoke.py"
+      ],
+      "setup_command": [],
+      "setup_reviewed": false,
+      "budget": {
+        "max_requests": 16,
+        "max_tokens": 4000,
+        "timeout_seconds": 300
+      },
+      "supported_platforms": [
+        "windows",
+        "linux"
+      ],
+      "tags": [
+        "python",
+        "cli",
+        "bsd-3-clause"
+      ]
+    }
+  ]
+}

@@ -70,3 +70,17 @@ def test_durable_parallel_evaluation_covers_recovery_safety_and_integration(tmp_
     generated = by_case["generated-artifact-filtering"]
     assert generated.relevant_changed_files == ["module.py"]
     assert "__pycache__" not in generated.relevant_changed_files
+
+
+def test_release_offline_runs_package_cli_and_report_preflight(tmp_path):
+    runner = EvaluationRunner(results_dir=tmp_path / "release")
+
+    run = runner.run(
+        "release-offline",
+        variant_id="durable-parallel-fake",
+        case_ids={"calculator-feature"},
+    )
+
+    assert run.passed is True
+    assert all(run.metadata["release_acceptance"].values())
+    assert run.metadata["release_acceptance"]["storage_roundtrip"] is True

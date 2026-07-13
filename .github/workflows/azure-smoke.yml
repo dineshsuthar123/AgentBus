@@ -1,0 +1,44 @@
+name: Manual Azure release smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agentbus-azure-release-smoke
+  cancel-in-progress: false
+
+jobs:
+  azure-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      AGENTBUS_PROVIDER: azure
+      AGENTBUS_ENABLE_PROVIDER_FALLBACK: "false"
+      AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+      AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+      AZURE_OPENAI_DEFAULT_DEPLOYMENT: ${{ secrets.AZURE_OPENAI_DEFAULT_DEPLOYMENT }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Validate required secret presence without printing values
+        run: >-
+          python -c "import os,sys; names=('AZURE_OPENAI_ENDPOINT','AZURE_OPENAI_API_KEY','AZURE_OPENAI_DEFAULT_DEPLOYMENT'); missing=[name for name in names if not os.getenv(name)]; print('Required Azure secrets configured' if not missing else 'Missing required Azure secret names: '+','.join(missing)); sys.exit(bool(missing))"
+      - name: Install Azure provider support
+        run: python -m pip install ".[azure]"
+      - name: Run bounded live acceptance twice
+        run: >-
+          agentbus-eval run
+          --suite release-azure-smoke
+          --variant durable-azure
+          --live
+          --repeat 2
+          --max-requests 8
+          --max-tokens 2000
+          --timeout-seconds 180

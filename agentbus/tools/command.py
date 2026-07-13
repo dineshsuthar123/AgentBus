@@ -4,6 +4,12 @@ import sys
 from collections.abc import Mapping
 from pathlib import Path
 
+from agentbus.security.redaction import (
+    is_sensitive_key,
+    redact_text,
+    safe_child_environment,
+)
+
 
 class CommandTools:
     SAFE_ENVIRONMENT_OVERRIDES = {
@@ -112,12 +118,12 @@ class CommandTools:
                 env=child_environment,
             )
 
-            stdout = result.stdout.strip()
-            stderr = result.stderr.strip()
+            stdout = redact_text(result.stdout.strip()) or ""
+            stderr = redact_text(result.stderr.strip()) or ""
             output = _format_output(result.returncode, stdout, stderr)
 
             return {
-                "command": command,
+                "command": _reported_command(command),
                 "exit_code": result.returncode,
                 "passed": result.returncode == 0,
                 "stdout": stdout,
@@ -142,11 +148,9 @@ class CommandTools:
     def _child_environment(
         self,
         overrides: Mapping[str, str] | None,
-    ) -> dict[str, str] | None:
-        if not overrides:
-            return None
-        environment = os.environ.copy()
-        for name, value in overrides.items():
+    ) -> dict[str, str]:
+        environment = safe_child_environment(os.environ)
+        for name, value in (overrides or {}).items():
             allowed_values = self.SAFE_ENVIRONMENT_OVERRIDES.get(name)
             if allowed_values is None or value not in allowed_values:
                 raise ValueError(f"{name} is not an allowed verifier override")
@@ -164,11 +168,29 @@ def _format_output(exit_code: int, stdout: str, stderr: str) -> str:
 
 def _blocked_result(command, message: str, blocked: bool = True) -> dict:
     return {
-        "command": command if isinstance(command, list) else [],
+        "command": _reported_command(command) if isinstance(command, list) else [],
         "exit_code": None,
         "passed": False,
         "stdout": "",
-        "stderr": message,
-        "output": message,
+        "stderr": redact_text(message) or "Blocked command.",
+        "output": redact_text(message) or "Blocked command.",
         "blocked": blocked,
     }
+
+
+def _reported_command(command: list[str]) -> list[str]:
+    reported: list[str] = []
+    redact_next = False
+    for argument in command:
+        if redact_next:
+            reported.append("[REDACTED]")
+            redact_next = False
+            continue
+        name, separator, _ = argument.partition("=")
+        normalized = name.lstrip("-/").replace("-", "_")
+        if not separator and is_sensitive_key(normalized):
+            reported.append(argument)
+            redact_next = True
+        else:
+            reported.append(redact_text(argument) or "")
+    return reported

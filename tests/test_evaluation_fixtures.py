@@ -1,3 +1,4 @@
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -39,6 +40,64 @@ def test_fixture_manager_creates_fresh_isolated_git_repository_per_run(tmp_path)
     (first.repository / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
     assert (second.repository / "app.py").read_text(encoding="utf-8") == "VALUE = 1\n"
     assert (source / "app.py").read_text(encoding="utf-8") == "VALUE = 1\n"
+
+
+def test_fixture_copy_drops_source_git_metadata_remotes_and_hooks(tmp_path):
+    source = make_source(tmp_path / "source")
+    subprocess.run(["git", "init", "-q"], cwd=source, check=True, shell=False)
+    subprocess.run(
+        ["git", "config", "user.name", "Source Owner"],
+        cwd=source,
+        check=True,
+        shell=False,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "source@example.invalid"],
+        cwd=source,
+        check=True,
+        shell=False,
+    )
+    subprocess.run(["git", "add", "app.py"], cwd=source, check=True, shell=False)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "source baseline"],
+        cwd=source,
+        check=True,
+        shell=False,
+    )
+    subprocess.run(
+        ["git", "remote", "add", "origin", "https://example.invalid/source.git"],
+        cwd=source,
+        check=True,
+        shell=False,
+    )
+    (source / ".git" / "hooks" / "pre-commit").write_text(
+        "source-only hook\n",
+        encoding="utf-8",
+    )
+    manager = FixtureRepositoryManager(tmp_path, tmp_path / "owned")
+
+    fixture = manager.create(make_case(source), "run-with-git-source")
+    remotes = subprocess.run(
+        ["git", "remote"],
+        cwd=fixture.repository,
+        check=True,
+        capture_output=True,
+        text=True,
+        shell=False,
+    )
+    commit_count = subprocess.run(
+        ["git", "rev-list", "--count", "HEAD"],
+        cwd=fixture.repository,
+        check=True,
+        capture_output=True,
+        text=True,
+        shell=False,
+    )
+
+    assert remotes.stdout.strip() == ""
+    assert commit_count.stdout.strip() == "1"
+    assert not (fixture.repository / ".git" / "hooks" / "pre-commit").is_file()
+    assert (source / ".git").is_dir()
 
 
 def test_fixture_cleanup_removes_only_owned_marked_tree(tmp_path):

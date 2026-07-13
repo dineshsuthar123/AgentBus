@@ -1,3 +1,5 @@
+import builtins
+
 import pytest
 
 from agentbus.config import AgentBusConfig
@@ -114,6 +116,25 @@ def test_ollama_route_preserves_existing_model_and_url():
     assert route.provider == "ollama"
     assert route.model == "local-model"
     assert route.fallback_enabled is False
+
+
+def test_missing_azure_extra_raises_actionable_configuration_error(monkeypatch):
+    original_import = builtins.__import__
+
+    def import_without_openai(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "agentbus.models.azure_openai":
+            raise ModuleNotFoundError("No module named 'openai'", name="openai")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", import_without_openai)
+    config = azure_config()
+    route = ModelRouter(config).route_for(ModelRole.CODER)
+
+    with pytest.raises(ModelConfigurationError, match="azure.*extra") as captured:
+        ModelProviderFactory(config).create(route)
+
+    assert captured.value.provider == "azure"
+    assert captured.value.model == "coder-deployment"
 
 
 def test_transient_failure_retries_with_deterministic_backoff():

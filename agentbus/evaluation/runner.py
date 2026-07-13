@@ -45,6 +45,7 @@ from agentbus.evaluation.providers import (
     ScriptedResponseStore,
 )
 from agentbus.evaluation.scoring import calculate_score
+from agentbus.evaluation.statistics import build_series
 from agentbus.evaluation.storage import EvaluationStorage
 from agentbus.evaluation.suites import builtin_suites, builtin_variants
 from agentbus.execution.engine import DurableExecutionEngine
@@ -96,10 +97,9 @@ class EvaluationRunner:
         offline_backend: EvaluationBackend | None = None,
         live_backend: EvaluationBackend | None = None,
     ):
-        repository_root = Path(__file__).resolve().parents[2]
         self.storage = storage or EvaluationStorage(results_dir)
         self.fixture_manager = FixtureRepositoryManager(
-            fixture_root or repository_root / "evaluation" / "fixtures",
+            fixture_root or Path(__file__).with_name("fixtures_data"),
             owned_fixture_root
             or os.getenv("AGENTBUS_EVAL_FIXTURE_ROOT")
             or Path(tempfile.gettempdir()) / "agentbus-eval-fixtures",
@@ -143,6 +143,8 @@ class EvaluationRunner:
                 "prompt_content_persisted": False,
             },
         )
+        if suite.metadata.get("release_surface_checks"):
+            run.metadata["release_acceptance"] = _release_surface_checks()
         self.storage.save_run(run)
         backend = self.live_backend if live else self.offline_backend
         for case in selected:
@@ -176,8 +178,47 @@ class EvaluationRunner:
         )
         run.aggregate_metrics = _aggregate_metrics(run.case_results)
         run.aggregate_score = _average_score(run.case_results)
+        if suite.metadata.get("release_surface_checks"):
+            release_checks = run.metadata["release_acceptance"]
+            try:
+                loaded = self.storage.load_run(run.evaluation_run_id)
+                export_path = self.storage.exports_dir / (
+                    f".{run.evaluation_run_id}-release-roundtrip.json"
+                )
+                self.storage.export_run(run.evaluation_run_id, export_path)
+                release_checks["storage_roundtrip"] = (
+                    loaded.evaluation_run_id == run.evaluation_run_id
+                    and export_path.is_file()
+                )
+                export_path.unlink(missing_ok=True)
+            except Exception:
+                release_checks["storage_roundtrip"] = False
+            run.passed = run.passed and all(release_checks.values())
         self.storage.save_run(run)
         return run
+
+    def run_repeated(
+        self,
+        suite_id: str,
+        *,
+        repeat: int,
+        **kwargs: Any,
+    ):
+        if repeat < 1:
+            raise EvaluationConfigurationError("--repeat must be at least 1.")
+        runs = [self.run(suite_id, **kwargs) for _ in range(repeat)]
+        series = build_series(runs)
+        for index, run in enumerate(runs, start=1):
+            run.metadata.update(
+                {
+                    "series_id": series.series_id,
+                    "repeat_index": index,
+                    "repeat_count": repeat,
+                }
+            )
+            self.storage.save_run(run)
+        self.storage.save_series(series)
+        return series
 
     def _run_case(
         self,
@@ -502,8 +543,10 @@ class LiveRuntimeBackend:
             provider_name=variant.provider,
             fallback_provider_name=variant.fallback_provider or base.fallback_provider_name,
             enable_provider_fallback=variant.fallback_enabled,
-            parallel_execution=variant.parallel,
-            max_workers=variant.max_workers,
+            parallel_execution=bool(variant.parallel or case.parallel_mode),
+            max_workers=max(2, variant.max_workers, case.maximum_workers)
+            if (variant.parallel or case.parallel_mode)
+            else 1,
             worktree_root=str(fixture.owned_root / "worktrees"),
             keep_worktrees=True,
             model_timeout_seconds=min(base.model_timeout_seconds, case.timeout_seconds),
@@ -1371,6 +1414,30 @@ def _event_duration(events, start_type, end_type):
 
 def _average_score(results):
     return round(sum(item.score.total for item in results) / len(results), 4) if results else 0.0
+
+
+def _release_surface_checks() -> dict[str, bool]:
+    from agentbus import __version__
+    from agentbus.cli import COMMANDS, main as cli_main
+    from agentbus.eval import main as evaluation_main
+    from agentbus.release_report import main as release_report_main
+
+    return {
+        "package_import": bool(__version__),
+        "cli_entry_callable": callable(cli_main),
+        "evaluation_entry_callable": callable(evaluation_main),
+        "release_report_callable": callable(release_report_main),
+        "documented_command_groups": {
+            "run",
+            "resume",
+            "runs",
+            "show-run",
+            "providers",
+            "config",
+            "doctor",
+            "evaluate",
+        }.issubset(COMMANDS),
+    }
 
 
 def _non_durable_report(case, result, verifier_result, repository_path):

@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 from agentbus.config import AgentBusConfig
+from agentbus.configuration import resolve_configuration
 from agentbus.execution.engine import DurableExecutionEngine, DurableExecutionError
 from agentbus.execution.leases import LeaseError, LeaseService
 from agentbus.execution.models import ExecutionReport, RunStatus
@@ -25,9 +26,13 @@ from agentbus.worktrees.manager import GitWorktreeManager
 from agentbus.worktrees.models import WorktreeStatus
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run AgentBus Local Runner.")
     parser.add_argument("task", nargs="?", help="Task for the local runner.")
+    parser.add_argument(
+        "--config",
+        help="Explicit TOML or JSON configuration file (no parent-directory search).",
+    )
     parser.add_argument(
         "--workflow",
         choices=["single", "multi"],
@@ -190,7 +195,7 @@ def parse_args() -> argparse.Namespace:
         "--worker-id",
         help="Filter --list-workers output to one persisted worker ID.",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     has_operation = any(
         [
             args.resume,
@@ -235,14 +240,19 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def main() -> int:
-    args = parse_args()
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
 
     print("AgentBus Local Runner")
     print("---------------------")
 
     try:
-        config = AgentBusConfig.from_env().with_overrides(
+        base_config = (
+            AgentBusConfig.from_env()
+            if args.config is None
+            else resolve_configuration(config_file=args.config).config
+        )
+        config = base_config.with_overrides(
             model_name=args.model,
             workspace_dir=args.workspace,
             max_steps=args.max_steps,

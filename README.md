@@ -1,22 +1,51 @@
 # AgentBus
 
-AgentBus Local Runner is a provider-independent coding runtime for small software engineering tasks. It can use local Ollama models or Azure OpenAI deployments for structured agent actions, executes a small set of workspace-scoped tools, records machine-readable run logs, and stops when the work is finished or the configured step limit is reached. Ollama remains the default and requires no Azure configuration.
+AgentBus is a provider-independent local coding runtime for small software engineering tasks. It can use local Ollama models or Azure OpenAI deployments for structured agent actions, executes a small set of workspace-scoped tools, records machine-readable run state, and stops when the work is finished or the configured step limit is reached. Ollama remains the default and requires no Azure configuration.
 
-## Setup
+AgentBus `0.1.0-alpha.1` is an early developer release. It has no production
+SLA, does not provide complete sandbox isolation, and does not automatically
+roll back filesystem or external side effects.
 
-Create and activate a virtual environment, then install the project dependencies:
+## Quick Start
+
+Install from a source checkout with standard Python packaging:
+
+```powershell
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install .
+.venv\Scripts\agentbus.exe --version
+.venv\Scripts\agentbus.exe init --local --provider ollama --dry-run
+```
 
 ```bash
 python -m venv .venv
-.venv\Scripts\activate
-python -m pip install -r requirements.txt
+.venv/bin/python -m pip install .
+.venv/bin/agentbus --version
+.venv/bin/agentbus init --local --provider ollama --dry-run
 ```
 
-Install Ollama and pull the default local model:
+Remove `--dry-run` when the reported paths are correct, then run offline
+diagnostics and a task from the exact root of a disposable Git repository:
+
+```powershell
+agentbus init --local --provider ollama
+agentbus doctor --config .agentbus\config.toml
+agentbus run --config .agentbus\config.toml --workflow multi --durable "Add a tested feature"
+agentbus runs --config .agentbus\config.toml
+agentbus-eval run --suite release-offline --variant durable-parallel-fake
+```
+
+AgentBus never downloads an Ollama model. Install Ollama and obtain the desired
+model explicitly:
 
 ```bash
 ollama pull qwen2.5-coder:7b
 ```
+
+Start with [Getting Started](docs/getting-started.md), then see
+[Configuration](docs/configuration.md), the
+[Python calculator example](examples/python-calculator/README.md), and the
+[Safety Model](#safety-model).
 
 ## Model Providers
 
@@ -141,6 +170,23 @@ Save a passing run as a named baseline and compare later runs:
 
 Replacing a baseline requires `--replace`. Comparison fails on configured regressions such as a previously passing or verifier-passing case failing, a safety violation, excessive score loss, more unrelated files, or token, latency, and retry growth beyond thresholds. Quality and safety transitions are critical; timing and usage thresholds are configurable because host and provider performance varies.
 
+### Repeated Runs And Variant Reports
+
+`--repeat` stores every immutable run plus one aggregate series. The series
+reports success rate, score mean/median/minimum/sample standard deviation,
+duration and token means/medians, retry distribution, fallback, reviewer,
+verifier, file-scope violation, and conflict rates. These are descriptive
+sample statistics and do not imply significance at small sample sizes.
+
+```powershell
+agentbus-eval run --suite release-offline --variant durable-parallel-fake --repeat 3
+agentbus-eval show-series SERIES_ID
+agentbus-eval compare-variants RUN_OR_SERIES_A RUN_OR_SERIES_B --format markdown --output comparison.md
+```
+
+Comparison output shows right-minus-left differences and never labels one
+variant "best" from a single run.
+
 ### Live Evaluation Safety
 
 Live Ollama and Azure variants are opt-in. A live run requires an explicitly selected live suite, a live variant, and `--live`; otherwise it fails before provider construction. The CLI prints the provider, role deployment summary, estimated maximum calls, and hard request/token limits before execution. Every provider call is locally reserved against request, conservative token, and wall-clock budgets before network access. Evaluation never pushes, opens a PR, or deploys infrastructure, and provider fallback occurs only when the selected variant enables it.
@@ -152,13 +198,23 @@ $env:AGENTBUS_EVAL_TIMEOUT_SECONDS = "180"
 .venv\Scripts\python.exe -m agentbus.eval run --suite azure-smoke --variant durable-azure --live
 ```
 
-The live Azure suite is intentionally not part of normal tests and should be run only after deployment and credential configuration. Evaluation result metadata is sanitized and excludes task prompts, API keys, environment dumps, source snapshots, and SDK objects. Configuration fingerprints include prompt templates, action schemas, routing, retry/fallback, and workflow settings without secrets.
+The live Azure suite is intentionally not part of normal tests and should be run only after deployment and credential configuration. `release-azure-smoke` contains one bounded fixture and is intended for explicit `--repeat 2` release checks. Evaluation result metadata is sanitized and excludes task prompts, API keys, environment dumps, source snapshots, and SDK objects. Configuration fingerprints include prompt templates, action schemas, routing, retry/fallback, and workflow settings without secrets.
 
 Fixture repositories are copied into marker-owned temporary directories and initialized as independent Git repositories. Cleanup validates the exact ownership marker and never resets, cleans, or deletes an unknown repository. `AGENTBUS_EVAL_PRESERVE_FIXTURES=true` retains fixtures; `AGENTBUS_EVAL_RESULTS_DIR` and `AGENTBUS_EVAL_FIXTURE_ROOT` override storage locations.
 
-Current limitations: evaluation cases run sequentially, fixtures are deliberately small and local, live results can vary by model and service conditions, and no pricing model is included. Passing these fixtures does not guarantee correctness, security, or reliability on arbitrary production repositories. See [ADR 0005](docs/adr/0005-evaluation-and-regression-harness.md) for the design and future benchmark path.
+License-reviewed real-repository benchmarks are available but require explicit
+`--allow-repository-download`, an exact manifest SHA, a live variant, and
+`--live`. They never run in normal tests. See
+[Benchmarking Real Repositories](docs/benchmarking-real-repositories.md).
+
+Current limitations: suite cases run sequentially, fixtures are deliberately compact, live results can vary by model and service conditions, and no pricing model is included. Passing these fixtures does not guarantee correctness, security, or reliability on arbitrary production repositories. See [ADR 0005](docs/adr/0005-evaluation-and-regression-harness.md) and [ADR 0006](docs/adr/0006-v0.1-release-and-real-repo-validation.md).
 
 ## Run The CLI
+
+Installed command groups include `run`, `resume`, `runs`, `show-run`,
+`approve`, `reject`, `providers`, `config`, `init`, `doctor`, `worktrees`,
+`evaluate`, `release-report`, and `version`. The original
+`python -m agentbus.main` option-oriented interface remains supported.
 
 Single-agent mode is the default. It sends the task directly to one AgentBus tool-using loop.
 
@@ -348,7 +404,7 @@ In sequential mode, branch creation may occur before planning when requested. In
 
 AgentBus applies one conservative repository-relative artifact policy to Python, Node, Java/build, editor, OS, and AgentBus runtime outputs. Reports distinguish the complete run-attributed audit inventory from relevant review files, generated artifacts, Git-ignored paths, review exclusions, and commit-eligible files. Normal untracked source and unknown files remain visible; they are never hidden merely because they are untracked.
 
-Auto-detected pytest verification runs as `python -B -m pytest -p no:cacheprovider` with `PYTHONDONTWRITEBYTECODE=1` in an isolated copy of the inherited child environment. This prevents Python bytecode and pytest cache noise without mutating `os.environ`. Explicit verifier commands keep their original arguments; Python commands still receive the safe bytecode environment policy.
+Auto-detected pytest verification runs as `python -B -m pytest -p no:cacheprovider` with `PYTHONDONTWRITEBYTECODE=1` in a sanitized child environment. Ordinary process settings remain available, while common key, token, secret, password, credential, package-index, and authentication variables are removed. This prevents Python bytecode and pytest cache noise without mutating `os.environ` or forwarding provider keys to repository tests. Explicit verifier commands keep their original arguments; Python commands still receive the safe bytecode environment policy.
 
 Known untracked or Git-ignored generated outputs are excluded from semantic review. Tracked generated-looking files remain visible to the reviewer because the repository has intentionally versioned them. Commit selection is stricter: only relevant run-attributed paths are passed to path-scoped Git commit operations, generated artifacts are never staged, and unrelated staged or pre-existing changes remain untouched.
 
@@ -458,6 +514,7 @@ AgentBus is intentionally local and conservative:
 - Commands must be JSON arrays of strings and run with `shell=False`.
 - Only a small command allowlist is available.
 - Obvious destructive commands, destructive arguments, shell syntax, and remote access helpers are blocked.
+- Verifier subprocesses remove common credential-bearing environment variables.
 - Git automation uses safe `git` subprocess calls with `shell=False`.
 - AgentBus does not reset, clean, rebase, force push, deploy, or apply infrastructure.
 - Run logs are JSONL files in the configured runs directory and do not include environment variables or secrets.
@@ -483,3 +540,14 @@ AgentBus is intentionally local and conservative:
 - AgentBus does not discover or provision Azure resources/deployments and does not automatically switch API modes.
 - Some Azure deployments do not support Responses API or strict structured outputs; select a compatible deployment or configure `chat_completions` explicitly.
 - The command allowlist is intentionally narrow, so some legitimate workflows may need explicit tool support before they are available.
+
+## Project Information
+
+- [Changelog](CHANGELOG.md)
+- [Contributing](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
+- [Code of conduct](CODE_OF_CONDUCT.md)
+- [Support](SUPPORT.md)
+- [Release checklist](RELEASE_CHECKLIST.md)
+- [Release process](docs/release-process.md)
+- [MIT license](LICENSE)
