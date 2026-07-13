@@ -1,3 +1,4 @@
+from agentbus.agents.coder import CoderAgent
 from agentbus.agents.planner import PlannerAgent
 from agentbus.agents.reviewer import ReviewerAgent
 
@@ -34,6 +35,8 @@ def test_planner_agent_parses_valid_model_output():
 
     assert plan["goal"] == "Create calculator functions"
     assert plan["steps"][0]["risk"] == "low"
+    assert "dependencies" not in plan["steps"][0]
+    assert "done_criteria" not in plan["steps"][0]
     assert "create calculator" in model.prompts[0]
 
 
@@ -58,3 +61,26 @@ def test_reviewer_agent_parses_valid_model_output():
     assert review["approved"] is True
     assert review["summary"] == "Looks good"
     assert "1 passed" in model.prompts[0]
+
+
+def test_coder_preserves_legacy_loop_factory_that_only_accepts_config():
+    seen = {}
+
+    class LegacyLoop:
+        def __init__(self, config):
+            seen["config"] = config
+
+        def run(self, task):
+            seen["task"] = task
+            return "legacy loop complete"
+
+    coder = CoderAgent(model=FakeModel({}), loop_factory=LegacyLoop)
+
+    result = coder.execute(
+        "Complete task",
+        {"goal": "Complete", "steps": []},
+    )
+
+    assert result == "legacy loop complete"
+    assert seen["config"] is coder.config
+    assert "Complete task" in seen["task"]

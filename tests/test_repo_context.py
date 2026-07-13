@@ -73,6 +73,15 @@ def test_test_command_detector_picks_pytest(tmp_path):
     assert result["confidence"] == "high"
 
 
+def test_test_command_detector_picks_root_level_pytest_file(tmp_path):
+    workspace = tmp_path / "workspace"
+    write(workspace / "test_calculator.py", "def test_add(): assert True")
+
+    result = TestCommandDetector(str(workspace)).detect()
+
+    assert result["command"] == ["python", "-m", "pytest"]
+
+
 def test_test_command_detector_picks_npm_test(tmp_path):
     workspace = tmp_path / "workspace"
     write(workspace / "package.json", '{"scripts":{"test":"vitest"}}')

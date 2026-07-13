@@ -1,8 +1,11 @@
+import inspect
 import json
 
 from agentbus.config import AgentBusConfig
 from agentbus.memory.run_log import RunLogger
-from agentbus.models.ollama import OllamaModel
+from agentbus.models.errors import ModelOutputError, ModelProviderError
+from agentbus.models.router import ModelRouter
+from agentbus.models.types import ModelRole
 from agentbus.runtime.prompts import SYSTEM_PROMPT
 from agentbus.runtime.schemas import AgentAction
 from agentbus.tools.command import CommandTools
@@ -17,6 +20,8 @@ class AgentLoop:
         model_name: str | None = None,
         max_history_chars: int | None = None,
         config: AgentBusConfig | None = None,
+        model=None,
+        model_router: ModelRouter | None = None,
     ):
         config = config or AgentBusConfig.from_env()
         config = config.with_overrides(
@@ -26,8 +31,13 @@ class AgentLoop:
         )
 
         self.config = config
-        self.workspace = config.workspace_dir
-        self.model = OllamaModel(config=config)
+        self.workspace = str(config.workspace_path)
+        self.model_router = model_router
+        if model is not None:
+            self.model = model
+        else:
+            self.model_router = model_router or ModelRouter(config)
+            self.model = self.model_router.for_role(ModelRole.CODER)
         self.fs = FileSystemTools(workspace=self.workspace)
         self.cmd = CommandTools(
             workspace=self.workspace,
@@ -41,10 +51,13 @@ class AgentLoop:
         history = ""
         max_steps = max_steps or self.config.max_steps
 
-        self.logger.log("run_started", {
-            "task": user_task,
-            "workspace": self.workspace,
-        })
+        self.logger.log(
+            "run_started",
+            {
+                "task_chars": len(user_task),
+                "workspace": self.workspace,
+            },
+        )
 
         for step in range(1, max_steps + 1):
             self.logger.log("step_started", {
@@ -57,38 +70,59 @@ class AgentLoop:
             action = None
 
             try:
-                raw_action = self.model.generate_json(prompt)
+                method = self.model.generate_json
+                if _accepts_schema(method):
+                    raw_action = method(prompt, schema=AgentAction)
+                else:
+                    raw_action = method(prompt)
                 action = AgentAction(**raw_action)
+            except ModelOutputError as error:
+                observation = f"Model output error: {error.safe_message}"
+                self.logger.log(
+                    "model_error",
+                    {"step": step, **error.safe_metadata()},
+                )
+            except ModelProviderError as error:
+                self.logger.log(
+                    "model_error",
+                    {"step": step, **error.safe_metadata()},
+                )
+                raise
             except Exception as e:
                 observation = f"Model output error: {str(e)}"
-                self.logger.log("model_error", {
-                    "step": step,
-                    "error": str(e),
-                    "raw_action": raw_action,
-                })
+                self.logger.log(
+                    "model_error",
+                    {
+                        "step": step,
+                        "error_type": type(e).__name__,
+                        "error_chars": len(str(e)),
+                    },
+                )
             else:
-                self.logger.log("model_action", {
-                    "step": step,
-                    "action": raw_action,
-                })
+                self.logger.log(
+                    "model_action",
+                    {"step": step, **_action_log_metadata(action)},
+                )
 
                 try:
                     observation = self._execute(action)
                 except Exception as e:
                     observation = f"Tool error: {str(e)}"
 
-                self.logger.log("tool_observation", {
-                    "step": step,
-                    "observation": observation,
-                })
-
+                self.logger.log(
+                    "tool_observation",
+                    {
+                        "step": step,
+                        "observation_chars": len(observation),
+                    },
+                )
 
             history += self._format_history(step, raw_action, observation)
             history = self._trim_history(history)
 
             if action and action.action == "finish":
                 self.logger.log("run_finished", {
-                    "summary": action.summary,
+                    "summary_chars": len(action.summary or ""),
                 })
                 return action.summary
 
@@ -96,7 +130,7 @@ class AgentLoop:
 
         self.logger.log("run_stopped", {
             "reason": "max_steps_reached",
-            "history_tail": history[-5000:],
+            "history_chars": len(history),
         })
 
         return final
@@ -147,3 +181,29 @@ Return the next JSON action.
             return history
 
         return history[-self.max_history_chars:]
+
+
+def _accepts_schema(method) -> bool:
+    try:
+        parameters = inspect.signature(method).parameters.values()
+    except (TypeError, ValueError):
+        return True
+    return any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        or parameter.name == "schema"
+        for parameter in parameters
+    )
+
+
+def _action_log_metadata(action: AgentAction) -> dict:
+    metadata = {"action": action.action}
+    if action.path:
+        metadata["path"] = action.path
+    if action.content is not None:
+        metadata["content_chars"] = len(action.content)
+    if action.command:
+        metadata["command"] = action.command[0]
+        metadata["command_arg_count"] = len(action.command) - 1
+    if action.summary:
+        metadata["summary_chars"] = len(action.summary)
+    return metadata

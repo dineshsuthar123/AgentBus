@@ -1,15 +1,274 @@
+from __future__ import annotations
+
 import json
 import re
+import time
+from typing import Any, Callable
+
 import requests
+from pydantic import BaseModel, ValidationError
 
 from agentbus.config import AgentBusConfig
+from agentbus.models.base import validate_json_schema
+from agentbus.models.errors import (
+    ModelAuthenticationError,
+    ModelAuthorizationError,
+    ModelBadRequestError,
+    ModelNotFoundError,
+    ModelOutputError,
+    ModelProviderError,
+    ModelRateLimitError,
+    ModelSchemaValidationError,
+    ModelServiceUnavailableError,
+    ModelTimeoutError,
+    ModelTransportError,
+)
+from agentbus.models.types import ModelResult, ModelRole, ModelUsage
 
 
-class ModelOutputError(ValueError):
-    """Raised when a model response cannot be used as an AgentBus action."""
+class OllamaProvider:
+    def __init__(
+        self,
+        *,
+        model: str,
+        url: str,
+        timeout_seconds: float = 180,
+        role: ModelRole = ModelRole.DEFAULT,
+        clock: Callable[[], float] = time.perf_counter,
+    ):
+        self._model = model
+        self.url = url
+        self.timeout_seconds = timeout_seconds
+        self.role = role
+        self.clock = clock
+
+    @property
+    def provider_name(self) -> str:
+        return "ollama"
+
+    @property
+    def model_name(self) -> str:
+        return self._model
+
+    def generate_text(
+        self,
+        prompt: str,
+        *,
+        system_prompt: str | None = None,
+        timeout_seconds: float | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> ModelResult:
+        payload: dict[str, Any] = {
+            "model": self.model_name,
+            "prompt": prompt,
+            "stream": False,
+            "options": {"temperature": 0.1},
+        }
+        if system_prompt:
+            payload["system"] = system_prompt
+        response_payload, latency = self._request(
+            payload,
+            timeout_seconds=timeout_seconds,
+        )
+        text = self._response_text(response_payload)
+        return self._result(text, response_payload, latency)
+
+    def generate_json(
+        self,
+        prompt: str,
+        *,
+        schema: type[BaseModel] | dict[str, Any] | None = None,
+        system_prompt: str | None = None,
+        timeout_seconds: float | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> ModelResult:
+        payload: dict[str, Any] = {
+            "model": self.model_name,
+            "prompt": prompt,
+            "stream": False,
+            "format": (
+                schema.model_json_schema()
+                if isinstance(schema, type) and issubclass(schema, BaseModel)
+                else schema or "json"
+            ),
+            "options": {"temperature": 0.1},
+        }
+        if system_prompt:
+            payload["system"] = system_prompt
+        response_payload, latency = self._request(
+            payload,
+            timeout_seconds=timeout_seconds,
+        )
+        raw = self._response_text(response_payload)
+        parsed = self._parse_model_json(raw)
+        if isinstance(schema, type) and issubclass(schema, BaseModel):
+            try:
+                parsed = schema.model_validate(parsed).model_dump(mode="json")
+            except ValidationError as exc:
+                raise ModelSchemaValidationError(
+                    "Ollama output failed local schema validation.",
+                    provider=self.provider_name,
+                    model=self.model_name,
+                ) from exc
+        elif isinstance(schema, dict):
+            validate_json_schema(
+                parsed,
+                schema,
+                provider=self.provider_name,
+                model=self.model_name,
+            )
+        return self._result(parsed, response_payload, latency)
+
+    def _request(
+        self,
+        payload: dict[str, Any],
+        *,
+        timeout_seconds: float | None,
+    ) -> tuple[dict[str, Any], float]:
+        started = self.clock()
+        try:
+            response = requests.post(
+                self.url,
+                json=payload,
+                timeout=timeout_seconds or self.timeout_seconds,
+            )
+            response.raise_for_status()
+        except requests.Timeout as exc:
+            raise ModelTimeoutError(
+                "Ollama request timed out.",
+                provider=self.provider_name,
+                model=self.model_name,
+            ) from exc
+        except requests.ConnectionError as exc:
+            raise ModelTransportError(
+                "Unable to connect to Ollama.",
+                provider=self.provider_name,
+                model=self.model_name,
+            ) from exc
+        except requests.HTTPError as exc:
+            raise self._http_error(exc) from exc
+        except requests.RequestException as exc:
+            raise ModelTransportError(
+                "Ollama request failed.",
+                provider=self.provider_name,
+                model=self.model_name,
+            ) from exc
+
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise ModelOutputError(
+                "Ollama returned a non-JSON HTTP body.",
+                provider=self.provider_name,
+                model=self.model_name,
+            ) from exc
+        if not isinstance(body, dict):
+            raise ModelOutputError(
+                "Ollama returned an unexpected response object.",
+                provider=self.provider_name,
+                model=self.model_name,
+            )
+        return body, max(0.0, self.clock() - started)
+
+    def _http_error(self, error: requests.HTTPError) -> ModelProviderError:
+        status = getattr(getattr(error, "response", None), "status_code", None)
+        error_type: type[ModelProviderError]
+        if status == 400:
+            error_type = ModelBadRequestError
+        elif status == 401:
+            error_type = ModelAuthenticationError
+        elif status == 403:
+            error_type = ModelAuthorizationError
+        elif status == 404:
+            error_type = ModelNotFoundError
+        elif status == 429:
+            error_type = ModelRateLimitError
+        elif status is not None and status >= 500:
+            error_type = ModelServiceUnavailableError
+        else:
+            error_type = ModelTransportError
+        return error_type(
+            "Ollama request failed.",
+            provider=self.provider_name,
+            model=self.model_name,
+            http_status=status,
+        )
+
+    def _response_text(self, payload: dict[str, Any]) -> str:
+        if "response" not in payload:
+            raise ModelOutputError(
+                "Ollama response is missing the 'response' field.",
+                provider=self.provider_name,
+                model=self.model_name,
+            )
+        raw = payload["response"]
+        if not isinstance(raw, str) or not raw.strip():
+            raise ModelOutputError(
+                "Ollama 'response' field must be a non-empty string.",
+                provider=self.provider_name,
+                model=self.model_name,
+            )
+        return raw.strip()
+
+    def _parse_model_json(self, raw: str) -> dict[str, Any]:
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            match = re.search(r"\{.*\}", raw, re.DOTALL)
+            if not match:
+                raise ModelOutputError(
+                    "Model did not return valid JSON.",
+                    provider=self.provider_name,
+                    model=self.model_name,
+                )
+            try:
+                parsed = json.loads(match.group(0))
+            except json.JSONDecodeError as exc:
+                raise ModelOutputError(
+                    "Model did not return valid JSON.",
+                    provider=self.provider_name,
+                    model=self.model_name,
+                ) from exc
+        if not isinstance(parsed, dict):
+            raise ModelOutputError(
+                "Model JSON output must be an object.",
+                provider=self.provider_name,
+                model=self.model_name,
+            )
+        return parsed
+
+    def _result(
+        self,
+        value: str | dict[str, Any],
+        payload: dict[str, Any],
+        latency: float,
+    ) -> ModelResult:
+        input_tokens = _optional_int(payload.get("prompt_eval_count"))
+        output_tokens = _optional_int(payload.get("eval_count"))
+        total_tokens = (
+            (input_tokens or 0) + (output_tokens or 0)
+            if input_tokens is not None or output_tokens is not None
+            else None
+        )
+        return ModelResult(
+            value=value,
+            provider=self.provider_name,
+            model=self.model_name,
+            role=self.role,
+            usage=ModelUsage(
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                total_tokens=total_tokens,
+            ),
+            finish_status="completed" if payload.get("done") else None,
+            latency_seconds=latency,
+            provider_metadata={"runtime": "local"},
+        )
 
 
 class OllamaModel:
+    """Backward-compatible dict/string facade over the Ollama provider."""
+
     def __init__(
         self,
         model: str | None = None,
@@ -17,73 +276,49 @@ class OllamaModel:
         config: AgentBusConfig | None = None,
     ):
         config = config or AgentBusConfig.from_env()
-        self.model = model or config.model_name
-        self.url = url or config.ollama_url
+        self.provider = OllamaProvider(
+            model=model or config.model_name,
+            url=url or config.ollama_url,
+            timeout_seconds=getattr(config, "model_timeout_seconds", 180),
+        )
+        self.last_result: ModelResult | None = None
 
-    def generate_json(self, prompt: str) -> dict:
+    @property
+    def model(self) -> str:
+        return self.provider.model_name
+
+    @property
+    def url(self) -> str:
+        return self.provider.url
+
+    def generate_json(
+        self,
+        prompt: str,
+        *,
+        schema: type[BaseModel] | dict[str, Any] | None = None,
+        **kwargs,
+    ) -> dict[str, Any]:
         try:
-            response = requests.post(
-                self.url,
-                json={
-                    "model": self.model,
-                    "prompt": prompt,
-                    "stream": False,
-                    "format": "json",
-                    "options": {
-                        "temperature": 0.1,
-                    },
-                },
-                timeout=180,
+            self.last_result = self.provider.generate_json(
+                prompt,
+                schema=schema,
+                **kwargs,
             )
+        except ModelOutputError:
+            raise
+        except ModelProviderError as exc:
+            raise ModelOutputError(
+                "Ollama request failed.",
+                provider="ollama",
+                model=self.model,
+                retryable=exc.retryable,
+            ) from exc
+        return self.last_result.json_value()
 
-            response.raise_for_status()
-        except requests.RequestException as exc:
-            raise ModelOutputError(f"Ollama request failed: {exc}") from exc
-
-        try:
-            payload = response.json()
-        except ValueError as exc:
-            raise ModelOutputError("Ollama returned a non-JSON HTTP body.") from exc
-
-        if "response" not in payload:
-            raise ModelOutputError("Ollama response is missing the 'response' field.")
-
-        raw = payload["response"]
-
-        if not isinstance(raw, str) or not raw.strip():
-            raise ModelOutputError("Ollama 'response' field must be a non-empty string.")
-
-        return self._parse_model_json(raw.strip())
-
-    def _parse_model_json(self, raw: str) -> dict:
-        try:
-            parsed = json.loads(raw)
-        except json.JSONDecodeError:
-            extracted = self._extract_json(raw)
-
-            try:
-                parsed = json.loads(extracted)
-            except json.JSONDecodeError as exc:
-                raise ModelOutputError(
-                    f"Model did not return valid JSON: {_excerpt(raw)}"
-                ) from exc
-
-        if not isinstance(parsed, dict):
-            raise ModelOutputError("Model JSON output must be an object.")
-
-        return parsed
-
-    def _extract_json(self, text: str) -> str:
-        match = re.search(r"\{.*\}", text, re.DOTALL)
-
-        if not match:
-            raise ModelOutputError(f"Model did not return valid JSON: {_excerpt(text)}")
-
-        return match.group(0)
+    def generate_text(self, prompt: str, **kwargs) -> str:
+        self.last_result = self.provider.generate_text(prompt, **kwargs)
+        return self.last_result.text_value()
 
 
-def _excerpt(text: str, limit: int = 500) -> str:
-    if len(text) <= limit:
-        return text
-
-    return text[:limit] + "... [truncated]"
+def _optional_int(value: Any) -> int | None:
+    return value if isinstance(value, int) and value >= 0 else None

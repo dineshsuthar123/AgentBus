@@ -64,6 +64,11 @@ class TestCommandDetector:
         if (self.workspace / "pytest.ini").is_file():
             return True
 
+        if any(self.workspace.glob("test_*.py")) or any(
+            self.workspace.glob("*_test.py")
+        ):
+            return True
+
         tests_dir = self.workspace / "tests"
         if not tests_dir.is_dir():
             return False

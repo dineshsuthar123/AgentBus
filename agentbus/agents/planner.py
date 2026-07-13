@@ -1,19 +1,30 @@
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from agentbus.agents.base import BaseAgent
 from agentbus.config import AgentBusConfig
+from agentbus.models.router import ModelRouter
+from agentbus.models.types import ModelRole
 
 
 class PlanStep(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     id: str
     title: str
     description: str
     risk: Literal["low", "medium", "high"]
+    dependencies: list[str] | None = None
+    assigned_role: str = "coder"
+    maximum_attempts: int = Field(default=2, ge=1)
+    expected_outputs: list[str] = Field(default_factory=list)
+    done_criteria: list[str] | None = None
 
 
 class PlannerOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     goal: str
     steps: list[PlanStep]
     test_strategy: str
@@ -21,12 +32,19 @@ class PlannerOutput(BaseModel):
 
 
 class PlannerAgent(BaseAgent):
-    def __init__(self, config: AgentBusConfig | None = None, model=None):
+    def __init__(
+        self,
+        config: AgentBusConfig | None = None,
+        model=None,
+        model_router: ModelRouter | None = None,
+    ):
         super().__init__(
             name="planner",
             role="Break a user task into a small, testable local implementation plan.",
             config=config,
             model=model,
+            model_role=ModelRole.PLANNER,
+            model_router=model_router,
         )
 
     def plan(
@@ -46,7 +64,12 @@ Return ONLY valid JSON with this shape:
       "id": "step-1",
       "title": "...",
       "description": "...",
-      "risk": "low|medium|high"
+      "risk": "low|medium|high",
+      "dependencies": ["optional-prerequisite-step-id"],
+      "assigned_role": "coder",
+      "maximum_attempts": 2,
+      "expected_outputs": ["..."],
+      "done_criteria": ["..."]
     }}
   ],
   "test_strategy": "...",
@@ -59,8 +82,8 @@ User task:
 Repo context:
 {context}
 """
-        output = self.generate_json(prompt)
-        return PlannerOutput(**output).model_dump()
+        output = self.generate_json(prompt, schema=PlannerOutput)
+        return PlannerOutput(**output).model_dump(exclude_none=True)
 
     def summarize(self, plan: dict) -> str:
         step_count = len(plan.get("steps", []))

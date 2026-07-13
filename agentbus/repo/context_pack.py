@@ -1,9 +1,11 @@
+from pathlib import Path
 from typing import Any
 
 
 class ContextPackBuilder:
-    def __init__(self, max_chars: int = 12_000):
+    def __init__(self, max_chars: int = 12_000, workspace: str | None = None):
         self.max_chars = max_chars
+        self.workspace = Path(workspace).resolve() if workspace else None
 
     def build(
         self,
@@ -11,6 +13,14 @@ class ContextPackBuilder:
         test_detection: dict[str, Any],
         user_task: str | None = None,
     ) -> str:
+        scanned_workspace = scan_result.get("workspace")
+        if self.workspace is not None and scanned_workspace:
+            if Path(scanned_workspace).resolve() != self.workspace:
+                raise ValueError(
+                    "Context pack workspace does not match the configured workspace: "
+                    f"{scanned_workspace!r} != {str(self.workspace)!r}"
+                )
+
         lines = [
             "Repo Context Pack",
             "",

@@ -1,8 +1,10 @@
 from typing import Literal, Optional
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, ConfigDict, model_validator
 
 
 class AgentAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     action: Literal[
         "list_files",
         "read_file",

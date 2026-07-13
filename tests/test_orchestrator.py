@@ -44,15 +44,16 @@ class FakeCoder:
 
 
 class FakeVerifier:
-    def __init__(self):
+    def __init__(self, passed=True):
         self.calls = 0
+        self.passed = passed
 
     def verify(self):
         self.calls += 1
         return {
             "command": ["python", "-m", "pytest"],
-            "exit_code": 0,
-            "passed": True,
+            "exit_code": 0 if self.passed else 1,
+            "passed": self.passed,
             "output": f"{self.calls} passed",
         }
 
@@ -72,6 +73,35 @@ class FakeReviewer:
             }
         )
         return self.reviews.pop(0)
+
+
+class FakeGitRepository:
+    def __init__(self):
+        self.commits = []
+        self.created_branches = []
+
+    def is_git_repo(self):
+        return True
+
+    def current_branch(self):
+        return "main"
+
+    def has_uncommitted_changes(self):
+        return False
+
+    def create_branch(self, branch_name):
+        self.created_branches.append(branch_name)
+        return f"Created branch: {branch_name}"
+
+    def changed_files(self):
+        return ["calculator.py", "tests/test_calculator.py"]
+
+    def commit(self, message):
+        self.commits.append(message)
+        return "abc1234"
+
+    def push_branch(self, branch_name=None):
+        return f"Pushed branch: {branch_name or 'main'}"
 
 
 def config(tmp_path):
@@ -160,3 +190,65 @@ def test_orchestrator_reviewer_rejection_triggers_one_retry(tmp_path):
     assert coder.calls[1]["reviewer_feedback"]["required_fixes"] == ["Add tests"]
     assert verifier.calls == 2
     assert "retry_started" in log_events(tmp_path)
+
+
+def test_orchestrator_does_not_commit_if_verifier_fails(tmp_path):
+    git_repo = FakeGitRepository()
+    reviewer = FakeReviewer(
+        [
+            {
+                "approved": True,
+                "issues": [],
+                "summary": "Approved",
+                "required_fixes": [],
+            }
+        ]
+    )
+    orchestrator = MultiAgentOrchestrator(
+        config=config(tmp_path),
+        planner=FakePlanner(),
+        coder=FakeCoder(),
+        reviewer=reviewer,
+        verifier=FakeVerifier(passed=False),
+        git_repository=git_repo,
+        commit_changes=True,
+    )
+
+    result = orchestrator.run("create calculator")
+
+    assert result.approved is True
+    assert result.commit_hash is None
+    assert git_repo.commits == []
+
+
+def test_orchestrator_commits_only_after_reviewer_approval(tmp_path):
+    git_repo = FakeGitRepository()
+    reviewer = FakeReviewer(
+        [
+            {
+                "approved": True,
+                "issues": [],
+                "summary": "Approved",
+                "required_fixes": [],
+            }
+        ]
+    )
+    orchestrator = MultiAgentOrchestrator(
+        config=config(tmp_path),
+        planner=FakePlanner(),
+        coder=FakeCoder(),
+        reviewer=reviewer,
+        verifier=FakeVerifier(),
+        git_repository=git_repo,
+        create_branch=True,
+        branch_name="agentbus/add-tests",
+        commit_changes=True,
+    )
+
+    result = orchestrator.run("Add calculator tests")
+
+    assert result.git_branch == "agentbus/add-tests"
+    assert result.changed_files == ["calculator.py", "tests/test_calculator.py"]
+    assert result.commit_hash == "abc1234"
+    assert git_repo.created_branches == ["agentbus/add-tests"]
+    assert git_repo.commits == ["feat: add calculator tests"]

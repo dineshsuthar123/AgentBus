@@ -70,8 +70,11 @@ def test_cli_accepts_multi_workflow(monkeypatch, capsys):
     seen_tasks = []
 
     class FakeOrchestrator:
-        def __init__(self, config):
+        seen_kwargs = []
+
+        def __init__(self, config, **kwargs):
             seen_configs.append(config)
+            self.seen_kwargs.append(kwargs)
 
         def run(self, task):
             seen_tasks.append(task)
@@ -81,7 +84,12 @@ def test_cli_accepts_multi_workflow(monkeypatch, capsys):
                     "command": ["python", "-m", "pytest"],
                     "passed": True,
                 },
+                git_branch=None,
+                changed_files=[],
                 approved=True,
+                commit_hash=None,
+                pr_url=None,
+                pr_error=None,
                 final_summary="multi done",
             )
 
@@ -124,3 +132,61 @@ def test_cli_show_context_prints_and_exits_without_task(monkeypatch, capsys):
     assert "CTX" in output
     assert "Task:" not in output
     assert FakeLoop.seen_tasks == []
+
+
+def test_cli_parses_git_workflow_flags(monkeypatch, capsys):
+    seen = {}
+
+    class FakeOrchestrator:
+        def __init__(self, config, **kwargs):
+            seen["config"] = config
+            seen["kwargs"] = kwargs
+
+        def run(self, task):
+            seen["task"] = task
+            return SimpleNamespace(
+                planner_summary="Plan (1 steps)",
+                git_branch="agentbus/add-tests",
+                changed_files=["tests/test_calculator.py"],
+                verifier_result={
+                    "command": ["python", "-m", "pytest"],
+                    "passed": True,
+                },
+                approved=True,
+                commit_hash="abc1234",
+                pr_url="https://github.com/acme/repo/pull/1",
+                pr_error=None,
+                final_summary="done",
+            )
+
+    monkeypatch.setattr(main_module, "MultiAgentOrchestrator", FakeOrchestrator)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "agentbus.main",
+            "--workflow",
+            "multi",
+            "--create-branch",
+            "--branch-name",
+            "agentbus/add-tests",
+            "--commit",
+            "--open-pr",
+            "--pr-base",
+            "develop",
+            "Add calculator tests",
+        ],
+    )
+
+    main_module.main()
+
+    output = capsys.readouterr().out
+
+    assert seen["task"] == "Add calculator tests"
+    assert seen["kwargs"]["create_branch"] is True
+    assert seen["kwargs"]["branch_name"] == "agentbus/add-tests"
+    assert seen["kwargs"]["commit_changes"] is True
+    assert seen["kwargs"]["open_pr"] is True
+    assert seen["kwargs"]["pr_base"] == "develop"
+    assert "Commit: abc1234" in output
+    assert "PR: https://github.com/acme/repo/pull/1" in output

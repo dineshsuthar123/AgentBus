@@ -1,9 +1,15 @@
+import os
 import subprocess
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 
 class CommandTools:
+    SAFE_ENVIRONMENT_OVERRIDES = {
+        "PYTHONDONTWRITEBYTECODE": {"1"},
+    }
+
     def __init__(self, workspace: str = "workspace", timeout_seconds: int = 90):
         self.workspace = Path(workspace).resolve()
         self.timeout_seconds = timeout_seconds
@@ -57,7 +63,13 @@ class CommandTools:
     def run_command(self, command: list[str], timeout: int | None = None) -> str:
         return self.run_command_result(command, timeout=timeout)["output"]
 
-    def run_command_result(self, command: list[str], timeout: int | None = None) -> dict:
+    def run_command_result(
+        self,
+        command: list[str],
+        timeout: int | None = None,
+        *,
+        environment_overrides: Mapping[str, str] | None = None,
+    ) -> dict:
         if not isinstance(command, list) or not all(
             isinstance(arg, str) for arg in command
         ):
@@ -85,6 +97,11 @@ class CommandTools:
             execution_command[0] = sys.executable
 
         try:
+            child_environment = self._child_environment(environment_overrides)
+        except ValueError as exc:
+            return _blocked_result(command, f"Blocked environment override: {exc}")
+
+        try:
             result = subprocess.run(
                 execution_command,
                 cwd=self.workspace,
@@ -92,6 +109,7 @@ class CommandTools:
                 text=True,
                 timeout=timeout,
                 shell=False,
+                env=child_environment,
             )
 
             stdout = result.stdout.strip()
@@ -120,6 +138,20 @@ class CommandTools:
 
         except Exception as e:
             return _blocked_result(command, f"Command error: {str(e)}")
+
+    def _child_environment(
+        self,
+        overrides: Mapping[str, str] | None,
+    ) -> dict[str, str] | None:
+        if not overrides:
+            return None
+        environment = os.environ.copy()
+        for name, value in overrides.items():
+            allowed_values = self.SAFE_ENVIRONMENT_OVERRIDES.get(name)
+            if allowed_values is None or value not in allowed_values:
+                raise ValueError(f"{name} is not an allowed verifier override")
+            environment[name] = value
+        return environment
 
 
 def _format_output(exit_code: int, stdout: str, stderr: str) -> str:

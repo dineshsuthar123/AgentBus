@@ -1,28 +1,18 @@
-import subprocess
 from pathlib import Path
+
+from agentbus.git.repository import GitRepository, WorkspaceRepositoryMismatch
 
 
 class GitTools:
-    def __init__(self, workspace: str = "workspace"):
-        self.workspace = Path(workspace).resolve()
+    def __init__(self, workspace: str = "workspace", max_diff_chars: int = 30_000):
+        self.workspace = Path(workspace).expanduser().resolve()
+        self.max_diff_chars = max_diff_chars
+        self.repository = GitRepository(str(self.workspace))
 
     def git_diff(self) -> str:
         try:
-            result = subprocess.run(
-                ["git", "diff", "--", "."],
-                cwd=self.workspace,
-                capture_output=True,
-                text=True,
-                timeout=30,
-                shell=False,
-            )
-
-            diff = result.stdout.strip()
-
-            if not diff:
-                return "No git diff found."
-
-            return diff[:30_000]
-
-        except Exception as e:
-            return f"git_diff error: {str(e)}"
+            return self.repository.review_diff(max_chars=self.max_diff_chars)
+        except WorkspaceRepositoryMismatch:
+            raise
+        except Exception as exc:
+            return f"git_diff error: {exc}"
