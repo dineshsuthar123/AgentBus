@@ -39,10 +39,12 @@ class IntegrationCoordinator:
         worktree_manager: GitWorktreeManager,
         *,
         timeout_seconds: int = 90,
+        crash_hook=None,
     ):
         self.store = store
         self.worktree_manager = worktree_manager
         self.timeout_seconds = timeout_seconds
+        self.crash_hook = crash_hook
 
     def integrate(
         self,
@@ -75,9 +77,11 @@ class IntegrationCoordinator:
             event_type="integration_started",
             event_payload={"integration_id": attempt.integration_id},
         )
+        self._crash("after_integration_started", task_commit.run_id, task_commit.task_id)
         result = self._run(path, ["cherry-pick", task_commit.commit_sha])
         if result.returncode == 0:
             resulting_commit = self._git(path, ["rev-parse", "HEAD"])
+            self._crash("after_cherry_pick", task_commit.run_id, task_commit.task_id)
             completed = self.store.update_integration(
                 attempt.integration_id,
                 status=MergeStatus.INTEGRATED,
@@ -249,3 +253,7 @@ class IntegrationCoordinator:
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise IntegrationError(f"Git integration command could not run: {exc}") from exc
+
+    def _crash(self, stage: str, run_id: str, task_id: str) -> None:
+        if self.crash_hook is not None:
+            self.crash_hook(stage, run_id, task_id)
