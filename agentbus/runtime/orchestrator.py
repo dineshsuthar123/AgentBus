@@ -1,8 +1,9 @@
 import inspect
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from agentbus.agents.coder import CoderAgent
 from agentbus.agents.planner import PlannerAgent
@@ -92,6 +93,7 @@ class MultiAgentOrchestrator:
         parallel_final_reviewer=None,
         worker_crash_hook=None,
         integration_crash_hook=None,
+        lease_clock: Callable[[], datetime] | None = None,
     ):
         self.config = config or AgentBusConfig.from_env()
         self.workspace = self.config.workspace_path
@@ -141,6 +143,7 @@ class MultiAgentOrchestrator:
         self.parallel_final_reviewer = parallel_final_reviewer
         self.worker_crash_hook = worker_crash_hook
         self.integration_crash_hook = integration_crash_hook
+        self.lease_clock = lease_clock
 
     def run(self, user_task: str) -> OrchestrationResult:
         self.logger.log(
@@ -373,11 +376,13 @@ class MultiAgentOrchestrator:
             parallel.get("worktree_root") or self.config.worktree_root_path,
             self.state_store,
         )
+        lease_options = {"clock": self.lease_clock} if self.lease_clock else {}
         leases = LeaseService(
             self.state_store,
             lease_seconds=float(
                 parallel.get("lease_seconds", self.config.worker_lease_seconds)
             ),
+            **lease_options,
         )
         integration = IntegrationCoordinator(
             self.state_store,

@@ -7,6 +7,12 @@ __pycache__/
 .pytest_tmp/
 .mypy_cache/
 .ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+build/
+dist/
+*.egg-info/
 
 # Virtual env
 .venv/

@@ -58,6 +58,9 @@ def test_list_supports_human_and_json_output(tmp_path, capsys):
     assert {item["suite_id"] for item in payload["suites"]} == {
         "core-offline",
         "azure-smoke",
+        "release-offline",
+        "release-azure-smoke",
+        "real-repos",
     }
 
 
@@ -157,6 +160,42 @@ def test_run_forwards_filters_and_returns_nonzero_on_failed_assertions(
     assert calls[0][1]["fail_fast"] is True
     assert calls[0][1]["preserve_fixtures"] is True
     assert calls[0][1]["live"] is False
+
+
+def test_offline_scoring_limits_do_not_shrink_the_pre_call_budget(
+    tmp_path,
+    monkeypatch,
+):
+    class FakeRunner:
+        def __init__(self, **kwargs):
+            pass
+
+        def run(self, *args, **kwargs):
+            assert kwargs["live"] is False
+            assert kwargs["max_requests"] == 30
+            assert kwargs["max_tokens"] == 900
+            assert kwargs["timeout_seconds"] == 45
+            return make_run()
+
+    monkeypatch.setattr(eval_cli, "EvaluationRunner", FakeRunner)
+
+    assert (
+        invoke(
+            tmp_path,
+            "run",
+            "--suite",
+            "release-offline",
+            "--variant",
+            "durable-parallel-fake",
+            "--max-requests",
+            "30",
+            "--max-tokens",
+            "900",
+            "--timeout-seconds",
+            "45",
+        )
+        == 0
+    )
 
 
 def test_live_variant_requires_explicit_consent_without_calling_provider(

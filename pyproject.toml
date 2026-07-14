@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentbus"
+dynamic = ["version"]
+description = "A safety-oriented local multi-agent software engineering runner"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Dinesh Suthar" }]
+maintainers = [{ name = "AgentBus contributors" }]
+keywords = ["agents", "developer-tools", "llm", "software-engineering"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Software Development :: Quality Assurance",
+]
+dependencies = [
+  "jsonschema>=4",
+  "pydantic>=2,<3",
+  "pytest>=8",
+  "requests>=2.31",
+]
+
+[project.optional-dependencies]
+azure = ["openai>=1.66"]
+dev = [
+  "build>=1.2",
+  "wheel>=0.43",
+]
+entra = ["azure-identity>=1.17"]
+
+[project.scripts]
+agentbus = "agentbus.cli:main"
+agentbus-eval = "agentbus.eval:main"
+
+[project.urls]
+Documentation = "https://github.com/dineshsuthar123/AgentBus#readme"
+Issues = "https://github.com/dineshsuthar123/AgentBus/issues"
+Repository = "https://github.com/dineshsuthar123/AgentBus"
+
+[tool.setuptools.dynamic]
+version = { attr = "agentbus.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["agentbus*"]
+
+[tool.setuptools.package-data]
+agentbus = ["py.typed"]
+"agentbus.evaluation" = [
+  "*.json",
+  "fixtures_data/**/*",
+  "fixtures_data/generated-artifact/.gitignore",
+]

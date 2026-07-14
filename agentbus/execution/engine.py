@@ -4,6 +4,7 @@ import uuid
 from collections.abc import Callable
 from typing import Any, Protocol
 
+from agentbus import __version__
 from agentbus.execution.models import (
     ApprovalOutcome,
     AttemptStatus,
@@ -72,6 +73,7 @@ class DurableExecutionEngine:
     ) -> RunRecord:
         graph = TaskGraph.from_planner_output(planner_output)
         run_metadata = dict(metadata or {})
+        run_metadata["agentbus_version"] = __version__
         raw_execution_metadata = run_metadata.get("execution", {})
         if not isinstance(raw_execution_metadata, dict):
             raise DurableExecutionError("Run execution metadata must be an object.")

@@ -51,7 +51,9 @@ class FixtureRepositoryManager:
             raise FixtureOwnershipError(f"Owned fixture path already exists: {case_root}")
         repository = case_root / "repo"
         repository.parent.mkdir(parents=True)
-        shutil.copytree(source, repository)
+        # Real-repository sources carry their own Git metadata. The evaluation
+        # fixture must have a fresh local history with no inherited remotes or hooks.
+        shutil.copytree(source, repository, ignore=shutil.ignore_patterns(".git"))
         marker = {
             "evaluation_run_id": evaluation_run_id,
             "case_id": case.case_id,
@@ -95,7 +97,7 @@ class FixtureRepositoryManager:
         }
         if marker != expected:
             raise FixtureOwnershipError("Fixture ownership marker does not match cleanup target.")
-        shutil.rmtree(root, onexc=_remove_readonly)
+        shutil.rmtree(root, onerror=_remove_readonly)
 
 
 def _git(path: Path, *arguments: str) -> str:

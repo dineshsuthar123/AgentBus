@@ -19,13 +19,34 @@ from agentbus.tools.git_tools import GitTools
 
 def init_repository(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
+
     subprocess.run(
-        ["git", "init", "-q", str(path)],
+        ["git", "init", "-q"],
+        cwd=path,
         check=True,
         capture_output=True,
         text=True,
         shell=False,
     )
+
+    subprocess.run(
+        ["git", "config", "user.name", "AgentBus Test"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+        text=True,
+        shell=False,
+    )
+
+    subprocess.run(
+        ["git", "config", "user.email", "agentbus@example.invalid"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+        text=True,
+        shell=False,
+    )
+
     return path.resolve()
 
 
@@ -88,8 +109,28 @@ def test_git_diff_and_changed_files_are_scoped_to_workspace(tmp_path):
     assert "unrelated-parent.txt" not in diff
 
 
-def test_path_scoped_commit_does_not_include_unrelated_staged_changes(tmp_path):
+def test_path_scoped_commit_does_not_include_unrelated_staged_changes(
+    tmp_path, monkeypatch
+):
+    isolated_home = tmp_path / "git-home"
+    isolated_home.mkdir()
+    monkeypatch.setenv("HOME", str(isolated_home))
+    monkeypatch.setenv("USERPROFILE", str(isolated_home))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    for name in (
+        "GIT_AUTHOR_NAME",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_COMMITTER_EMAIL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
     workspace = init_repository(tmp_path / "target")
+    assert run_git(workspace, "config", "--local", "user.name").strip() == "AgentBus Test"
+    assert (
+        run_git(workspace, "config", "--local", "user.email").strip()
+        == "agentbus@example.invalid"
+    )
     (workspace / "unrelated.txt").write_text("baseline\n", encoding="utf-8")
     run_git(workspace, "add", "unrelated.txt")
     run_git(workspace, "commit", "-m", "baseline")

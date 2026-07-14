@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 
 from agentbus.evaluation.errors import EvaluationStorageError
-from agentbus.evaluation.models import EvaluationRun
+from agentbus.evaluation.models import EvaluationRun, EvaluationSeries
 from agentbus.security.redaction import sanitize_json
 
 
@@ -18,9 +18,15 @@ class EvaluationStorage:
     def __init__(self, root: str | Path):
         self.root = Path(root).expanduser().resolve()
         self.runs_dir = self.root / "runs"
+        self.series_dir = self.root / "series"
         self.baselines_dir = self.root / "baselines"
         self.exports_dir = self.root / "exports"
-        for directory in (self.runs_dir, self.baselines_dir, self.exports_dir):
+        for directory in (
+            self.runs_dir,
+            self.series_dir,
+            self.baselines_dir,
+            self.exports_dir,
+        ):
             directory.mkdir(parents=True, exist_ok=True)
 
     def save_run(self, run: EvaluationRun) -> Path:
@@ -39,6 +45,30 @@ class EvaluationStorage:
             EvaluationRun.model_validate(_read_json(path))
             for path in sorted(self.runs_dir.glob("*.json"))
         ]
+
+    def save_series(self, series: EvaluationSeries) -> Path:
+        path = self.series_dir / f"{_name(series.series_id)}.json"
+        _write_json(path, series.model_dump(mode="json"))
+        return path
+
+    def load_series(self, series_id: str) -> EvaluationSeries:
+        path = self.series_dir / f"{_name(series_id)}.json"
+        if not path.is_file():
+            raise EvaluationStorageError(f"Evaluation series not found: {series_id}")
+        return EvaluationSeries.model_validate(_read_json(path))
+
+    def list_series(self) -> list[EvaluationSeries]:
+        return [
+            EvaluationSeries.model_validate(_read_json(path))
+            for path in sorted(self.series_dir.glob("*.json"))
+        ]
+
+    def runs_for_reference(self, reference: str) -> list[EvaluationRun]:
+        run_path = self.runs_dir / f"{_name(reference)}.json"
+        if run_path.is_file():
+            return [EvaluationRun.model_validate(_read_json(run_path))]
+        series = self.load_series(reference)
+        return [self.load_run(run_id) for run_id in series.run_ids]
 
     def save_baseline(
         self,
@@ -65,6 +95,12 @@ class EvaluationStorage:
         run = self.load_run(run_id)
         path = Path(output).expanduser().resolve()
         _write_json(path, run.model_dump(mode="json"))
+        return path
+
+    def export_series(self, series_id: str, output: str | Path) -> Path:
+        series = self.load_series(series_id)
+        path = Path(output).expanduser().resolve()
+        _write_json(path, series.model_dump(mode="json"))
         return path
 
 

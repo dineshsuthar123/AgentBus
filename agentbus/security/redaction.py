@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import re
+from collections.abc import Mapping
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -23,6 +25,24 @@ _SECRET_PATTERN = re.compile(
 )
 _BEARER_PATTERN = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+")
 _URL_QUERY_PATTERN = re.compile(r"(https?://[^\s?#]+)[?#][^\s]+", re.IGNORECASE)
+_SENSITIVE_ENVIRONMENT_NAMES = {
+    "DOCKER_AUTH_CONFIG",
+    "KUBECONFIG",
+    "NETRC",
+    "PIP_EXTRA_INDEX_URL",
+    "PIP_INDEX_URL",
+    "SSH_AUTH_SOCK",
+}
+_SENSITIVE_ENVIRONMENT_MARKERS = (
+    "ACCESS_KEY",
+    "API_KEY",
+    "AUTHORIZATION",
+    "COOKIE",
+    "CREDENTIAL",
+    "PASSWORD",
+    "SECRET",
+    "TOKEN",
+)
 
 
 def redact_text(value: str | None, *, max_chars: int = 20_000) -> str | None:
@@ -86,6 +106,24 @@ def safe_endpoint_host(endpoint: str | None) -> str | None:
     except ValueError:
         return "[invalid endpoint]"
     return parsed.hostname or "[invalid endpoint]"
+
+
+def safe_child_environment(
+    environ: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    source = os.environ if environ is None else environ
+    return {
+        name: value
+        for name, value in source.items()
+        if not is_sensitive_environment_key(name)
+    }
+
+
+def is_sensitive_environment_key(name: str) -> bool:
+    normalized = name.strip().upper().replace("-", "_")
+    return normalized in _SENSITIVE_ENVIRONMENT_NAMES or any(
+        marker in normalized for marker in _SENSITIVE_ENVIRONMENT_MARKERS
+    )
 
 
 def is_sensitive_key(key: str) -> bool:

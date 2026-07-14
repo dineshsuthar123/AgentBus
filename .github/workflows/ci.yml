@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install development dependencies
+        run: python -m pip install -e ".[azure,dev]"
+      - name: Compile package
+        run: python -m compileall -q agentbus
+      - name: Run full test suite
+        run: python -m pytest
+      - name: Run deterministic core evaluation
+        run: python -m agentbus.eval run --suite core-offline --variant durable-parallel-fake
+      - name: Check patch whitespace
+        run: git diff --check
+
+  package:
+    name: Package smoke / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install build dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Build wheel and source distribution
+        run: python -m build
+      - name: Audit distribution contents
+        run: python scripts/verify_distribution.py dist
+      - name: Install wheel in a fresh virtual environment
+        run: python scripts/install_smoke.py dist
+      - name: Run offline release acceptance
+        run: python -m agentbus.eval run --suite release-offline --variant durable-parallel-fake
+      - name: Check patch whitespace
+        run: git diff --check

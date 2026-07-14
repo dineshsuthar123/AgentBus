@@ -10,6 +10,7 @@ import uuid
 from collections import defaultdict
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Protocol
@@ -45,10 +46,11 @@ from agentbus.evaluation.providers import (
     ScriptedResponseStore,
 )
 from agentbus.evaluation.scoring import calculate_score
+from agentbus.evaluation.statistics import build_series
 from agentbus.evaluation.storage import EvaluationStorage
 from agentbus.evaluation.suites import builtin_suites, builtin_variants
 from agentbus.execution.engine import DurableExecutionEngine
-from agentbus.execution.models import FailureCategory, TaskExecutionResult
+from agentbus.execution.models import FailureCategory, TaskExecutionResult, utc_now
 from agentbus.execution.state_store import StateStore
 from agentbus.git.repository import GitRepository
 from agentbus.models.errors import ModelOutputError, ModelProviderError
@@ -96,10 +98,9 @@ class EvaluationRunner:
         offline_backend: EvaluationBackend | None = None,
         live_backend: EvaluationBackend | None = None,
     ):
-        repository_root = Path(__file__).resolve().parents[2]
         self.storage = storage or EvaluationStorage(results_dir)
         self.fixture_manager = FixtureRepositoryManager(
-            fixture_root or repository_root / "evaluation" / "fixtures",
+            fixture_root or Path(__file__).with_name("fixtures_data"),
             owned_fixture_root
             or os.getenv("AGENTBUS_EVAL_FIXTURE_ROOT")
             or Path(tempfile.gettempdir()) / "agentbus-eval-fixtures",
@@ -143,6 +144,8 @@ class EvaluationRunner:
                 "prompt_content_persisted": False,
             },
         )
+        if suite.metadata.get("release_surface_checks"):
+            run.metadata["release_acceptance"] = _release_surface_checks()
         self.storage.save_run(run)
         backend = self.live_backend if live else self.offline_backend
         for case in selected:
@@ -176,8 +179,47 @@ class EvaluationRunner:
         )
         run.aggregate_metrics = _aggregate_metrics(run.case_results)
         run.aggregate_score = _average_score(run.case_results)
+        if suite.metadata.get("release_surface_checks"):
+            release_checks = run.metadata["release_acceptance"]
+            try:
+                loaded = self.storage.load_run(run.evaluation_run_id)
+                export_path = self.storage.exports_dir / (
+                    f".{run.evaluation_run_id}-release-roundtrip.json"
+                )
+                self.storage.export_run(run.evaluation_run_id, export_path)
+                release_checks["storage_roundtrip"] = (
+                    loaded.evaluation_run_id == run.evaluation_run_id
+                    and export_path.is_file()
+                )
+                export_path.unlink(missing_ok=True)
+            except Exception:
+                release_checks["storage_roundtrip"] = False
+            run.passed = run.passed and all(release_checks.values())
         self.storage.save_run(run)
         return run
+
+    def run_repeated(
+        self,
+        suite_id: str,
+        *,
+        repeat: int,
+        **kwargs: Any,
+    ):
+        if repeat < 1:
+            raise EvaluationConfigurationError("--repeat must be at least 1.")
+        runs = [self.run(suite_id, **kwargs) for _ in range(repeat)]
+        series = build_series(runs)
+        for index, run in enumerate(runs, start=1):
+            run.metadata.update(
+                {
+                    "series_id": series.series_id,
+                    "repeat_index": index,
+                    "repeat_count": repeat,
+                }
+            )
+            self.storage.save_run(run)
+        self.storage.save_series(series)
+        return series
 
     def _run_case(
         self,
@@ -330,6 +372,9 @@ class OfflineRuntimeBackend:
             tracker,
         )
         state_store = StateStore(fixture.owned_root / "runtime-state.db")
+        lease_clock = (
+            ControlledLeaseClock() if _has_injection(case, "lease_expiry") else None
+        )
         config = AgentBusConfig(
             model_name="deterministic-evaluation-v1",
             workspace_dir=str(fixture.repository),
@@ -343,9 +388,7 @@ class OfflineRuntimeBackend:
             else 1,
             worktree_root=str(fixture.owned_root / "worktrees"),
             keep_worktrees=True,
-            worker_lease_seconds=(
-                0.05 if _has_injection(case, "lease_expiry") else 30
-            ),
+            worker_lease_seconds=30,
             worker_heartbeat_seconds=(
                 0.01 if _has_injection(case, "lease_expiry") else 5
             ),
@@ -357,7 +400,7 @@ class OfflineRuntimeBackend:
             state_store=state_store,
             case=case,
         )
-        crash_hook = OneShotCrashHook(case)
+        crash_hook = OneShotCrashHook(case, lease_clock=lease_clock)
         integration_crash_hook = OneShotIntegrationCrashHook(case)
         pr_client = RecordingPRClient()
         orchestrator = MultiAgentOrchestrator(
@@ -384,6 +427,7 @@ class OfflineRuntimeBackend:
             integration_crash_hook=(
                 integration_crash_hook if integration_crash_hook.enabled else None
             ),
+            lease_clock=lease_clock,
         )
         started = time.perf_counter()
         runtime_run_id = None
@@ -502,8 +546,10 @@ class LiveRuntimeBackend:
             provider_name=variant.provider,
             fallback_provider_name=variant.fallback_provider or base.fallback_provider_name,
             enable_provider_fallback=variant.fallback_enabled,
-            parallel_execution=variant.parallel,
-            max_workers=variant.max_workers,
+            parallel_execution=bool(variant.parallel or case.parallel_mode),
+            max_workers=max(2, variant.max_workers, case.maximum_workers)
+            if (variant.parallel or case.parallel_mode)
+            else 1,
             worktree_root=str(fixture.owned_root / "worktrees"),
             keep_worktrees=True,
             model_timeout_seconds=min(base.model_timeout_seconds, case.timeout_seconds),
@@ -851,8 +897,27 @@ class PhaseTracker:
                 self.values[phase] += time.perf_counter() - started
 
 
+class ControlledLeaseClock:
+    def __init__(self):
+        self._value = utc_now()
+        self._lock = threading.Lock()
+
+    def __call__(self):
+        with self._lock:
+            return self._value
+
+    def advance(self, seconds: float):
+        with self._lock:
+            self._value += timedelta(seconds=seconds)
+
+
 class OneShotCrashHook:
-    def __init__(self, case: EvaluationCase):
+    def __init__(
+        self,
+        case: EvaluationCase,
+        *,
+        lease_clock: ControlledLeaseClock | None = None,
+    ):
         injection = next(
             (
                 item
@@ -876,6 +941,7 @@ class OneShotCrashHook:
             else None
         )
         self.fired = False
+        self.lease_clock = lease_clock
         self._lock = threading.Lock()
 
     def __call__(self, stage, run_id, task_id):
@@ -887,7 +953,11 @@ class OneShotCrashHook:
             ):
                 self.fired = True
                 if self.kind == "lease_expiry":
-                    time.sleep(0.12)
+                    if self.lease_clock is None:
+                        raise RuntimeError(
+                            "Lease expiry injection requires a controlled clock."
+                        )
+                    self.lease_clock.advance(31)
                     return
                 raise RuntimeError(f"Deterministic worker crash at {stage}")
 
@@ -1371,6 +1441,30 @@ def _event_duration(events, start_type, end_type):
 
 def _average_score(results):
     return round(sum(item.score.total for item in results) / len(results), 4) if results else 0.0
+
+
+def _release_surface_checks() -> dict[str, bool]:
+    from agentbus import __version__
+    from agentbus.cli import COMMANDS, main as cli_main
+    from agentbus.eval import main as evaluation_main
+    from agentbus.release_report import main as release_report_main
+
+    return {
+        "package_import": bool(__version__),
+        "cli_entry_callable": callable(cli_main),
+        "evaluation_entry_callable": callable(evaluation_main),
+        "release_report_callable": callable(release_report_main),
+        "documented_command_groups": {
+            "run",
+            "resume",
+            "runs",
+            "show-run",
+            "providers",
+            "config",
+            "doctor",
+            "evaluate",
+        }.issubset(COMMANDS),
+    }
 
 
 def _non_durable_report(case, result, verifier_result, repository_path):

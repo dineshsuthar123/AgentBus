@@ -8,6 +8,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from agentbus import __version__
+
 from agentbus.execution.models import RiskLevel, RunStatus
 from agentbus.security.redaction import sanitize_json
 
@@ -400,6 +402,7 @@ class EvaluationRun(EvaluationModel):
     started_at: datetime = Field(default_factory=utc_now)
     completed_at: datetime | None = None
     agentbus_commit_sha: str
+    agentbus_version: str = __version__
     configuration_fingerprint: str
     case_results: list[EvaluationCaseResult] = Field(default_factory=list)
     aggregate_metrics: EvaluationMetrics = Field(default_factory=EvaluationMetrics)
@@ -412,6 +415,79 @@ class EvaluationRun(EvaluationModel):
     @classmethod
     def safe_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
         return _safe_json(value)
+
+
+class SampleStatistics(EvaluationModel):
+    samples: int = Field(ge=0)
+    mean: float = 0
+    median: float = 0
+    minimum: float = 0
+    sample_standard_deviation: float = Field(default=0, ge=0)
+
+
+class RepeatedEvaluationStatistics(EvaluationModel):
+    samples: int = Field(ge=0)
+    success_rate: float = Field(default=0, ge=0, le=1)
+    score: SampleStatistics
+    duration_seconds: SampleStatistics
+    tokens: SampleStatistics
+    retry_distribution: dict[str, int] = Field(default_factory=dict)
+    fallback_rate: float = Field(default=0, ge=0, le=1)
+    reviewer_approval_rate: float | None = Field(default=None, ge=0, le=1)
+    verifier_pass_rate: float | None = Field(default=None, ge=0, le=1)
+    file_scope_violation_rate: float = Field(default=0, ge=0, le=1)
+    conflict_rate: float = Field(default=0, ge=0, le=1)
+    interpretation_note: str = (
+        "Descriptive sample statistics only; small samples do not establish "
+        "statistical significance."
+    )
+
+
+class EvaluationSeries(EvaluationModel):
+    schema_version: int = 1
+    series_id: str
+    suite_id: str
+    variant: EvaluationVariant
+    repeat: int = Field(ge=1)
+    run_ids: list[str]
+    started_at: datetime = Field(default_factory=utc_now)
+    completed_at: datetime | None = None
+    agentbus_commit_sha: str
+    agentbus_version: str = __version__
+    configuration_fingerprint: str
+    aggregate: RepeatedEvaluationStatistics
+    by_case: dict[str, RepeatedEvaluationStatistics] = Field(default_factory=dict)
+    passed: bool = False
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("metadata")
+    @classmethod
+    def safe_series_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _safe_json(value)
+
+
+class VariantSummary(EvaluationModel):
+    reference: str
+    variant_id: str
+    samples: int = Field(ge=1)
+    success_rate: float = Field(ge=0, le=1)
+    score_mean: float
+    duration_mean_seconds: float = Field(ge=0)
+    tokens_mean: float = Field(ge=0)
+    retries_mean: float = Field(ge=0)
+    fallback_rate: float = Field(ge=0, le=1)
+    safety_failure_rate: float = Field(ge=0, le=1)
+    scope_violation_rate: float = Field(ge=0, le=1)
+
+
+class VariantComparisonReport(EvaluationModel):
+    left: VariantSummary
+    right: VariantSummary
+    differences: dict[str, float]
+    interpretation_note: str = (
+        "Differences are descriptive. AgentBus does not declare a best variant "
+        "from a single run or small sample."
+    )
 
 
 class RegressionSeverity(str, Enum):

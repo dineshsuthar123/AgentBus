@@ -9,9 +9,12 @@ from typing import Any, Callable, Iterator
 from pydantic import BaseModel
 
 from agentbus.config import AgentBusConfig
-from agentbus.models.azure_openai import AzureOpenAIProvider
 from agentbus.models.base import ModelProvider
-from agentbus.models.errors import ModelOutputError, ModelProviderError
+from agentbus.models.errors import (
+    ModelConfigurationError,
+    ModelOutputError,
+    ModelProviderError,
+)
 from agentbus.models.ollama import OllamaProvider
 from agentbus.models.types import ModelResult, ModelRole, ModelRoute
 from agentbus.models.usage import UsageLedger
@@ -45,6 +48,17 @@ class ModelProviderFactory:
                 role=route.role,
             )
         if route.provider == "azure":
+            try:
+                from agentbus.models.azure_openai import AzureOpenAIProvider
+            except ModuleNotFoundError as exc:
+                if exc.name == "openai":
+                    raise ModelConfigurationError(
+                        "Azure support is not installed. Install AgentBus with the "
+                        "'azure' extra.",
+                        provider="azure",
+                        model=route.model,
+                    ) from exc
+                raise
             return AzureOpenAIProvider(
                 endpoint=self.config.azure_openai_endpoint or "",
                 api_key=self.config.azure_openai_api_key or "",
