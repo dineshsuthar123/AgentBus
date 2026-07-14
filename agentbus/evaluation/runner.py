@@ -10,6 +10,7 @@ import uuid
 from collections import defaultdict
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Protocol
@@ -49,7 +50,7 @@ from agentbus.evaluation.statistics import build_series
 from agentbus.evaluation.storage import EvaluationStorage
 from agentbus.evaluation.suites import builtin_suites, builtin_variants
 from agentbus.execution.engine import DurableExecutionEngine
-from agentbus.execution.models import FailureCategory, TaskExecutionResult
+from agentbus.execution.models import FailureCategory, TaskExecutionResult, utc_now
 from agentbus.execution.state_store import StateStore
 from agentbus.git.repository import GitRepository
 from agentbus.models.errors import ModelOutputError, ModelProviderError
@@ -371,6 +372,9 @@ class OfflineRuntimeBackend:
             tracker,
         )
         state_store = StateStore(fixture.owned_root / "runtime-state.db")
+        lease_clock = (
+            ControlledLeaseClock() if _has_injection(case, "lease_expiry") else None
+        )
         config = AgentBusConfig(
             model_name="deterministic-evaluation-v1",
             workspace_dir=str(fixture.repository),
@@ -384,9 +388,7 @@ class OfflineRuntimeBackend:
             else 1,
             worktree_root=str(fixture.owned_root / "worktrees"),
             keep_worktrees=True,
-            worker_lease_seconds=(
-                0.05 if _has_injection(case, "lease_expiry") else 30
-            ),
+            worker_lease_seconds=30,
             worker_heartbeat_seconds=(
                 0.01 if _has_injection(case, "lease_expiry") else 5
             ),
@@ -398,7 +400,7 @@ class OfflineRuntimeBackend:
             state_store=state_store,
             case=case,
         )
-        crash_hook = OneShotCrashHook(case)
+        crash_hook = OneShotCrashHook(case, lease_clock=lease_clock)
         integration_crash_hook = OneShotIntegrationCrashHook(case)
         pr_client = RecordingPRClient()
         orchestrator = MultiAgentOrchestrator(
@@ -425,6 +427,7 @@ class OfflineRuntimeBackend:
             integration_crash_hook=(
                 integration_crash_hook if integration_crash_hook.enabled else None
             ),
+            lease_clock=lease_clock,
         )
         started = time.perf_counter()
         runtime_run_id = None
@@ -894,8 +897,27 @@ class PhaseTracker:
                 self.values[phase] += time.perf_counter() - started
 
 
+class ControlledLeaseClock:
+    def __init__(self):
+        self._value = utc_now()
+        self._lock = threading.Lock()
+
+    def __call__(self):
+        with self._lock:
+            return self._value
+
+    def advance(self, seconds: float):
+        with self._lock:
+            self._value += timedelta(seconds=seconds)
+
+
 class OneShotCrashHook:
-    def __init__(self, case: EvaluationCase):
+    def __init__(
+        self,
+        case: EvaluationCase,
+        *,
+        lease_clock: ControlledLeaseClock | None = None,
+    ):
         injection = next(
             (
                 item
@@ -919,6 +941,7 @@ class OneShotCrashHook:
             else None
         )
         self.fired = False
+        self.lease_clock = lease_clock
         self._lock = threading.Lock()
 
     def __call__(self, stage, run_id, task_id):
@@ -930,7 +953,11 @@ class OneShotCrashHook:
             ):
                 self.fired = True
                 if self.kind == "lease_expiry":
-                    time.sleep(0.12)
+                    if self.lease_clock is None:
+                        raise RuntimeError(
+                            "Lease expiry injection requires a controlled clock."
+                        )
+                    self.lease_clock.advance(31)
                     return
                 raise RuntimeError(f"Deterministic worker crash at {stage}")
 

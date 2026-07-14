@@ -122,7 +122,16 @@ def test_integration_interruption_recovers_without_quality_loss(tmp_path):
     assert run.case_results[0].metrics.execution.recoveries >= 1
 
 
-def test_lease_expiry_is_bounded_and_recoverable(tmp_path):
+def test_lease_expiry_is_bounded_and_recoverable(tmp_path, monkeypatch):
+    def fail_on_sleep(*_):
+        raise AssertionError(
+            "lease expiry injection must not depend on wall-clock sleeps"
+        )
+
+    monkeypatch.setattr(
+        "agentbus.evaluation.runner.time.sleep",
+        fail_on_sleep,
+    )
     case = calculator_case(FailureInjectionKind.LEASE_EXPIRY)
 
     run = injected_runner(tmp_path, case).run(
