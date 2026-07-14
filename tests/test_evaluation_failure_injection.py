@@ -1,10 +1,16 @@
+from datetime import timedelta
+
 from agentbus.evaluation.models import (
     EvaluationFailureInjection,
     EvaluationSuite,
     FailureInjectionKind,
     RunStatus,
 )
-from agentbus.evaluation.runner import EvaluationRunner
+from agentbus.evaluation.runner import (
+    ControlledLeaseClock,
+    EvaluationRunner,
+    OneShotCrashHook,
+)
 from agentbus.evaluation.suites import builtin_suites, builtin_variants
 
 
@@ -122,16 +128,19 @@ def test_integration_interruption_recovers_without_quality_loss(tmp_path):
     assert run.case_results[0].metrics.execution.recoveries >= 1
 
 
-def test_lease_expiry_is_bounded_and_recoverable(tmp_path, monkeypatch):
-    def fail_on_sleep(*_):
-        raise AssertionError(
-            "lease expiry injection must not depend on wall-clock sleeps"
-        )
+def test_lease_expiry_hook_advances_controlled_clock_without_sleep():
+    case = calculator_case(FailureInjectionKind.LEASE_EXPIRY)
+    clock = ControlledLeaseClock()
+    hook = OneShotCrashHook(case, lease_clock=clock)
+    before = clock()
 
-    monkeypatch.setattr(
-        "agentbus.evaluation.runner.time.sleep",
-        fail_on_sleep,
-    )
+    hook("after_worktree_created", "run-id", "feature")
+
+    assert hook.fired is True
+    assert clock() == before + timedelta(seconds=31)
+
+
+def test_lease_expiry_is_bounded_and_recoverable(tmp_path):
     case = calculator_case(FailureInjectionKind.LEASE_EXPIRY)
 
     run = injected_runner(tmp_path, case).run(
@@ -139,6 +148,7 @@ def test_lease_expiry_is_bounded_and_recoverable(tmp_path, monkeypatch):
     )
 
     assert run.passed is True, failure_messages(run)
+    assert run.case_results[0].metrics.execution.recoveries >= 1
     assert run.case_results[0].metrics.execution.retries >= 1
 
 
