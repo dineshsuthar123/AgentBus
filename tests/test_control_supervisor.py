@@ -1,0 +1,131 @@
+from __future__ import annotations
+
+import threading
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from agentbus.control.errors import (
+    ControlPlaneConflictError,
+    ControlPlaneUnavailableError,
+)
+from agentbus.control.models import RunCreateRequest
+from agentbus.control.supervisor import BackgroundRunSupervisor
+from agentbus.execution.models import RunStatus
+
+
+class BlockingBackend:
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.executions: list[str] = []
+        self.workspaces: dict[str, str] = {}
+        self.cancelled: list[str] = []
+
+    def execute_new(self, request: RunCreateRequest, run_id: str) -> None:
+        self.executions.append(run_id)
+        self.workspaces[run_id] = request.workspace
+        self.started.set()
+        self.release.wait(timeout=5)
+
+    def resume(self, run_id: str) -> None:
+        self.started.set()
+        self.release.wait(timeout=5)
+
+    def cancel(self, run_id: str, reason: str | None = None) -> RunStatus:
+        self.cancelled.append(run_id)
+        return RunStatus.CANCELLED
+
+    def workspace_for(self, run_id: str) -> str:
+        return self.workspaces[run_id]
+
+
+def _request(workspace: Path) -> RunCreateRequest:
+    return RunCreateRequest(task="Task", workspace=str(workspace), workflow="single")
+
+
+def _isolated_repository(path: Path) -> Path:
+    path.mkdir(exist_ok=True)
+    result = subprocess.run(
+        ["git", "init"],
+        cwd=path,
+        capture_output=True,
+        text=True,
+        shell=False,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return path
+
+
+def test_submit_returns_immediately_and_fences_same_workspace(
+    tmp_path: Path,
+) -> None:
+    backend = BlockingBackend()
+    supervisor = BackgroundRunSupervisor(backend, max_background_runs=2)
+    workspace = _isolated_repository(tmp_path / "repo")
+    accepted = supervisor.submit(_request(workspace))
+    assert backend.started.wait(timeout=2)
+
+    with pytest.raises(ControlPlaneConflictError, match="active AgentBus run"):
+        supervisor.submit(_request(workspace))
+
+    assert accepted.run_id in backend.executions
+    assert supervisor.is_active(accepted.run_id)
+    backend.release.set()
+    supervisor.shutdown()
+
+
+def test_completed_run_releases_workspace_for_next_submission(
+    tmp_path: Path,
+) -> None:
+    backend = BlockingBackend()
+    backend.release.set()
+    supervisor = BackgroundRunSupervisor(backend)
+    workspace = _isolated_repository(tmp_path / "repo")
+    first = supervisor.submit(_request(workspace))
+    while supervisor.is_active(first.run_id):
+        threading.Event().wait(0.01)
+
+    second = supervisor.submit(_request(workspace))
+
+    assert first.run_id != second.run_id
+    supervisor.shutdown()
+
+
+def test_resume_has_single_active_owner(tmp_path: Path) -> None:
+    backend = BlockingBackend()
+    backend.workspaces["run-1"] = str(tmp_path)
+    supervisor = BackgroundRunSupervisor(backend)
+
+    response = supervisor.resume("run-1")
+    assert backend.started.wait(timeout=2)
+
+    with pytest.raises(ControlPlaneConflictError, match="active owner"):
+        supervisor.resume("run-1")
+
+    assert response.resumed is True
+    backend.release.set()
+    supervisor.shutdown()
+
+
+def test_cancel_delegates_to_persisted_backend(tmp_path: Path) -> None:
+    backend = BlockingBackend()
+    backend.workspaces["run-1"] = str(tmp_path)
+    supervisor = BackgroundRunSupervisor(backend)
+
+    response = supervisor.cancel("run-1", "User requested cancellation")
+
+    assert response.status == "cancelled"
+    assert backend.cancelled == ["run-1"]
+    supervisor.shutdown()
+
+
+def test_shutdown_refuses_new_work(tmp_path: Path) -> None:
+    backend = BlockingBackend()
+    supervisor = BackgroundRunSupervisor(backend)
+    supervisor.shutdown()
+
+    with pytest.raises(ControlPlaneUnavailableError, match="shutting down"):
+        supervisor.submit(_request(tmp_path))
