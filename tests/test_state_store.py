@@ -108,6 +108,50 @@ def test_events_are_json_and_sensitive_values_are_redacted(tmp_path):
     assert "credential-value" not in json.dumps(event["payload"])
 
 
+def test_event_pages_support_global_monotonic_replay(tmp_path):
+    store = StateStore(tmp_path / "state.db")
+    store.create_run(make_run("run-1"))
+    store.create_run(make_run("run-2"))
+    first = store.record_event("run-1", "first")
+    second = store.record_event("run-2", "second")
+
+    replay = store.list_all_events(after_event_id=first, limit=10)
+
+    assert [event["event_id"] for event in replay] == [second]
+    assert replay[0]["run_id"] == "run-2"
+
+
+def test_run_event_pages_are_bounded_and_filtered(tmp_path):
+    store = StateStore(tmp_path / "state.db")
+    store.create_run(make_run("run-1"))
+    store.create_run(make_run("run-2"))
+    store.record_event("run-1", "one")
+    store.record_event("run-2", "other")
+    cursor = store.record_event("run-1", "two")
+    store.record_event("run-1", "three")
+
+    replay = store.list_events("run-1", after_event_id=cursor, limit=1)
+
+    assert len(replay) == 1
+    assert replay[0]["event_type"] == "three"
+    assert replay[0]["run_id"] == "run-1"
+
+
+@pytest.mark.parametrize(
+    ("after_event_id", "limit"),
+    [(-1, 10), (0, 0), (0, 5001)],
+)
+def test_event_page_rejects_unbounded_or_invalid_queries(
+    tmp_path,
+    after_event_id,
+    limit,
+):
+    store = StateStore(tmp_path / "state.db")
+
+    with pytest.raises(StateStoreError):
+        store.list_all_events(after_event_id=after_event_id, limit=limit)
+
+
 def test_approval_persists(tmp_path):
     store = StateStore(tmp_path / "state.db")
     store.create_run_with_tasks(make_run(), [make_task()])

@@ -921,25 +921,47 @@ class StateStore:
                 payload or {},
             )
 
-    def list_events(self, run_id: str) -> list[dict[str, Any]]:
+    def list_events(
+        self,
+        run_id: str,
+        *,
+        after_event_id: int = 0,
+        limit: int = 1000,
+    ) -> list[dict[str, Any]]:
         _require_id(run_id, "run")
+        _validate_event_page(after_event_id, limit)
         with self._connection() as connection:
             self._require_run_row(connection, run_id)
             rows = connection.execute(
-                "SELECT * FROM events WHERE run_id = ? ORDER BY event_id",
-                (run_id,),
+                """
+                SELECT * FROM events
+                WHERE run_id = ? AND event_id > ?
+                ORDER BY event_id
+                LIMIT ?
+                """,
+                (run_id, after_event_id, limit),
             ).fetchall()
-        return [
-            {
-                "event_id": row["event_id"],
-                "run_id": row["run_id"],
-                "task_id": row["task_id"],
-                "event_type": row["event_type"],
-                "payload": _load_json(row["payload_json"], "event payload"),
-                "created_at": _parse_timestamp(row["created_at"]),
-            }
-            for row in rows
-        ]
+        return [_event_from_row(row) for row in rows]
+
+    def list_all_events(
+        self,
+        *,
+        after_event_id: int = 0,
+        limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        """Return a bounded global event page for control-plane replay."""
+        _validate_event_page(after_event_id, limit)
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM events
+                WHERE event_id > ?
+                ORDER BY event_id
+                LIMIT ?
+                """,
+                (after_event_id, limit),
+            ).fetchall()
+        return [_event_from_row(row) for row in rows]
 
     def record_approval(
         self,
@@ -1568,6 +1590,24 @@ def _sanitize(value: Any, key: str | None = None, depth: int = 0) -> Any:
     raise StateStoreError(
         f"Durable state values must be JSON serializable, got {type(value).__name__}."
     )
+
+
+def _event_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "event_id": row["event_id"],
+        "run_id": row["run_id"],
+        "task_id": row["task_id"],
+        "event_type": row["event_type"],
+        "payload": _load_json(row["payload_json"], "event payload"),
+        "created_at": _parse_timestamp(row["created_at"]),
+    }
+
+
+def _validate_event_page(after_event_id: int, limit: int) -> None:
+    if after_event_id < 0:
+        raise StateStoreError("Event cursor must not be negative.")
+    if limit < 1 or limit > 5000:
+        raise StateStoreError("Event page limit must be between 1 and 5000.")
 
 
 def _dump_json(value: Any) -> str:
