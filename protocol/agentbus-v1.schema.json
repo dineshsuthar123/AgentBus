@@ -1,0 +1,1726 @@
+{
+  "$defs": {
+    "ApprovalDecisionRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "anyOf": [
+            {
+              "maxLength": 2000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        },
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "revision"
+      ],
+      "title": "ApprovalDecisionRequest",
+      "type": "object"
+    },
+    "ApprovalDecisionResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "approval": {
+          "$ref": "#/$defs/ApprovalSummary"
+        },
+        "idempotent": {
+          "default": false,
+          "title": "Idempotent",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "approval"
+      ],
+      "title": "ApprovalDecisionResponse",
+      "type": "object"
+    },
+    "ApprovalListResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "approvals": {
+          "items": {
+            "$ref": "#/$defs/ApprovalSummary"
+          },
+          "title": "Approvals",
+          "type": "array"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "approvals"
+      ],
+      "title": "ApprovalListResponse",
+      "type": "object"
+    },
+    "ApprovalSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "affected_paths": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Affected Paths",
+          "type": "array"
+        },
+        "approval_id": {
+          "title": "Approval Id",
+          "type": "string"
+        },
+        "command": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Command"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        },
+        "requested_action": {
+          "title": "Requested Action",
+          "type": "string"
+        },
+        "revision": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "risk_category": {
+          "title": "Risk Category",
+          "type": "string"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "state": {
+          "title": "State",
+          "type": "string"
+        },
+        "task_id": {
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "approval_id",
+        "run_id",
+        "task_id",
+        "risk_category",
+        "requested_action",
+        "created_at",
+        "state"
+      ],
+      "title": "ApprovalSummary",
+      "type": "object"
+    },
+    "CancelResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "cancellation_requested": {
+          "title": "Cancellation Requested",
+          "type": "boolean"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "status": {
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "status",
+        "cancellation_requested"
+      ],
+      "title": "CancelResponse",
+      "type": "object"
+    },
+    "ChangeListResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "changes": {
+          "items": {
+            "$ref": "#/$defs/ChangeSummary"
+          },
+          "title": "Changes",
+          "type": "array"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "truncated": {
+          "default": false,
+          "title": "Truncated",
+          "type": "boolean"
+        },
+        "workspace": {
+          "title": "Workspace",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "workspace",
+        "changes"
+      ],
+      "title": "ChangeListResponse",
+      "type": "object"
+    },
+    "ChangeSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "additions": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Additions"
+        },
+        "binary": {
+          "default": false,
+          "title": "Binary",
+          "type": "boolean"
+        },
+        "classification": {
+          "title": "Classification",
+          "type": "string"
+        },
+        "deletions": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Deletions"
+        },
+        "generated": {
+          "default": false,
+          "title": "Generated",
+          "type": "boolean"
+        },
+        "generated_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Generated Reason"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "status": {
+          "title": "Status",
+          "type": "string"
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Id"
+        },
+        "tracked": {
+          "title": "Tracked",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "path",
+        "status",
+        "tracked",
+        "classification"
+      ],
+      "title": "ChangeSummary",
+      "type": "object"
+    },
+    "DaemonRegistryEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "agentbus_version": {
+          "title": "Agentbus Version",
+          "type": "string"
+        },
+        "daemon_id": {
+          "title": "Daemon Id",
+          "type": "string"
+        },
+        "executable": {
+          "title": "Executable",
+          "type": "string"
+        },
+        "heartbeat_at": {
+          "format": "date-time",
+          "title": "Heartbeat At",
+          "type": "string"
+        },
+        "host": {
+          "title": "Host",
+          "type": "string"
+        },
+        "pid": {
+          "minimum": 1,
+          "title": "Pid",
+          "type": "integer"
+        },
+        "port": {
+          "maximum": 65535,
+          "minimum": 0,
+          "title": "Port",
+          "type": "integer"
+        },
+        "process_start_identity": {
+          "title": "Process Start Identity",
+          "type": "string"
+        },
+        "protocol_version": {
+          "default": "1.0",
+          "title": "Protocol Version",
+          "type": "string"
+        },
+        "registry_path": {
+          "title": "Registry Path",
+          "type": "string"
+        },
+        "started_at": {
+          "format": "date-time",
+          "title": "Started At",
+          "type": "string"
+        },
+        "state_database": {
+          "title": "State Database",
+          "type": "string"
+        }
+      },
+      "required": [
+        "daemon_id",
+        "pid",
+        "executable",
+        "process_start_identity",
+        "host",
+        "port",
+        "agentbus_version",
+        "started_at",
+        "heartbeat_at",
+        "state_database",
+        "registry_path"
+      ],
+      "title": "DaemonRegistryEntry",
+      "type": "object"
+    },
+    "DiffResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "byte_limit": {
+          "minimum": 1,
+          "title": "Byte Limit",
+          "type": "integer"
+        },
+        "diff": {
+          "title": "Diff",
+          "type": "string"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "truncated": {
+          "default": false,
+          "title": "Truncated",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "run_id",
+        "diff",
+        "byte_limit"
+      ],
+      "title": "DiffResponse",
+      "type": "object"
+    },
+    "DoctorResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "checks": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Checks",
+          "type": "array"
+        },
+        "status": {
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "checks"
+      ],
+      "title": "DoctorResponse",
+      "type": "object"
+    },
+    "ErrorBody": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "details": {
+          "additionalProperties": true,
+          "title": "Details",
+          "type": "object"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "retryable": {
+          "default": false,
+          "title": "Retryable",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "ErrorBody",
+      "type": "object"
+    },
+    "ErrorResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "$ref": "#/$defs/ErrorBody"
+        }
+      },
+      "required": [
+        "error"
+      ],
+      "title": "ErrorResponse",
+      "type": "object"
+    },
+    "EventEnvelope": {
+      "additionalProperties": false,
+      "properties": {
+        "event_type": {
+          "title": "Event Type",
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "title": "Payload",
+          "type": "object"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Run Id"
+        },
+        "sequence": {
+          "minimum": 1,
+          "title": "Sequence",
+          "type": "integer"
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Id"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "title": "Timestamp",
+          "type": "string"
+        },
+        "worker_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Worker Id"
+        }
+      },
+      "required": [
+        "sequence",
+        "event_type",
+        "timestamp"
+      ],
+      "title": "EventEnvelope",
+      "type": "object"
+    },
+    "EventListResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "events": {
+          "items": {
+            "$ref": "#/$defs/EventEnvelope"
+          },
+          "title": "Events",
+          "type": "array"
+        },
+        "last_sequence": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Last Sequence",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "events"
+      ],
+      "title": "EventListResponse",
+      "type": "object"
+    },
+    "FileContentResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "title": "Content",
+          "type": "string"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "revision": {
+          "enum": [
+            "before",
+            "after"
+          ],
+          "title": "Revision",
+          "type": "string"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "truncated": {
+          "default": false,
+          "title": "Truncated",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "run_id",
+        "path",
+        "content",
+        "revision"
+      ],
+      "title": "FileContentResponse",
+      "type": "object"
+    },
+    "HealthResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "protocol_version": {
+          "default": "1.0",
+          "title": "Protocol Version",
+          "type": "string"
+        },
+        "status": {
+          "const": "ok",
+          "default": "ok",
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "title": "HealthResponse",
+      "type": "object"
+    },
+    "InfoResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "agentbus_version": {
+          "title": "Agentbus Version",
+          "type": "string"
+        },
+        "capabilities": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Capabilities",
+          "type": "array"
+        },
+        "daemon_id": {
+          "title": "Daemon Id",
+          "type": "string"
+        },
+        "host": {
+          "title": "Host",
+          "type": "string"
+        },
+        "pid": {
+          "minimum": 1,
+          "title": "Pid",
+          "type": "integer"
+        },
+        "port": {
+          "maximum": 65535,
+          "minimum": 0,
+          "title": "Port",
+          "type": "integer"
+        },
+        "protocol_version": {
+          "default": "1.0",
+          "title": "Protocol Version",
+          "type": "string"
+        },
+        "started_at": {
+          "format": "date-time",
+          "title": "Started At",
+          "type": "string"
+        },
+        "state_database": {
+          "title": "State Database",
+          "type": "string"
+        }
+      },
+      "required": [
+        "agentbus_version",
+        "daemon_id",
+        "pid",
+        "host",
+        "port",
+        "started_at",
+        "state_database"
+      ],
+      "title": "InfoResponse",
+      "type": "object"
+    },
+    "ProviderCheckRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "live_consent": {
+          "default": false,
+          "title": "Live Consent",
+          "type": "boolean"
+        },
+        "provider": {
+          "enum": [
+            "ollama",
+            "azure"
+          ],
+          "title": "Provider",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider"
+      ],
+      "title": "ProviderCheckRequest",
+      "type": "object"
+    },
+    "ProviderListResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "providers": {
+          "items": {
+            "$ref": "#/$defs/ProviderSummary"
+          },
+          "title": "Providers",
+          "type": "array"
+        }
+      },
+      "required": [
+        "providers"
+      ],
+      "title": "ProviderListResponse",
+      "type": "object"
+    },
+    "ProviderSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "configured": {
+          "title": "Configured",
+          "type": "boolean"
+        },
+        "endpoint_host": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Endpoint Host"
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Message"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "ready": {
+          "title": "Ready",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "configured",
+        "ready"
+      ],
+      "title": "ProviderSummary",
+      "type": "object"
+    },
+    "ReadyHandshake": {
+      "additionalProperties": false,
+      "properties": {
+        "agentbus_version": {
+          "title": "Agentbus Version",
+          "type": "string"
+        },
+        "bearer_token": {
+          "minLength": 32,
+          "title": "Bearer Token",
+          "type": "string"
+        },
+        "daemon_id": {
+          "title": "Daemon Id",
+          "type": "string"
+        },
+        "host": {
+          "title": "Host",
+          "type": "string"
+        },
+        "pid": {
+          "minimum": 1,
+          "title": "Pid",
+          "type": "integer"
+        },
+        "port": {
+          "maximum": 65535,
+          "minimum": 0,
+          "title": "Port",
+          "type": "integer"
+        },
+        "protocol_version": {
+          "default": "1.0",
+          "title": "Protocol Version",
+          "type": "string"
+        },
+        "registry_path": {
+          "title": "Registry Path",
+          "type": "string"
+        },
+        "token_delivery": {
+          "const": "parent_process_stdout",
+          "default": "parent_process_stdout",
+          "title": "Token Delivery",
+          "type": "string"
+        }
+      },
+      "required": [
+        "host",
+        "port",
+        "daemon_id",
+        "pid",
+        "agentbus_version",
+        "registry_path",
+        "bearer_token"
+      ],
+      "title": "ReadyHandshake",
+      "type": "object"
+    },
+    "ResumeResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "resumed": {
+          "title": "Resumed",
+          "type": "boolean"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "status": {
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "status",
+        "resumed"
+      ],
+      "title": "ResumeResponse",
+      "type": "object"
+    },
+    "RoleModelOverrides": {
+      "additionalProperties": false,
+      "properties": {
+        "coder": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Coder"
+        },
+        "planner": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Planner"
+        },
+        "reviewer": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reviewer"
+        },
+        "summarizer": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Summarizer"
+        }
+      },
+      "title": "RoleModelOverrides",
+      "type": "object"
+    },
+    "RunAcceptedResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "status": {
+          "title": "Status",
+          "type": "string"
+        },
+        "workspace": {
+          "title": "Workspace",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "status",
+        "workspace",
+        "created_at"
+      ],
+      "title": "RunAcceptedResponse",
+      "type": "object"
+    },
+    "RunActionRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "anyOf": [
+            {
+              "maxLength": 2000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        }
+      },
+      "title": "RunActionRequest",
+      "type": "object"
+    },
+    "RunCreateRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "commit_changes": {
+          "default": false,
+          "title": "Commit Changes",
+          "type": "boolean"
+        },
+        "create_pr": {
+          "default": false,
+          "title": "Create Pr",
+          "type": "boolean"
+        },
+        "durable": {
+          "default": false,
+          "title": "Durable",
+          "type": "boolean"
+        },
+        "fallback_enabled": {
+          "default": false,
+          "title": "Fallback Enabled",
+          "type": "boolean"
+        },
+        "fallback_provider": {
+          "anyOf": [
+            {
+              "enum": [
+                "ollama",
+                "azure"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fallback Provider"
+        },
+        "keep_worktrees": {
+          "default": true,
+          "title": "Keep Worktrees",
+          "type": "boolean"
+        },
+        "live_provider_consent": {
+          "default": false,
+          "title": "Live Provider Consent",
+          "type": "boolean"
+        },
+        "max_workers": {
+          "default": 1,
+          "maximum": 32,
+          "minimum": 1,
+          "title": "Max Workers",
+          "type": "integer"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        },
+        "parallel": {
+          "default": false,
+          "title": "Parallel",
+          "type": "boolean"
+        },
+        "provider": {
+          "default": "ollama",
+          "enum": [
+            "ollama",
+            "azure"
+          ],
+          "title": "Provider",
+          "type": "string"
+        },
+        "retry_limit": {
+          "default": 2,
+          "maximum": 20,
+          "minimum": 0,
+          "title": "Retry Limit",
+          "type": "integer"
+        },
+        "role_models": {
+          "$ref": "#/$defs/RoleModelOverrides"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "title": "Tags",
+          "type": "array"
+        },
+        "task": {
+          "maxLength": 100000,
+          "minLength": 1,
+          "title": "Task",
+          "type": "string"
+        },
+        "workflow": {
+          "$ref": "#/$defs/WorkflowMode",
+          "default": "multi"
+        },
+        "workspace": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Workspace",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task",
+        "workspace"
+      ],
+      "title": "RunCreateRequest",
+      "type": "object"
+    },
+    "RunListResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "runs": {
+          "items": {
+            "$ref": "#/$defs/RunSummary"
+          },
+          "title": "Runs",
+          "type": "array"
+        },
+        "total": {
+          "minimum": 0,
+          "title": "Total",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "runs",
+        "total"
+      ],
+      "title": "RunListResponse",
+      "type": "object"
+    },
+    "RunReportResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "report": {
+          "additionalProperties": true,
+          "title": "Report",
+          "type": "object"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "status": {
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "status",
+        "report"
+      ],
+      "title": "RunReportResponse",
+      "type": "object"
+    },
+    "RunSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "changed_files": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Changed Files",
+          "type": "array"
+        },
+        "completed_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Completed At"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "failure_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Failure Reason"
+        },
+        "original_task": {
+          "title": "Original Task",
+          "type": "string"
+        },
+        "reviewer_status": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reviewer Status"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "status": {
+          "title": "Status",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        },
+        "verifier_status": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Verifier Status"
+        },
+        "version": {
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        },
+        "workflow": {
+          "title": "Workflow",
+          "type": "string"
+        },
+        "workspace": {
+          "title": "Workspace",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "status",
+        "workflow",
+        "workspace",
+        "original_task",
+        "created_at",
+        "updated_at",
+        "version"
+      ],
+      "title": "RunSummary",
+      "type": "object"
+    },
+    "SchedulerResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "configured_max_workers": {
+          "minimum": 1,
+          "title": "Configured Max Workers",
+          "type": "integer"
+        },
+        "current_leases": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Current Leases",
+          "type": "array"
+        },
+        "expired_leases": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Expired Leases",
+          "type": "array"
+        },
+        "integration_conflicts": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Integration Conflicts",
+          "type": "array"
+        },
+        "integration_order": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Integration Order",
+          "type": "array"
+        },
+        "parallel_enabled": {
+          "title": "Parallel Enabled",
+          "type": "boolean"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "workers_used": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Workers Used",
+          "type": "array"
+        }
+      },
+      "required": [
+        "run_id",
+        "configured_max_workers",
+        "parallel_enabled"
+      ],
+      "title": "SchedulerResponse",
+      "type": "object"
+    },
+    "TaskListResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "tasks": {
+          "items": {
+            "$ref": "#/$defs/TaskSummary"
+          },
+          "title": "Tasks",
+          "type": "array"
+        }
+      },
+      "required": [
+        "run_id",
+        "tasks"
+      ],
+      "title": "TaskListResponse",
+      "type": "object"
+    },
+    "TaskSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "assigned_role": {
+          "title": "Assigned Role",
+          "type": "string"
+        },
+        "attempts": {
+          "minimum": 0,
+          "title": "Attempts",
+          "type": "integer"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "dependencies": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "done_criteria": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Done Criteria",
+          "type": "array"
+        },
+        "expected_outputs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Expected Outputs",
+          "type": "array"
+        },
+        "failure_category": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Failure Category"
+        },
+        "failure_message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Failure Message"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model"
+        },
+        "position": {
+          "minimum": 0,
+          "title": "Position",
+          "type": "integer"
+        },
+        "provider": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider"
+        },
+        "reviewer_status": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reviewer Status"
+        },
+        "risk": {
+          "title": "Risk",
+          "type": "string"
+        },
+        "status": {
+          "title": "Status",
+          "type": "string"
+        },
+        "task_id": {
+          "title": "Task Id",
+          "type": "string"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        },
+        "verifier_status": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Verifier Status"
+        },
+        "worker_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Worker Id"
+        }
+      },
+      "required": [
+        "task_id",
+        "title",
+        "description",
+        "status",
+        "position",
+        "assigned_role",
+        "risk",
+        "attempts",
+        "created_at",
+        "updated_at"
+      ],
+      "title": "TaskSummary",
+      "type": "object"
+    },
+    "UsageResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "fallbacks": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Fallbacks",
+          "type": "integer"
+        },
+        "input_tokens": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Input Tokens",
+          "type": "integer"
+        },
+        "latency_seconds": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Latency Seconds",
+          "type": "number"
+        },
+        "output_tokens": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Output Tokens",
+          "type": "integer"
+        },
+        "requests": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Requests",
+          "type": "integer"
+        },
+        "retries": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Retries",
+          "type": "integer"
+        },
+        "routes": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Routes",
+          "type": "array"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "total_tokens": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Total Tokens",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "title": "UsageResponse",
+      "type": "object"
+    },
+    "WorkflowMode": {
+      "enum": [
+        "single",
+        "multi"
+      ],
+      "title": "WorkflowMode",
+      "type": "string"
+    },
+    "WorkspaceValidationRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "require_git": {
+          "default": false,
+          "title": "Require Git",
+          "type": "boolean"
+        },
+        "workspace": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Workspace",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace"
+      ],
+      "title": "WorkspaceValidationRequest",
+      "type": "object"
+    },
+    "WorkspaceValidationResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "git_top_level": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Git Top Level"
+        },
+        "is_git_repository": {
+          "default": false,
+          "title": "Is Git Repository",
+          "type": "boolean"
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Message"
+        },
+        "valid": {
+          "title": "Valid",
+          "type": "boolean"
+        },
+        "workspace": {
+          "title": "Workspace",
+          "type": "string"
+        }
+      },
+      "required": [
+        "valid",
+        "workspace"
+      ],
+      "title": "WorkspaceValidationResponse",
+      "type": "object"
+    },
+    "WorktreeListResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "worktrees": {
+          "items": {
+            "$ref": "#/$defs/WorktreeSummary"
+          },
+          "title": "Worktrees",
+          "type": "array"
+        }
+      },
+      "required": [
+        "run_id",
+        "worktrees"
+      ],
+      "title": "WorktreeListResponse",
+      "type": "object"
+    },
+    "WorktreeSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "branch": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Branch"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "retained": {
+          "default": false,
+          "title": "Retained",
+          "type": "boolean"
+        },
+        "status": {
+          "title": "Status",
+          "type": "string"
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Id"
+        },
+        "worktree_id": {
+          "title": "Worktree Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "worktree_id",
+        "path",
+        "status"
+      ],
+      "title": "WorktreeSummary",
+      "type": "object"
+    }
+  },
+  "$id": "https://agentbus.invalid/protocol/agentbus-v1.schema.json",
+  "title": "AgentBus Control Protocol v1",
+  "x-agentbus-protocol-version": "1.0"
+}
