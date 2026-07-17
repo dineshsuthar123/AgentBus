@@ -37,9 +37,14 @@ dependencies = [
 azure = ["openai>=1.66"]
 dev = [
   "build>=1.2",
+  "httpx>=0.28",
   "wheel>=0.43",
 ]
 entra = ["azure-identity>=1.17"]
+ide = [
+  "fastapi>=0.115,<1",
+  "uvicorn>=0.34,<1",
+]
 
 [project.scripts]
 agentbus = "agentbus.cli:main"
