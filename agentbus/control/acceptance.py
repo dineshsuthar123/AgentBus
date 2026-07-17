@@ -149,7 +149,10 @@ def main() -> int:
             assert "after" in diff["diff"]
             assert token not in registry.read_text(encoding="utf-8")
             assert process.wait(timeout=25) == 0
-            assert token not in handshake_line.replace(token, "")
+            assert process.stderr is not None
+            assert token not in process.stderr.read()
+            registry_payload = json.loads(registry.read_text(encoding="utf-8"))
+            assert registry_payload["daemons"] == []
         finally:
             if process.poll() is None:
                 process.terminate()
