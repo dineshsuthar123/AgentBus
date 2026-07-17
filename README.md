@@ -1,5 +1,21 @@
 # AgentBus
 
+## VS Code Control Plane
+
+Install the optional local IDE stack and start a loopback-only daemon:
+
+```powershell
+pip install "agentbus[ide]"
+agentbus serve --port 0 --json-ready
+```
+
+The native extension in `extensions/vscode` discovers or starts the daemon,
+stores its bearer token only in VS Code SecretStorage, respects Workspace Trust,
+streams replayable progress, and opens changes with native diff editors. See
+[`docs/control-plane.md`](docs/control-plane.md),
+[`docs/daemon-security.md`](docs/daemon-security.md), and
+[`docs/vscode-extension.md`](docs/vscode-extension.md).
+
 AgentBus is a provider-independent local coding runtime for small software engineering tasks. It can use local Ollama models or Azure OpenAI deployments for structured agent actions, executes a small set of workspace-scoped tools, records machine-readable run state, and stops when the work is finished or the configured step limit is reached. Ollama remains the default and requires no Azure configuration.
 
 AgentBus `0.1.0-alpha.1` is an early developer release. It has no production
