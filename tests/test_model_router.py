@@ -3,6 +3,7 @@ import builtins
 import pytest
 
 from agentbus.config import AgentBusConfig
+from agentbus.execution.cancellation import CancellationToken
 from agentbus.memory.run_log import RunLogger
 from agentbus.models.base import ModelProvider
 from agentbus.models.errors import (
@@ -382,6 +383,26 @@ def test_usage_aggregates_by_run_task_role_provider_and_model():
     assert total.input_tokens == 12
     assert total.output_tokens == 2
     assert total.total_tokens == 14
+
+
+def test_nested_cancellation_context_preserves_run_and_task_attribution():
+    config = azure_config(model_max_retries=0)
+    fake = FakeProvider(
+        "azure",
+        "planner-deployment",
+        [result(model="planner-deployment", role=ModelRole.PLANNER, tokens=5)],
+    )
+    router = router_with(config, fake)
+
+    with model_request_context(run_id="run-1", task_id="task-1"):
+        with model_request_context(cancellation=CancellationToken()):
+            router.generate_json(ModelRole.PLANNER, "nested")
+
+    total = router.usage_ledger.total(
+        run_id="run-1",
+        task_id="task-1",
+    )
+    assert total.total_tokens == 6
 
 
 def test_router_events_never_log_prompt_or_secret(tmp_path):

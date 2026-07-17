@@ -1,6 +1,11 @@
+import threading
+
 import pytest
 
 from agentbus.config import AgentBusConfig
+from agentbus.execution.cancellation import CancellationToken
+from agentbus.execution.cancellation_registry import CancellationRegistry
+from agentbus.execution.engine import DurableExecutionEngine
 from agentbus.execution.models import RunStatus, TaskStatus
 from agentbus.execution.models import FailureCategory
 from agentbus.execution.state_store import StateStore, StateStoreError
@@ -467,3 +472,79 @@ def test_commit_completed_before_state_crash_is_reconciled_without_duplicate(
     assert report.status == RunStatus.SUCCEEDED
     assert report.commit_identifier == "abc1234"
     assert git_repository.commits == ["feat: create calculator"]
+
+
+def test_cancellation_during_final_review_preserves_successful_task_history(
+    tmp_path,
+):
+    settings = config(tmp_path)
+    store = StateStore(settings.state_database_path)
+    registry = CancellationRegistry(store)
+    token = CancellationToken()
+    registry.register("final-review-cancel", token)
+    review_started = threading.Event()
+    cancellation_observed = threading.Event()
+    release_review = threading.Event()
+    git_repository = FakeGitRepository()
+
+    class BlockingFinalReviewer(FakeReviewer):
+        def review(self, user_task, plan, git_diff, test_output=None):
+            with token.operation(
+                "deterministic.generate_json",
+                source="provider:deterministic",
+                interruptible=True,
+                provider="deterministic",
+            ):
+                review_started.set()
+                assert token.wait(timeout_seconds=5)
+                cancellation_observed.set()
+                assert release_review.wait(timeout=5)
+                token.checkpoint(
+                    "provider:deterministic",
+                    stage="final-review",
+                    provider="deterministic",
+                )
+            raise AssertionError("Final reviewer must be interrupted")
+
+    one_step = {**PLAN, "steps": [PLAN["steps"][0]]}
+    runner = MultiAgentOrchestrator(
+        config=settings,
+        planner=FakePlanner(one_step),
+        coder=FakeCoder(),
+        verifier=FakeVerifier(),
+        reviewer=BlockingFinalReviewer(),
+        git_repository=git_repository,
+        pr_client=FakePRClient(),
+        state_store=store,
+        commit_changes=True,
+        cancellation=token,
+        cancellation_registry=registry,
+    )
+    run_id = runner.create_durable_run(
+        "Create calculator",
+        run_id="final-review-cancel",
+    )
+    reports = []
+    thread = threading.Thread(
+        target=lambda: reports.append(runner.run_durable(run_id))
+    )
+    thread.start()
+    assert review_started.wait(timeout=5)
+
+    requested = DurableExecutionEngine(
+        store,
+        cancellation_registry=registry,
+    ).request_cancellation(run_id, "stop final review")
+    assert cancellation_observed.wait(timeout=5)
+
+    assert requested.status == RunStatus.WAITING_FOR_REVIEW
+    assert store.get_task(run_id, "step-1").status == TaskStatus.SUCCEEDED
+    release_review.set()
+    thread.join(timeout=5)
+
+    assert thread.is_alive() is False
+    assert reports[0].status == RunStatus.CANCELLED
+    assert reports[0].successful_tasks == ["step-1"]
+    assert store.list_attempts(run_id, "step-1")[0].status.value == "succeeded"
+    assert git_repository.commits == []
+    assert store.get_run(run_id).commit_identifier is None
