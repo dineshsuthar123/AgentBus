@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -114,9 +115,11 @@ def create_app(
     app.state.control_context = context
     app.state.query_service = query_service
     app.state.supervisor = supervisor
+    app.state.last_activity = time.monotonic()
 
     @app.middleware("http")
     async def secure_local_request(request: Request, call_next):
+        app.state.last_activity = time.monotonic()
         try:
             validate_origin(request.headers.get("origin"))
             length = request.headers.get("content-length")
