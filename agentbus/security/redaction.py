@@ -49,11 +49,11 @@ def redact_text(value: str | None, *, max_chars: int = 20_000) -> str | None:
     if value is None:
         return None
     text = str(value)
+    text = _BEARER_PATTERN.sub("Bearer [REDACTED]", text)
     text = _SECRET_PATTERN.sub(
         lambda match: f"{match.group(1)}=[REDACTED]",
         text,
     )
-    text = _BEARER_PATTERN.sub("Bearer [REDACTED]", text)
     text = _URL_QUERY_PATTERN.sub(r"\1?[REDACTED]", text)
     if len(text) > max_chars:
         return text[:max_chars] + "\n[truncated]"
