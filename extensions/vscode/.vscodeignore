@@ -15,3 +15,4 @@ agentbus-vscode.vsix
 *.db
 *.sqlite*
 .env*
+.agentbus/state.db
