@@ -25,15 +25,51 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
       - name: Install development dependencies
-        run: python -m pip install -e ".[azure,dev]"
+        run: python -m pip install -e ".[azure,dev,ide]"
       - name: Compile package
         run: python -m compileall -q agentbus
       - name: Run full test suite
         run: python -m pytest
       - name: Run deterministic core evaluation
         run: python -m agentbus.eval run --suite core-offline --variant durable-parallel-fake
+      - name: Run offline control-plane acceptance
+        if: matrix.python == '3.12'
+        run: python -m agentbus.control.acceptance
       - name: Check patch whitespace
         run: git diff --check
+
+  vscode:
+    name: VS Code extension
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: extensions/vscode/package-lock.json
+      - name: Install control plane
+        run: python -m pip install -e ".[ide]"
+      - name: Install extension dependencies
+        working-directory: extensions/vscode
+        run: npm ci
+      - name: Verify generated protocol
+        working-directory: extensions/vscode
+        run: npm run protocol:check
+      - name: Compile lint and unit test
+        working-directory: extensions/vscode
+        run: npm run compile && npm run lint && npm test
+      - name: Run VS Code integration
+        working-directory: extensions/vscode
+        run: xvfb-run -a npm run test:integration
+      - name: Package and audit VSIX
+        working-directory: extensions/vscode
+        run: npm run package && npm run package:audit
 
   package:
     name: Package smoke / ${{ matrix.os }}

@@ -222,6 +222,10 @@ class GitRepository:
             entry.path for entry in self._status_entries() if not entry.ignored
         )
 
+    def status_entries(self) -> list[GitStatusEntry]:
+        """Return repository-relative status entries after boundary validation."""
+        return list(self._status_entries())
+
     def ignored_files(self) -> list[str]:
         return sorted(entry.path for entry in self._status_entries() if entry.ignored)
 

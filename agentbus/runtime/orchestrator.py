@@ -241,9 +241,14 @@ class MultiAgentOrchestrator:
             self._state_store = StateStore(self.config.state_database_path)
         return self._state_store
 
-    def create_durable_run(self, user_task: str) -> str:
+    def create_durable_run(
+        self,
+        user_task: str,
+        *,
+        run_id: str | None = None,
+    ) -> str:
         """Plan and persist an opt-in durable run without executing a task."""
-        run_id = uuid.uuid4().hex
+        run_id = run_id or uuid.uuid4().hex
         self.logger = RunLogger(log_dir=self.config.runs_dir, run_id=run_id)
         self.model_router.set_logger(self.logger)
         self.logger.log(

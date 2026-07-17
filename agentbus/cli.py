@@ -22,6 +22,9 @@ COMMANDS = (
     "config",
     "init",
     "doctor",
+    "serve",
+    "daemon",
+    "control-schema",
     "worktrees",
     "evaluate",
     "release-report",
@@ -68,6 +71,12 @@ def main(argv: list[str] | None = None) -> int:
         return _init_command(rest)
     if command == "doctor":
         return _doctor_command(rest)
+    if command == "serve":
+        return _serve_command(rest)
+    if command == "daemon":
+        return _daemon_command(rest)
+    if command == "control-schema":
+        return _control_schema_command(rest)
     if command == "release-report":
         from agentbus.release_report import main as release_report_main
 
@@ -99,6 +108,9 @@ def _root_parser() -> argparse.ArgumentParser:
         "config": "Show, validate, or locate resolved configuration.",
         "init": "Create safe first-run configuration and state.",
         "doctor": "Run offline environment diagnostics.",
+        "serve": "Start the authenticated local control-plane daemon.",
+        "daemon": "Inspect or safely manage local daemons.",
+        "control-schema": "Export generated control-protocol artifacts.",
         "worktrees": "Inspect or explicitly clean owned worktrees.",
         "evaluate": "Run the evaluation harness.",
         "release-report": "Generate evidence-based release reports.",
@@ -307,6 +319,145 @@ def _doctor_command(arguments: list[str]) -> int:
         return 2
     print(json.dumps(report.to_dict(), indent=2, sort_keys=True) if args.json else render_doctor(report))
     return 1 if report.status == CheckStatus.FAIL else 0
+
+
+def _serve_command(arguments: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="agentbus serve")
+    parser.add_argument("--config")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=0)
+    parser.add_argument("--json-ready", action="store_true")
+    parser.add_argument("--idle-timeout", type=float, default=86_400)
+    parser.add_argument("--foreground", action="store_true")
+    parser.add_argument("--registry-path")
+    parser.add_argument(
+        "--log-level",
+        choices=["critical", "error", "warning", "info"],
+        default="warning",
+    )
+    args = parser.parse_args(arguments)
+    if args.port < 0 or args.port > 65535:
+        parser.error("--port must be between 0 and 65535")
+    if args.idle_timeout < 0:
+        parser.error("--idle-timeout must not be negative")
+    try:
+        config = resolve_configuration(config_file=args.config).config
+        from agentbus.control.server import serve
+
+        return serve(
+            config=config,
+            host=args.host,
+            port=args.port,
+            json_ready=args.json_ready,
+            idle_timeout=args.idle_timeout,
+            registry_path=args.registry_path,
+            log_level=args.log_level,
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        stream = sys.stderr if args.json_ready else sys.stdout
+        print(f"Control-plane error: {exc}", file=stream)
+        return 2
+
+
+def _daemon_command(arguments: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="agentbus daemon")
+    parser.add_argument("--registry-path")
+    parser.add_argument("--json", action="store_true")
+    commands = parser.add_subparsers(dest="daemon_command", required=True)
+    commands.add_parser("status")
+    stop = commands.add_parser("stop")
+    stop.add_argument("daemon_id", nargs="?")
+    commands.add_parser("registry")
+    commands.add_parser("cleanup-stale")
+    args = parser.parse_args(arguments)
+    from agentbus.control.registry import (
+        DaemonRegistry,
+        process_matches,
+        terminate_registered_daemon,
+    )
+
+    registry = DaemonRegistry(args.registry_path)
+    if args.daemon_command == "cleanup-stale":
+        removed = registry.cleanup_stale()
+        payload = {"removed": removed, "count": len(removed)}
+    elif args.daemon_command == "registry":
+        payload = {
+            "registry_path": str(registry.path),
+            "daemons": [
+                item.model_dump(mode="json", exclude_none=True)
+                for item in registry.list()
+            ],
+        }
+    elif args.daemon_command == "status":
+        payload = {
+            "registry_path": str(registry.path),
+            "daemons": [
+                {
+                    **item.model_dump(mode="json", exclude_none=True),
+                    "process_matches": process_matches(item),
+                }
+                for item in registry.list()
+            ],
+        }
+        payload["count"] = len(payload["daemons"])
+    else:
+        entries = registry.list()
+        daemon_id = args.daemon_id
+        if daemon_id is None:
+            active = [item for item in entries if process_matches(item)]
+            if len(active) != 1:
+                print(
+                    "Daemon stop requires DAEMON_ID unless exactly one active "
+                    "daemon is registered.",
+                    file=sys.stderr,
+                )
+                return 2
+            daemon_id = active[0].daemon_id
+        try:
+            terminate_registered_daemon(registry, daemon_id)
+        except (OSError, RuntimeError) as exc:
+            print(f"Daemon stop refused: {exc}", file=sys.stderr)
+            return 2
+        payload = {"stopped": daemon_id}
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    elif args.daemon_command == "status":
+        print(f"Registry: {payload['registry_path']}")
+        print(f"Registered daemons: {payload['count']}")
+        for item in payload["daemons"]:
+            state = "active" if item["process_matches"] else "stale"
+            print(
+                f"{item['daemon_id']}  {state}  pid={item['pid']}  "
+                f"{item['host']}:{item['port']}"
+            )
+    elif args.daemon_command == "registry":
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    elif args.daemon_command == "cleanup-stale":
+        print(f"Removed stale daemon registrations: {payload['count']}")
+    else:
+        print(f"Stop signal sent to daemon: {payload['stopped']}")
+    return 0
+
+
+def _control_schema_command(arguments: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="agentbus control-schema")
+    commands = parser.add_subparsers(dest="schema_command", required=True)
+    export = commands.add_parser("export")
+    export.add_argument("--output-dir", default="protocol")
+    export.add_argument("--check", action="store_true")
+    args = parser.parse_args(arguments)
+    try:
+        from agentbus.control.protocol import export_protocol
+
+        changed = export_protocol(Path(args.output_dir), check=args.check)
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(f"Protocol export error: {exc}", file=sys.stderr)
+        return 2
+    if args.check:
+        print("Control protocol artifacts are current.")
+    else:
+        print(f"Exported control protocol artifacts ({changed} changed).")
+    return 0
 
 
 def _version_command(arguments: list[str]) -> int:
