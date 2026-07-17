@@ -4,13 +4,20 @@ import json
 import threading
 import time
 from collections.abc import Callable
+from contextlib import nullcontext
 from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
+from agentbus.execution.cancellation import (
+    CancellationRequested,
+    CancellationState,
+    CancellationToken,
+)
 from agentbus.models.base import validate_json_schema
 from agentbus.models.errors import (
     ModelOutputError,
+    ModelCancellationError,
     ModelSchemaValidationError,
     ModelServiceUnavailableError,
     ModelTimeoutError,
@@ -62,16 +69,19 @@ class DeterministicProvider:
         system_prompt: str | None = None,
         timeout_seconds: float | None = None,
         metadata: dict[str, Any] | None = None,
+        cancellation: CancellationToken | None = None,
     ) -> ModelResult:
         call_number, scope_call, scope = self._next_call(metadata)
-        self._before_output(call_number, timeout_seconds)
-        value = self._text_value(scope_call)
-        return self._result(
-            value,
+        return self._generate(
             prompt=prompt,
+            schema=None,
+            metadata=metadata or {},
+            timeout_seconds=timeout_seconds,
+            cancellation=cancellation,
             call_number=call_number,
             scope_call=scope_call,
             scope=scope,
+            json_requested=False,
         )
 
     def generate_json(
@@ -82,18 +92,86 @@ class DeterministicProvider:
         system_prompt: str | None = None,
         timeout_seconds: float | None = None,
         metadata: dict[str, Any] | None = None,
+        cancellation: CancellationToken | None = None,
     ) -> ModelResult:
         call_number, scope_call, scope = self._next_call(metadata)
-        self._before_output(call_number, timeout_seconds)
-        value = self._json_value(scope_call, metadata or {}, schema)
-        value = self._validate(value, schema, call_number)
-        return self._result(
-            value,
+        return self._generate(
             prompt=prompt,
+            schema=schema,
+            metadata=metadata or {},
+            timeout_seconds=timeout_seconds,
+            cancellation=cancellation,
             call_number=call_number,
             scope_call=scope_call,
             scope=scope,
+            json_requested=True,
         )
+
+    def _generate(
+        self,
+        *,
+        prompt: str,
+        schema: type[BaseModel] | dict[str, Any] | None,
+        metadata: dict[str, Any],
+        timeout_seconds: float | None,
+        cancellation: CancellationToken | None,
+        call_number: int,
+        scope_call: int,
+        scope: str,
+        json_requested: bool,
+    ) -> ModelResult:
+        source = f"provider:{self.provider_name}"
+        task_id = str(metadata.get("task_id") or "") or None
+        operation = (
+            cancellation.operation(
+                f"{self.provider_name}.{self.role.value}.generate",
+                source=source,
+                interruptible=True,
+                provider=self.provider_name,
+                task_id=task_id,
+            )
+            if cancellation is not None
+            else nullcontext()
+        )
+        try:
+            with operation:
+                self._before_output(
+                    call_number,
+                    timeout_seconds,
+                    cancellation=cancellation,
+                )
+                if json_requested:
+                    value = self._json_value(scope_call, metadata, schema)
+                    value = self._validate(value, schema, call_number)
+                else:
+                    value = self._text_value(scope_call)
+                if cancellation is not None:
+                    cancellation.checkpoint(
+                        source,
+                        stage="after-output",
+                        provider=self.provider_name,
+                    )
+                return self._result(
+                    value,
+                    prompt=prompt,
+                    call_number=call_number,
+                    scope_call=scope_call,
+                    scope=scope,
+                    cancellation=(
+                        cancellation.snapshot() if cancellation is not None else None
+                    ),
+                )
+        except CancellationRequested as exc:
+            raise ModelCancellationError(
+                "Deterministic provider acknowledged cancellation.",
+                provider=self.provider_name,
+                model=self.model_name,
+                metadata={
+                    "acknowledgement_source": exc.source,
+                    "acknowledgement_stage": exc.stage,
+                    "cancellation_supported": True,
+                },
+            ) from exc
 
     def _next_call(
         self,
@@ -112,6 +190,8 @@ class DeterministicProvider:
         self,
         call_number: int,
         timeout_seconds: float | None,
+        *,
+        cancellation: CancellationToken | None,
     ) -> None:
         if self.latency_seconds:
             if timeout_seconds is not None and self.latency_seconds > timeout_seconds:
@@ -120,7 +200,15 @@ class DeterministicProvider:
                     provider=self.provider_name,
                     model=self.model_name,
                 )
-            self.sleeper(self.latency_seconds)
+            if cancellation is not None:
+                if cancellation.wait(self.latency_seconds):
+                    cancellation.checkpoint(
+                        f"provider:{self.provider_name}",
+                        stage="latency",
+                        provider=self.provider_name,
+                    )
+            else:
+                self.sleeper(self.latency_seconds)
         if call_number not in self.failure_calls:
             return
         arguments = {
@@ -299,6 +387,7 @@ class DeterministicProvider:
         call_number: int,
         scope_call: int,
         scope: str,
+        cancellation: CancellationState | None,
     ) -> ModelResult:
         output = value if isinstance(value, str) else json.dumps(value, sort_keys=True)
         input_tokens = max(1, (len(prompt) + 3) // 4)
@@ -317,6 +406,14 @@ class DeterministicProvider:
             ),
             finish_status="completed",
             latency_seconds=self.latency_seconds,
+            cancellation_requested=bool(
+                cancellation and cancellation.requested
+            ),
+            cancellation_acknowledged=bool(
+                cancellation and cancellation.acknowledged
+            ),
+            cancellation_supported=True,
+            completed_after_cancellation=False,
             provider_metadata={
                 "runtime": "offline",
                 "profile": self.profile,

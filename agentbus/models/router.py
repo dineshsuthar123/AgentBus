@@ -9,9 +9,14 @@ from typing import Any, Callable, Iterator
 from pydantic import BaseModel
 
 from agentbus.config import AgentBusConfig
+from agentbus.execution.cancellation import (
+    CancellationRequested,
+    CancellationToken,
+)
 from agentbus.models.base import ModelProvider
 from agentbus.models.deterministic import DeterministicProvider
 from agentbus.models.errors import (
+    ModelCancellationError,
     ModelConfigurationError,
     ModelOutputError,
     ModelProviderError,
@@ -26,6 +31,10 @@ ProviderBuilder = Callable[[ModelRoute], ModelProvider]
 _REQUEST_CONTEXT: ContextVar[dict[str, str | None]] = ContextVar(
     "agentbus_model_request_context",
     default={"run_id": None, "task_id": None},
+)
+_CANCELLATION_CONTEXT: ContextVar[CancellationToken | None] = ContextVar(
+    "agentbus_model_cancellation_context",
+    default=None,
 )
 
 
@@ -152,6 +161,7 @@ class ModelRouter:
         system_prompt: str | None = None,
         timeout_seconds: float | None = None,
         metadata: dict[str, Any] | None = None,
+        cancellation: CancellationToken | None = None,
     ) -> ModelResult:
         return self._generate(
             "generate_text",
@@ -160,6 +170,7 @@ class ModelRouter:
             system_prompt=system_prompt,
             timeout_seconds=timeout_seconds,
             metadata=metadata,
+            cancellation=cancellation,
         )
 
     def generate_json(
@@ -171,6 +182,7 @@ class ModelRouter:
         system_prompt: str | None = None,
         timeout_seconds: float | None = None,
         metadata: dict[str, Any] | None = None,
+        cancellation: CancellationToken | None = None,
     ) -> ModelResult:
         return self._generate(
             "generate_json",
@@ -180,6 +192,7 @@ class ModelRouter:
             system_prompt=system_prompt,
             timeout_seconds=timeout_seconds,
             metadata=metadata,
+            cancellation=cancellation,
         )
 
     def _generate(
@@ -189,6 +202,19 @@ class ModelRouter:
         prompt: str,
         **kwargs: Any,
     ) -> ModelResult:
+        cancellation = kwargs.get("cancellation") or _CANCELLATION_CONTEXT.get()
+        if cancellation is not None:
+            kwargs["cancellation"] = cancellation
+        else:
+            kwargs.pop("cancellation", None)
+        if cancellation is not None:
+            try:
+                cancellation.checkpoint(
+                    "model-router",
+                    stage=f"before:{method_name}",
+                )
+            except CancellationRequested as exc:
+                raise _model_cancellation(exc, role) from exc
         correlation = dict(kwargs.get("metadata") or {})
         for key, value in _REQUEST_CONTEXT.get().items():
             if value is not None:
@@ -197,11 +223,20 @@ class ModelRouter:
         route = self.route_for(role)
         self._log("model_route_selected", _route_metadata(route))
         try:
-            return self._call_with_retries(route, method_name, prompt, kwargs)
+            result = self._call_with_retries(route, method_name, prompt, kwargs)
         except ModelProviderError as error:
             if not self._should_fallback(route, error):
                 raise
-            return self._fallback(route, method_name, prompt, kwargs, error)
+            result = self._fallback(route, method_name, prompt, kwargs, error)
+        if cancellation is not None:
+            try:
+                cancellation.checkpoint(
+                    "model-router",
+                    stage=f"after:{method_name}",
+                )
+            except CancellationRequested as exc:
+                raise _model_cancellation(exc, role) from exc
+        return result
 
     def _call_with_retries(
         self,
@@ -237,6 +272,8 @@ class ModelRouter:
                         if key != "timeout_seconds"
                     },
                 )
+            except CancellationRequested as error:
+                raise _model_cancellation(error, route.role) from error
             except ModelProviderError as error:
                 self._log(
                     "model_request_failed",
@@ -258,7 +295,20 @@ class ModelRouter:
                         "error_category": error.error_category,
                     },
                 )
-                self.sleeper(delay)
+                cancellation = kwargs.get("cancellation")
+                if (
+                    isinstance(cancellation, CancellationToken)
+                    and cancellation.wait(delay)
+                ):
+                    try:
+                        cancellation.checkpoint(
+                            "model-router",
+                            stage="retry-delay",
+                        )
+                    except CancellationRequested as exc:
+                        raise _model_cancellation(exc, route.role) from exc
+                else:
+                    self.sleeper(delay)
                 continue
             except Exception as error:
                 normalized = ModelProviderError(
@@ -450,12 +500,17 @@ def model_request_context(
     *,
     run_id: str | None = None,
     task_id: str | None = None,
+    cancellation: CancellationToken | None = None,
 ) -> Iterator[None]:
-    token = _REQUEST_CONTEXT.set({"run_id": run_id, "task_id": task_id})
+    request_token = _REQUEST_CONTEXT.set({"run_id": run_id, "task_id": task_id})
+    cancellation_token = _CANCELLATION_CONTEXT.set(
+        cancellation or _CANCELLATION_CONTEXT.get()
+    )
     try:
         yield
     finally:
-        _REQUEST_CONTEXT.reset(token)
+        _CANCELLATION_CONTEXT.reset(cancellation_token)
+        _REQUEST_CONTEXT.reset(request_token)
 
 
 def _model_role(role: ModelRole | str) -> ModelRole:
@@ -477,3 +532,22 @@ def _route_metadata(route: ModelRoute) -> dict[str, Any]:
         "fallback_enabled": route.fallback_enabled,
         "fallback_provider": route.fallback_provider,
     }
+
+
+def _model_cancellation(
+    error: CancellationRequested,
+    role: ModelRole | str,
+) -> ModelCancellationError:
+    state = error.state
+    return ModelCancellationError(
+        "Model operation was cooperatively cancelled.",
+        provider="router",
+        model=_model_role(role).value,
+        metadata={
+            "acknowledgement_source": error.source,
+            "acknowledgement_stage": error.stage,
+            "requested_at": (
+                state.requested_at.isoformat() if state.requested_at else None
+            ),
+        },
+    )

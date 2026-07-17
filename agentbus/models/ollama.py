@@ -3,17 +3,24 @@ from __future__ import annotations
 import json
 import re
 import time
+from contextlib import nullcontext
 from typing import Any, Callable
 
 import requests
 from pydantic import BaseModel, ValidationError
 
 from agentbus.config import AgentBusConfig
+from agentbus.execution.cancellation import (
+    CancellationRequested,
+    CancellationState,
+    CancellationToken,
+)
 from agentbus.models.base import validate_json_schema
 from agentbus.models.errors import (
     ModelAuthenticationError,
     ModelAuthorizationError,
     ModelBadRequestError,
+    ModelCancellationError,
     ModelNotFoundError,
     ModelOutputError,
     ModelProviderError,
@@ -57,6 +64,7 @@ class OllamaProvider:
         system_prompt: str | None = None,
         timeout_seconds: float | None = None,
         metadata: dict[str, Any] | None = None,
+        cancellation: CancellationToken | None = None,
     ) -> ModelResult:
         payload: dict[str, Any] = {
             "model": self.model_name,
@@ -66,12 +74,18 @@ class OllamaProvider:
         }
         if system_prompt:
             payload["system"] = system_prompt
-        response_payload, latency = self._request(
+        response_payload, latency, cancellation_state = self._request(
             payload,
             timeout_seconds=timeout_seconds,
+            cancellation=cancellation,
         )
         text = self._response_text(response_payload)
-        return self._result(text, response_payload, latency)
+        return self._result(
+            text,
+            response_payload,
+            latency,
+            cancellation_state,
+        )
 
     def generate_json(
         self,
@@ -81,6 +95,7 @@ class OllamaProvider:
         system_prompt: str | None = None,
         timeout_seconds: float | None = None,
         metadata: dict[str, Any] | None = None,
+        cancellation: CancellationToken | None = None,
     ) -> ModelResult:
         payload: dict[str, Any] = {
             "model": self.model_name,
@@ -95,9 +110,10 @@ class OllamaProvider:
         }
         if system_prompt:
             payload["system"] = system_prompt
-        response_payload, latency = self._request(
+        response_payload, latency, cancellation_state = self._request(
             payload,
             timeout_seconds=timeout_seconds,
+            cancellation=cancellation,
         )
         raw = self._response_text(response_payload)
         parsed = self._parse_model_json(raw)
@@ -117,22 +133,56 @@ class OllamaProvider:
                 provider=self.provider_name,
                 model=self.model_name,
             )
-        return self._result(parsed, response_payload, latency)
+        return self._result(
+            parsed,
+            response_payload,
+            latency,
+            cancellation_state,
+        )
 
     def _request(
         self,
         payload: dict[str, Any],
         *,
         timeout_seconds: float | None,
-    ) -> tuple[dict[str, Any], float]:
+        cancellation: CancellationToken | None,
+    ) -> tuple[dict[str, Any], float, CancellationState | None]:
         started = self.clock()
         try:
-            response = requests.post(
-                self.url,
-                json=payload,
-                timeout=timeout_seconds or self.timeout_seconds,
+            operation = (
+                cancellation.operation(
+                    "ollama.http_request",
+                    source="provider:ollama",
+                    interruptible=False,
+                    provider=self.provider_name,
+                )
+                if cancellation is not None
+                else nullcontext()
             )
-            response.raise_for_status()
+            with operation:
+                response = requests.post(
+                    self.url,
+                    json=payload,
+                    timeout=timeout_seconds or self.timeout_seconds,
+                )
+                response.raise_for_status()
+                if cancellation is not None and cancellation.is_requested:
+                    cancellation.acknowledge(
+                        "provider:ollama",
+                        stage="after-response",
+                        provider=self.provider_name,
+                    )
+        except CancellationRequested as exc:
+            raise ModelCancellationError(
+                "Ollama request was cancelled before transport started.",
+                provider=self.provider_name,
+                model=self.model_name,
+                metadata={
+                    "acknowledgement_source": exc.source,
+                    "acknowledgement_stage": exc.stage,
+                    "cancellation_supported": False,
+                },
+            ) from exc
         except requests.Timeout as exc:
             raise ModelTimeoutError(
                 "Ollama request timed out.",
@@ -168,7 +218,11 @@ class OllamaProvider:
                 provider=self.provider_name,
                 model=self.model_name,
             )
-        return body, max(0.0, self.clock() - started)
+        return (
+            body,
+            max(0.0, self.clock() - started),
+            cancellation.snapshot() if cancellation is not None else None,
+        )
 
     def _http_error(self, error: requests.HTTPError) -> ModelProviderError:
         status = getattr(getattr(error, "response", None), "status_code", None)
@@ -242,6 +296,7 @@ class OllamaProvider:
         value: str | dict[str, Any],
         payload: dict[str, Any],
         latency: float,
+        cancellation: CancellationState | None = None,
     ) -> ModelResult:
         input_tokens = _optional_int(payload.get("prompt_eval_count"))
         output_tokens = _optional_int(payload.get("eval_count"))
@@ -262,6 +317,17 @@ class OllamaProvider:
             ),
             finish_status="completed" if payload.get("done") else None,
             latency_seconds=latency,
+            cancellation_requested=bool(
+                cancellation and cancellation.requested
+            ),
+            cancellation_acknowledged=bool(
+                cancellation
+                and cancellation.provider_cancellation_acknowledged_at
+            ),
+            cancellation_supported=False,
+            completed_after_cancellation=bool(
+                cancellation and cancellation.requested
+            ),
             provider_metadata={"runtime": "local"},
         )
 

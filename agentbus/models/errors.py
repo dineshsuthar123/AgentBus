@@ -113,3 +113,7 @@ class ModelSchemaValidationError(ModelOutputError):
 
 class ModelContentPolicyError(ModelProviderError):
     error_category = "content_policy_error"
+
+
+class ModelCancellationError(ModelProviderError):
+    error_category = "cancelled"
