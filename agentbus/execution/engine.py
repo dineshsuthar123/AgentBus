@@ -1146,6 +1146,13 @@ class DurableExecutionEngine:
             for item in integrations
             if item.status.value == "integration_conflict"
         ]
+        cancellation_state = self.store.get_cancellation_state(
+            snapshot.run.run_id
+        )
+        cancellation = cancellation_state.model_dump(mode="json")
+        cancellation["active_non_interruptible_operations"] = (
+            cancellation_state.active_non_interruptible_operations
+        )
         return ExecutionReport(
             run_id=snapshot.run.run_id,
             original_task=snapshot.run.original_task,
@@ -1212,6 +1219,7 @@ class DurableExecutionEngine:
                 if retained
                 else []
             ),
+            cancellation=cancellation,
             resume_command=(
                 f"python -m agentbus.main --resume {snapshot.run.run_id}"
                 if snapshot.run.status

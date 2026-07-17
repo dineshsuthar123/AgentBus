@@ -162,6 +162,37 @@ class RunAcceptedResponse(ProtocolModel):
     created_at: datetime
 
 
+class CancellationLifecycle(ProtocolModel):
+    requested: bool = False
+    requested_at: datetime | None = None
+    reason: str | None = None
+    propagated_at: datetime | None = None
+    propagation_sources: list[str] = Field(default_factory=list)
+    provider_cancellation_signalled: bool = False
+    provider_cancellation_requested_at: datetime | None = None
+    provider_names: list[str] = Field(default_factory=list)
+    provider_cancellation_acknowledged: bool = False
+    provider_cancellation_acknowledged_at: datetime | None = None
+    provider_acknowledgement_source: str | None = None
+    acknowledged: bool = False
+    acknowledged_at: datetime | None = None
+    acknowledgement_source: str | None = None
+    acknowledgement_stage: str | None = None
+    active_non_interruptible_operation: str | None = None
+    active_non_interruptible_operations: list[str] = Field(default_factory=list)
+    operations_completed_after_request: list[str] = Field(default_factory=list)
+    completed_after_cancellation_request: bool = False
+    tasks_prevented_from_starting: list[str] = Field(default_factory=list)
+    tasks_completed_after_request: list[str] = Field(default_factory=list)
+    scheduling_stopped: bool = False
+    scheduling_stopped_at: datetime | None = None
+    cleanup_completed: bool = False
+    cleanup_completed_at: datetime | None = None
+    resume_eligible: bool = True
+    terminal_reason: str | None = None
+    revision: int = Field(default=0, ge=0)
+
+
 class RunSummary(ProtocolModel):
     run_id: str
     status: str
@@ -176,6 +207,9 @@ class RunSummary(ProtocolModel):
     failure_reason: str | None = None
     changed_files: list[str] = Field(default_factory=list)
     version: int = Field(ge=1)
+    cancellation: CancellationLifecycle = Field(
+        default_factory=CancellationLifecycle
+    )
 
 
 class RunListResponse(ProtocolModel):
@@ -220,6 +254,9 @@ class SchedulerResponse(ProtocolModel):
     expired_leases: list[dict[str, Any]] = Field(default_factory=list)
     integration_order: list[str] = Field(default_factory=list)
     integration_conflicts: list[dict[str, Any]] = Field(default_factory=list)
+    cancellation: CancellationLifecycle = Field(
+        default_factory=CancellationLifecycle
+    )
 
 
 class WorktreeSummary(ProtocolModel):
@@ -252,6 +289,9 @@ class RunReportResponse(ProtocolModel):
     run_id: str
     status: str
     report: dict[str, Any]
+    cancellation: CancellationLifecycle = Field(
+        default_factory=CancellationLifecycle
+    )
 
 
 class EventEnvelope(ProtocolModel):
@@ -361,6 +401,9 @@ class CancelResponse(ProtocolModel):
     run_id: str
     status: str
     cancellation_requested: bool
+    cancellation: CancellationLifecycle = Field(
+        default_factory=CancellationLifecycle
+    )
 
 
 class ResumeResponse(ProtocolModel):

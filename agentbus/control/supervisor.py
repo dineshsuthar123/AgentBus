@@ -22,8 +22,11 @@ from agentbus.control.models import (
     RunAcceptedResponse,
     RunCreateRequest,
 )
-from agentbus.control.services import WorkspaceService
-from agentbus.execution.cancellation import CancellationRequested
+from agentbus.control.services import WorkspaceService, cancellation_lifecycle
+from agentbus.execution.cancellation import (
+    CancellationRequested,
+    CancellationState,
+)
 from agentbus.execution.engine import DurableExecutionEngine
 from agentbus.execution.cancellation_registry import CancellationRegistry
 from agentbus.execution.models import (
@@ -55,6 +58,8 @@ class RunBackend(Protocol):
     def workspace_for(self, run_id: str) -> str: ...
 
     def finalize_cancellation(self, run_id: str) -> RunStatus: ...
+
+    def cancellation_state(self, run_id: str) -> CancellationState: ...
 
 
 @dataclass
@@ -147,6 +152,11 @@ class AgentBusRunBackend:
             logger=RunLogger(log_dir=self.base_config.runs_dir, run_id=run_id),
             cancellation_registry=self.cancellations,
         ).finalize_cancellation(run_id).status
+
+    def cancellation_state(self, run_id: str) -> CancellationState:
+        if run_id in self.cancellations.run_ids:
+            return self.cancellations.get(run_id).snapshot()
+        return self.store.get_cancellation_state(run_id)
 
     def shutdown(self) -> None:
         self.cancellations.shutdown()
@@ -475,10 +485,19 @@ class BackgroundRunSupervisor:
             finalize = getattr(self.backend, "finalize_cancellation", None)
             if finalize is not None:
                 status = finalize(run_id)
+        lifecycle = None
+        get_cancellation_state = getattr(
+            self.backend,
+            "cancellation_state",
+            None,
+        )
+        if get_cancellation_state is not None:
+            lifecycle = cancellation_lifecycle(get_cancellation_state(run_id))
         return CancelResponse(
             run_id=run_id,
             status=status.value,
             cancellation_requested=True,
+            **({"cancellation": lifecycle} if lifecycle is not None else {}),
         )
 
     def is_active(self, run_id: str) -> bool:

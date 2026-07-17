@@ -35,6 +35,38 @@ export interface CancelResponse {
   "run_id": string;
   "status": string;
   "cancellation_requested": boolean;
+  "cancellation"?: CancellationLifecycle;
+}
+
+export interface CancellationLifecycle {
+  "requested"?: boolean;
+  "requested_at"?: string | null;
+  "reason"?: string | null;
+  "propagated_at"?: string | null;
+  "propagation_sources"?: Array<string>;
+  "provider_cancellation_signalled"?: boolean;
+  "provider_cancellation_requested_at"?: string | null;
+  "provider_names"?: Array<string>;
+  "provider_cancellation_acknowledged"?: boolean;
+  "provider_cancellation_acknowledged_at"?: string | null;
+  "provider_acknowledgement_source"?: string | null;
+  "acknowledged"?: boolean;
+  "acknowledged_at"?: string | null;
+  "acknowledgement_source"?: string | null;
+  "acknowledgement_stage"?: string | null;
+  "active_non_interruptible_operation"?: string | null;
+  "active_non_interruptible_operations"?: Array<string>;
+  "operations_completed_after_request"?: Array<string>;
+  "completed_after_cancellation_request"?: boolean;
+  "tasks_prevented_from_starting"?: Array<string>;
+  "tasks_completed_after_request"?: Array<string>;
+  "scheduling_stopped"?: boolean;
+  "scheduling_stopped_at"?: string | null;
+  "cleanup_completed"?: boolean;
+  "cleanup_completed_at"?: string | null;
+  "resume_eligible"?: boolean;
+  "terminal_reason"?: string | null;
+  "revision"?: number;
 }
 
 export interface ChangeListResponse {
@@ -229,6 +261,7 @@ export interface RunReportResponse {
   "run_id": string;
   "status": string;
   "report": Record<string, unknown>;
+  "cancellation"?: CancellationLifecycle;
 }
 
 export interface RunSummary {
@@ -245,6 +278,7 @@ export interface RunSummary {
   "failure_reason"?: string | null;
   "changed_files"?: Array<string>;
   "version": number;
+  "cancellation"?: CancellationLifecycle;
 }
 
 export interface SchedulerResponse {
@@ -256,6 +290,7 @@ export interface SchedulerResponse {
   "expired_leases"?: Array<Record<string, unknown>>;
   "integration_order"?: Array<string>;
   "integration_conflicts"?: Array<Record<string, unknown>>;
+  "cancellation"?: CancellationLifecycle;
 }
 
 export interface TaskListResponse {

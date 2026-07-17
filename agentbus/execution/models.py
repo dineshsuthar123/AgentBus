@@ -289,3 +289,4 @@ class ExecutionReport(DomainModel):
     integration_conflicts: list[dict[str, Any]] = Field(default_factory=list)
     retained_worktrees: list[str] = Field(default_factory=list)
     cleanup_recommendations: list[str] = Field(default_factory=list)
+    cancellation: dict[str, Any] = Field(default_factory=dict)

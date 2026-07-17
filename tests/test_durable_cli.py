@@ -163,6 +163,22 @@ def test_execution_report_renders_safe_durable_diagnostics():
             }
         ],
         side_effects_persisted=True,
+        cancellation={
+            "requested": True,
+            "requested_at": "2026-01-01T00:00:00Z",
+            "reason": "Stop safely",
+            "provider_cancellation_requested_at": "2026-01-01T00:00:01Z",
+            "provider_names": ["deterministic"],
+            "provider_cancellation_acknowledged_at": "2026-01-01T00:00:02Z",
+            "active_non_interruptible_operations": ["verification-command"],
+            "operations_completed_after_request": ["verification-command"],
+            "tasks_prevented_from_starting": ["step-2"],
+            "tasks_completed_after_request": ["step-1"],
+            "scheduling_stopped_at": "2026-01-01T00:00:03Z",
+            "cleanup_completed_at": "2026-01-01T00:00:04Z",
+            "resume_eligible": False,
+            "terminal_reason": "Cancelled safely.",
+        },
     )
 
     output = main_module.render_execution_report(report)
@@ -180,6 +196,12 @@ def test_execution_report_renders_safe_durable_diagnostics():
     assert "Files excluded from review: .pytest_cache, __pycache__/calculator.pyc" in output
     assert "Verifier artifact suppression: active" in output
     assert "Filesystem rollback: not performed" in output
+    assert "Provider cancellation signalled" in output
+    assert "Provider cancellation acknowledged" in output
+    assert "Active non-interruptible operations: verification-command" in output
+    assert "Tasks prevented from starting: step-2" in output
+    assert "Cancellation resume eligibility: unavailable" in output
+    assert "Cancellation terminal reason: Cancelled safely." in output
 
 
 def test_cli_resume_uses_persisted_workspace_without_prompt(monkeypatch, capsys, tmp_path):

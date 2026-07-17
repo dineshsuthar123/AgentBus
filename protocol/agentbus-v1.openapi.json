@@ -154,6 +154,9 @@
       "CancelResponse": {
         "additionalProperties": false,
         "properties": {
+          "cancellation": {
+            "$ref": "#/components/schemas/CancellationLifecycle"
+          },
           "cancellation_requested": {
             "title": "Cancellation Requested",
             "type": "boolean"
@@ -173,6 +176,251 @@
           "cancellation_requested"
         ],
         "title": "CancelResponse",
+        "type": "object"
+      },
+      "CancellationLifecycle": {
+        "additionalProperties": false,
+        "properties": {
+          "acknowledged": {
+            "default": false,
+            "title": "Acknowledged",
+            "type": "boolean"
+          },
+          "acknowledged_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acknowledged At"
+          },
+          "acknowledgement_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acknowledgement Source"
+          },
+          "acknowledgement_stage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acknowledgement Stage"
+          },
+          "active_non_interruptible_operation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Non Interruptible Operation"
+          },
+          "active_non_interruptible_operations": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Active Non Interruptible Operations",
+            "type": "array"
+          },
+          "cleanup_completed": {
+            "default": false,
+            "title": "Cleanup Completed",
+            "type": "boolean"
+          },
+          "cleanup_completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cleanup Completed At"
+          },
+          "completed_after_cancellation_request": {
+            "default": false,
+            "title": "Completed After Cancellation Request",
+            "type": "boolean"
+          },
+          "operations_completed_after_request": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Operations Completed After Request",
+            "type": "array"
+          },
+          "propagated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Propagated At"
+          },
+          "propagation_sources": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Propagation Sources",
+            "type": "array"
+          },
+          "provider_acknowledgement_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Acknowledgement Source"
+          },
+          "provider_cancellation_acknowledged": {
+            "default": false,
+            "title": "Provider Cancellation Acknowledged",
+            "type": "boolean"
+          },
+          "provider_cancellation_acknowledged_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Cancellation Acknowledged At"
+          },
+          "provider_cancellation_requested_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Cancellation Requested At"
+          },
+          "provider_cancellation_signalled": {
+            "default": false,
+            "title": "Provider Cancellation Signalled",
+            "type": "boolean"
+          },
+          "provider_names": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Provider Names",
+            "type": "array"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "requested": {
+            "default": false,
+            "title": "Requested",
+            "type": "boolean"
+          },
+          "requested_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested At"
+          },
+          "resume_eligible": {
+            "default": true,
+            "title": "Resume Eligible",
+            "type": "boolean"
+          },
+          "revision": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "scheduling_stopped": {
+            "default": false,
+            "title": "Scheduling Stopped",
+            "type": "boolean"
+          },
+          "scheduling_stopped_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scheduling Stopped At"
+          },
+          "tasks_completed_after_request": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tasks Completed After Request",
+            "type": "array"
+          },
+          "tasks_prevented_from_starting": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tasks Prevented From Starting",
+            "type": "array"
+          },
+          "terminal_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Terminal Reason"
+          }
+        },
+        "title": "CancellationLifecycle",
         "type": "object"
       },
       "ChangeListResponse": {
@@ -956,6 +1204,9 @@
       "RunReportResponse": {
         "additionalProperties": false,
         "properties": {
+          "cancellation": {
+            "$ref": "#/components/schemas/CancellationLifecycle"
+          },
           "report": {
             "additionalProperties": true,
             "title": "Report",
@@ -981,6 +1232,9 @@
       "RunSummary": {
         "additionalProperties": false,
         "properties": {
+          "cancellation": {
+            "$ref": "#/components/schemas/CancellationLifecycle"
+          },
           "changed_files": {
             "items": {
               "type": "string"
@@ -1085,6 +1339,9 @@
       "SchedulerResponse": {
         "additionalProperties": false,
         "properties": {
+          "cancellation": {
+            "$ref": "#/components/schemas/CancellationLifecycle"
+          },
           "configured_max_workers": {
             "minimum": 1.0,
             "title": "Configured Max Workers",

@@ -15,6 +15,7 @@ from agentbus.control.models import (
     ApprovalDecisionResponse,
     ApprovalListResponse,
     ApprovalSummary,
+    CancellationLifecycle,
     ChangeListResponse,
     ChangeSummary,
     DiffResponse,
@@ -35,6 +36,7 @@ from agentbus.control.models import (
     WorktreeSummary,
 )
 from agentbus.doctor import run_doctor
+from agentbus.execution.cancellation import CancellationState
 from agentbus.execution.engine import DurableExecutionEngine, DurableExecutionError
 from agentbus.execution.models import (
     ApprovalOutcome,
@@ -300,8 +302,7 @@ class ControlQueryService:
         runs = [self.run_summary(run) for run in self.store.list_runs(limit=limit)]
         return RunListResponse(runs=runs, total=len(runs))
 
-    @staticmethod
-    def run_summary(run: RunRecord) -> RunSummary:
+    def run_summary(self, run: RunRecord) -> RunSummary:
         return RunSummary(
             run_id=run.run_id,
             status=run.status.value,
@@ -316,6 +317,9 @@ class ControlQueryService:
             failure_reason=run.failure_reason,
             changed_files=run.changed_files,
             version=run.version,
+            cancellation=cancellation_lifecycle(
+                self.store.get_cancellation_state(run.run_id)
+            ),
         )
 
     def tasks(self, run_id: str) -> TaskListResponse:
@@ -371,10 +375,14 @@ class ControlQueryService:
         self.get_run(run_id)
         report = DurableExecutionEngine(self.store).get_report(run_id)
         safe = sanitize_json(report.model_dump(mode="json"))
+        cancellation = cancellation_lifecycle(
+            self.store.get_cancellation_state(run_id)
+        )
         return RunReportResponse(
             run_id=run_id,
             status=report.status.value,
             report=safe,
+            cancellation=cancellation,
         )
 
     def scheduler(self, run_id: str) -> SchedulerResponse:
@@ -388,6 +396,9 @@ class ControlQueryService:
             expired_leases=sanitize_json(report.expired_leases),
             integration_order=report.integration_order,
             integration_conflicts=sanitize_json(report.integration_conflicts),
+            cancellation=cancellation_lifecycle(
+                self.store.get_cancellation_state(run_id)
+            ),
         )
 
     def worktrees(self, run_id: str) -> WorktreeListResponse:
@@ -547,6 +558,55 @@ def _task_attribution(run: RunRecord, path: str) -> str | None:
     if isinstance(value, dict) and value.get(path):
         return str(value[path])
     return None
+
+
+def cancellation_lifecycle(state: CancellationState) -> CancellationLifecycle:
+    active = state.active_non_interruptible_operations
+    return CancellationLifecycle(
+        requested=state.requested,
+        requested_at=state.requested_at,
+        reason=state.reason,
+        propagated_at=state.propagated_at,
+        propagation_sources=state.propagation_sources,
+        provider_cancellation_signalled=(
+            state.provider_cancellation_requested_at is not None
+        ),
+        provider_cancellation_requested_at=(
+            state.provider_cancellation_requested_at
+        ),
+        provider_names=state.provider_names,
+        provider_cancellation_acknowledged=(
+            state.provider_cancellation_acknowledged_at is not None
+        ),
+        provider_cancellation_acknowledged_at=(
+            state.provider_cancellation_acknowledged_at
+        ),
+        provider_acknowledgement_source=(
+            state.provider_acknowledgement_source
+        ),
+        acknowledged=state.acknowledged,
+        acknowledged_at=state.acknowledged_at,
+        acknowledgement_source=state.acknowledgement_source,
+        acknowledgement_stage=state.acknowledgement_stage,
+        active_non_interruptible_operation=active[0] if active else None,
+        active_non_interruptible_operations=active,
+        operations_completed_after_request=(
+            state.operations_completed_after_request
+        ),
+        completed_after_cancellation_request=bool(
+            state.operations_completed_after_request
+            or state.tasks_completed_after_request
+        ),
+        tasks_prevented_from_starting=state.tasks_prevented_from_starting,
+        tasks_completed_after_request=state.tasks_completed_after_request,
+        scheduling_stopped=state.scheduling_stopped_at is not None,
+        scheduling_stopped_at=state.scheduling_stopped_at,
+        cleanup_completed=state.cleanup_completed_at is not None,
+        cleanup_completed_at=state.cleanup_completed_at,
+        resume_eligible=state.resume_eligible,
+        terminal_reason=state.terminal_reason,
+        revision=state.revision,
+    )
 
 
 def _nested(value: dict[str, Any], *keys: str) -> Any:
