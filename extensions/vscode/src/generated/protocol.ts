@@ -72,6 +72,15 @@ export interface DaemonRegistryEntry {
   "registry_path": string;
 }
 
+export interface DeterministicProviderOptions {
+  "profile"?: "python-calculator" | "cancellation-two-task";
+  "latency_seconds"?: number;
+  "latency_roles"?: Array<"planner" | "coder" | "reviewer" | "summarizer">;
+  "failure_kind"?: "output_error" | "timeout" | "service_unavailable";
+  "failure_calls"?: Array<number>;
+  "failure_roles"?: Array<"planner" | "coder" | "reviewer" | "summarizer">;
+}
+
 export interface DiffResponse {
   "run_id": string;
   "path"?: string | null;
@@ -137,7 +146,7 @@ export interface InfoResponse {
 }
 
 export interface ProviderCheckRequest {
-  "provider": "ollama" | "azure";
+  "provider": "ollama" | "azure" | "deterministic";
   "live_consent"?: boolean;
 }
 
@@ -193,13 +202,14 @@ export interface RunActionRequest {
 export interface RunCreateRequest {
   "task": string;
   "workspace": string;
-  "provider"?: "ollama" | "azure";
-  "fallback_provider"?: "ollama" | "azure" | null;
+  "provider"?: "ollama" | "azure" | "deterministic";
+  "fallback_provider"?: "ollama" | "azure" | "deterministic" | null;
   "workflow"?: WorkflowMode;
   "durable"?: boolean;
   "parallel"?: boolean;
   "max_workers"?: number;
   "role_models"?: RoleModelOverrides;
+  "deterministic"?: DeterministicProviderOptions;
   "fallback_enabled"?: boolean;
   "live_provider_consent"?: boolean;
   "create_pr"?: boolean;

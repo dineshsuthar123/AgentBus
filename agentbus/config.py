@@ -9,8 +9,17 @@ from typing import Any
 from agentbus.security.redaction import safe_endpoint_host
 
 
-SUPPORTED_PROVIDERS = ("ollama", "azure")
+SUPPORTED_PROVIDERS = ("ollama", "azure", "deterministic")
 SUPPORTED_AZURE_API_MODES = ("responses", "chat_completions")
+SUPPORTED_DETERMINISTIC_PROFILES = (
+    "python-calculator",
+    "cancellation-two-task",
+)
+SUPPORTED_DETERMINISTIC_FAILURES = (
+    "output_error",
+    "timeout",
+    "service_unavailable",
+)
 
 
 @dataclass(frozen=True)
@@ -47,6 +56,13 @@ class AgentBusConfig:
     coder_model: str | None = None
     reviewer_model: str | None = None
     summarizer_model: str | None = None
+
+    deterministic_profile: str = "python-calculator"
+    deterministic_latency_seconds: float = 0.0
+    deterministic_latency_roles: tuple[str, ...] = ()
+    deterministic_failure_kind: str = "service_unavailable"
+    deterministic_failure_calls: tuple[int, ...] = ()
+    deterministic_failure_roles: tuple[str, ...] = ()
 
     azure_openai_endpoint: str | None = field(default=None, repr=False)
     azure_openai_api_key: str | None = field(default=None, repr=False)
@@ -138,6 +154,29 @@ class AgentBusConfig:
             coder_model=_env_text("AGENTBUS_CODER_MODEL"),
             reviewer_model=_env_text("AGENTBUS_REVIEWER_MODEL"),
             summarizer_model=_env_text("AGENTBUS_SUMMARIZER_MODEL"),
+            deterministic_profile=(
+                _env_text("AGENTBUS_DETERMINISTIC_PROFILE")
+                or cls.deterministic_profile
+            ).lower(),
+            deterministic_latency_seconds=_env_float(
+                "AGENTBUS_DETERMINISTIC_LATENCY_SECONDS",
+                cls.deterministic_latency_seconds,
+                minimum=0,
+            ),
+            deterministic_latency_roles=_env_csv(
+                "AGENTBUS_DETERMINISTIC_LATENCY_ROLES"
+            ),
+            deterministic_failure_kind=(
+                _env_text("AGENTBUS_DETERMINISTIC_FAILURE_KIND")
+                or cls.deterministic_failure_kind
+            ).lower(),
+            deterministic_failure_calls=_env_int_csv(
+                "AGENTBUS_DETERMINISTIC_FAILURE_CALLS",
+                minimum=1,
+            ),
+            deterministic_failure_roles=_env_csv(
+                "AGENTBUS_DETERMINISTIC_FAILURE_ROLES"
+            ),
             azure_openai_endpoint=_env_text("AZURE_OPENAI_ENDPOINT"),
             azure_openai_api_key=_env_text("AZURE_OPENAI_API_KEY"),
             azure_openai_auth_mode=(
@@ -185,6 +224,12 @@ class AgentBusConfig:
         coder_model: str | None = None,
         reviewer_model: str | None = None,
         summarizer_model: str | None = None,
+        deterministic_profile: str | None = None,
+        deterministic_latency_seconds: float | None = None,
+        deterministic_latency_roles: tuple[str, ...] | None = None,
+        deterministic_failure_kind: str | None = None,
+        deterministic_failure_calls: tuple[int, ...] | None = None,
+        deterministic_failure_roles: tuple[str, ...] | None = None,
         model_timeout_seconds: float | None = None,
         parallel_execution: bool | None = None,
         max_workers: int | None = None,
@@ -216,6 +261,28 @@ class AgentBusConfig:
             updates["reviewer_model"] = reviewer_model
         if summarizer_model is not None:
             updates["summarizer_model"] = summarizer_model
+        if deterministic_profile is not None:
+            updates["deterministic_profile"] = deterministic_profile.lower()
+        if deterministic_latency_seconds is not None:
+            updates["deterministic_latency_seconds"] = (
+                deterministic_latency_seconds
+            )
+        if deterministic_latency_roles is not None:
+            updates["deterministic_latency_roles"] = tuple(
+                role.lower() for role in deterministic_latency_roles
+            )
+        if deterministic_failure_kind is not None:
+            updates["deterministic_failure_kind"] = (
+                deterministic_failure_kind.lower()
+            )
+        if deterministic_failure_calls is not None:
+            updates["deterministic_failure_calls"] = tuple(
+                deterministic_failure_calls
+            )
+        if deterministic_failure_roles is not None:
+            updates["deterministic_failure_roles"] = tuple(
+                role.lower() for role in deterministic_failure_roles
+            )
         if model_timeout_seconds is not None:
             updates["model_timeout_seconds"] = model_timeout_seconds
         if parallel_execution is not None:
@@ -292,6 +359,34 @@ class AgentBusConfig:
             and self.azure_openai_max_retries < 0
         ):
             raise ValueError("AZURE_OPENAI_MAX_RETRIES must be at least 0")
+        if self.deterministic_profile not in SUPPORTED_DETERMINISTIC_PROFILES:
+            choices = ", ".join(SUPPORTED_DETERMINISTIC_PROFILES)
+            raise ValueError(
+                "AGENTBUS_DETERMINISTIC_PROFILE must be one of: "
+                f"{choices}"
+            )
+        if (
+            not math.isfinite(self.deterministic_latency_seconds)
+            or self.deterministic_latency_seconds < 0
+        ):
+            raise ValueError(
+                "AGENTBUS_DETERMINISTIC_LATENCY_SECONDS must be at least 0"
+            )
+        if self.deterministic_failure_kind not in SUPPORTED_DETERMINISTIC_FAILURES:
+            choices = ", ".join(SUPPORTED_DETERMINISTIC_FAILURES)
+            raise ValueError(
+                "AGENTBUS_DETERMINISTIC_FAILURE_KIND must be one of: "
+                f"{choices}"
+            )
+        if any(call < 1 for call in self.deterministic_failure_calls):
+            raise ValueError(
+                "AGENTBUS_DETERMINISTIC_FAILURE_CALLS must contain positive integers"
+            )
+        for role in (
+            *self.deterministic_latency_roles,
+            *self.deterministic_failure_roles,
+        ):
+            _normalize_role(role)
 
     def resolve_model(self, role: str, *, provider: str | None = None) -> str:
         selected_provider = (provider or self.provider_name).lower()
@@ -305,6 +400,8 @@ class AgentBusConfig:
 
         if selected_provider == "ollama":
             return role_override or self.model_name
+        if selected_provider == "deterministic":
+            return role_override or "deterministic-v1"
 
         role_deployment = getattr(
             self,
@@ -346,6 +443,8 @@ class AgentBusConfig:
                 raise ValueError(
                     "AGENTBUS_OLLAMA_URL must be an HTTP(S) URL with a hostname."
                 )
+            return model
+        if selected_provider == "deterministic":
             return model
         if selected_provider == "azure":
             self.validate_azure_modes()
@@ -480,6 +579,21 @@ def _env_optional_float(name: str, *, minimum: float) -> float | None:
     if raw is None:
         return None
     return _parse_float(name, raw, minimum=minimum)
+
+
+def _env_csv(name: str) -> tuple[str, ...]:
+    raw = _env_text(name)
+    if raw is None:
+        return ()
+    values = tuple(item.strip().lower() for item in raw.split(",") if item.strip())
+    if len(values) != len(set(values)):
+        raise ValueError(f"{name} must not contain duplicate values")
+    return values
+
+
+def _env_int_csv(name: str, *, minimum: int) -> tuple[int, ...]:
+    values = _env_csv(name)
+    return tuple(_parse_int(name, value, minimum=minimum) for value in values)
 
 
 def _parse_float(name: str, raw: str, *, minimum: float) -> float:

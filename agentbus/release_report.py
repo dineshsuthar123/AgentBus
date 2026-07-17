@@ -123,7 +123,7 @@ def build_release_report(
         commit=commit,
         branch=branch,
         checks=checks,
-        supported_providers=["ollama", "azure"],
+        supported_providers=["ollama", "azure", "deterministic"],
         known_limitations=[
             "Local foreground execution only; no distributed exactly-once guarantee.",
             "Filesystem and external side effects are not transactionally rolled back.",

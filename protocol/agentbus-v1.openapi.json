@@ -292,6 +292,75 @@
         "title": "ChangeSummary",
         "type": "object"
       },
+      "DeterministicProviderOptions": {
+        "additionalProperties": false,
+        "properties": {
+          "failure_calls": {
+            "items": {
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "title": "Failure Calls",
+            "type": "array"
+          },
+          "failure_kind": {
+            "default": "service_unavailable",
+            "enum": [
+              "output_error",
+              "timeout",
+              "service_unavailable"
+            ],
+            "title": "Failure Kind",
+            "type": "string"
+          },
+          "failure_roles": {
+            "items": {
+              "enum": [
+                "planner",
+                "coder",
+                "reviewer",
+                "summarizer"
+              ],
+              "type": "string"
+            },
+            "maxItems": 4,
+            "title": "Failure Roles",
+            "type": "array"
+          },
+          "latency_roles": {
+            "items": {
+              "enum": [
+                "planner",
+                "coder",
+                "reviewer",
+                "summarizer"
+              ],
+              "type": "string"
+            },
+            "maxItems": 4,
+            "title": "Latency Roles",
+            "type": "array"
+          },
+          "latency_seconds": {
+            "default": 0.0,
+            "maximum": 60.0,
+            "minimum": 0.0,
+            "title": "Latency Seconds",
+            "type": "number"
+          },
+          "profile": {
+            "default": "python-calculator",
+            "enum": [
+              "python-calculator",
+              "cancellation-two-task"
+            ],
+            "title": "Profile",
+            "type": "string"
+          }
+        },
+        "title": "DeterministicProviderOptions",
+        "type": "object"
+      },
       "DiffResponse": {
         "additionalProperties": false,
         "properties": {
@@ -525,7 +594,8 @@
           "provider": {
             "enum": [
               "ollama",
-              "azure"
+              "azure",
+              "deterministic"
             ],
             "title": "Provider",
             "type": "string"
@@ -752,6 +822,9 @@
             "title": "Create Pr",
             "type": "boolean"
           },
+          "deterministic": {
+            "$ref": "#/components/schemas/DeterministicProviderOptions"
+          },
           "durable": {
             "default": false,
             "title": "Durable",
@@ -767,7 +840,8 @@
               {
                 "enum": [
                   "ollama",
-                  "azure"
+                  "azure",
+                  "deterministic"
                 ],
                 "type": "string"
               },
@@ -808,7 +882,8 @@
             "default": "ollama",
             "enum": [
               "ollama",
-              "azure"
+              "azure",
+              "deterministic"
             ],
             "title": "Provider",
             "type": "string"

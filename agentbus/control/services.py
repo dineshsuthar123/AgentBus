@@ -502,7 +502,7 @@ class ControlQueryService:
 
     def providers(self) -> ProviderListResponse:
         values: list[ProviderSummary] = []
-        for name in ("ollama", "azure"):
+        for name in ("ollama", "azure", "deterministic"):
             try:
                 model = self.config.resolve_model("default", provider=name)
                 self.config.validate_provider_configuration(name)
@@ -521,7 +521,7 @@ class ControlQueryService:
                     endpoint_host=(
                         self.config.safe_model_summary().get("endpoint_host")
                         if name == "azure"
-                        else "localhost"
+                        else ("localhost" if name == "ollama" else None)
                     ),
                     message=message,
                 )

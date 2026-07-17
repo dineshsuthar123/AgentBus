@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from agentbus.config import AgentBusConfig
+from agentbus.config import AgentBusConfig, SUPPORTED_PROVIDERS
 from agentbus.configuration import resolve_configuration
 from agentbus.execution.engine import DurableExecutionEngine, DurableExecutionError
 from agentbus.execution.leases import LeaseError, LeaseService
@@ -41,12 +41,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--provider",
-        choices=["ollama", "azure"],
+        choices=SUPPORTED_PROVIDERS,
         help="Override the primary model provider.",
     )
     parser.add_argument(
         "--fallback-provider",
-        choices=["ollama", "azure"],
+        choices=SUPPORTED_PROVIDERS,
         help="Override the explicitly configured fallback provider.",
     )
     parser.add_argument(
@@ -182,7 +182,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     operations.add_argument(
         "--check-provider",
-        choices=["ollama", "azure"],
+        choices=SUPPORTED_PROVIDERS,
         help="Validate one provider's local configuration.",
     )
     parser.add_argument(
@@ -533,6 +533,7 @@ def _handle_model_diagnostic(
     if args.list_providers:
         print("ollama  local/offline provider (default)")
         print("azure   Azure OpenAI v1 provider")
+        print("deterministic  network-free development and acceptance provider")
         return 0
 
     if args.show_model_config:
@@ -564,10 +565,17 @@ def _handle_model_diagnostic(
 
     print("Readiness: locally configured")
     if not args.live:
-        print("Network request: skipped (use --live to opt in)")
+        if provider == "deterministic":
+            print("Network request: not applicable (deterministic provider is offline)")
+        else:
+            print("Network request: skipped (use --live to opt in)")
         return 0
 
-    print("Network request: LIVE opt-in; sending one minimal model request")
+    print(
+        "Network request: not applicable; running one deterministic request"
+        if provider == "deterministic"
+        else "Network request: LIVE opt-in; sending one minimal model request"
+    )
     live_config = config.with_overrides(
         provider_name=provider,
         enable_provider_fallback=False,
@@ -602,7 +610,7 @@ def _provider_configuration_errors(
 ) -> list[str]:
     errors: list[str] = []
     try:
-        if provider == "ollama":
+        if provider in {"ollama", "deterministic"}:
             config.validate_provider_configuration(provider)
         else:
             config.resolve_model("default", provider=provider)

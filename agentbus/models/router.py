@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from agentbus.config import AgentBusConfig
 from agentbus.models.base import ModelProvider
+from agentbus.models.deterministic import DeterministicProvider
 from agentbus.models.errors import (
     ModelConfigurationError,
     ModelOutputError,
@@ -46,6 +47,25 @@ class ModelProviderFactory:
                 url=self.config.ollama_url,
                 timeout_seconds=route.timeout_seconds,
                 role=route.role,
+            )
+        if route.provider == "deterministic":
+            latency_roles = set(self.config.deterministic_latency_roles)
+            failure_roles = set(self.config.deterministic_failure_roles)
+            return DeterministicProvider(
+                role=route.role,
+                model=route.model,
+                profile=self.config.deterministic_profile,
+                latency_seconds=(
+                    self.config.deterministic_latency_seconds
+                    if not latency_roles or route.role.value in latency_roles
+                    else 0.0
+                ),
+                failure_kind=self.config.deterministic_failure_kind,
+                failure_calls=(
+                    self.config.deterministic_failure_calls
+                    if not failure_roles or route.role.value in failure_roles
+                    else ()
+                ),
             )
         if route.provider == "azure":
             try:
@@ -169,6 +189,11 @@ class ModelRouter:
         prompt: str,
         **kwargs: Any,
     ) -> ModelResult:
+        correlation = dict(kwargs.get("metadata") or {})
+        for key, value in _REQUEST_CONTEXT.get().items():
+            if value is not None:
+                correlation.setdefault(key, value)
+        kwargs["metadata"] = correlation or None
         route = self.route_for(role)
         self._log("model_route_selected", _route_metadata(route))
         try:
