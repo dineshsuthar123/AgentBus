@@ -337,6 +337,10 @@ class ResumeResponse(ProtocolModel):
     resumed: bool
 
 
+class RunActionRequest(ProtocolModel):
+    reason: str | None = Field(default=None, max_length=2000)
+
+
 class DaemonRegistryEntry(ProtocolModel):
     daemon_id: str
     pid: int = Field(ge=1)
