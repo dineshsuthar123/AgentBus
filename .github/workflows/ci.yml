@@ -32,6 +32,9 @@ jobs:
         run: python -m pytest
       - name: Run deterministic core evaluation
         run: python -m agentbus.eval run --suite core-offline --variant durable-parallel-fake
+      - name: Run offline control-plane acceptance
+        if: matrix.python == '3.12'
+        run: python -m agentbus.control.acceptance
       - name: Check patch whitespace
         run: git diff --check
 
