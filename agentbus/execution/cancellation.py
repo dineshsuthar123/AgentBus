@@ -99,6 +99,10 @@ class CancellationToken:
     def is_requested(self) -> bool:
         return self._event.is_set()
 
+    def is_set(self) -> bool:
+        """Match ``threading.Event`` for compatibility with existing callers."""
+        return self.is_requested
+
     def snapshot(self) -> CancellationState:
         with self._lock:
             return self._state.model_copy(deep=True)
@@ -396,6 +400,34 @@ class CancellationToken:
             state, listeners = self._notification()
         self._notify(listeners, state)
         return True
+
+    def abandon_active_operations(self, source: str) -> list[CancellationOperation]:
+        """Clear operation markers whose owning process no longer exists."""
+        clean_source = _bounded_label(source, "recovery source")
+        with self._lock:
+            abandoned = list(self._operations.values())
+            if not abandoned:
+                return []
+            self._operations.clear()
+            updates: dict[str, Any] = {
+                "active_operations": [],
+                "revision": self._state.revision + 1,
+            }
+            if self._state.requested and not self._state.acknowledged:
+                now = self._clock()
+                updates.update(
+                    {
+                        "acknowledged": True,
+                        "acknowledged_at": now,
+                        "acknowledgement_source": clean_source,
+                        "acknowledgement_stage": "process-recovery",
+                    }
+                )
+            self._state = self._state.model_copy(update=updates)
+            self._condition.notify_all()
+            state, listeners = self._notification()
+        self._notify(listeners, state)
+        return abandoned
 
     def _notification(
         self,

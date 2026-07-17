@@ -502,7 +502,17 @@ def model_request_context(
     task_id: str | None = None,
     cancellation: CancellationToken | None = None,
 ) -> Iterator[None]:
-    request_token = _REQUEST_CONTEXT.set({"run_id": run_id, "task_id": task_id})
+    current_request = _REQUEST_CONTEXT.get()
+    request_token = _REQUEST_CONTEXT.set(
+        {
+            "run_id": (
+                run_id if run_id is not None else current_request.get("run_id")
+            ),
+            "task_id": (
+                task_id if task_id is not None else current_request.get("task_id")
+            ),
+        }
+    )
     cancellation_token = _CANCELLATION_CONTEXT.set(
         cancellation or _CANCELLATION_CONTEXT.get()
     )

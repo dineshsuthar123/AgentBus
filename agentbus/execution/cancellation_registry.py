@@ -40,6 +40,29 @@ class CancellationRegistry:
             self._tokens[run_id] = token
             return token
 
+    def register(
+        self,
+        run_id: str,
+        token: CancellationToken,
+        *,
+        persist_current: bool = False,
+    ) -> CancellationToken:
+        with self._lock:
+            existing = self._tokens.get(run_id)
+            if existing is not None:
+                if existing is not token:
+                    raise ValueError(
+                        f"Run '{run_id}' already has a different cancellation token."
+                    )
+                return existing
+            token.add_listener(
+                lambda updated, target=run_id: self._persist(target, updated)
+            )
+            self._tokens[run_id] = token
+        if persist_current:
+            self.synchronize(run_id)
+        return token
+
     def synchronize(self, run_id: str) -> CancellationState:
         token = self.get(run_id)
         persisted = self._store.persist_cancellation_state(
@@ -49,6 +72,11 @@ class CancellationRegistry:
         with self._lock:
             self._pending.pop(run_id, None)
         return persisted
+
+    def recover(self, run_id: str) -> CancellationToken:
+        token = self.get(run_id)
+        token.abandon_active_operations("cancellation-recovery")
+        return token
 
     def request(self, run_id: str, reason: str | None = None) -> bool:
         return self.get(run_id).request(reason)
@@ -87,4 +115,3 @@ class CancellationRegistry:
                 pending = self._pending.get(run_id)
                 if pending is None or state.revision > pending.revision:
                     self._pending[run_id] = state
-

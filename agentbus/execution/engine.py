@@ -5,6 +5,8 @@ from collections.abc import Callable
 from typing import Any, Protocol
 
 from agentbus import __version__
+from agentbus.execution.cancellation import CancellationToken
+from agentbus.execution.cancellation_registry import CancellationRegistry
 from agentbus.execution.models import (
     ApprovalOutcome,
     AttemptStatus,
@@ -51,6 +53,8 @@ class DurableExecutionEngine:
         failure_classifier: FailureClassifier | None = None,
         logger: Any | None = None,
         crash_hook: CrashHook | None = None,
+        cancellation: CancellationToken | None = None,
+        cancellation_registry: CancellationRegistry | None = None,
     ):
         self.store = state_store
         self.task_executor = task_executor
@@ -58,6 +62,11 @@ class DurableExecutionEngine:
         self.failure_classifier = failure_classifier or FailureClassifier()
         self.logger = logger
         self.crash_hook = crash_hook
+        self.cancellations = cancellation_registry or CancellationRegistry(
+            state_store
+        )
+        self._explicit_cancellation = cancellation
+        self._explicit_cancellation_run_id: str | None = None
 
     def create_run(
         self,
@@ -92,6 +101,8 @@ class DurableExecutionEngine:
             metadata=run_metadata,
         )
         self.store.create_run_with_tasks(record, graph.tasks)
+        self._cancellation_token(record.run_id)
+        self.cancellations.synchronize(record.run_id)
         self._log(
             "durable_run_created",
             record.run_id,
@@ -105,6 +116,8 @@ class DurableExecutionEngine:
         return self.store.get_run(record.run_id)
 
     def run_until_blocked(self, run_id: str) -> ExecutionReport:
+        if self._cancellation_token(run_id).is_requested:
+            return self.finalize_cancellation(run_id)
         snapshot = self.store.load_snapshot(run_id)
         if snapshot.run.status in {
             RunStatus.SUCCEEDED,
@@ -115,6 +128,8 @@ class DurableExecutionEngine:
             return self._report(snapshot)
 
         self._recover_running_tasks(run_id)
+        if self._cancellation_token(run_id).is_requested:
+            return self.finalize_cancellation(run_id)
         run = self.store.get_run(run_id)
         if run.status == RunStatus.PENDING:
             self.store.update_run_status(
@@ -126,6 +141,8 @@ class DurableExecutionEngine:
 
         maximum_iterations = self._maximum_iterations(run_id)
         for _ in range(maximum_iterations):
+            if self._cancellation_token(run_id).is_requested:
+                return self.finalize_cancellation(run_id)
             report = self.execute_next(run_id)
             if report.status in {
                 RunStatus.SUCCEEDED,
@@ -143,6 +160,9 @@ class DurableExecutionEngine:
         return self.get_report(run_id)
 
     def execute_next(self, run_id: str) -> ExecutionReport:
+        cancellation = self._cancellation_token(run_id)
+        if cancellation.is_requested:
+            return self.finalize_cancellation(run_id)
         snapshot = self.store.load_snapshot(run_id)
         if snapshot.run.status in {
             RunStatus.SUCCEEDED,
@@ -160,6 +180,8 @@ class DurableExecutionEngine:
             )
 
         self._synchronize_graph(run_id)
+        if cancellation.is_requested:
+            return self.finalize_cancellation(run_id)
         snapshot = self.store.load_snapshot(run_id)
         if snapshot.run.status != RunStatus.RUNNING:
             return self._report(snapshot)
@@ -172,6 +194,8 @@ class DurableExecutionEngine:
             self._synchronize_graph(run_id)
             return self.get_report(run_id)
 
+        if cancellation.is_requested:
+            return self.finalize_cancellation(run_id)
         self.store.update_task_status(
             run_id,
             task_record.task_id,
@@ -227,6 +251,12 @@ class DurableExecutionEngine:
             )
 
         self._persist_execution_result(attempt, task_record, result)
+        if cancellation.is_requested:
+            if result.succeeded:
+                cancellation.record_task_completed_after_request(
+                    task_record.task_id
+                )
+            return self.finalize_cancellation(run_id)
         self._synchronize_graph(run_id)
         return self.get_report(run_id)
 
@@ -239,6 +269,10 @@ class DurableExecutionEngine:
             RunStatus.WAITING_FOR_REVIEW,
         }:
             return self.get_report(run_id)
+        if self._explicit_cancellation is None:
+            self.cancellations.recover(run_id)
+        if self._cancellation_token(run_id).is_requested:
+            return self.finalize_cancellation(run_id)
         self.store.record_event(
             run_id,
             "durable_run_resumed",
@@ -342,38 +376,157 @@ class DurableExecutionEngine:
             RunStatus.CANCELLED,
         }:
             return self._report(snapshot)
+        cancellation = self._cancellation_token(run_id)
+        cancellation.request(reason or "Cancelled by user.")
+        cancellation.mark_propagated("durable-engine")
+        current = self.store.load_snapshot(run_id)
+        active_task = any(
+            task.status in {TaskStatus.RUNNING, TaskStatus.INTEGRATING}
+            for task in current.tasks
+        )
+        active_attempt = any(
+            attempt.status == AttemptStatus.RUNNING
+            for attempt in current.attempts
+        )
+        if (
+            not cancellation.snapshot().active_operations
+            and not active_task
+            and not active_attempt
+        ):
+            return self.finalize_cancellation(run_id)
+        return self.get_report(run_id)
 
-        for attempt in snapshot.attempts:
-            if attempt.status == AttemptStatus.RUNNING:
-                self.store.complete_attempt(
-                    attempt.attempt_id,
-                    AttemptStatus.INTERRUPTED,
-                    error_category=FailureCategory.INTERRUPTED,
-                    error_message=reason or "Run cancelled during task execution.",
-                )
-        for task in self.store.list_tasks(run_id):
-            if task.status in {
+    def request_cancellation(
+        self,
+        run_id: str,
+        reason: str | None = None,
+    ) -> ExecutionReport:
+        snapshot = self.store.load_snapshot(run_id)
+        if snapshot.run.status in {
+            RunStatus.SUCCEEDED,
+            RunStatus.FAILED,
+            RunStatus.CANCELLED,
+        }:
+            return self._report(snapshot)
+        cancellation = self._cancellation_token(run_id)
+        cancellation.request(reason or "Cancelled by user.")
+        cancellation.mark_propagated("durable-engine")
+        return self.get_report(run_id)
+
+    def finalize_cancellation(self, run_id: str) -> ExecutionReport:
+        cancellation = self._cancellation_token(run_id)
+        state = cancellation.snapshot()
+        if not state.requested:
+            return self.get_report(run_id)
+        if state.active_operations:
+            return self.get_report(run_id)
+
+        run = self.store.get_run(run_id)
+        if run.status == RunStatus.CANCELLED:
+            cancellation.complete_cleanup(
+                terminal_reason=(
+                    state.terminal_reason or "Cancellation completed safely."
+                ),
+                resume_eligible=False,
+            )
+            return self.get_report(run_id)
+        if run.status in {RunStatus.SUCCEEDED, RunStatus.FAILED}:
+            return self.get_report(run_id)
+
+        cancellation.acknowledge(
+            "durable-engine",
+            stage="cancellation-finalization",
+        )
+        snapshot = self.store.load_snapshot(run_id)
+        prevented = [
+            task.task_id
+            for task in snapshot.tasks
+            if task.status
+            in {
+                TaskStatus.PENDING,
+                TaskStatus.READY,
+                TaskStatus.WAITING_FOR_APPROVAL,
+                TaskStatus.RETRYABLE,
+                TaskStatus.INTEGRATION_PENDING,
+                TaskStatus.INTEGRATING,
+            }
+        ]
+        cancellation.mark_scheduling_stopped(prevented)
+
+        attempts_by_task = {
+            task.task_id: snapshot.attempts_for(task.task_id)
+            for task in snapshot.tasks
+        }
+        for task in snapshot.tasks:
+            if task.status == TaskStatus.SUCCEEDED:
+                continue
+            if task.status not in {
                 TaskStatus.PENDING,
                 TaskStatus.READY,
                 TaskStatus.RUNNING,
                 TaskStatus.WAITING_FOR_APPROVAL,
                 TaskStatus.RETRYABLE,
+                TaskStatus.INTEGRATION_PENDING,
+                TaskStatus.INTEGRATING,
             }:
+                continue
+            attempts = attempts_by_task[task.task_id]
+            latest = attempts[-1] if attempts else None
+            if (
+                task.status == TaskStatus.RUNNING
+                and latest is not None
+                and latest.status == AttemptStatus.SUCCEEDED
+            ):
                 self.store.update_task_status(
                     run_id,
                     task.task_id,
-                    TaskStatus.CANCELLED,
-                    event_type="task_cancelled",
-                    event_payload={"reason": reason},
+                    TaskStatus.SUCCEEDED,
+                    event_type="cancelled_run_completed_task_recovered",
                 )
-        self.store.update_run_status(
-            run_id,
+                cancellation.record_task_completed_after_request(task.task_id)
+                continue
+            if latest is not None and latest.status == AttemptStatus.RUNNING:
+                self.store.complete_attempt(
+                    latest.attempt_id,
+                    AttemptStatus.INTERRUPTED,
+                    error_category=FailureCategory.CANCELLED,
+                    error_message="Attempt stopped after cancellation was requested.",
+                    event_type="task_attempt_cancelled",
+                )
+            self.store.update_task_status(
+                run_id,
+                task.task_id,
+                TaskStatus.CANCELLED,
+                event_type="task_cancelled",
+                event_payload={"cancellation_requested": True},
+            )
+
+        reason = state.reason or "Cancelled by user."
+        current = self.store.get_run(run_id)
+        if current.status not in {
+            RunStatus.SUCCEEDED,
+            RunStatus.FAILED,
             RunStatus.CANCELLED,
-            failure_reason=reason or "Cancelled by user.",
-            event_type="durable_run_cancelled",
-            event_payload={"reason": reason},
+        }:
+            self.store.update_run_status(
+                run_id,
+                RunStatus.CANCELLED,
+                failure_reason=reason,
+                event_type="run_cancelled",
+                event_payload={
+                    "acknowledged": cancellation.snapshot().acknowledged,
+                    "tasks_prevented_from_starting": prevented,
+                },
+            )
+            self._log(
+                "run_cancelled",
+                run_id,
+                metadata={"task_count_prevented": len(prevented)},
+            )
+        cancellation.complete_cleanup(
+            terminal_reason="Cancellation completed safely.",
+            resume_eligible=False,
         )
-        self._log("durable_run_cancelled", run_id, metadata={"reason": reason})
         return self.get_report(run_id)
 
     def get_report(self, run_id: str) -> ExecutionReport:
@@ -447,6 +600,26 @@ class DurableExecutionEngine:
 
         category = result.failure_category or FailureCategory.UNKNOWN
         message = result.error_message or result.summary
+        if category == FailureCategory.CANCELLED:
+            self.store.complete_attempt(
+                attempt.attempt_id,
+                AttemptStatus.INTERRUPTED,
+                error_category=category,
+                error_message=message,
+                observation_summary=result.summary,
+                metadata=attempt_metadata,
+                event_type="task_attempt_cancelled",
+            )
+            current = self.store.get_task(run_id, task_id)
+            if current.status == TaskStatus.RUNNING:
+                self.store.update_task_status(
+                    run_id,
+                    task_id,
+                    TaskStatus.CANCELLED,
+                    event_type="task_cancelled",
+                    event_payload={"cancellation_requested": True},
+                )
+            return
         self.store.complete_attempt(
             attempt.attempt_id,
             AttemptStatus.FAILED,
@@ -658,12 +831,16 @@ class DurableExecutionEngine:
             )
 
     def _synchronize_graph(self, run_id: str) -> None:
+        if self._cancellation_token(run_id).is_requested:
+            return
         snapshot = self.store.load_snapshot(run_id)
         if snapshot.run.status != RunStatus.RUNNING:
             return
         graph = TaskGraph.from_dict(snapshot.run.graph_data)
 
         while True:
+            if self._cancellation_token(run_id).is_requested:
+                return
             snapshot = self.store.load_snapshot(run_id)
             statuses = {task.task_id: task.status for task in snapshot.tasks}
             blocked = graph.blocked_tasks(statuses)
@@ -694,6 +871,8 @@ class DurableExecutionEngine:
         snapshot = self.store.load_snapshot(run_id)
         statuses = {task.task_id: task.status for task in snapshot.tasks}
         for task in graph.ready_tasks(statuses):
+            if self._cancellation_token(run_id).is_requested:
+                return
             current = statuses.get(task.task_id, TaskStatus.PENDING)
             if current in {TaskStatus.PENDING, TaskStatus.RETRYABLE}:
                 self.store.update_task_status(
@@ -715,6 +894,8 @@ class DurableExecutionEngine:
             approval.task_id: approval.decision for approval in snapshot.approvals
         }
         for task in snapshot.tasks:
+            if self._cancellation_token(run_id).is_requested:
+                return
             if (
                 task.status == TaskStatus.READY
                 and task.spec.risk == RiskLevel.HIGH
@@ -787,6 +968,9 @@ class DurableExecutionEngine:
             )
 
     def _fail_run(self, run_id: str, reason: str) -> None:
+        if self._cancellation_token(run_id).is_requested:
+            self.finalize_cancellation(run_id)
+            return
         run = self.store.get_run(run_id)
         if run.status not in {
             RunStatus.RUNNING,
@@ -822,6 +1006,22 @@ class DurableExecutionEngine:
             raise DurableExecutionError(
                 "Persisted retry policy is invalid; recovery cannot continue safely."
             ) from exc
+
+    def _cancellation_token(self, run_id: str) -> CancellationToken:
+        if self._explicit_cancellation is None:
+            return self.cancellations.get(run_id)
+        if (
+            self._explicit_cancellation_run_id is not None
+            and self._explicit_cancellation_run_id != run_id
+        ):
+            raise DurableExecutionError(
+                "One explicit cancellation token cannot control multiple runs."
+            )
+        self._explicit_cancellation_run_id = run_id
+        return self.cancellations.register(
+            run_id,
+            self._explicit_cancellation,
+        )
 
     def _report(self, snapshot: RunSnapshot) -> ExecutionReport:
         successful = [

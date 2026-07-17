@@ -6,8 +6,10 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from agentbus.execution.cancellation import CancellationRequested
 from agentbus.execution.models import FailureCategory, RetryPolicy
 from agentbus.models.errors import (
+    ModelCancellationError,
     ModelOutputError,
     ModelProviderError,
     ModelRateLimitError,
@@ -51,6 +53,22 @@ class FailureClassifier:
     """Maps executor failures into stable categories without inspecting secrets."""
 
     def classify(self, error: Exception) -> FailureClassification:
+        if isinstance(error, (CancellationRequested, ModelCancellationError)):
+            metadata = (
+                error.safe_metadata()
+                if isinstance(error, ModelCancellationError)
+                else {
+                    "source": error.source,
+                    "stage": error.stage,
+                }
+            )
+            return FailureClassification(
+                FailureCategory.CANCELLED,
+                False,
+                "Execution stopped after cancellation was requested.",
+                metadata,
+            )
+
         if isinstance(error, (ModelSchemaValidationError, ModelOutputError)):
             return FailureClassification(
                 FailureCategory.MODEL_OUTPUT_ERROR,
