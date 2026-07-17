@@ -1,0 +1,252 @@
+import type {
+  ApprovalDecisionRequest,
+  ApprovalDecisionResponse,
+  ApprovalListResponse,
+  CancelResponse,
+  ChangeListResponse,
+  DiffResponse,
+  DoctorResponse,
+  ErrorResponse,
+  FileContentResponse,
+  InfoResponse,
+  ProviderListResponse,
+  ResumeResponse,
+  RunAcceptedResponse,
+  RunCreateRequest,
+  RunListResponse,
+  RunReportResponse,
+  RunSummary,
+  SchedulerResponse,
+  TaskListResponse,
+  UsageResponse,
+  WorkspaceValidationRequest,
+  WorkspaceValidationResponse,
+  WorktreeListResponse
+} from "./generated/protocol";
+import { redactText } from "./redaction";
+
+export type FetchLike = (
+  input: string | URL,
+  init?: RequestInit
+) => Promise<Response>;
+
+export class AgentBusApiError extends Error {
+  public constructor(
+    public readonly code: string,
+    message: string,
+    public readonly retryable: boolean,
+    public readonly status: number
+  ) {
+    super(redactText(message));
+    this.name = "AgentBusApiError";
+  }
+}
+
+export class AgentBusClient {
+  private readonly baseUrl: URL;
+
+  public constructor(
+    baseUrl: string,
+    private readonly token: string,
+    private readonly fetcher: FetchLike = fetch
+  ) {
+    this.baseUrl = validateLoopbackBaseUrl(baseUrl);
+    if (token.length < 32) {
+      throw new Error("AgentBus daemon token is invalid.");
+    }
+  }
+
+  public info(): Promise<InfoResponse> {
+    return this.request("GET", "/api/v1/info");
+  }
+
+  public validateWorkspace(
+    body: WorkspaceValidationRequest
+  ): Promise<WorkspaceValidationResponse> {
+    return this.request("POST", "/api/v1/workspaces/validate", body);
+  }
+
+  public providers(): Promise<ProviderListResponse> {
+    return this.request("GET", "/api/v1/providers");
+  }
+
+  public doctor(workspace?: string): Promise<DoctorResponse> {
+    const query = workspace
+      ? `?workspace=${encodeURIComponent(workspace)}`
+      : "";
+    return this.request("GET", `/api/v1/doctor${query}`);
+  }
+
+  public createRun(body: RunCreateRequest): Promise<RunAcceptedResponse> {
+    return this.request("POST", "/api/v1/runs", body);
+  }
+
+  public listRuns(limit = 100): Promise<RunListResponse> {
+    return this.request("GET", `/api/v1/runs?limit=${limit}`);
+  }
+
+  public run(runId: string): Promise<RunSummary> {
+    return this.request("GET", `/api/v1/runs/${safeSegment(runId)}`);
+  }
+
+  public resume(runId: string): Promise<ResumeResponse> {
+    return this.request("POST", `/api/v1/runs/${safeSegment(runId)}/resume`);
+  }
+
+  public cancel(runId: string, reason?: string): Promise<CancelResponse> {
+    return this.request(
+      "POST",
+      `/api/v1/runs/${safeSegment(runId)}/cancel`,
+      reason ? { reason } : undefined
+    );
+  }
+
+  public tasks(runId: string): Promise<TaskListResponse> {
+    return this.request("GET", `/api/v1/runs/${safeSegment(runId)}/tasks`);
+  }
+
+  public scheduler(runId: string): Promise<SchedulerResponse> {
+    return this.request(
+      "GET",
+      `/api/v1/runs/${safeSegment(runId)}/scheduler`
+    );
+  }
+
+  public worktrees(runId: string): Promise<WorktreeListResponse> {
+    return this.request(
+      "GET",
+      `/api/v1/runs/${safeSegment(runId)}/worktrees`
+    );
+  }
+
+  public usage(runId: string): Promise<UsageResponse> {
+    return this.request("GET", `/api/v1/runs/${safeSegment(runId)}/usage`);
+  }
+
+  public report(runId: string): Promise<RunReportResponse> {
+    return this.request("GET", `/api/v1/runs/${safeSegment(runId)}/report`);
+  }
+
+  public approvals(runId: string): Promise<ApprovalListResponse> {
+    return this.request(
+      "GET",
+      `/api/v1/runs/${safeSegment(runId)}/approvals`
+    );
+  }
+
+  public decideApproval(
+    runId: string,
+    approvalId: string,
+    decision: "approve" | "reject",
+    body: ApprovalDecisionRequest
+  ): Promise<ApprovalDecisionResponse> {
+    return this.request(
+      "POST",
+      `/api/v1/runs/${safeSegment(runId)}/approvals/${safeSegment(
+        approvalId
+      )}/${decision}`,
+      body
+    );
+  }
+
+  public changes(runId: string): Promise<ChangeListResponse> {
+    return this.request("GET", `/api/v1/runs/${safeSegment(runId)}/changes`);
+  }
+
+  public diff(runId: string, path?: string): Promise<DiffResponse> {
+    const query = path ? `?path=${encodeURIComponent(path)}` : "";
+    return this.request(
+      "GET",
+      `/api/v1/runs/${safeSegment(runId)}/diff${query}`
+    );
+  }
+
+  public file(
+    runId: string,
+    path: string,
+    revision: "before" | "after"
+  ): Promise<FileContentResponse> {
+    const safePath = path
+      .split("/")
+      .map((part) => safeSegment(part))
+      .join("/");
+    return this.request(
+      "GET",
+      `/api/v1/runs/${safeSegment(runId)}/changes/${safePath}?revision=${revision}`
+    );
+  }
+
+  public eventsUrl(runId?: string): URL {
+    return new URL(
+      runId
+        ? `/api/v1/runs/${safeSegment(runId)}/events`
+        : "/api/v1/events",
+      this.baseUrl
+    );
+  }
+
+  public authorizationHeader(): string {
+    return `Bearer ${this.token}`;
+  }
+
+  private async request<T>(
+    method: string,
+    path: string,
+    body?: unknown
+  ): Promise<T> {
+    const url = new URL(path, this.baseUrl);
+    const response = await this.fetcher(url, {
+      method,
+      headers: {
+        Accept: "application/json",
+        Authorization: this.authorizationHeader(),
+        ...(body === undefined ? {} : { "Content-Type": "application/json" })
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(30_000)
+    });
+    if (!response.ok) {
+      throw await mapError(response);
+    }
+    return (await response.json()) as T;
+  }
+}
+
+export function validateLoopbackBaseUrl(value: string): URL {
+  const url = new URL(value);
+  const hostname = url.hostname.replace(/^\[|\]$/g, "");
+  if (
+    url.protocol !== "http:" ||
+    !["127.0.0.1", "::1"].includes(hostname) ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash
+  ) {
+    throw new Error("AgentBus daemon URL must be an uncredentialed loopback HTTP URL.");
+  }
+  return new URL(url.origin);
+}
+
+async function mapError(response: Response): Promise<AgentBusApiError> {
+  let body: Partial<ErrorResponse> = {};
+  try {
+    body = (await response.json()) as Partial<ErrorResponse>;
+  } catch {
+    // The stable fallback intentionally ignores untrusted raw response text.
+  }
+  const error = body.error;
+  return new AgentBusApiError(
+    error?.code ?? "http_error",
+    error?.message ?? `AgentBus request failed with HTTP ${response.status}.`,
+    error?.retryable ?? false,
+    response.status
+  );
+}
+
+function safeSegment(value: string): string {
+  if (!value || value === "." || value === ".." || value.includes("\0")) {
+    throw new Error("Unsafe AgentBus protocol path segment.");
+  }
+  return encodeURIComponent(value);
+}

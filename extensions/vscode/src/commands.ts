@@ -1,0 +1,270 @@
+import * as vscode from "vscode";
+import type { AgentBusClient } from "./apiClient";
+import type { DaemonManager } from "./daemonManager";
+import { changeUri, reportUri } from "./documents";
+import type { ApprovalSummary, RunSummary } from "./generated/protocol";
+import { ReconnectingSseClient } from "./sse";
+import type { RunStore } from "./runStore";
+import { safeError } from "./redaction";
+import { canonicalWorkspacePath, selectWorkspace } from "./workspace";
+import type { AgentBusItem, RunSelection } from "./views";
+
+export interface Refreshers {
+  refresh(): void;
+}
+
+export class CommandController implements vscode.Disposable {
+  private readonly disposables: vscode.Disposable[] = [];
+  private stream: ReconnectingSseClient | undefined;
+
+  public constructor(
+    private readonly daemon: DaemonManager,
+    private readonly store: RunStore,
+    private readonly selection: RunSelection,
+    private readonly refreshers: Refreshers[],
+    private readonly output: vscode.OutputChannel,
+    private readonly status: vscode.StatusBarItem
+  ) {}
+
+  public register(context: vscode.ExtensionContext): void {
+    const command = (name: string, callback: (...args: unknown[]) => unknown) =>
+      this.disposables.push(vscode.commands.registerCommand(name, callback));
+    command("agentbus.startTask", () => this.start(false, false));
+    command("agentbus.startDurableTask", () => this.start(true, false));
+    command("agentbus.startParallelTask", () => this.start(true, true));
+    command("agentbus.refresh", () => this.refresh());
+    command("agentbus.showRun", (item) => this.showRun(item));
+    command("agentbus.resumeRun", () => this.resume());
+    command("agentbus.cancelRun", () => this.cancel());
+    command("agentbus.openRunReport", () => this.openReport());
+    command("agentbus.openChanges", () => this.openChanges());
+    command("agentbus.approveAction", (item) => this.decide(item, "approve"));
+    command("agentbus.rejectAction", (item) => this.decide(item, "reject"));
+    command("agentbus.runDoctor", () => this.doctor());
+    command("agentbus.selectProvider", () => this.selectProvider());
+    command("agentbus.restartDaemon", () => this.restartDaemon());
+    command("agentbus.stopDaemon", () => this.daemon.stop());
+    command("agentbus.openLogs", () => this.output.show());
+    context.subscriptions.push(...this.disposables);
+    void this.connect();
+  }
+
+  public dispose(): void {
+    this.stream?.stop();
+    for (const item of this.disposables) item.dispose();
+  }
+
+  private async client(): Promise<AgentBusClient> {
+    return (await this.daemon.connectOrStart()).client;
+  }
+
+  private async connect(): Promise<void> {
+    try {
+      const client = await this.client();
+      this.stream?.stop();
+      this.stream = new ReconnectingSseClient(
+        client,
+        (event) => {
+          this.store.apply(event);
+          this.refreshViews();
+        },
+        { onReconnectFailure: () => this.refresh() }
+      );
+      this.stream.start();
+      await this.refresh();
+    } catch (error) {
+      this.output.appendLine(`AgentBus connection: ${safeError(error)}`);
+      this.status.text = "$(debug-disconnect) AgentBus offline";
+    }
+  }
+
+  private async refresh(): Promise<void> {
+    const response = await (await this.client()).listRuns();
+    this.store.replaceRuns(response.runs);
+    this.refreshViews();
+    const active = response.runs.filter((run) =>
+      ["pending", "running", "waiting_for_approval", "waiting_for_review"].includes(
+        run.status
+      )
+    ).length;
+    this.status.text = active
+      ? `$(sync~spin) AgentBus ${active}`
+      : "$(check) AgentBus";
+  }
+
+  private refreshViews(): void {
+    for (const provider of this.refreshers) provider.refresh();
+  }
+
+  private async start(durable: boolean, parallel: boolean): Promise<void> {
+    const folder = await selectWorkspace(true);
+    if (!folder) return;
+    const task = await vscode.window.showInputBox({
+      title: "AgentBus Task",
+      prompt: "Describe the software engineering task",
+      validateInput: (value) => value.trim() ? undefined : "Task is required."
+    });
+    if (!task) return;
+    const workspace = await canonicalWorkspacePath(folder);
+    const config = vscode.workspace.getConfiguration("agentbus");
+    const provider = config.get<"ollama" | "azure">("defaultProvider", "ollama");
+    let consent = false;
+    if (provider === "azure") {
+      consent =
+        (await vscode.window.showWarningMessage(
+          "This task will make live Azure provider requests.",
+          { modal: true },
+          "Continue"
+        )) === "Continue";
+      if (!consent) return;
+    }
+    const workflow = parallel
+      ? "multi"
+      : config.get<"single" | "multi">("defaultWorkflow", "multi");
+    const client = await this.client();
+    const validation = await client.validateWorkspace({
+      workspace,
+      require_git: durable || parallel
+    });
+    if (!validation.valid) throw new Error(validation.message ?? "Invalid workspace.");
+    const accepted = await client.createRun({
+      task,
+      workspace: validation.workspace,
+      provider,
+      workflow,
+      durable,
+      parallel,
+      max_workers: parallel ? config.get<number>("maxWorkers", 4) : 1,
+      live_provider_consent: consent,
+      keep_worktrees: config.get<boolean>("keepWorktrees", true)
+    });
+    this.selection.set(accepted.run_id);
+    void vscode.window.showInformationMessage(`AgentBus run ${accepted.run_id} started.`);
+    await this.refresh();
+  }
+
+  private async chooseRun(): Promise<RunSummary | undefined> {
+    const selected = this.selection.get();
+    if (selected) return this.store.run(selected);
+    return vscode.window.showQuickPick(
+      this.store.runs().map((run) => ({
+        label: run.original_task,
+        description: run.status,
+        run
+      }))
+    ).then((item) => item?.run);
+  }
+
+  private async showRun(raw?: unknown): Promise<void> {
+    const item = raw as AgentBusItem | undefined;
+    const run = item?.value as RunSummary | undefined ?? await this.chooseRun();
+    if (!run) return;
+    this.selection.set(run.run_id);
+    this.refreshViews();
+    await vscode.commands.executeCommand("agentbus.openRunReport");
+  }
+
+  private async resume(): Promise<void> {
+    const run = await this.chooseRun();
+    if (!run) return;
+    await (await this.client()).resume(run.run_id);
+    await this.refresh();
+  }
+
+  private async cancel(): Promise<void> {
+    const run = await this.chooseRun();
+    if (!run) return;
+    const confirmed = await vscode.window.showWarningMessage(
+      `Cancel AgentBus run ${run.run_id}?`,
+      { modal: true },
+      "Cancel Run"
+    );
+    if (confirmed !== "Cancel Run") return;
+    await (await this.client()).cancel(run.run_id, "Cancelled by local IDE user");
+    await this.refresh();
+  }
+
+  private async openReport(): Promise<void> {
+    const run = await this.chooseRun();
+    if (!run) return;
+    const document = await vscode.workspace.openTextDocument(reportUri(run.run_id));
+    await vscode.window.showTextDocument(document, { preview: true });
+  }
+
+  private async openChanges(): Promise<void> {
+    const run = await this.chooseRun();
+    if (!run) return;
+    const changes = await (await this.client()).changes(run.run_id);
+    const picked = await vscode.window.showQuickPick(
+      changes.changes.map((change) => ({
+        label: change.path,
+        description: `${change.status}${change.generated ? " · generated" : ""}`,
+        change
+      }))
+    );
+    if (!picked) return;
+    await vscode.commands.executeCommand(
+      "vscode.diff",
+      changeUri({ runId: run.run_id, path: picked.change.path, revision: "before" }),
+      changeUri({ runId: run.run_id, path: picked.change.path, revision: "after" }),
+      `${picked.change.path} (AgentBus)`
+    );
+  }
+
+  private async decide(raw: unknown, decision: "approve" | "reject"): Promise<void> {
+    const item = raw as AgentBusItem | undefined;
+    let approval = item?.value as ApprovalSummary | undefined;
+    const run = await this.chooseRun();
+    if (!run) return;
+    if (!approval) {
+      const response = await (await this.client()).approvals(run.run_id);
+      approval = (await vscode.window.showQuickPick(
+        response.approvals.map((value) => ({
+          label: value.requested_action,
+          description: value.risk_category,
+          value
+        }))
+      ))?.value;
+    }
+    if (!approval) return;
+    if (decision === "approve" && approval.risk_category === "high") {
+      const confirmed = await vscode.window.showWarningMessage(
+        approval.requested_action,
+        { modal: true, detail: approval.reason ?? undefined },
+        "Approve"
+      );
+      if (confirmed !== "Approve") return;
+    }
+    const reason = await vscode.window.showInputBox({ prompt: `${decision} reason (optional)` });
+    await (await this.client()).decideApproval(
+      run.run_id,
+      approval.approval_id,
+      decision,
+      { revision: approval.revision ?? 1, reason: reason || undefined }
+    );
+    await this.refresh();
+  }
+
+  private async doctor(): Promise<void> {
+    const folder = await selectWorkspace(false);
+    const report = await (await this.client()).doctor(folder?.uri.fsPath);
+    this.output.appendLine(JSON.stringify(report, null, 2));
+    this.output.show();
+  }
+
+  private async selectProvider(): Promise<void> {
+    const picked = await vscode.window.showQuickPick(["ollama", "azure"]);
+    if (picked) {
+      await vscode.workspace.getConfiguration("agentbus").update(
+        "defaultProvider",
+        picked,
+        vscode.ConfigurationTarget.Global
+      );
+    }
+  }
+
+  private async restartDaemon(): Promise<void> {
+    await this.daemon.restart();
+    await this.connect();
+  }
+}

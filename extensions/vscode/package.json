@@ -1,0 +1,247 @@
+{
+  "name": "agentbus-vscode",
+  "displayName": "AgentBus",
+  "description": "Native local control-plane integration for AgentBus",
+  "version": "0.2.0-alpha.0",
+  "publisher": "agentbus",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dineshsuthar123/AgentBus.git"
+  },
+  "private": true,
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "Other",
+    "Machine Learning"
+  ],
+  "keywords": [
+    "agentbus",
+    "agents",
+    "local",
+    "developer tools"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onView:agentbus.runs",
+    "onCommand:agentbus.startTask"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "agentbus.startTask",
+        "title": "AgentBus: Start Task"
+      },
+      {
+        "command": "agentbus.startDurableTask",
+        "title": "AgentBus: Start Durable Task"
+      },
+      {
+        "command": "agentbus.startParallelTask",
+        "title": "AgentBus: Start Parallel Task"
+      },
+      {
+        "command": "agentbus.resumeRun",
+        "title": "AgentBus: Resume Run"
+      },
+      {
+        "command": "agentbus.cancelRun",
+        "title": "AgentBus: Cancel Run"
+      },
+      {
+        "command": "agentbus.showRun",
+        "title": "AgentBus: Show Run"
+      },
+      {
+        "command": "agentbus.openRunReport",
+        "title": "AgentBus: Open Run Report"
+      },
+      {
+        "command": "agentbus.openChanges",
+        "title": "AgentBus: Open Changes"
+      },
+      {
+        "command": "agentbus.approveAction",
+        "title": "AgentBus: Approve Action"
+      },
+      {
+        "command": "agentbus.rejectAction",
+        "title": "AgentBus: Reject Action"
+      },
+      {
+        "command": "agentbus.runDoctor",
+        "title": "AgentBus: Run Doctor"
+      },
+      {
+        "command": "agentbus.selectProvider",
+        "title": "AgentBus: Select Provider"
+      },
+      {
+        "command": "agentbus.restartDaemon",
+        "title": "AgentBus: Restart Daemon"
+      },
+      {
+        "command": "agentbus.stopDaemon",
+        "title": "AgentBus: Stop Daemon"
+      },
+      {
+        "command": "agentbus.openLogs",
+        "title": "AgentBus: Open Logs"
+      },
+      {
+        "command": "agentbus.refresh",
+        "title": "AgentBus: Refresh"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "agentbus",
+          "title": "AgentBus",
+          "icon": "media/agentbus.svg"
+        }
+      ]
+    },
+    "views": {
+      "agentbus": [
+        {
+          "id": "agentbus.runs",
+          "name": "Runs"
+        },
+        {
+          "id": "agentbus.tasks",
+          "name": "Run Tasks"
+        },
+        {
+          "id": "agentbus.approvals",
+          "name": "Approvals"
+        },
+        {
+          "id": "agentbus.worktrees",
+          "name": "Worktrees"
+        },
+        {
+          "id": "agentbus.providers",
+          "name": "Providers"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "agentbus.refresh",
+          "when": "view =~ /agentbus\\./",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "agentbus.showRun",
+          "when": "viewItem == agentbusRun",
+          "group": "inline"
+        },
+        {
+          "command": "agentbus.approveAction",
+          "when": "viewItem == agentbusApproval",
+          "group": "inline"
+        },
+        {
+          "command": "agentbus.rejectAction",
+          "when": "viewItem == agentbusApproval",
+          "group": "inline"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "AgentBus",
+      "properties": {
+        "agentbus.executablePath": {
+          "type": "string",
+          "default": "",
+          "description": "Explicit AgentBus executable path."
+        },
+        "agentbus.pythonPath": {
+          "type": "string",
+          "default": "",
+          "description": "Python executable used with -m agentbus.cli when no AgentBus executable is set."
+        },
+        "agentbus.autoStartDaemon": {
+          "type": "boolean",
+          "default": true
+        },
+        "agentbus.defaultProvider": {
+          "type": "string",
+          "enum": [
+            "ollama",
+            "azure"
+          ],
+          "default": "ollama"
+        },
+        "agentbus.defaultWorkflow": {
+          "type": "string",
+          "enum": [
+            "single",
+            "multi"
+          ],
+          "default": "multi"
+        },
+        "agentbus.defaultDurable": {
+          "type": "boolean",
+          "default": true
+        },
+        "agentbus.defaultParallel": {
+          "type": "boolean",
+          "default": false
+        },
+        "agentbus.maxWorkers": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32,
+          "default": 4
+        },
+        "agentbus.keepWorktrees": {
+          "type": "boolean",
+          "default": true
+        },
+        "agentbus.logLevel": {
+          "type": "string",
+          "enum": [
+            "error",
+            "warning",
+            "info"
+          ],
+          "default": "warning"
+        },
+        "agentbus.registryPath": {
+          "type": "string",
+          "default": "",
+          "description": "Optional daemon registry path. This file contains metadata only, never tokens."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "clean": "node scripts/clean.mjs",
+    "compile": "node scripts/clean-output.mjs && tsc -p .",
+    "watch": "tsc -p . --watch",
+    "lint": "eslint src --max-warnings=0",
+    "test": "npm run compile && node --test out/test/*.test.js",
+    "test:integration": "npm run compile && node out/test/runIntegration.js",
+    "protocol:check": "node scripts/check-protocol.mjs",
+    "package": "npm run compile && vsce package --no-dependencies -o agentbus-vscode.vsix",
+    "package:audit": "node scripts/audit-vsix.mjs agentbus-vscode.vsix"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.30.0",
+    "@types/node": "^22.15.0",
+    "@types/vscode": "^1.96.0",
+    "@vscode/test-electron": "^2.5.2",
+    "@vscode/vsce": "^3.6.0",
+    "eslint": "^9.30.0",
+    "jszip": "^3.10.1",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.35.0"
+  }
+}

@@ -1,0 +1,17 @@
+.github/**
+.vscode-test/**
+node_modules/**
+src/**
+scripts/**
+**/*.map
+**/*.test.js
+**/*.test.d.ts
+out/test/**
+tsconfig.json
+eslint.config.mjs
+package-lock.json
+agentbus-vscode.vsix
+*.log
+*.db
+*.sqlite*
+.env*
