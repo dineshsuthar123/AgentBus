@@ -1,10 +1,16 @@
 import inspect
 import json
+from contextlib import nullcontext
 
 from agentbus.config import AgentBusConfig
+from agentbus.execution.cancellation import CancellationRequested, CancellationToken
 from agentbus.memory.run_log import RunLogger
-from agentbus.models.errors import ModelOutputError, ModelProviderError
-from agentbus.models.router import ModelRouter
+from agentbus.models.errors import (
+    ModelCancellationError,
+    ModelOutputError,
+    ModelProviderError,
+)
+from agentbus.models.router import ModelRouter, model_request_context
 from agentbus.models.types import ModelRole
 from agentbus.runtime.prompts import SYSTEM_PROMPT
 from agentbus.runtime.schemas import AgentAction
@@ -22,6 +28,7 @@ class AgentLoop:
         config: AgentBusConfig | None = None,
         model=None,
         model_router: ModelRouter | None = None,
+        cancellation: CancellationToken | None = None,
     ):
         config = config or AgentBusConfig.from_env()
         config = config.with_overrides(
@@ -46,6 +53,7 @@ class AgentLoop:
         self.git = GitTools(workspace=self.workspace)
         self.logger = RunLogger(log_dir=config.runs_dir)
         self.max_history_chars = max_history_chars or config.max_history_chars
+        self.cancellation = cancellation
 
     def run(self, user_task: str, max_steps: int | None = None) -> str:
         history = ""
@@ -60,6 +68,7 @@ class AgentLoop:
         )
 
         for step in range(1, max_steps + 1):
+            self._checkpoint(f"before-step-{step}")
             self.logger.log("step_started", {
                 "step": step,
             })
@@ -71,11 +80,15 @@ class AgentLoop:
 
             try:
                 method = self.model.generate_json
-                if _accepts_schema(method):
-                    raw_action = method(prompt, schema=AgentAction)
-                else:
-                    raw_action = method(prompt)
+                with model_request_context(cancellation=self.cancellation):
+                    if _accepts_schema(method):
+                        raw_action = method(prompt, schema=AgentAction)
+                    else:
+                        raw_action = method(prompt)
+                self._checkpoint(f"after-model-step-{step}")
                 action = AgentAction(**raw_action)
+            except (CancellationRequested, ModelCancellationError):
+                raise
             except ModelOutputError as error:
                 observation = f"Model output error: {error.safe_message}"
                 self.logger.log(
@@ -105,7 +118,11 @@ class AgentLoop:
                 )
 
                 try:
+                    self._checkpoint(f"before-tool-step-{step}")
                     observation = self._execute(action)
+                    self._checkpoint(f"after-tool-step-{step}")
+                except (CancellationRequested, ModelCancellationError):
+                    raise
                 except Exception as e:
                     observation = f"Tool error: {str(e)}"
 
@@ -156,18 +173,34 @@ Return the next JSON action.
             return self.fs.read_file(action.path)
 
         if action.action == "write_file":
-            return self.fs.write_file(action.path, action.content)
+            with self._operation("tool.write_file"):
+                return self.fs.write_file(action.path, action.content)
 
         if action.action == "run_command":
-            return self.cmd.run_command(action.command)
+            with self._operation("tool.run_command"):
+                return self.cmd.run_command(action.command)
 
         if action.action == "git_diff":
-            return self.git.git_diff()
+            with self._operation("tool.git_diff"):
+                return self.git.git_diff()
 
         if action.action == "finish":
             return f"Finished: {action.summary}"
 
         return f"Unknown action: {action.action}"
+
+    def _operation(self, name: str):
+        if self.cancellation is None:
+            return nullcontext()
+        return self.cancellation.operation(
+            name,
+            source="coder-loop",
+            interruptible=False,
+        )
+
+    def _checkpoint(self, stage: str) -> None:
+        if self.cancellation is not None:
+            self.cancellation.checkpoint("coder-loop", stage=stage)
 
     def _format_history(self, step: int, raw_action, observation: str) -> str:
         return (

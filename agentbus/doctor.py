@@ -467,7 +467,7 @@ def _secret_safety_check(
 
 
 def _live_provider_check(config: AgentBusConfig, provider: str) -> DoctorCheck:
-    if provider not in {"ollama", "azure"}:
+    if provider not in {"ollama", "azure", "deterministic"}:
         return DoctorCheck(
             "live-provider",
             CheckStatus.FAIL,
@@ -488,7 +488,11 @@ def _live_provider_check(config: AgentBusConfig, provider: str) -> DoctorCheck:
         return DoctorCheck(
             "live-provider",
             CheckStatus.PASS,
-            f"Explicit live {provider} request succeeded.",
+            (
+                "Explicit deterministic offline request succeeded."
+                if provider == "deterministic"
+                else f"Explicit live {provider} request succeeded."
+            ),
         )
     except (ModelProviderError, ValueError) as exc:
         return DoctorCheck(

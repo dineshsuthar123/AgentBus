@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -9,7 +10,11 @@ from agentbus.config import AgentBusConfig
 from agentbus.control.errors import ControlPlaneForbiddenError
 from agentbus.control.models import WorkspaceValidationRequest
 from agentbus.control.services import ControlQueryService, WorkspaceService
-from agentbus.execution.models import RunRecord
+from agentbus.execution.cancellation import (
+    CancellationOperation,
+    CancellationState,
+)
+from agentbus.execution.models import RunRecord, utc_now
 from agentbus.execution.state_store import StateStore
 from agentbus.git.repository import WorkspaceRepositoryMismatch
 
@@ -24,6 +29,19 @@ def _git(workspace: Path, *arguments: str) -> None:
         check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+def _git_output(workspace: Path, *arguments: str) -> str:
+    result = subprocess.run(
+        ["git", *arguments],
+        cwd=workspace,
+        capture_output=True,
+        text=True,
+        shell=False,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout.strip()
 
 
 def _repository(path: Path) -> Path:
@@ -140,3 +158,114 @@ def test_before_and_after_content_are_repository_contained(tmp_path: Path) -> No
 
     assert before.content.splitlines() == ["before"]
     assert after.content.splitlines() == ["after"]
+
+
+def test_query_responses_expose_persisted_cancellation_lifecycle(
+    tmp_path: Path,
+) -> None:
+    workspace = _repository(tmp_path / "repo")
+    service, run = _service(tmp_path, workspace)
+    requested_at = utc_now()
+    state = CancellationState(
+        requested=True,
+        requested_at=requested_at,
+        reason="Stop safely",
+        propagated_at=requested_at,
+        propagation_sources=["control", "scheduler"],
+        provider_cancellation_requested_at=requested_at,
+        provider_names=["deterministic"],
+        acknowledged=True,
+        acknowledged_at=requested_at + timedelta(milliseconds=1),
+        acknowledgement_source="deterministic-provider",
+        acknowledgement_stage="provider-wait",
+        provider_cancellation_acknowledged_at=(
+            requested_at + timedelta(milliseconds=1)
+        ),
+        provider_acknowledgement_source="deterministic-provider",
+        active_operations=[
+            CancellationOperation(
+                operation_id="operation-1",
+                name="verification-command",
+                source="verifier",
+                interruptible=False,
+                task_id="step-1",
+                started_at=requested_at,
+            )
+        ],
+        operations_completed_after_request=["task-commit"],
+        tasks_prevented_from_starting=["step-2"],
+        tasks_completed_after_request=["step-1"],
+        scheduling_stopped_at=requested_at + timedelta(milliseconds=2),
+        cleanup_completed_at=requested_at + timedelta(milliseconds=3),
+        resume_eligible=False,
+        terminal_reason="Cancelled safely.",
+        revision=1,
+    )
+    service.store.persist_cancellation_state(run.run_id, state)
+
+    summary = service.run_summary(service.get_run(run.run_id))
+    report = service.report(run.run_id)
+    scheduler = service.scheduler(run.run_id)
+
+    assert summary.cancellation.requested is True
+    assert summary.cancellation.provider_cancellation_signalled is True
+    assert summary.cancellation.provider_cancellation_acknowledged is True
+    assert (
+        summary.cancellation.active_non_interruptible_operation
+        == "verification-command"
+    )
+    assert summary.cancellation.completed_after_cancellation_request is True
+    assert summary.cancellation.tasks_prevented_from_starting == ["step-2"]
+    assert summary.cancellation.resume_eligible is False
+    assert report.cancellation == summary.cancellation
+    assert scheduler.cancellation == summary.cancellation
+
+
+def test_review_api_reads_parallel_integration_commit_without_checkout(
+    tmp_path: Path,
+) -> None:
+    workspace = _repository(tmp_path / "repo")
+    base_commit = _git_output(workspace, "rev-parse", "HEAD")
+    original_branch = _git_output(workspace, "branch", "--show-current")
+    _git(workspace, "switch", "-c", "agentbus/integration-test")
+    (workspace / "tracked.txt").write_text("integrated\n", encoding="utf-8")
+    (workspace / "created.py").write_text("VALUE = 42\n", encoding="utf-8")
+    _git(workspace, "add", "tracked.txt", "created.py")
+    _git(workspace, "commit", "-m", "integrated result")
+    integration_commit = _git_output(workspace, "rev-parse", "HEAD")
+    _git(workspace, "switch", original_branch)
+    service, run = _service(tmp_path, workspace)
+    service.store.update_run_details(
+        run.run_id,
+        metadata_updates={
+            "parallel_execution": {
+                "enabled": True,
+                "base_commit": base_commit,
+                "integration_commit": integration_commit,
+            }
+        },
+    )
+    persisted = service.get_run(run.run_id)
+
+    changes = service.repository.list_changes(persisted)
+    diff = service.repository.diff(persisted)
+    before = service.repository.file_content(
+        persisted,
+        "tracked.txt",
+        revision="before",
+    )
+    after = service.repository.file_content(
+        persisted,
+        "created.py",
+        revision="after",
+    )
+
+    assert not (workspace / "created.py").exists()
+    assert {item.path for item in changes.changes} == {
+        "created.py",
+        "tracked.txt",
+    }
+    assert all(item.status == "committed" for item in changes.changes)
+    assert "VALUE = 42" in diff.diff
+    assert before.content == "before\n"
+    assert after.content == "VALUE = 42\n"

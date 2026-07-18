@@ -5,12 +5,14 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from agentbus.execution.cancellation import CancellationRequested, CancellationToken
 from agentbus.execution.models import (
     FailureCategory,
     ExecutionArtifact,
     TaskExecutionContext,
     TaskExecutionResult,
 )
+from agentbus.models.errors import ModelCancellationError
 from agentbus.models.router import model_request_context
 from agentbus.git.repository import RepositoryChangeSet
 
@@ -27,6 +29,7 @@ class MultiAgentTaskExecutor:
         git_tools,
         git_repository,
         workspace: str | None = None,
+        cancellation: CancellationToken | None = None,
     ):
         self.coder = coder
         self.verifier = verifier
@@ -38,6 +41,7 @@ class MultiAgentTaskExecutor:
         if selected_workspace is None:
             raise ValueError("Durable task executor requires an explicit workspace.")
         self.workspace = Path(selected_workspace).expanduser().resolve()
+        self.cancellation = cancellation
 
     def execute(self, context: TaskExecutionContext) -> TaskExecutionResult:
         _drain_model_results(self.coder)
@@ -45,27 +49,53 @@ class MultiAgentTaskExecutor:
         plan = self._task_plan(context)
         reviewer_feedback = self._previous_reviewer_feedback(context)
         before = self._snapshot()
-        with model_request_context(
-            run_id=context.run.run_id,
-            task_id=context.task.task_id,
-        ):
-            coder_summary = self.coder.execute(
-                context.run.original_task,
-                plan,
-                reviewer_feedback=reviewer_feedback,
-            )
-            verifier_result = self.verifier.verify()
-            changed_files = self._changed_since(before)
-            changes = self._change_set(changed_files)
-            task_diff = self._task_diff(changes)
-            reviewer_result = self._review_task(
+        coder_summary = ""
+        verifier_result: dict[str, Any] | None = None
+        reviewer_result: dict[str, Any] | None = None
+        try:
+            with model_request_context(
+                run_id=context.run.run_id,
+                task_id=context.task.task_id,
+                cancellation=self.cancellation,
+            ):
+                self._checkpoint("before-coder")
+                coder_arguments = {
+                    "user_task": context.run.original_task,
+                    "plan": plan,
+                    "reviewer_feedback": reviewer_feedback,
+                    "cancellation": self.cancellation,
+                }
+                coder_summary = self.coder.execute(
+                    **_supported_arguments(
+                        self.coder.execute,
+                        coder_arguments,
+                    )
+                )
+                self._checkpoint("after-coder")
+                verifier_result = self.verifier.verify()
+                self._checkpoint("after-verifier")
+                changed_files = self._changed_since(before)
+                changes = self._change_set(changed_files)
+                task_diff = self._task_diff(changes)
+                self._checkpoint("before-task-review")
+                reviewer_result = self._review_task(
+                    context,
+                    plan,
+                    changes,
+                    task_diff,
+                    coder_summary,
+                    verifier_result,
+                )
+                self._checkpoint("after-task-review")
+        except (CancellationRequested, ModelCancellationError):
+            return self._cancelled_result(
                 context,
-                plan,
-                changes,
-                task_diff,
-                coder_summary,
-                verifier_result,
+                before,
+                coder_summary=coder_summary,
+                verifier_result=verifier_result,
             )
+        assert verifier_result is not None
+        assert reviewer_result is not None
         verifier_status = "passed" if verifier_result.get("passed") else "failed"
         metadata = {
             "task_review": {
@@ -155,6 +185,83 @@ class MultiAgentTaskExecutor:
             changed_files=changed_files,
             metadata=metadata,
         )
+
+    def _cancelled_result(
+        self,
+        context: TaskExecutionContext,
+        before: dict[str, str],
+        *,
+        coder_summary: str,
+        verifier_result: dict[str, Any] | None,
+    ) -> TaskExecutionResult:
+        changed_files = self._changed_since(before)
+        changes = self._change_set(changed_files)
+        generated = set(changes.generated_files)
+        ignored = set(changes.ignored_files)
+        tracked_generated = set(changes.tracked_generated_files)
+        review_files = set(changes.review_files)
+        commit_files = set(changes.commit_files)
+        artifacts = [
+            ExecutionArtifact(
+                artifact_id=uuid.uuid4().hex,
+                run_id=context.run.run_id,
+                task_id=context.task.task_id,
+                artifact_type="workspace_file",
+                identifier=path,
+                metadata={
+                    "attempt_number": context.attempt_number,
+                    "generated": path in generated,
+                    "ignored": path in ignored,
+                    "tracked_generated": path in tracked_generated,
+                    "review_eligible": path in review_files,
+                    "commit_eligible": path in commit_files,
+                },
+            )
+            for path in changed_files
+        ]
+        state = self.cancellation.snapshot() if self.cancellation is not None else None
+        return TaskExecutionResult(
+            succeeded=False,
+            summary="Task stopped after cancellation was requested.",
+            artifacts=artifacts,
+            failure_category=FailureCategory.CANCELLED,
+            error_message="Execution stopped cooperatively at a safe checkpoint.",
+            retryable=False,
+            verifier_status=(
+                "passed"
+                if verifier_result and verifier_result.get("passed")
+                else "cancelled"
+            ),
+            changed_files=changed_files,
+            metadata={
+                "artifact_hygiene": changes.to_metadata(),
+                "coder_summary": coder_summary,
+                "cancellation": (
+                    {
+                        "requested_at": state.requested_at.isoformat()
+                        if state and state.requested_at
+                        else None,
+                        "acknowledgement_source": (
+                            state.acknowledgement_source if state else None
+                        ),
+                        "acknowledgement_stage": (
+                            state.acknowledgement_stage if state else None
+                        ),
+                    }
+                ),
+                "model_requests": [
+                    *(_drain_model_results(self.coder)),
+                    *(_drain_model_results(self.reviewer)),
+                ],
+            },
+        )
+
+    def _checkpoint(self, stage: str) -> None:
+        if self.cancellation is not None:
+            self.cancellation.checkpoint(
+                "durable-task-executor",
+                stage=stage,
+            )
 
     def _task_plan(self, context: TaskExecutionContext) -> dict[str, Any]:
         task = context.task

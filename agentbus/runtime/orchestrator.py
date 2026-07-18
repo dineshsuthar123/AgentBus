@@ -9,6 +9,8 @@ from agentbus.agents.coder import CoderAgent
 from agentbus.agents.planner import PlannerAgent
 from agentbus.agents.reviewer import ReviewerAgent
 from agentbus.config import AgentBusConfig
+from agentbus.execution.cancellation import CancellationRequested, CancellationToken
+from agentbus.execution.cancellation_registry import CancellationRegistry
 from agentbus.execution.engine import DurableExecutionEngine
 from agentbus.execution.integration import IntegrationCoordinator
 from agentbus.execution.leases import LeaseService
@@ -32,6 +34,7 @@ from agentbus.models.router import (
     ModelRouter,
     model_request_context,
 )
+from agentbus.models.errors import ModelCancellationError
 from agentbus.repo.context_pack import ContextPackBuilder
 from agentbus.repo.scanner import RepoScanner
 from agentbus.repo.test_detection import TestCommandDetector
@@ -94,6 +97,8 @@ class MultiAgentOrchestrator:
         worker_crash_hook=None,
         integration_crash_hook=None,
         lease_clock: Callable[[], datetime] | None = None,
+        cancellation: CancellationToken | None = None,
+        cancellation_registry: CancellationRegistry | None = None,
     ):
         self.config = config or AgentBusConfig.from_env()
         self.workspace = self.config.workspace_path
@@ -115,7 +120,10 @@ class MultiAgentOrchestrator:
             config=self.config,
             model_router=self.model_router,
         )
-        self.verifier = verifier or Verifier(config=self.config)
+        self.verifier = verifier or Verifier(
+            config=self.config,
+            cancellation=cancellation,
+        )
         self.scanner = scanner or RepoScanner(workspace=str(self.workspace))
         self.test_detector = test_detector or TestCommandDetector(
             workspace=str(self.workspace)
@@ -144,8 +152,12 @@ class MultiAgentOrchestrator:
         self.worker_crash_hook = worker_crash_hook
         self.integration_crash_hook = integration_crash_hook
         self.lease_clock = lease_clock
+        self._explicit_cancellation = cancellation
+        self._cancellation_registry = cancellation_registry
 
     def run(self, user_task: str) -> OrchestrationResult:
+        cancellation = self._explicit_cancellation
+        self._checkpoint_optional(cancellation, "before-orchestration")
         self.logger.log(
             "run_started",
             {
@@ -157,16 +169,31 @@ class MultiAgentOrchestrator:
         git_branch = self._prepare_git_workflow(user_task)
         context_pack = self._build_context_pack(user_task)
         self.logger.log("planner_started", {})
-        with model_request_context(run_id=self.logger.run_id):
+        with model_request_context(
+            run_id=self.logger.run_id,
+            cancellation=cancellation,
+        ):
             plan = self.planner.plan(user_task, context_pack=context_pack)
+        self._checkpoint_optional(cancellation, "after-planner")
         self.logger.log("planner_output", _plan_log_metadata(plan))
 
         coder_summaries = []
         self.logger.log("coder_started", {"attempt": 1})
-        with model_request_context(run_id=self.logger.run_id):
-            coder_summaries.append(self.coder.execute(user_task, plan))
+        with model_request_context(
+            run_id=self.logger.run_id,
+            cancellation=cancellation,
+        ):
+            coder_summaries.append(
+                self._call_coder(
+                    user_task,
+                    plan,
+                    cancellation=cancellation,
+                )
+            )
 
+        self._checkpoint_optional(cancellation, "before-verifier")
         verifier_result = self.verifier.verify()
+        self._checkpoint_optional(cancellation, "after-verifier")
         self.logger.log("verifier_output", _verifier_log_metadata(verifier_result))
 
         reviewer_result = self._review(user_task, plan, verifier_result)
@@ -184,15 +211,21 @@ class MultiAgentOrchestrator:
                 },
             )
             self.logger.log("coder_started", {"attempt": 2})
-            with model_request_context(run_id=self.logger.run_id):
+            with model_request_context(
+                run_id=self.logger.run_id,
+                cancellation=cancellation,
+            ):
                 coder_summaries.append(
-                    self.coder.execute(
+                    self._call_coder(
                         user_task,
                         plan,
                         reviewer_feedback=reviewer_result,
+                        cancellation=cancellation,
                     )
                 )
+            self._checkpoint_optional(cancellation, "before-retry-verifier")
             verifier_result = self.verifier.verify()
+            self._checkpoint_optional(cancellation, "after-retry-verifier")
             self.logger.log(
                 "verifier_output",
                 _verifier_log_metadata(verifier_result),
@@ -241,6 +274,31 @@ class MultiAgentOrchestrator:
             self._state_store = StateStore(self.config.state_database_path)
         return self._state_store
 
+    def _cancellation_registry_for_use(self) -> CancellationRegistry:
+        if self._cancellation_registry is None:
+            self._cancellation_registry = CancellationRegistry(self.state_store)
+        return self._cancellation_registry
+
+    def _cancellation_for(
+        self,
+        run_id: str,
+        *,
+        prepare: bool = False,
+    ) -> CancellationToken:
+        registry = self._cancellation_registry_for_use()
+        if self._explicit_cancellation is not None:
+            return registry.register(run_id, self._explicit_cancellation)
+        if prepare:
+            return registry.prepare(run_id)
+        return registry.get(run_id)
+
+    def _bind_component_cancellation(
+        self,
+        cancellation: CancellationToken,
+    ) -> None:
+        if hasattr(self.verifier, "cancellation"):
+            self.verifier.cancellation = cancellation
+
     def create_durable_run(
         self,
         user_task: str,
@@ -249,6 +307,8 @@ class MultiAgentOrchestrator:
     ) -> str:
         """Plan and persist an opt-in durable run without executing a task."""
         run_id = run_id or uuid.uuid4().hex
+        cancellation = self._cancellation_for(run_id, prepare=True)
+        self._bind_component_cancellation(cancellation)
         self.logger = RunLogger(log_dir=self.config.runs_dir, run_id=run_id)
         self.model_router.set_logger(self.logger)
         self.logger.log(
@@ -259,6 +319,7 @@ class MultiAgentOrchestrator:
                 "task_chars": len(user_task),
             },
         )
+        cancellation.checkpoint("orchestrator", stage="before-workspace-validation")
         git_top_level = self._validate_workspace_repository()
         parallel_enabled = bool(self.config.parallel_execution)
         base_commit = (
@@ -272,9 +333,11 @@ class MultiAgentOrchestrator:
             initial_head = self.git_repository.head_commit()
 
         context_pack = self._build_context_pack(user_task)
+        cancellation.checkpoint("orchestrator", stage="before-planner")
         self.logger.log("planner_started", {})
-        with model_request_context(run_id=run_id):
+        with model_request_context(run_id=run_id, cancellation=cancellation):
             plan = self.planner.plan(user_task, context_pack=context_pack)
+        cancellation.checkpoint("orchestrator", stage="after-planner")
         self.logger.log("planner_output", _plan_log_metadata(plan))
         metadata = {
             "git": {
@@ -323,23 +386,57 @@ class MultiAgentOrchestrator:
 
     def run_durable(self, run_id: str, *, resume: bool = False) -> ExecutionReport:
         """Execute or resume a persisted multi-agent run and finalize Git safely."""
+        if resume and self._explicit_cancellation is None:
+            cancellation = self._cancellation_registry_for_use().recover(run_id)
+        else:
+            cancellation = self._cancellation_for(run_id)
+        self._bind_component_cancellation(cancellation)
+        if cancellation.is_requested:
+            return self._durable_engine(run_id, executor=False).finalize_cancellation(
+                run_id
+            )
         persisted = self.state_store.get_run(run_id)
-        parallel = persisted.metadata.get("parallel_execution", {})
-        if isinstance(parallel, dict) and parallel.get("enabled"):
-            scheduler = self._parallel_scheduler(run_id)
-            report = scheduler.run(run_id, resume=resume)
+        try:
+            parallel = persisted.metadata.get("parallel_execution", {})
+            if isinstance(parallel, dict) and parallel.get("enabled"):
+                scheduler = self._parallel_scheduler(run_id)
+                report = scheduler.run(run_id, resume=resume)
+                if report.status == RunStatus.WAITING_FOR_REVIEW:
+                    cancellation.checkpoint(
+                        "orchestrator",
+                        stage="before-final-integration-review",
+                    )
+                    report = self._run_parallel_final_review(run_id)
+                if report.status == RunStatus.SUCCEEDED:
+                    cancellation.checkpoint(
+                        "orchestrator",
+                        stage="before-parallel-git-finalization",
+                    )
+                    report = self._finalize_parallel_git(run_id)
+                return report
+            engine = self._durable_engine(run_id)
+            report = (
+                engine.resume(run_id)
+                if resume
+                else engine.run_until_blocked(run_id)
+            )
             if report.status == RunStatus.WAITING_FOR_REVIEW:
-                report = self._run_parallel_final_review(run_id)
+                cancellation.checkpoint(
+                    "orchestrator",
+                    stage="before-final-review",
+                )
+                report = self._run_final_review(run_id)
             if report.status == RunStatus.SUCCEEDED:
-                report = self._finalize_parallel_git(run_id)
+                cancellation.checkpoint(
+                    "orchestrator",
+                    stage="before-git-finalization",
+                )
+                report = self._finalize_durable_git(run_id)
             return report
-        engine = self._durable_engine(run_id)
-        report = engine.resume(run_id) if resume else engine.run_until_blocked(run_id)
-        if report.status == RunStatus.WAITING_FOR_REVIEW:
-            report = self._run_final_review(run_id)
-        if report.status == RunStatus.SUCCEEDED:
-            report = self._finalize_durable_git(run_id)
-        return report
+        except (CancellationRequested, ModelCancellationError):
+            return self._durable_engine(run_id, executor=False).finalize_cancellation(
+                run_id
+            )
 
     def resume_durable(self, run_id: str) -> ExecutionReport:
         return self.run_durable(run_id, resume=True)
@@ -356,6 +453,7 @@ class MultiAgentOrchestrator:
         logger = RunLogger(log_dir=self.config.runs_dir, run_id=run_id)
         task_executor = None
         if executor:
+            cancellation = self._cancellation_for(run_id)
             task_executor = MultiAgentTaskExecutor(
                 coder=self.coder,
                 verifier=self.verifier,
@@ -363,15 +461,19 @@ class MultiAgentOrchestrator:
                 git_tools=self.git,
                 git_repository=self.git_repository,
                 workspace=str(self.workspace),
+                cancellation=cancellation,
             )
         return DurableExecutionEngine(
             self.state_store,
             task_executor,
             logger=logger,
             crash_hook=self.durable_crash_hook,
+            cancellation=self._cancellation_for(run_id),
+            cancellation_registry=self._cancellation_registry_for_use(),
         )
 
     def _parallel_scheduler(self, run_id: str) -> ParallelExecutionScheduler:
+        cancellation = self._cancellation_for(run_id)
         run = self.state_store.get_run(run_id)
         parallel = run.metadata.get("parallel_execution", {})
         if not isinstance(parallel, dict):
@@ -401,12 +503,16 @@ class MultiAgentOrchestrator:
                 store=self.state_store,
                 lease_service=leases,
                 worktree_manager=manager,
-                executor_factory=self._parallel_task_executor,
+                executor_factory=lambda workspace: self._parallel_task_executor(
+                    workspace,
+                    cancellation,
+                ),
                 heartbeat_seconds=float(
                     parallel.get(
                         "heartbeat_seconds", self.config.worker_heartbeat_seconds
                     )
                 ),
+                cancellation=cancellation,
                 crash_hook=self.worker_crash_hook,
             )
 
@@ -417,9 +523,15 @@ class MultiAgentOrchestrator:
             integration=integration,
             worker_factory=worker_factory,
             max_workers=int(parallel.get("max_workers", 1)),
+            cancellation=cancellation,
+            cancellation_registry=self._cancellation_registry_for_use(),
         )
 
-    def _parallel_task_executor(self, workspace: Path):
+    def _parallel_task_executor(
+        self,
+        workspace: Path,
+        cancellation: CancellationToken | None = None,
+    ):
         if self.parallel_executor_factory is not None:
             return self.parallel_executor_factory(workspace)
         config = self.config.with_overrides(
@@ -441,14 +553,20 @@ class MultiAgentOrchestrator:
         repository = GitRepository(str(workspace))
         return MultiAgentTaskExecutor(
             coder=CoderAgent(config=config, model_router=router),
-            verifier=Verifier(config=config),
+            verifier=Verifier(config=config, cancellation=cancellation),
             reviewer=ReviewerAgent(config=config, model_router=router),
             git_tools=GitTools(str(workspace)),
             git_repository=repository,
             workspace=str(workspace),
+            cancellation=cancellation,
         )
 
     def _run_final_review(self, run_id: str) -> ExecutionReport:
+        cancellation = self._cancellation_for(run_id)
+        cancellation.checkpoint(
+            "final-review",
+            stage="before-final-verification",
+        )
         run = self.state_store.get_run(run_id)
         if run.status != RunStatus.WAITING_FOR_REVIEW:
             return self.get_durable_report(run_id)
@@ -479,6 +597,10 @@ class MultiAgentOrchestrator:
                 return self.get_durable_report(run_id)
 
         verifier_result = self._verify_final()
+        cancellation.checkpoint(
+            "final-review",
+            stage="after-final-verification",
+        )
         baseline = run.metadata.get("workspace_baseline", {})
         changed_since = getattr(self.git_repository, "changed_since", None)
         changed_files = (
@@ -526,7 +648,14 @@ class MultiAgentOrchestrator:
             if review_diff is not None
             else self._fallback_review_diff(changes)
         )
-        with model_request_context(run_id=run_id):
+        cancellation.checkpoint(
+            "final-review",
+            stage="before-final-reviewer",
+        )
+        with model_request_context(
+            run_id=run_id,
+            cancellation=cancellation,
+        ):
             reviewer_result = self._call_reviewer(
                 user_task=run.original_task,
                 plan=run.planner_output,
@@ -534,6 +663,10 @@ class MultiAgentOrchestrator:
                 test_output=verifier_result.get("output"),
                 changes=changes,
             )
+        cancellation.checkpoint(
+            "final-review",
+            stage="after-final-reviewer",
+        )
         approved = bool(reviewer_result.get("approved"))
         self.state_store.update_run_details(
             run_id,
@@ -569,6 +702,11 @@ class MultiAgentOrchestrator:
         return self.get_durable_report(run_id)
 
     def _run_parallel_final_review(self, run_id: str) -> ExecutionReport:
+        cancellation = self._cancellation_for(run_id)
+        cancellation.checkpoint(
+            "final-review",
+            stage="before-integration-finalization",
+        )
         run = self.state_store.get_run(run_id)
         if run.status != RunStatus.WAITING_FOR_REVIEW:
             return self.get_durable_report(run_id)
@@ -618,7 +756,10 @@ class MultiAgentOrchestrator:
             ) from exc
         repository = GitRepository(str(integration_path))
         repository.validate_workspace()
-        verifier, reviewer = self._parallel_final_runtime(integration_path)
+        verifier, reviewer = self._parallel_final_runtime(
+            integration_path,
+            cancellation,
+        )
         self.state_store.record_event(
             run_id,
             "final_integration_verification_started",
@@ -629,6 +770,10 @@ class MultiAgentOrchestrator:
             verify(require_command=True)
             if "require_command" in inspect.signature(verify).parameters
             else verify()
+        )
+        cancellation.checkpoint(
+            "final-review",
+            stage="after-integration-verification",
         )
         changed_files = repository.changed_files_between(base_commit)
         changes = repository.change_set(changed_files)
@@ -667,7 +812,14 @@ class MultiAgentOrchestrator:
             )
             return self.get_durable_report(run_id)
         git_diff = repository.commit_diff(base_commit, max_chars=30_000)
-        with model_request_context(run_id=run_id):
+        cancellation.checkpoint(
+            "final-review",
+            stage="before-integration-reviewer",
+        )
+        with model_request_context(
+            run_id=run_id,
+            cancellation=cancellation,
+        ):
             reviewer_result = self._call_reviewer(
                 user_task=run.original_task,
                 plan=run.planner_output,
@@ -676,6 +828,10 @@ class MultiAgentOrchestrator:
                 changes=changes,
                 reviewer=reviewer,
             )
+        cancellation.checkpoint(
+            "final-review",
+            stage="after-integration-reviewer",
+        )
         approved = bool(reviewer_result.get("approved"))
         self.state_store.update_run_details(
             run_id,
@@ -710,7 +866,11 @@ class MultiAgentOrchestrator:
         )
         return self.get_durable_report(run_id)
 
-    def _parallel_final_runtime(self, workspace: Path):
+    def _parallel_final_runtime(
+        self,
+        workspace: Path,
+        cancellation: CancellationToken,
+    ):
         verifier = self.parallel_final_verifier
         reviewer = self.parallel_final_reviewer
         if verifier is not None and reviewer is not None:
@@ -730,7 +890,7 @@ class MultiAgentOrchestrator:
             jitter=self.model_router.jitter,
         )
         return (
-            verifier or Verifier(config=config),
+            verifier or Verifier(config=config, cancellation=cancellation),
             reviewer or ReviewerAgent(config=config, model_router=router),
         )
 
@@ -1098,6 +1258,41 @@ class MultiAgentOrchestrator:
             }
         return selected_reviewer.review(**arguments)
 
+    def _call_coder(
+        self,
+        user_task: str,
+        plan: dict[str, Any],
+        *,
+        reviewer_feedback: dict[str, Any] | None = None,
+        cancellation: CancellationToken | None = None,
+    ) -> str:
+        arguments = {
+            "user_task": user_task,
+            "plan": plan,
+            "reviewer_feedback": reviewer_feedback,
+            "cancellation": cancellation,
+        }
+        parameters = inspect.signature(self.coder.execute).parameters.values()
+        if not any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters
+        ):
+            supported = {parameter.name for parameter in parameters}
+            arguments = {
+                name: value
+                for name, value in arguments.items()
+                if name in supported
+            }
+        return self.coder.execute(**arguments)
+
+    @staticmethod
+    def _checkpoint_optional(
+        cancellation: CancellationToken | None,
+        stage: str,
+    ) -> None:
+        if cancellation is not None:
+            cancellation.checkpoint("orchestrator", stage=stage)
+
     def _has_unresolved_pr_creation(self, run_id: str) -> bool:
         return self._has_unresolved_external_event(
             run_id,
@@ -1293,10 +1488,17 @@ class MultiAgentOrchestrator:
         plan: dict[str, Any],
         verifier_result: dict[str, Any],
     ) -> dict[str, Any]:
+        self._checkpoint_optional(
+            self._explicit_cancellation,
+            "before-reviewer",
+        )
         changed_files = self._all_changed_files()
         changes = self._repository_changes(changed_files)
         git_diff = self._fallback_review_diff(changes)
-        with model_request_context(run_id=self.logger.run_id):
+        with model_request_context(
+            run_id=self.logger.run_id,
+            cancellation=self._explicit_cancellation,
+        ):
             reviewer_result = self._call_reviewer(
                 user_task=user_task,
                 plan=plan,
@@ -1304,6 +1506,10 @@ class MultiAgentOrchestrator:
                 test_output=verifier_result.get("output"),
                 changes=changes,
             )
+        self._checkpoint_optional(
+            self._explicit_cancellation,
+            "after-reviewer",
+        )
         self.logger.log(
             "reviewer_output",
             {

@@ -40,7 +40,7 @@ only whether a value is configured. Azure endpoints are reduced to their host.
 | Variable | Purpose |
 | --- | --- |
 | `AGENTBUS_WORKSPACE` | Exact target Git repository root |
-| `AGENTBUS_PROVIDER` | `ollama` or `azure` |
+| `AGENTBUS_PROVIDER` | `ollama`, `azure`, or `deterministic` |
 | `AGENTBUS_MODEL` | Ollama model or active-provider CLI default |
 | `AGENTBUS_OLLAMA_URL` | Ollama HTTP endpoint |
 | `AGENTBUS_STATE_DIR` / `AGENTBUS_STATE_DB` | Durable SQLite location |
@@ -52,6 +52,28 @@ only whether a value is configured. Azure endpoints are reduced to their host.
 
 Role model variables are `AGENTBUS_PLANNER_MODEL`, `AGENTBUS_CODER_MODEL`,
 `AGENTBUS_REVIEWER_MODEL`, and `AGENTBUS_SUMMARIZER_MODEL`.
+
+## Deterministic provider
+
+The `deterministic` provider is network-free and uses the same provider
+contract, routing, parsing, usage accounting, cancellation, and durable runtime
+as Ollama and Azure. It is intended for development, demos, CI, and acceptance,
+not general code generation.
+
+```powershell
+$env:AGENTBUS_PROVIDER = "deterministic"
+$env:AGENTBUS_DETERMINISTIC_PROFILE = "python-calculator"
+python -m agentbus.main --provider deterministic --workflow multi --durable `
+  --parallel --max-workers 1 --workspace C:\path\to\isolated-repo `
+  "Create and verify the deterministic calculator"
+```
+
+Profiles are `python-calculator` and `cancellation-two-task`. Failure and
+latency injection use `AGENTBUS_DETERMINISTIC_LATENCY_SECONDS`,
+`AGENTBUS_DETERMINISTIC_LATENCY_ROLES`,
+`AGENTBUS_DETERMINISTIC_FAILURE_KIND`,
+`AGENTBUS_DETERMINISTIC_FAILURE_CALLS`, and
+`AGENTBUS_DETERMINISTIC_FAILURE_ROLES`.
 
 ## Azure
 

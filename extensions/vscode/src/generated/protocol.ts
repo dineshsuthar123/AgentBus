@@ -35,6 +35,38 @@ export interface CancelResponse {
   "run_id": string;
   "status": string;
   "cancellation_requested": boolean;
+  "cancellation"?: CancellationLifecycle;
+}
+
+export interface CancellationLifecycle {
+  "requested"?: boolean;
+  "requested_at"?: string | null;
+  "reason"?: string | null;
+  "propagated_at"?: string | null;
+  "propagation_sources"?: Array<string>;
+  "provider_cancellation_signalled"?: boolean;
+  "provider_cancellation_requested_at"?: string | null;
+  "provider_names"?: Array<string>;
+  "provider_cancellation_acknowledged"?: boolean;
+  "provider_cancellation_acknowledged_at"?: string | null;
+  "provider_acknowledgement_source"?: string | null;
+  "acknowledged"?: boolean;
+  "acknowledged_at"?: string | null;
+  "acknowledgement_source"?: string | null;
+  "acknowledgement_stage"?: string | null;
+  "active_non_interruptible_operation"?: string | null;
+  "active_non_interruptible_operations"?: Array<string>;
+  "operations_completed_after_request"?: Array<string>;
+  "completed_after_cancellation_request"?: boolean;
+  "tasks_prevented_from_starting"?: Array<string>;
+  "tasks_completed_after_request"?: Array<string>;
+  "scheduling_stopped"?: boolean;
+  "scheduling_stopped_at"?: string | null;
+  "cleanup_completed"?: boolean;
+  "cleanup_completed_at"?: string | null;
+  "resume_eligible"?: boolean;
+  "terminal_reason"?: string | null;
+  "revision"?: number;
 }
 
 export interface ChangeListResponse {
@@ -70,6 +102,15 @@ export interface DaemonRegistryEntry {
   "heartbeat_at": string;
   "state_database": string;
   "registry_path": string;
+}
+
+export interface DeterministicProviderOptions {
+  "profile"?: "python-calculator" | "cancellation-two-task";
+  "latency_seconds"?: number;
+  "latency_roles"?: Array<"planner" | "coder" | "reviewer" | "summarizer">;
+  "failure_kind"?: "output_error" | "timeout" | "service_unavailable";
+  "failure_calls"?: Array<number>;
+  "failure_roles"?: Array<"planner" | "coder" | "reviewer" | "summarizer">;
 }
 
 export interface DiffResponse {
@@ -137,7 +178,7 @@ export interface InfoResponse {
 }
 
 export interface ProviderCheckRequest {
-  "provider": "ollama" | "azure";
+  "provider": "ollama" | "azure" | "deterministic";
   "live_consent"?: boolean;
 }
 
@@ -193,13 +234,14 @@ export interface RunActionRequest {
 export interface RunCreateRequest {
   "task": string;
   "workspace": string;
-  "provider"?: "ollama" | "azure";
-  "fallback_provider"?: "ollama" | "azure" | null;
+  "provider"?: "ollama" | "azure" | "deterministic";
+  "fallback_provider"?: "ollama" | "azure" | "deterministic" | null;
   "workflow"?: WorkflowMode;
   "durable"?: boolean;
   "parallel"?: boolean;
   "max_workers"?: number;
   "role_models"?: RoleModelOverrides;
+  "deterministic"?: DeterministicProviderOptions;
   "fallback_enabled"?: boolean;
   "live_provider_consent"?: boolean;
   "create_pr"?: boolean;
@@ -219,6 +261,7 @@ export interface RunReportResponse {
   "run_id": string;
   "status": string;
   "report": Record<string, unknown>;
+  "cancellation"?: CancellationLifecycle;
 }
 
 export interface RunSummary {
@@ -235,6 +278,7 @@ export interface RunSummary {
   "failure_reason"?: string | null;
   "changed_files"?: Array<string>;
   "version": number;
+  "cancellation"?: CancellationLifecycle;
 }
 
 export interface SchedulerResponse {
@@ -246,6 +290,7 @@ export interface SchedulerResponse {
   "expired_leases"?: Array<Record<string, unknown>>;
   "integration_order"?: Array<string>;
   "integration_conflicts"?: Array<Record<string, unknown>>;
+  "cancellation"?: CancellationLifecycle;
 }
 
 export interface TaskListResponse {

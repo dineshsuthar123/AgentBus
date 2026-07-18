@@ -1,11 +1,13 @@
 import * as vscode from "vscode";
 import { CommandController } from "./commands";
+import type { AgentBusClient } from "./apiClient";
 import { DaemonManager } from "./daemonManager";
 import {
   ChangeDocumentProvider,
   ReportDocumentProvider
 } from "./documents";
 import { RunStore } from "./runStore";
+import type { EventEnvelope, RunSummary } from "./generated/protocol";
 import {
   ApprovalsProvider,
   ProvidersProvider,
@@ -15,7 +17,14 @@ import {
   WorktreesProvider
 } from "./views";
 
-export function activate(context: vscode.ExtensionContext): void {
+export interface AgentBusExtensionApi {
+  client(): Promise<AgentBusClient>;
+  daemonId(): string | undefined;
+  events(): readonly EventEnvelope[];
+  runs(): RunSummary[];
+}
+
+export function activate(context: vscode.ExtensionContext): AgentBusExtensionApi {
   const output = vscode.window.createOutputChannel("AgentBus", { log: true });
   const status = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Left,
@@ -65,6 +74,12 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   controller.register(context);
   context.subscriptions.push(controller);
+  return {
+    client,
+    daemonId: () => daemon.current()?.entry.daemon_id,
+    events: () => store.events(),
+    runs: () => store.runs()
+  };
 }
 
 export function deactivate(): void {}

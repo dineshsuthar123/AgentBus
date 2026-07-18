@@ -4,6 +4,7 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel
 
+from agentbus.execution.cancellation import CancellationToken
 from agentbus.models.errors import (
     ModelConfigurationError,
     ModelSchemaValidationError,
@@ -27,6 +28,7 @@ class ModelProvider(Protocol):
         system_prompt: str | None = None,
         timeout_seconds: float | None = None,
         metadata: dict[str, Any] | None = None,
+        cancellation: CancellationToken | None = None,
     ) -> ModelResult:
         ...
 
@@ -38,6 +40,7 @@ class ModelProvider(Protocol):
         system_prompt: str | None = None,
         timeout_seconds: float | None = None,
         metadata: dict[str, Any] | None = None,
+        cancellation: CancellationToken | None = None,
     ) -> ModelResult:
         ...
 

@@ -139,8 +139,13 @@
       "view/item/context": [
         {
           "command": "agentbus.showRun",
-          "when": "viewItem == agentbusRun",
+          "when": "viewItem =~ /agentbusRun.*/",
           "group": "inline"
+        },
+        {
+          "command": "agentbus.cancelRun",
+          "when": "viewItem == agentbusRunCancellable",
+          "group": "inline@2"
         },
         {
           "command": "agentbus.approveAction",
@@ -175,7 +180,8 @@
           "type": "string",
           "enum": [
             "ollama",
-            "azure"
+            "azure",
+            "deterministic"
           ],
           "default": "ollama"
         },

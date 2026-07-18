@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -15,6 +16,7 @@ from agentbus.control.models import (
     ApprovalDecisionResponse,
     ApprovalListResponse,
     ApprovalSummary,
+    CancellationLifecycle,
     ChangeListResponse,
     ChangeSummary,
     DiffResponse,
@@ -35,6 +37,7 @@ from agentbus.control.models import (
     WorktreeSummary,
 )
 from agentbus.doctor import run_doctor
+from agentbus.execution.cancellation import CancellationState
 from agentbus.execution.engine import DurableExecutionEngine, DurableExecutionError
 from agentbus.execution.models import (
     ApprovalOutcome,
@@ -67,6 +70,7 @@ _SECRET_NAMES = {
 }
 _SECRET_SUFFIXES = {".key", ".pem", ".p12", ".pfx", ".jks", ".keystore"}
 _FORBIDDEN_PARTS = {".git", ".agentbus"}
+_COMMIT_SHA = re.compile(r"^[0-9a-fA-F]{40,64}$")
 
 
 class WorkspaceService:
@@ -124,6 +128,37 @@ class RepositoryReviewService:
 
     def list_changes(self, run: RunRecord) -> ChangeListResponse:
         repository = self.workspace_service.require_repository(run.workspace)
+        revisions = _integration_revisions(run)
+        if revisions is not None:
+            base_commit, integration_commit = revisions
+            changes = repository.changed_files_between(
+                base_commit,
+                integration_commit,
+            )
+            result = []
+            for path in changes:
+                classification = repository.artifact_policy.classify(
+                    path,
+                    git_ignored=False,
+                )
+                result.append(
+                    ChangeSummary(
+                        path=path,
+                        status="committed",
+                        tracked=True,
+                        generated=(
+                            classification.category == ArtifactCategory.GENERATED
+                        ),
+                        generated_reason=classification.reason,
+                        classification=classification.category.value,
+                        task_id=_task_attribution(run, path),
+                    )
+                )
+            return ChangeListResponse(
+                run_id=run.run_id,
+                workspace=str(repository.workspace),
+                changes=result,
+            )
         entries = {entry.path: entry for entry in repository.status_entries()}
         changes = repository.change_set()
         result: list[ChangeSummary] = []
@@ -162,7 +197,15 @@ class RepositoryReviewService:
         paths = [self._safe_relative(repository.workspace, path)] if path else None
         if path:
             self._ensure_public_file(paths[0])
-        diff = repository.full_diff(max_chars=limit, paths=paths)
+        revisions = _integration_revisions(run)
+        if revisions is None:
+            diff = repository.full_diff(max_chars=limit, paths=paths)
+        else:
+            diff = repository.commit_diff(
+                *revisions,
+                max_chars=limit,
+                paths=paths,
+            )
         truncated = diff.endswith("[diff truncated]")
         return DiffResponse(
             run_id=run.run_id,
@@ -182,10 +225,19 @@ class RepositoryReviewService:
         repository = self.workspace_service.require_repository(run.workspace)
         relative = self._safe_relative(repository.workspace, path)
         self._ensure_public_file(relative)
+        revisions = _integration_revisions(run)
         if revision == "after":
-            data = self._read_after(repository.workspace, relative)
+            data = (
+                self._read_after(repository.workspace, relative)
+                if revisions is None
+                else self._read_revision(repository, revisions[1], relative)
+            )
         elif revision == "before":
-            data = self._read_before(repository, relative)
+            data = (
+                self._read_before(repository, relative)
+                if revisions is None
+                else self._read_revision(repository, revisions[0], relative)
+            )
         else:
             raise ControlPlaneForbiddenError("Unsupported file revision.")
         if len(data) > MAX_FILE_BYTES:
@@ -258,10 +310,22 @@ class RepositoryReviewService:
 
     @staticmethod
     def _read_before(repository: GitRepository, relative: str) -> bytes:
+        return RepositoryReviewService._read_revision(
+            repository,
+            "HEAD",
+            relative,
+        )
+
+    @staticmethod
+    def _read_revision(
+        repository: GitRepository,
+        revision: str,
+        relative: str,
+    ) -> bytes:
         repository.validate_workspace()
         try:
             result = subprocess.run(
-                ["git", "show", f"HEAD:{relative}"],
+                ["git", "show", f"{revision}:{relative}"],
                 cwd=repository.workspace,
                 capture_output=True,
                 timeout=repository.timeout_seconds,
@@ -300,8 +364,7 @@ class ControlQueryService:
         runs = [self.run_summary(run) for run in self.store.list_runs(limit=limit)]
         return RunListResponse(runs=runs, total=len(runs))
 
-    @staticmethod
-    def run_summary(run: RunRecord) -> RunSummary:
+    def run_summary(self, run: RunRecord) -> RunSummary:
         return RunSummary(
             run_id=run.run_id,
             status=run.status.value,
@@ -316,6 +379,9 @@ class ControlQueryService:
             failure_reason=run.failure_reason,
             changed_files=run.changed_files,
             version=run.version,
+            cancellation=cancellation_lifecycle(
+                self.store.get_cancellation_state(run.run_id)
+            ),
         )
 
     def tasks(self, run_id: str) -> TaskListResponse:
@@ -371,10 +437,14 @@ class ControlQueryService:
         self.get_run(run_id)
         report = DurableExecutionEngine(self.store).get_report(run_id)
         safe = sanitize_json(report.model_dump(mode="json"))
+        cancellation = cancellation_lifecycle(
+            self.store.get_cancellation_state(run_id)
+        )
         return RunReportResponse(
             run_id=run_id,
             status=report.status.value,
             report=safe,
+            cancellation=cancellation,
         )
 
     def scheduler(self, run_id: str) -> SchedulerResponse:
@@ -388,6 +458,9 @@ class ControlQueryService:
             expired_leases=sanitize_json(report.expired_leases),
             integration_order=report.integration_order,
             integration_conflicts=sanitize_json(report.integration_conflicts),
+            cancellation=cancellation_lifecycle(
+                self.store.get_cancellation_state(run_id)
+            ),
         )
 
     def worktrees(self, run_id: str) -> WorktreeListResponse:
@@ -502,7 +575,7 @@ class ControlQueryService:
 
     def providers(self) -> ProviderListResponse:
         values: list[ProviderSummary] = []
-        for name in ("ollama", "azure"):
+        for name in ("ollama", "azure", "deterministic"):
             try:
                 model = self.config.resolve_model("default", provider=name)
                 self.config.validate_provider_configuration(name)
@@ -521,7 +594,7 @@ class ControlQueryService:
                     endpoint_host=(
                         self.config.safe_model_summary().get("endpoint_host")
                         if name == "azure"
-                        else "localhost"
+                        else ("localhost" if name == "ollama" else None)
                     ),
                     message=message,
                 )
@@ -547,6 +620,75 @@ def _task_attribution(run: RunRecord, path: str) -> str | None:
     if isinstance(value, dict) and value.get(path):
         return str(value[path])
     return None
+
+
+def _integration_revisions(run: RunRecord) -> tuple[str, str] | None:
+    parallel = run.metadata.get("parallel_execution", {})
+    if not isinstance(parallel, dict):
+        return None
+    integration_commit = parallel.get("integration_commit")
+    if not integration_commit:
+        return None
+    base_commit = parallel.get("base_commit")
+    if not (
+        isinstance(base_commit, str)
+        and isinstance(integration_commit, str)
+        and _COMMIT_SHA.fullmatch(base_commit)
+        and _COMMIT_SHA.fullmatch(integration_commit)
+    ):
+        raise ControlPlaneConflictError(
+            "Persisted integration revision metadata is invalid."
+        )
+    return base_commit, integration_commit
+
+
+def cancellation_lifecycle(state: CancellationState) -> CancellationLifecycle:
+    active = state.active_non_interruptible_operations
+    return CancellationLifecycle(
+        requested=state.requested,
+        requested_at=state.requested_at,
+        reason=state.reason,
+        propagated_at=state.propagated_at,
+        propagation_sources=state.propagation_sources,
+        provider_cancellation_signalled=(
+            state.provider_cancellation_requested_at is not None
+        ),
+        provider_cancellation_requested_at=(
+            state.provider_cancellation_requested_at
+        ),
+        provider_names=state.provider_names,
+        provider_cancellation_acknowledged=(
+            state.provider_cancellation_acknowledged_at is not None
+        ),
+        provider_cancellation_acknowledged_at=(
+            state.provider_cancellation_acknowledged_at
+        ),
+        provider_acknowledgement_source=(
+            state.provider_acknowledgement_source
+        ),
+        acknowledged=state.acknowledged,
+        acknowledged_at=state.acknowledged_at,
+        acknowledgement_source=state.acknowledgement_source,
+        acknowledgement_stage=state.acknowledgement_stage,
+        active_non_interruptible_operation=active[0] if active else None,
+        active_non_interruptible_operations=active,
+        operations_completed_after_request=(
+            state.operations_completed_after_request
+        ),
+        completed_after_cancellation_request=bool(
+            state.operations_completed_after_request
+            or state.tasks_completed_after_request
+        ),
+        tasks_prevented_from_starting=state.tasks_prevented_from_starting,
+        tasks_completed_after_request=state.tasks_completed_after_request,
+        scheduling_stopped=state.scheduling_stopped_at is not None,
+        scheduling_stopped_at=state.scheduling_stopped_at,
+        cleanup_completed=state.cleanup_completed_at is not None,
+        cleanup_completed_at=state.cleanup_completed_at,
+        resume_eligible=state.resume_eligible,
+        terminal_reason=state.terminal_reason,
+        revision=state.revision,
+    )
 
 
 def _nested(value: dict[str, Any], *keys: str) -> Any:

@@ -71,6 +71,8 @@ Supported providers:
 
 - `ollama` is the local/offline default and preserves `AGENTBUS_MODEL` plus `AGENTBUS_OLLAMA_URL` behavior.
 - `azure` uses the official OpenAI Python SDK against the Azure OpenAI v1 base URL.
+- `deterministic` is a network-free development, CI, and acceptance provider
+  that follows the normal routing and structured-output paths.
 
 List providers and inspect redacted routing configuration without making a network request:
 
@@ -79,6 +81,7 @@ python -m agentbus.main --list-providers
 python -m agentbus.main --show-model-config
 python -m agentbus.main --check-provider ollama
 python -m agentbus.main --check-provider azure
+python -m agentbus.main --check-provider deterministic
 ```
 
 `--check-provider` is local-only unless `--live` is supplied explicitly. The first real Azure smoke test should be run only after credentials and deployments are configured:
@@ -366,6 +369,13 @@ python -m agentbus.main --recover-leases <run-id>
 python -m agentbus.main --resume <run-id>
 python -m agentbus.main --cancel-run <run-id> --reason "Work no longer needed"
 ```
+
+Cancellation is cooperative. Reports distinguish request, provider signal,
+acknowledgement, non-interruptible work, completed-after-request operations,
+scheduling stop, cleanup, and resume eligibility. Azure and Ollama transports
+may finish an already active request; the deterministic provider acknowledges
+its interruptible wait immediately. Cancellation never retries the interrupted
+task, starts a new lease, or rolls back user files automatically.
 
 On sequential resume, a task left `running` is reconciled from its latest persisted attempt. On parallel resume, AgentBus first expires stale leases, leaves tasks with valid leases untouched, validates persisted worktrees, recovers a task commit created before state persistence when its history is unambiguous, and resumes interrupted integration safely:
 

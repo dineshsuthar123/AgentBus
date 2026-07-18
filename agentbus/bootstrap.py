@@ -5,6 +5,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from agentbus.config import SUPPORTED_PROVIDERS
 from agentbus.execution.state_store import StateStore
 
 
@@ -33,8 +34,9 @@ def initialize(
     with_env_example: bool = False,
     root: str | Path | None = None,
 ) -> BootstrapResult:
-    if provider not in {"ollama", "azure"}:
-        raise BootstrapError("Provider must be 'ollama' or 'azure'.")
+    if provider not in SUPPORTED_PROVIDERS:
+        choices = ", ".join(SUPPORTED_PROVIDERS)
+        raise BootstrapError(f"Provider must be one of: {choices}.")
     workspace_path = Path(workspace).expanduser().resolve()
     if root is not None:
         config_root = Path(root).expanduser().resolve()
@@ -123,12 +125,20 @@ def _config_template(*, workspace: Path, root: Path, provider: str, local: bool)
                 "# environment. Never put a real API key in this file.",
             ]
         )
-    else:
+    elif provider == "ollama":
         lines.extend(
             [
                 "",
                 "# Ollama is the offline-first default. AgentBus never downloads models.",
                 '# ollama_url = "http://localhost:11434/api/generate"',
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "",
+                "# Deterministic mode is network-free and requires no credentials.",
+                '# deterministic_profile = "python-calculator"',
             ]
         )
     return "\n".join(lines) + "\n"
@@ -141,6 +151,11 @@ def _environment_template(provider: str) -> str:
             "AZURE_OPENAI_ENDPOINT=https://YOUR-RESOURCE.openai.azure.com\n"
             "AZURE_OPENAI_API_KEY=replace-with-a-real-key-outside-source-control\n"
             "AZURE_OPENAI_DEFAULT_DEPLOYMENT=your-deployment\n"
+        )
+    if provider == "deterministic":
+        return common + (
+            "AGENTBUS_DETERMINISTIC_PROFILE=python-calculator\n"
+            "AGENTBUS_DETERMINISTIC_LATENCY_SECONDS=0\n"
         )
     return common + (
         "AGENTBUS_PROVIDER=ollama\n"

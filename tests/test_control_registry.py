@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -67,7 +69,41 @@ def test_current_process_identity_matches_registry_entry(tmp_path: Path) -> None
 
     assert entry.process_start_identity
     assert entry.executable
+    assert executable_identity() == executable_identity(os.getpid())
     assert process_matches(entry) is True
+
+
+def test_external_process_identity_is_stable() -> None:
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import time; time.sleep(30)",
+        ],
+        shell=False,
+    )
+    try:
+        now = datetime.now(timezone.utc)
+        entry = DaemonRegistryEntry(
+            daemon_id="external-process",
+            pid=process.pid,
+            executable=executable_identity(process.pid),
+            process_start_identity=process_start_identity(process.pid),
+            host="127.0.0.1",
+            port=43123,
+            agentbus_version="0.2.0",
+            started_at=now,
+            heartbeat_at=now,
+            state_database="state.db",
+            registry_path="registry.json",
+        )
+
+        assert entry.executable
+        assert entry.process_start_identity
+        assert process_matches(entry) is True
+    finally:
+        process.terminate()
+        process.wait(timeout=10)
 
 
 def test_cleanup_removes_stale_identity_without_stopping_process(
@@ -88,16 +124,26 @@ def test_safe_termination_refuses_pid_identity_mismatch(
 ) -> None:
     path = tmp_path / "registry.json"
     registry = DaemonRegistry(path)
-    registry.register(_entry(path))
-    killed: list[tuple[int, int]] = []
-    monkeypatch.setattr("agentbus.control.registry.process_matches", lambda entry: False)
+    stale = _entry(path).model_copy(update={"process_start_identity": "stale"})
+    registry.register(stale)
+    signals: list[tuple[int, int]] = []
+    real_kill = os.kill
+
+    def observe_signal(pid: int, sig: int) -> None:
+        signals.append((pid, sig))
+        if sig == 0:
+            real_kill(pid, sig)
+
     monkeypatch.setattr(
         "agentbus.control.registry.os.kill",
-        lambda pid, sig: killed.append((pid, sig)),
+        observe_signal,
     )
 
     with pytest.raises(ControlPlaneConflictError, match="no process was stopped"):
         terminate_registered_daemon(registry, "daemon-1")
 
-    assert killed == []
+    assert [item for item in signals if item[1] != 0] == []
+    if os.name != "nt":
+        assert signals
+        assert all(item == (os.getpid(), 0) for item in signals)
     assert registry.list() == []

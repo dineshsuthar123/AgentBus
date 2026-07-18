@@ -7,6 +7,7 @@ from pathlib import Path
 
 from agentbus import __version__
 from agentbus.bootstrap import BootstrapError, initialize
+from agentbus.config import SUPPORTED_PROVIDERS
 from agentbus.configuration import configuration_paths, resolve_configuration
 from agentbus.doctor import CheckStatus, render_doctor, run_doctor
 
@@ -169,7 +170,7 @@ def _providers_command(arguments: list[str]) -> int:
     show = commands.add_parser("show", help="Show redacted routing configuration.")
     show.add_argument("--config")
     check = commands.add_parser("check", help="Validate one provider locally.")
-    check.add_argument("provider", choices=["ollama", "azure"])
+    check.add_argument("provider", choices=SUPPORTED_PROVIDERS)
     check.add_argument("--live", action="store_true")
     check.add_argument("--config")
     args = parser.parse_args(arguments)
@@ -251,7 +252,11 @@ def _config_command(arguments: list[str]) -> int:
 def _init_command(arguments: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="agentbus init")
     parser.add_argument("--local", action="store_true")
-    parser.add_argument("--provider", choices=["ollama", "azure"], default="ollama")
+    parser.add_argument(
+        "--provider",
+        choices=SUPPORTED_PROVIDERS,
+        default="ollama",
+    )
     parser.add_argument("--workspace", default=".")
     parser.add_argument("--root", help="Explicit configuration root (primarily for automation).")
     parser.add_argument("--with-env-example", action="store_true")
@@ -304,7 +309,7 @@ def _doctor_command(arguments: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="agentbus doctor")
     parser.add_argument("--config")
     parser.add_argument("--workspace")
-    parser.add_argument("--live-provider", choices=["ollama", "azure"])
+    parser.add_argument("--live-provider", choices=SUPPORTED_PROVIDERS)
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(arguments)
     try:

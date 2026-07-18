@@ -56,6 +56,7 @@ class RiskLevel(str, Enum):
 
 
 class FailureCategory(str, Enum):
+    CANCELLED = "cancelled"
     MODEL_OUTPUT_ERROR = "model_output_error"
     MODEL_TRANSPORT_ERROR = "model_transport_error"
     TOOL_VALIDATION_ERROR = "tool_validation_error"
@@ -288,3 +289,4 @@ class ExecutionReport(DomainModel):
     integration_conflicts: list[dict[str, Any]] = Field(default_factory=list)
     retained_worktrees: list[str] = Field(default_factory=list)
     cleanup_recommendations: list[str] = Field(default_factory=list)
+    cancellation: dict[str, Any] = Field(default_factory=dict)

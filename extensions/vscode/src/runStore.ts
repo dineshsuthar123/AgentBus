@@ -1,4 +1,5 @@
 import type { EventEnvelope, RunSummary } from "./generated/protocol";
+import { applyCancellationEvent } from "./cancellation";
 
 const terminalStatuses = new Set(["succeeded", "failed", "cancelled"]);
 
@@ -15,8 +16,13 @@ export class RunStore {
   }
 
   public replaceRuns(runs: RunSummary[]): void {
+    const preserved = [...this.runsById.values()].filter(
+      (run) =>
+        !terminalStatuses.has(run.status) &&
+        !runs.some((candidate) => candidate.run_id === run.run_id)
+    );
     this.runsById.clear();
-    for (const run of runs) {
+    for (const run of [...runs, ...preserved]) {
       this.runsById.set(run.run_id, run);
     }
     this.emit();
@@ -43,10 +49,19 @@ export class RunStore {
       const run = this.runsById.get(event.run_id);
       if (run) {
         const status = statusFromEvent(event.event_type);
+        const cancellation = applyCancellationEvent(run.cancellation, event);
         if (status && (!terminalStatuses.has(run.status) || run.status === status)) {
           this.runsById.set(event.run_id, {
             ...run,
             status,
+            cancellation,
+            updated_at: event.timestamp,
+            version: run.version + 1
+          });
+        } else if (cancellation !== run.cancellation) {
+          this.runsById.set(event.run_id, {
+            ...run,
+            cancellation,
             updated_at: event.timestamp,
             version: run.version + 1
           });
@@ -65,6 +80,23 @@ export class RunStore {
 
   public run(runId: string): RunSummary | undefined {
     return this.runsById.get(runId);
+  }
+
+  public updateCancellation(
+    runId: string,
+    status: string,
+    cancellation: RunSummary["cancellation"]
+  ): void {
+    const run = this.runsById.get(runId);
+    if (!run) return;
+    this.runsById.set(runId, {
+      ...run,
+      status,
+      cancellation,
+      updated_at: new Date().toISOString(),
+      version: run.version + 1
+    });
+    this.emit();
   }
 
   public events(): readonly EventEnvelope[] {

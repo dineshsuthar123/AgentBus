@@ -9,6 +9,10 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
+from agentbus.execution.cancellation import (
+    CancellationOperation,
+    CancellationState,
+)
 from agentbus.execution.models import (
     ApprovalDecision,
     ApprovalOutcome,
@@ -921,6 +925,134 @@ class StateStore:
                 payload or {},
             )
 
+    def persist_cancellation_state(
+        self,
+        run_id: str,
+        state: CancellationState,
+    ) -> CancellationState:
+        """Persist a full cancellation snapshot and its new lifecycle events.
+
+        Listener callbacks may reach SQLite out of order when multiple runtime
+        threads update one token. The monotonic revision check makes the newest
+        complete snapshot authoritative while still deriving every missing event.
+        """
+        _require_id(run_id, "run")
+        if not isinstance(state, CancellationState):
+            raise StateStoreError("Cancellation state must be a CancellationState.")
+        with self._write_transaction() as connection:
+            self._require_run_row(connection, run_id)
+            row = connection.execute(
+                "SELECT * FROM cancellations WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+            previous = self._cancellation_from_row(row) if row is not None else None
+            if previous is not None and state.revision <= previous.revision:
+                return previous
+
+            now = utc_now()
+            connection.execute(
+                """
+                INSERT INTO cancellations(
+                    run_id, requested, requested_at, reason, propagated_at,
+                    propagation_sources_json, provider_cancellation_requested_at,
+                    provider_names_json, acknowledged, acknowledged_at,
+                    acknowledgement_source, acknowledgement_stage,
+                    provider_cancellation_acknowledged_at,
+                    provider_acknowledgement_source, active_operations_json,
+                    operations_completed_after_request_json,
+                    tasks_prevented_from_starting_json,
+                    tasks_completed_after_request_json, scheduling_stopped_at,
+                    cleanup_completed_at, resume_eligible, terminal_reason,
+                    revision, updated_at
+                ) VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?
+                )
+                ON CONFLICT(run_id) DO UPDATE SET
+                    requested = excluded.requested,
+                    requested_at = excluded.requested_at,
+                    reason = excluded.reason,
+                    propagated_at = excluded.propagated_at,
+                    propagation_sources_json = excluded.propagation_sources_json,
+                    provider_cancellation_requested_at =
+                        excluded.provider_cancellation_requested_at,
+                    provider_names_json = excluded.provider_names_json,
+                    acknowledged = excluded.acknowledged,
+                    acknowledged_at = excluded.acknowledged_at,
+                    acknowledgement_source = excluded.acknowledgement_source,
+                    acknowledgement_stage = excluded.acknowledgement_stage,
+                    provider_cancellation_acknowledged_at =
+                        excluded.provider_cancellation_acknowledged_at,
+                    provider_acknowledgement_source =
+                        excluded.provider_acknowledgement_source,
+                    active_operations_json = excluded.active_operations_json,
+                    operations_completed_after_request_json =
+                        excluded.operations_completed_after_request_json,
+                    tasks_prevented_from_starting_json =
+                        excluded.tasks_prevented_from_starting_json,
+                    tasks_completed_after_request_json =
+                        excluded.tasks_completed_after_request_json,
+                    scheduling_stopped_at = excluded.scheduling_stopped_at,
+                    cleanup_completed_at = excluded.cleanup_completed_at,
+                    resume_eligible = excluded.resume_eligible,
+                    terminal_reason = excluded.terminal_reason,
+                    revision = excluded.revision,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    run_id,
+                    int(state.requested),
+                    _timestamp(state.requested_at),
+                    _safe_text(state.reason),
+                    _timestamp(state.propagated_at),
+                    _dump_json(state.propagation_sources),
+                    _timestamp(state.provider_cancellation_requested_at),
+                    _dump_json(state.provider_names),
+                    int(state.acknowledged),
+                    _timestamp(state.acknowledged_at),
+                    _safe_text(state.acknowledgement_source),
+                    _safe_text(state.acknowledgement_stage),
+                    _timestamp(state.provider_cancellation_acknowledged_at),
+                    _safe_text(state.provider_acknowledgement_source),
+                    _dump_json(
+                        [
+                            operation.model_dump(mode="json")
+                            for operation in state.active_operations
+                        ]
+                    ),
+                    _dump_json(state.operations_completed_after_request),
+                    _dump_json(state.tasks_prevented_from_starting),
+                    _dump_json(state.tasks_completed_after_request),
+                    _timestamp(state.scheduling_stopped_at),
+                    _timestamp(state.cleanup_completed_at),
+                    int(state.resume_eligible),
+                    _safe_text(state.terminal_reason),
+                    state.revision,
+                    _timestamp(now),
+                ),
+            )
+            for event_type, payload in _cancellation_events(previous, state):
+                self._insert_event(
+                    connection,
+                    run_id,
+                    None,
+                    event_type,
+                    payload,
+                )
+        return self.get_cancellation_state(run_id)
+
+    def get_cancellation_state(self, run_id: str) -> CancellationState:
+        _require_id(run_id, "run")
+        with self._connection() as connection:
+            self._require_run_row(connection, run_id)
+            row = connection.execute(
+                "SELECT * FROM cancellations WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+        if row is None:
+            return CancellationState()
+        return self._cancellation_from_row(row)
+
     def list_events(
         self,
         run_id: str,
@@ -1550,6 +1682,176 @@ class StateStore:
             created_at=_parse_timestamp(row["created_at"]),
             completed_at=_parse_timestamp(row["completed_at"]),
         )
+
+    @staticmethod
+    @_domain_decode("cancellation state")
+    def _cancellation_from_row(row: sqlite3.Row) -> CancellationState:
+        operations = _load_json(
+            row["active_operations_json"],
+            "active cancellation operations",
+        )
+        if not isinstance(operations, list):
+            raise ValueError("active cancellation operations must be a list")
+        return CancellationState(
+            requested=bool(row["requested"]),
+            requested_at=_parse_timestamp(row["requested_at"]),
+            reason=row["reason"],
+            propagated_at=_parse_timestamp(row["propagated_at"]),
+            propagation_sources=_load_json(
+                row["propagation_sources_json"],
+                "cancellation propagation sources",
+            ),
+            provider_cancellation_requested_at=_parse_timestamp(
+                row["provider_cancellation_requested_at"]
+            ),
+            provider_names=_load_json(
+                row["provider_names_json"],
+                "cancellation provider names",
+            ),
+            acknowledged=bool(row["acknowledged"]),
+            acknowledged_at=_parse_timestamp(row["acknowledged_at"]),
+            acknowledgement_source=row["acknowledgement_source"],
+            acknowledgement_stage=row["acknowledgement_stage"],
+            provider_cancellation_acknowledged_at=_parse_timestamp(
+                row["provider_cancellation_acknowledged_at"]
+            ),
+            provider_acknowledgement_source=row[
+                "provider_acknowledgement_source"
+            ],
+            active_operations=[
+                CancellationOperation.model_validate(operation)
+                for operation in operations
+            ],
+            operations_completed_after_request=_load_json(
+                row["operations_completed_after_request_json"],
+                "operations completed after cancellation",
+            ),
+            tasks_prevented_from_starting=_load_json(
+                row["tasks_prevented_from_starting_json"],
+                "tasks prevented by cancellation",
+            ),
+            tasks_completed_after_request=_load_json(
+                row["tasks_completed_after_request_json"],
+                "tasks completed after cancellation",
+            ),
+            scheduling_stopped_at=_parse_timestamp(
+                row["scheduling_stopped_at"]
+            ),
+            cleanup_completed_at=_parse_timestamp(row["cleanup_completed_at"]),
+            resume_eligible=bool(row["resume_eligible"]),
+            terminal_reason=row["terminal_reason"],
+            revision=int(row["revision"]),
+        )
+
+
+def _cancellation_events(
+    previous: CancellationState | None,
+    current: CancellationState,
+) -> list[tuple[str, dict[str, Any]]]:
+    before = previous or CancellationState()
+    events: list[tuple[str, dict[str, Any]]] = []
+    if current.requested and not before.requested:
+        events.append(
+            (
+                "cancellation_requested",
+                {
+                    "requested_at": _timestamp(current.requested_at),
+                    "has_reason": bool(current.reason),
+                    "revision": current.revision,
+                },
+            )
+        )
+    if current.requested and current.propagated_at is not None and (
+        not before.requested or before.propagated_at is None
+    ):
+        events.append(
+            (
+                "cancellation_propagated",
+                {
+                    "propagated_at": _timestamp(current.propagated_at),
+                    "sources": current.propagation_sources,
+                    "revision": current.revision,
+                },
+            )
+        )
+    if (
+        current.provider_cancellation_requested_at is not None
+        and before.provider_cancellation_requested_at is None
+    ):
+        events.append(
+            (
+                "provider_cancellation_requested",
+                {
+                    "requested_at": _timestamp(
+                        current.provider_cancellation_requested_at
+                    ),
+                    "providers": current.provider_names,
+                    "revision": current.revision,
+                },
+            )
+        )
+    if (
+        current.provider_cancellation_acknowledged_at is not None
+        and before.provider_cancellation_acknowledged_at is None
+    ):
+        events.append(
+            (
+                "provider_cancellation_acknowledged",
+                {
+                    "acknowledged_at": _timestamp(
+                        current.provider_cancellation_acknowledged_at
+                    ),
+                    "source": current.provider_acknowledgement_source,
+                    "providers": current.provider_names,
+                    "revision": current.revision,
+                },
+            )
+        )
+
+    prior_completed = set(before.operations_completed_after_request)
+    for operation in current.operations_completed_after_request:
+        if operation not in prior_completed:
+            events.append(
+                (
+                    "operation_completed_after_cancellation",
+                    {
+                        "operation": operation,
+                        "revision": current.revision,
+                    },
+                )
+            )
+    if (
+        current.scheduling_stopped_at is not None
+        and before.scheduling_stopped_at is None
+    ):
+        events.append(
+            (
+                "scheduling_stopped",
+                {
+                    "stopped_at": _timestamp(current.scheduling_stopped_at),
+                    "tasks_prevented_from_starting": (
+                        current.tasks_prevented_from_starting
+                    ),
+                    "task_count": len(current.tasks_prevented_from_starting),
+                    "revision": current.revision,
+                },
+            )
+        )
+    if current.cleanup_completed_at is not None and before.cleanup_completed_at is None:
+        events.append(
+            (
+                "cancellation_cleanup_completed",
+                {
+                    "completed_at": _timestamp(current.cleanup_completed_at),
+                    "resume_eligible": current.resume_eligible,
+                    "tasks_completed_after_request": (
+                        current.tasks_completed_after_request
+                    ),
+                    "revision": current.revision,
+                },
+            )
+        )
+    return events
 
 
 def _timestamp(value: datetime | None) -> str | None:

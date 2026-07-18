@@ -1,4 +1,4 @@
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 SCHEMA_SQL = """
@@ -169,11 +169,41 @@ CREATE TABLE IF NOT EXISTS integration_attempts (
     FOREIGN KEY (run_id, task_id) REFERENCES tasks(run_id, task_id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS cancellations (
+    run_id TEXT PRIMARY KEY,
+    requested INTEGER NOT NULL,
+    requested_at TEXT,
+    reason TEXT,
+    propagated_at TEXT,
+    propagation_sources_json TEXT NOT NULL,
+    provider_cancellation_requested_at TEXT,
+    provider_names_json TEXT NOT NULL,
+    acknowledged INTEGER NOT NULL,
+    acknowledged_at TEXT,
+    acknowledgement_source TEXT,
+    acknowledgement_stage TEXT,
+    provider_cancellation_acknowledged_at TEXT,
+    provider_acknowledgement_source TEXT,
+    active_operations_json TEXT NOT NULL,
+    operations_completed_after_request_json TEXT NOT NULL,
+    tasks_prevented_from_starting_json TEXT NOT NULL,
+    tasks_completed_after_request_json TEXT NOT NULL,
+    scheduling_stopped_at TEXT,
+    cleanup_completed_at TEXT,
+    resume_eligible INTEGER NOT NULL,
+    terminal_reason TEXT,
+    revision INTEGER NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_worktrees_run ON worktrees(run_id, purpose, task_id);
 CREATE INDEX IF NOT EXISTS idx_leases_task ON worker_leases(run_id, task_id, fencing_token);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_lease_per_task
     ON worker_leases(run_id, task_id) WHERE status = 'active';
 CREATE INDEX IF NOT EXISTS idx_integration_run ON integration_attempts(run_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_cancellations_requested
+    ON cancellations(requested, updated_at);
 """
 
 
@@ -216,5 +246,35 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
         "CREATE INDEX idx_leases_task ON worker_leases(run_id, task_id, fencing_token)",
         "CREATE UNIQUE INDEX idx_one_active_lease_per_task ON worker_leases(run_id, task_id) WHERE status = 'active'",
         "CREATE INDEX idx_integration_run ON integration_attempts(run_id, created_at)",
+    ),
+    2: (
+        """CREATE TABLE cancellations (
+            run_id TEXT PRIMARY KEY,
+            requested INTEGER NOT NULL,
+            requested_at TEXT,
+            reason TEXT,
+            propagated_at TEXT,
+            propagation_sources_json TEXT NOT NULL,
+            provider_cancellation_requested_at TEXT,
+            provider_names_json TEXT NOT NULL,
+            acknowledged INTEGER NOT NULL,
+            acknowledged_at TEXT,
+            acknowledgement_source TEXT,
+            acknowledgement_stage TEXT,
+            provider_cancellation_acknowledged_at TEXT,
+            provider_acknowledgement_source TEXT,
+            active_operations_json TEXT NOT NULL,
+            operations_completed_after_request_json TEXT NOT NULL,
+            tasks_prevented_from_starting_json TEXT NOT NULL,
+            tasks_completed_after_request_json TEXT NOT NULL,
+            scheduling_stopped_at TEXT,
+            cleanup_completed_at TEXT,
+            resume_eligible INTEGER NOT NULL,
+            terminal_reason TEXT,
+            revision INTEGER NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE
+        )""",
+        "CREATE INDEX idx_cancellations_requested ON cancellations(requested, updated_at)",
     ),
 }

@@ -8,6 +8,11 @@ import type {
   WorktreeSummary
 } from "./generated/protocol";
 import type { RunStore } from "./runStore";
+import {
+  canCancel,
+  cancellationDetails,
+  cancellationStatus
+} from "./cancellation";
 
 export interface RunSelection {
   get(): string | undefined;
@@ -165,12 +170,23 @@ function runItem(run: RunSummary): AgentBusItem {
     vscode.TreeItemCollapsibleState.None,
     run
   );
-  item.description = run.status;
+  item.description =
+    cancellationStatus(run.cancellation, run.status) ?? run.status;
+  const cancellation = cancellationDetails(run.cancellation, run.status);
   item.tooltip = new vscode.MarkdownString(
-    `**${run.status}**\n\nWorkspace: \`${run.workspace}\`\n\nRun: \`${run.run_id}\``
+    [
+      `**${run.status}**`,
+      ...cancellation.map((detail) => `\n\n${detail}`),
+      `\n\nWorkspace: \`${run.workspace}\``,
+      `\n\nRun: \`${run.run_id}\``
+    ].join("")
   );
   item.iconPath = new vscode.ThemeIcon(iconForStatus(run.status));
-  item.contextValue = "agentbusRun";
+  item.contextValue = canCancel(run)
+    ? "agentbusRunCancellable"
+    : run.cancellation?.requested
+      ? "agentbusRunCancelling"
+      : "agentbusRunTerminal";
   item.command = {
     command: "agentbus.showRun",
     title: "Show Run",
@@ -185,7 +201,7 @@ function taskItem(task: TaskSummary): AgentBusItem {
     vscode.TreeItemCollapsibleState.None,
     task
   );
-  item.description = `${task.status} · ${task.attempts} attempt(s)`;
+  item.description = `${task.status} | ${task.attempts} attempt(s)`;
   item.tooltip = new vscode.MarkdownString(
     [
       `**${task.status}**`,
@@ -210,7 +226,7 @@ function approvalItem(approval: ApprovalSummary): AgentBusItem {
     vscode.TreeItemCollapsibleState.None,
     approval
   );
-  item.description = `${approval.risk_category} · ${approval.state}`;
+  item.description = `${approval.risk_category} | ${approval.state}`;
   item.tooltip = new vscode.MarkdownString(
     `Reason: ${approval.reason ?? "not provided"}\n\nPaths: ${
       approval.affected_paths?.join(", ") || "none"
