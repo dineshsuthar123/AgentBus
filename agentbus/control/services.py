@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -69,6 +70,7 @@ _SECRET_NAMES = {
 }
 _SECRET_SUFFIXES = {".key", ".pem", ".p12", ".pfx", ".jks", ".keystore"}
 _FORBIDDEN_PARTS = {".git", ".agentbus"}
+_COMMIT_SHA = re.compile(r"^[0-9a-fA-F]{40,64}$")
 
 
 class WorkspaceService:
@@ -126,6 +128,37 @@ class RepositoryReviewService:
 
     def list_changes(self, run: RunRecord) -> ChangeListResponse:
         repository = self.workspace_service.require_repository(run.workspace)
+        revisions = _integration_revisions(run)
+        if revisions is not None:
+            base_commit, integration_commit = revisions
+            changes = repository.changed_files_between(
+                base_commit,
+                integration_commit,
+            )
+            result = []
+            for path in changes:
+                classification = repository.artifact_policy.classify(
+                    path,
+                    git_ignored=False,
+                )
+                result.append(
+                    ChangeSummary(
+                        path=path,
+                        status="committed",
+                        tracked=True,
+                        generated=(
+                            classification.category == ArtifactCategory.GENERATED
+                        ),
+                        generated_reason=classification.reason,
+                        classification=classification.category.value,
+                        task_id=_task_attribution(run, path),
+                    )
+                )
+            return ChangeListResponse(
+                run_id=run.run_id,
+                workspace=str(repository.workspace),
+                changes=result,
+            )
         entries = {entry.path: entry for entry in repository.status_entries()}
         changes = repository.change_set()
         result: list[ChangeSummary] = []
@@ -164,7 +197,15 @@ class RepositoryReviewService:
         paths = [self._safe_relative(repository.workspace, path)] if path else None
         if path:
             self._ensure_public_file(paths[0])
-        diff = repository.full_diff(max_chars=limit, paths=paths)
+        revisions = _integration_revisions(run)
+        if revisions is None:
+            diff = repository.full_diff(max_chars=limit, paths=paths)
+        else:
+            diff = repository.commit_diff(
+                *revisions,
+                max_chars=limit,
+                paths=paths,
+            )
         truncated = diff.endswith("[diff truncated]")
         return DiffResponse(
             run_id=run.run_id,
@@ -184,10 +225,19 @@ class RepositoryReviewService:
         repository = self.workspace_service.require_repository(run.workspace)
         relative = self._safe_relative(repository.workspace, path)
         self._ensure_public_file(relative)
+        revisions = _integration_revisions(run)
         if revision == "after":
-            data = self._read_after(repository.workspace, relative)
+            data = (
+                self._read_after(repository.workspace, relative)
+                if revisions is None
+                else self._read_revision(repository, revisions[1], relative)
+            )
         elif revision == "before":
-            data = self._read_before(repository, relative)
+            data = (
+                self._read_before(repository, relative)
+                if revisions is None
+                else self._read_revision(repository, revisions[0], relative)
+            )
         else:
             raise ControlPlaneForbiddenError("Unsupported file revision.")
         if len(data) > MAX_FILE_BYTES:
@@ -260,10 +310,22 @@ class RepositoryReviewService:
 
     @staticmethod
     def _read_before(repository: GitRepository, relative: str) -> bytes:
+        return RepositoryReviewService._read_revision(
+            repository,
+            "HEAD",
+            relative,
+        )
+
+    @staticmethod
+    def _read_revision(
+        repository: GitRepository,
+        revision: str,
+        relative: str,
+    ) -> bytes:
         repository.validate_workspace()
         try:
             result = subprocess.run(
-                ["git", "show", f"HEAD:{relative}"],
+                ["git", "show", f"{revision}:{relative}"],
                 cwd=repository.workspace,
                 capture_output=True,
                 timeout=repository.timeout_seconds,
@@ -558,6 +620,26 @@ def _task_attribution(run: RunRecord, path: str) -> str | None:
     if isinstance(value, dict) and value.get(path):
         return str(value[path])
     return None
+
+
+def _integration_revisions(run: RunRecord) -> tuple[str, str] | None:
+    parallel = run.metadata.get("parallel_execution", {})
+    if not isinstance(parallel, dict):
+        return None
+    integration_commit = parallel.get("integration_commit")
+    if not integration_commit:
+        return None
+    base_commit = parallel.get("base_commit")
+    if not (
+        isinstance(base_commit, str)
+        and isinstance(integration_commit, str)
+        and _COMMIT_SHA.fullmatch(base_commit)
+        and _COMMIT_SHA.fullmatch(integration_commit)
+    ):
+        raise ControlPlaneConflictError(
+            "Persisted integration revision metadata is invalid."
+        )
+    return base_commit, integration_commit
 
 
 def cancellation_lifecycle(state: CancellationState) -> CancellationLifecycle:

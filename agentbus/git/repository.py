@@ -205,9 +205,14 @@ class GitRepository:
         head: str = "HEAD",
         *,
         max_chars: int = 30_000,
+        paths: Iterable[str] | None = None,
     ) -> str:
         changed = self.changed_files_between(base_commit, head)
-        review_files = self.change_set(changed).review_files
+        review_files = (
+            self.change_set(changed).review_files
+            if paths is None
+            else self._normalize_paths(paths)
+        )
         if not review_files:
             return "No diff."
         diff = self._run(

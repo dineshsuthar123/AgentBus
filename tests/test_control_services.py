@@ -31,6 +31,19 @@ def _git(workspace: Path, *arguments: str) -> None:
     assert result.returncode == 0, result.stderr
 
 
+def _git_output(workspace: Path, *arguments: str) -> str:
+    result = subprocess.run(
+        ["git", *arguments],
+        cwd=workspace,
+        capture_output=True,
+        text=True,
+        shell=False,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout.strip()
+
+
 def _repository(path: Path) -> Path:
     path.mkdir()
     _git(path, "init")
@@ -206,3 +219,53 @@ def test_query_responses_expose_persisted_cancellation_lifecycle(
     assert summary.cancellation.resume_eligible is False
     assert report.cancellation == summary.cancellation
     assert scheduler.cancellation == summary.cancellation
+
+
+def test_review_api_reads_parallel_integration_commit_without_checkout(
+    tmp_path: Path,
+) -> None:
+    workspace = _repository(tmp_path / "repo")
+    base_commit = _git_output(workspace, "rev-parse", "HEAD")
+    original_branch = _git_output(workspace, "branch", "--show-current")
+    _git(workspace, "switch", "-c", "agentbus/integration-test")
+    (workspace / "tracked.txt").write_text("integrated\n", encoding="utf-8")
+    (workspace / "created.py").write_text("VALUE = 42\n", encoding="utf-8")
+    _git(workspace, "add", "tracked.txt", "created.py")
+    _git(workspace, "commit", "-m", "integrated result")
+    integration_commit = _git_output(workspace, "rev-parse", "HEAD")
+    _git(workspace, "switch", original_branch)
+    service, run = _service(tmp_path, workspace)
+    service.store.update_run_details(
+        run.run_id,
+        metadata_updates={
+            "parallel_execution": {
+                "enabled": True,
+                "base_commit": base_commit,
+                "integration_commit": integration_commit,
+            }
+        },
+    )
+    persisted = service.get_run(run.run_id)
+
+    changes = service.repository.list_changes(persisted)
+    diff = service.repository.diff(persisted)
+    before = service.repository.file_content(
+        persisted,
+        "tracked.txt",
+        revision="before",
+    )
+    after = service.repository.file_content(
+        persisted,
+        "created.py",
+        revision="after",
+    )
+
+    assert not (workspace / "created.py").exists()
+    assert {item.path for item in changes.changes} == {
+        "created.py",
+        "tracked.txt",
+    }
+    assert all(item.status == "committed" for item in changes.changes)
+    assert "VALUE = 42" in diff.diff
+    assert before.content == "before\n"
+    assert after.content == "VALUE = 42\n"
