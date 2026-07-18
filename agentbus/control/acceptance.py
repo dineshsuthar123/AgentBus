@@ -122,7 +122,6 @@ def main() -> int:
                 base,
                 headers,
                 cancelled_run,
-                cancelled_summary,
                 cancel_events,
             )
 
@@ -386,9 +385,14 @@ def _assert_cancelled_run(
     base: str,
     headers: dict[str, str],
     run_id: str,
-    summary: dict[str, Any],
     events: list[dict[str, Any]],
 ) -> None:
+    summary = _request(
+        "GET",
+        f"{base}/api/v1/runs/{run_id}",
+        headers=headers,
+    ).json()
+    assert summary["status"] == "cancelled"
     cancellation = summary["cancellation"]
     assert cancellation["requested"] is True
     assert cancellation["acknowledged"] is True
