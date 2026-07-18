@@ -17,6 +17,7 @@ from agentbus.control.errors import (
 from agentbus.control.models import DaemonRegistryEntry
 
 _REGISTRY_VERSION = 1
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 
 
 def utc_now() -> datetime:
@@ -189,8 +190,7 @@ def _process_exists(pid: int) -> bool:
     if pid <= 0:
         return False
     if os.name == "nt":
-        kernel32 = ctypes.windll.kernel32
-        handle = kernel32.OpenProcess(0x1000, False, pid)
+        kernel32, handle = _open_windows_process(pid)
         if not handle:
             return False
         kernel32.CloseHandle(handle)
@@ -205,14 +205,23 @@ def _process_exists(pid: int) -> bool:
 
 
 def _windows_executable(pid: int) -> str:
-    kernel32 = ctypes.windll.kernel32
-    handle = kernel32.OpenProcess(0x1000, False, pid)
+    from ctypes import wintypes
+
+    kernel32, handle = _open_windows_process(pid)
     if not handle:
         return ""
     try:
-        size = ctypes.c_ulong(32768)
+        query_image = kernel32.QueryFullProcessImageNameW
+        query_image.argtypes = [
+            wintypes.HANDLE,
+            wintypes.DWORD,
+            wintypes.LPWSTR,
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        query_image.restype = wintypes.BOOL
+        size = wintypes.DWORD(32768)
         buffer = ctypes.create_unicode_buffer(size.value)
-        if not kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
+        if not query_image(handle, 0, buffer, ctypes.byref(size)):
             return ""
         return str(Path(buffer.value).resolve())
     finally:
@@ -220,22 +229,56 @@ def _windows_executable(pid: int) -> str:
 
 
 def _windows_process_start(pid: int) -> str:
-    kernel32 = ctypes.windll.kernel32
-    handle = kernel32.OpenProcess(0x1000, False, pid)
+    from ctypes import wintypes
+
+    kernel32, handle = _open_windows_process(pid)
     if not handle:
         return ""
     try:
-        creation = ctypes.c_ulonglong()
-        exit_time = ctypes.c_ulonglong()
-        kernel_time = ctypes.c_ulonglong()
-        user_time = ctypes.c_ulonglong()
-        success = kernel32.GetProcessTimes(
+        get_process_times = kernel32.GetProcessTimes
+        get_process_times.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(wintypes.FILETIME),
+            ctypes.POINTER(wintypes.FILETIME),
+            ctypes.POINTER(wintypes.FILETIME),
+            ctypes.POINTER(wintypes.FILETIME),
+        ]
+        get_process_times.restype = wintypes.BOOL
+        creation = wintypes.FILETIME()
+        exit_time = wintypes.FILETIME()
+        kernel_time = wintypes.FILETIME()
+        user_time = wintypes.FILETIME()
+        success = get_process_times(
             handle,
             ctypes.byref(creation),
             ctypes.byref(exit_time),
             ctypes.byref(kernel_time),
             ctypes.byref(user_time),
         )
-        return str(creation.value) if success else ""
+        if not success:
+            return ""
+        value = (creation.dwHighDateTime << 32) | creation.dwLowDateTime
+        return str(value)
     finally:
         kernel32.CloseHandle(handle)
+
+
+def _open_windows_process(pid: int):
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    open_process = kernel32.OpenProcess
+    open_process.argtypes = [
+        wintypes.DWORD,
+        wintypes.BOOL,
+        wintypes.DWORD,
+    ]
+    open_process.restype = wintypes.HANDLE
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = [wintypes.HANDLE]
+    close_handle.restype = wintypes.BOOL
+    return kernel32, open_process(
+        _PROCESS_QUERY_LIMITED_INFORMATION,
+        False,
+        pid,
+    )
