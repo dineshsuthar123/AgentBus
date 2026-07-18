@@ -108,7 +108,11 @@ export class ReconnectingSseClient {
         if (!this.running || this.controller.signal.aborted) {
           return;
         }
-        await this.options.onReconnectFailure?.();
+        try {
+          await this.options.onReconnectFailure?.();
+        } catch {
+          // The daemon may still be restarting; the next reconnect retries safely.
+        }
         await delay(this.options.reconnectDelayMs ?? 1_000);
       }
     }

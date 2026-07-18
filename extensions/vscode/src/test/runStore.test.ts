@@ -70,3 +70,14 @@ test("run store reduces cancellation events into lifecycle state", () => {
     true
   );
 });
+
+test("active optimistic runs survive pre-planning refresh and accept durable status", () => {
+  const store = new RunStore();
+  store.replaceRuns([run()]);
+
+  store.replaceRuns([]);
+  assert.equal(store.run("run-1")?.status, "pending");
+
+  store.apply(event(1, "durable_run_succeeded"));
+  assert.equal(store.run("run-1")?.status, "succeeded");
+});

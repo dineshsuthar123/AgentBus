@@ -16,8 +16,13 @@ export class RunStore {
   }
 
   public replaceRuns(runs: RunSummary[]): void {
+    const preserved = [...this.runsById.values()].filter(
+      (run) =>
+        !terminalStatuses.has(run.status) &&
+        !runs.some((candidate) => candidate.run_id === run.run_id)
+    );
     this.runsById.clear();
-    for (const run of runs) {
+    for (const run of [...runs, ...preserved]) {
       this.runsById.set(run.run_id, run);
     }
     this.emit();

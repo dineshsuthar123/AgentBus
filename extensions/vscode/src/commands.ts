@@ -2,7 +2,13 @@ import * as vscode from "vscode";
 import type { AgentBusClient } from "./apiClient";
 import type { DaemonManager } from "./daemonManager";
 import { changeUri, reportUri } from "./documents";
-import type { ApprovalSummary, RunSummary } from "./generated/protocol";
+import type {
+  ApprovalSummary,
+  CancelResponse,
+  RunAcceptedResponse,
+  RunCreateRequest,
+  RunSummary
+} from "./generated/protocol";
 import { ReconnectingSseClient } from "./sse";
 import type { RunStore } from "./runStore";
 import { safeError } from "./redaction";
@@ -39,6 +45,15 @@ export class CommandController implements vscode.Disposable {
     command("agentbus.startTask", () => this.start(false, false));
     command("agentbus.startDurableTask", () => this.start(true, false));
     command("agentbus.startParallelTask", () => this.start(true, true));
+    command("agentbus.submitRun", (request) =>
+      this.submitRequest(request as RunCreateRequest)
+    );
+    command("agentbus.requestCancellation", (runId, reason) =>
+      this.requestCancellation(String(runId), String(reason ?? ""))
+    );
+    command("agentbus.openChange", (runId, path) =>
+      this.openChange(String(runId), String(path))
+    );
     command("agentbus.refresh", () => this.refresh());
     command("agentbus.showRun", (item) => this.showRun(item));
     command("agentbus.resumeRun", () => this.resume());
@@ -50,7 +65,7 @@ export class CommandController implements vscode.Disposable {
     command("agentbus.runDoctor", () => this.doctor());
     command("agentbus.selectProvider", () => this.selectProvider());
     command("agentbus.restartDaemon", () => this.restartDaemon());
-    command("agentbus.stopDaemon", () => this.daemon.stop());
+    command("agentbus.stopDaemon", () => this.stopDaemon());
     command("agentbus.openLogs", () => this.output.show());
     context.subscriptions.push(...this.disposables);
     void this.connect();
@@ -141,7 +156,7 @@ export class CommandController implements vscode.Disposable {
       require_git: durable || parallel
     });
     if (!validation.valid) throw new Error(validation.message ?? "Invalid workspace.");
-    const accepted = await client.createRun({
+    await this.submitRequest({
       task,
       workspace: validation.workspace,
       provider,
@@ -152,9 +167,27 @@ export class CommandController implements vscode.Disposable {
       live_provider_consent: consent,
       keep_worktrees: config.get<boolean>("keepWorktrees", true)
     });
+  }
+
+  private async submitRequest(
+    request: RunCreateRequest
+  ): Promise<RunAcceptedResponse> {
+    const accepted = await (await this.client()).createRun(request);
+    this.store.upsert({
+      run_id: accepted.run_id,
+      status: accepted.status,
+      workflow: String(request.workflow ?? "multi"),
+      workspace: accepted.workspace,
+      original_task: request.task,
+      created_at: accepted.created_at,
+      updated_at: accepted.created_at,
+      version: 1
+    });
     this.selection.set(accepted.run_id);
+    this.status.text = "$(sync~spin) AgentBus 1";
+    this.refreshViews();
     void vscode.window.showInformationMessage(`AgentBus run ${accepted.run_id} started.`);
-    await this.refresh();
+    return accepted;
   }
 
   private async chooseRun(): Promise<RunSummary | undefined> {
@@ -202,16 +235,40 @@ export class CommandController implements vscode.Disposable {
       "Cancel Run"
     );
     if (confirmed !== "Cancel Run") return;
-    this.cancellationsInFlight.add(run.run_id);
-    this.output.appendLine(`[${run.run_id}] Cancelling...`);
+    await this.requestCancellation(
+      run.run_id,
+      "Cancelled by local IDE user"
+    );
+  }
+
+  private async requestCancellation(
+    runId: string,
+    reason: string
+  ): Promise<CancelResponse> {
+    let run = this.store.run(runId);
+    if (!run) {
+      run = await (await this.client()).run(runId);
+      this.store.upsert(run);
+    }
+    if (!canCancel(run) || this.cancellationsInFlight.has(runId)) {
+      const state =
+        cancellationStatus(run.cancellation, run.status) ??
+        `Run is already ${run.status}.`;
+      this.output.appendLine(`[${runId}] ${state}`);
+      return {
+        run_id: runId,
+        status: run.status,
+        cancellation_requested: Boolean(run.cancellation?.requested),
+        cancellation: run.cancellation
+      };
+    }
+    this.cancellationsInFlight.add(runId);
+    this.output.appendLine(`[${runId}] Cancelling...`);
     this.status.text = "$(sync~spin) AgentBus cancelling";
     try {
-      const response = await (await this.client()).cancel(
-        run.run_id,
-        "Cancelled by local IDE user"
-      );
+      const response = await (await this.client()).cancel(runId, reason || undefined);
       this.store.updateCancellation(
-        run.run_id,
+        runId,
         response.status,
         response.cancellation
       );
@@ -219,12 +276,13 @@ export class CommandController implements vscode.Disposable {
         response.cancellation,
         response.status
       )) {
-        this.output.appendLine(`[${run.run_id}] ${detail}`);
+        this.output.appendLine(`[${runId}] ${detail}`);
       }
       this.refreshViews();
       await this.refresh();
+      return response;
     } finally {
-      this.cancellationsInFlight.delete(run.run_id);
+      this.cancellationsInFlight.delete(runId);
     }
   }
 
@@ -247,11 +305,15 @@ export class CommandController implements vscode.Disposable {
       }))
     );
     if (!picked) return;
+    await this.openChange(run.run_id, picked.change.path);
+  }
+
+  private async openChange(runId: string, path: string): Promise<void> {
     await vscode.commands.executeCommand(
       "vscode.diff",
-      changeUri({ runId: run.run_id, path: picked.change.path, revision: "before" }),
-      changeUri({ runId: run.run_id, path: picked.change.path, revision: "after" }),
-      `${picked.change.path} (AgentBus)`
+      changeUri({ runId, path, revision: "before" }),
+      changeUri({ runId, path, revision: "after" }),
+      `${path} (AgentBus)`
     );
   }
 
@@ -312,7 +374,14 @@ export class CommandController implements vscode.Disposable {
   }
 
   private async restartDaemon(): Promise<void> {
+    this.stream?.stop();
     await this.daemon.restart();
     await this.connect();
+  }
+
+  private async stopDaemon(): Promise<void> {
+    this.stream?.stop();
+    await this.daemon.stop();
+    this.status.text = "$(debug-disconnect) AgentBus offline";
   }
 }
