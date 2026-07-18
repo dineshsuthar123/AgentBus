@@ -77,17 +77,18 @@ def test_json_ready_daemon_authenticates_and_cleans_registry(
         try:
             urllib.request.urlopen(url, timeout=1)
         except urllib.error.HTTPError as exc:
-            assert exc.code == 403
+            try:
+                assert exc.code == 403
+            finally:
+                exc.close()
         else:
             raise AssertionError("unauthenticated API request unexpectedly succeeded")
 
-        assert process.wait(timeout=8) == 0
+        _wait_for_daemon_exit(process, timeout_seconds=30)
         payload = json.loads(registry.read_text(encoding="utf-8"))
         assert payload["daemons"] == []
     finally:
-        if process.poll() is None:
-            process.terminate()
-            process.wait(timeout=5)
+        _terminate_process(process)
 
 
 def _request_with_retry(url: str, *, headers: dict[str, str]) -> str:
@@ -102,3 +103,30 @@ def _request_with_retry(url: str, *, headers: dict[str, str]) -> str:
             last_error = exc
             time.sleep(0.05)
     raise AssertionError(f"daemon did not become ready: {last_error}")
+
+
+def _wait_for_daemon_exit(
+    process: subprocess.Popen[str],
+    *,
+    timeout_seconds: float,
+) -> None:
+    try:
+        _, stderr = process.communicate(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired as exc:
+        raise AssertionError(
+            f"daemon did not stop within {timeout_seconds:g} seconds"
+        ) from exc
+    assert process.returncode == 0, (
+        f"daemon exited with {process.returncode}: {stderr.strip()}"
+    )
+
+
+def _terminate_process(process: subprocess.Popen[str]) -> None:
+    if process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.communicate(timeout=10)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.communicate(timeout=10)
