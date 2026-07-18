@@ -97,7 +97,12 @@ def serve(
             date_header=False,
         )
     )
-    idle = IdleShutdownMonitor(server, app, idle_timeout)
+    idle = IdleShutdownMonitor(
+        server,
+        app,
+        idle_timeout,
+        has_active_work=supervisor.has_active_runs,
+    )
     try:
         heartbeat.start()
         idle.start()

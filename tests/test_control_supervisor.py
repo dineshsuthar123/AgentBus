@@ -87,6 +87,7 @@ def test_submit_returns_immediately_and_fences_same_workspace(
     backend = BlockingBackend()
     supervisor = BackgroundRunSupervisor(backend, max_background_runs=2)
     workspace = _isolated_repository(tmp_path / "repo")
+    assert supervisor.has_active_runs() is False
     accepted = supervisor.submit(_request(workspace))
     assert backend.started.wait(timeout=2)
 
@@ -95,8 +96,10 @@ def test_submit_returns_immediately_and_fences_same_workspace(
 
     assert accepted.run_id in backend.executions
     assert supervisor.is_active(accepted.run_id)
+    assert supervisor.has_active_runs() is True
     backend.release.set()
     supervisor.shutdown()
+    assert supervisor.has_active_runs() is False
 
 
 def test_completed_run_releases_workspace_for_next_submission(

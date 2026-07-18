@@ -504,6 +504,10 @@ class BackgroundRunSupervisor:
         with self._lock:
             return run_id in self._active
 
+    def has_active_runs(self) -> bool:
+        with self._lock:
+            return bool(self._active)
+
     def shutdown(self, *, wait: bool = True) -> None:
         with self._lock:
             if self._closed:
