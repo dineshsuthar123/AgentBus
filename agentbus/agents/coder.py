@@ -3,6 +3,7 @@ import json
 
 from agentbus.agents.base import BaseAgent
 from agentbus.config import AgentBusConfig
+from agentbus.execution.cancellation import CancellationToken
 from agentbus.models.router import ModelRouter
 from agentbus.models.types import ModelRole
 from agentbus.runtime.loop import AgentLoop
@@ -31,11 +32,14 @@ class CoderAgent(BaseAgent):
         user_task: str,
         plan: dict,
         reviewer_feedback: dict | None = None,
+        cancellation: CancellationToken | None = None,
     ) -> str:
         task = self._build_task(user_task, plan, reviewer_feedback)
         loop_arguments = {"config": self.config}
         if _accepts_keyword(self.loop_factory, "model"):
             loop_arguments["model"] = self.model
+        if _accepts_keyword(self.loop_factory, "cancellation"):
+            loop_arguments["cancellation"] = cancellation
         loop = self.loop_factory(**loop_arguments)
         return loop.run(task)
 

@@ -1,3 +1,9 @@
+from agentbus.execution.cancellation import (
+    CancellationRequested,
+    CancellationState,
+    CancellationToken,
+)
+from agentbus.execution.cancellation_registry import CancellationRegistry
 from agentbus.execution.engine import DurableExecutionEngine
 from agentbus.execution.models import (
     ApprovalDecision,
@@ -23,6 +29,10 @@ from agentbus.execution.task_graph import TaskGraph, TaskGraphValidationError
 __all__ = [
     "ApprovalDecision",
     "AttemptStatus",
+    "CancellationRegistry",
+    "CancellationRequested",
+    "CancellationState",
+    "CancellationToken",
     "DurableExecutionEngine",
     "ExecutionArtifact",
     "ExecutionReport",

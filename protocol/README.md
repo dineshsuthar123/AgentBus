@@ -13,3 +13,8 @@ Run `agentbus control-schema export` after changing protocol models. Run
 The health endpoint is unauthenticated. Every `/api/v1` endpoint uses an opaque
 bearer token delivered once through the daemon parent-process handshake.
 Generated files contain no concrete token, credential, or machine-specific path.
+
+Cancellation lifecycle fields are optional protocol v1 extensions with safe
+defaults. Run, scheduler, report, and cancel responses share the same model.
+Persisted cancellation events are monotonic and replayable; payloads contain no
+prompts, bearer tokens, API keys, environment dumps, or raw provider objects.

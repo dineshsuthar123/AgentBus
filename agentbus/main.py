@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from agentbus.config import AgentBusConfig
+from agentbus.config import AgentBusConfig, SUPPORTED_PROVIDERS
 from agentbus.configuration import resolve_configuration
 from agentbus.execution.engine import DurableExecutionEngine, DurableExecutionError
 from agentbus.execution.leases import LeaseError, LeaseService
@@ -41,12 +41,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--provider",
-        choices=["ollama", "azure"],
+        choices=SUPPORTED_PROVIDERS,
         help="Override the primary model provider.",
     )
     parser.add_argument(
         "--fallback-provider",
-        choices=["ollama", "azure"],
+        choices=SUPPORTED_PROVIDERS,
         help="Override the explicitly configured fallback provider.",
     )
     parser.add_argument(
@@ -182,7 +182,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     operations.add_argument(
         "--check-provider",
-        choices=["ollama", "azure"],
+        choices=SUPPORTED_PROVIDERS,
         help="Validate one provider's local configuration.",
     )
     parser.add_argument(
@@ -533,6 +533,7 @@ def _handle_model_diagnostic(
     if args.list_providers:
         print("ollama  local/offline provider (default)")
         print("azure   Azure OpenAI v1 provider")
+        print("deterministic  network-free development and acceptance provider")
         return 0
 
     if args.show_model_config:
@@ -564,10 +565,17 @@ def _handle_model_diagnostic(
 
     print("Readiness: locally configured")
     if not args.live:
-        print("Network request: skipped (use --live to opt in)")
+        if provider == "deterministic":
+            print("Network request: not applicable (deterministic provider is offline)")
+        else:
+            print("Network request: skipped (use --live to opt in)")
         return 0
 
-    print("Network request: LIVE opt-in; sending one minimal model request")
+    print(
+        "Network request: not applicable; running one deterministic request"
+        if provider == "deterministic"
+        else "Network request: LIVE opt-in; sending one minimal model request"
+    )
     live_config = config.with_overrides(
         provider_name=provider,
         enable_provider_fallback=False,
@@ -602,7 +610,7 @@ def _provider_configuration_errors(
 ) -> list[str]:
     errors: list[str] = []
     try:
-        if provider == "ollama":
+        if provider in {"ollama", "deterministic"}:
             config.validate_provider_configuration(provider)
         else:
             config.resolve_model("default", provider=provider)
@@ -883,6 +891,89 @@ def render_execution_report(report: ExecutionReport) -> str:
             "Filesystem rollback: not performed; created or modified files remain "
             "in the target workspace for inspection and manual cleanup."
         )
+    cancellation = report.cancellation
+    if cancellation.get("requested"):
+        lines.append(
+            "Cancellation requested: "
+            + str(cancellation.get("requested_at") or "[time not recorded]")
+        )
+        if cancellation.get("reason"):
+            lines.append(f"Cancellation reason: {cancellation['reason']}")
+        provider_requested_at = cancellation.get(
+            "provider_cancellation_requested_at"
+        )
+        if provider_requested_at:
+            providers = ", ".join(cancellation.get("provider_names", []))
+            lines.append(
+                "Provider cancellation signalled: "
+                f"{provider_requested_at}"
+                + (f" ({providers})" if providers else "")
+            )
+        provider_acknowledged_at = cancellation.get(
+            "provider_cancellation_acknowledged_at"
+        )
+        if provider_acknowledged_at:
+            lines.append(
+                "Provider cancellation acknowledged: "
+                f"{provider_acknowledged_at}"
+            )
+        active_operations = cancellation.get(
+            "active_non_interruptible_operations",
+            [],
+        )
+        if active_operations:
+            lines.append(
+                "Active non-interruptible operations: "
+                + ", ".join(active_operations)
+            )
+        completed_operations = cancellation.get(
+            "operations_completed_after_request",
+            [],
+        )
+        if completed_operations:
+            lines.append(
+                "Operations completed after cancellation request: "
+                + ", ".join(completed_operations)
+            )
+        prevented_tasks = cancellation.get(
+            "tasks_prevented_from_starting",
+            [],
+        )
+        if prevented_tasks:
+            lines.append(
+                "Tasks prevented from starting: " + ", ".join(prevented_tasks)
+            )
+        completed_tasks = cancellation.get(
+            "tasks_completed_after_request",
+            [],
+        )
+        if completed_tasks:
+            lines.append(
+                "Tasks completed after cancellation request: "
+                + ", ".join(completed_tasks)
+            )
+        if cancellation.get("scheduling_stopped_at"):
+            lines.append(
+                "Scheduling stopped: "
+                f"{cancellation['scheduling_stopped_at']}"
+            )
+        if cancellation.get("cleanup_completed_at"):
+            lines.append(
+                "Cancellation cleanup completed: "
+                f"{cancellation['cleanup_completed_at']}"
+            )
+        lines.append(
+            "Cancellation resume eligibility: "
+            + (
+                "available"
+                if cancellation.get("resume_eligible", True)
+                else "unavailable"
+            )
+        )
+        if cancellation.get("terminal_reason"):
+            lines.append(
+                f"Cancellation terminal reason: {cancellation['terminal_reason']}"
+            )
     if report.resume_command:
         lines.append(f"Resume: {report.resume_command}")
     return "\n".join(lines)

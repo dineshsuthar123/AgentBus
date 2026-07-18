@@ -12,6 +12,7 @@ import {
   type LaunchSettings
 } from "./daemonProtocol";
 import { CONTROL_PROTOCOL_VERSION, type DaemonRegistryEntry } from "./generated/protocol";
+import { waitForChildExit } from "./processLifecycle";
 import { redactText, safeError } from "./redaction";
 
 const secretPrefix = "agentbus.daemonToken.";
@@ -23,6 +24,7 @@ export interface DaemonConnection {
 
 export class DaemonManager implements vscode.Disposable {
   private connection: DaemonConnection | undefined;
+  private connecting: Promise<DaemonConnection> | undefined;
   private child: ChildProcessWithoutNullStreams | undefined;
 
   public constructor(
@@ -35,17 +37,21 @@ export class DaemonManager implements vscode.Disposable {
   }
 
   public async connectOrStart(): Promise<DaemonConnection> {
-    const existing = await this.discover();
-    if (existing) {
-      return existing;
+    if (this.connection) {
+      return this.connection;
     }
-    const configuration = vscode.workspace.getConfiguration("agentbus");
-    if (!configuration.get<boolean>("autoStartDaemon", true)) {
-      throw new Error(
-        "No compatible AgentBus daemon is available and automatic startup is disabled."
-      );
+    if (this.connecting) {
+      return this.connecting;
     }
-    return this.start();
+    const connecting = this.connectOrStartOnce();
+    this.connecting = connecting;
+    try {
+      return await connecting;
+    } finally {
+      if (this.connecting === connecting) {
+        this.connecting = undefined;
+      }
+    }
   }
 
   public async discover(): Promise<DaemonConnection | undefined> {
@@ -94,8 +100,11 @@ export class DaemonManager implements vscode.Disposable {
   }
 
   public async start(): Promise<DaemonConnection> {
-    if (this.child && this.child.exitCode === null) {
-      throw new Error("AgentBus daemon startup is already in progress.");
+    if (this.child) {
+      if (this.child.exitCode === null && this.child.signalCode === null) {
+        throw new Error("An AgentBus daemon process is already running.");
+      }
+      this.child = undefined;
     }
     const spec = buildLaunchSpec(this.settings());
     const child = spawn(spec.command, spec.args, {
@@ -146,6 +155,9 @@ export class DaemonManager implements vscode.Disposable {
       this.output.append(redactText(data.toString("utf8")));
     });
     child.on("exit", () => {
+      if (this.child === child) {
+        this.child = undefined;
+      }
       if (this.connection?.entry.daemon_id === handshake.daemon_id) {
         this.connection = undefined;
       }
@@ -155,29 +167,58 @@ export class DaemonManager implements vscode.Disposable {
   }
 
   public async stop(): Promise<void> {
+    if (this.connecting) {
+      await this.connecting;
+    }
     const connection = this.connection;
     if (!connection) {
       return;
     }
+    const ownedChild = this.child;
     const spec = buildStopSpec(this.settings(), connection.entry.daemon_id);
     const result = await runChild(spec.command, spec.args);
-    if (result !== 0) {
-      throw new Error("AgentBus refused the safe daemon stop request.");
+    if (result.exitCode !== 0) {
+      throw new Error(
+        `AgentBus refused the safe daemon stop request: ${
+          redactText(result.stderr) || "no diagnostic was returned"
+        }`
+      );
+    }
+    if (ownedChild) {
+      await waitForChildExit(ownedChild);
     }
     await this.context.secrets.delete(
       `${secretPrefix}${connection.entry.daemon_id}`
     );
     this.connection = undefined;
+    if (this.child === ownedChild) {
+      this.child = undefined;
+    }
   }
 
   public async restart(): Promise<DaemonConnection> {
     await this.stop();
-    return this.start();
+    return this.connectOrStart();
   }
 
   public dispose(): void {
+    this.connecting = undefined;
     this.child = undefined;
     this.connection = undefined;
+  }
+
+  private async connectOrStartOnce(): Promise<DaemonConnection> {
+    const existing = await this.discover();
+    if (existing) {
+      return existing;
+    }
+    const configuration = vscode.workspace.getConfiguration("agentbus");
+    if (!configuration.get<boolean>("autoStartDaemon", true)) {
+      throw new Error(
+        "No compatible AgentBus daemon is available and automatic startup is disabled."
+      );
+    }
+    return this.start();
   }
 
   private settings(): LaunchSettings {
@@ -244,15 +285,30 @@ async function readHandshake(
   });
 }
 
-async function runChild(command: string, args: string[]): Promise<number> {
+async function runChild(
+  command: string,
+  args: string[]
+): Promise<{ exitCode: number; stderr: string }> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       env: process.env,
       shell: false,
-      windowsHide: true,
-      stdio: "ignore"
+      windowsHide: true
+    });
+    child.stdout.resume();
+    let stderr = "";
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (value: string) => {
+      if (stderr.length < 16_384) {
+        stderr += value;
+      }
     });
     child.once("error", reject);
-    child.once("exit", (code) => resolve(code ?? 1));
+    child.once("close", (code) =>
+      resolve({
+        exitCode: code ?? 1,
+        stderr: stderr.slice(0, 16_384).trim()
+      })
+    );
   });
 }

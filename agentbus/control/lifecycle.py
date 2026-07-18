@@ -3,6 +3,7 @@ from __future__ import annotations
 import socket
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from agentbus.control.models import DaemonRegistryEntry
@@ -66,11 +67,13 @@ class IdleShutdownMonitor:
         timeout_seconds: float,
         *,
         poll_seconds: float = 1.0,
+        has_active_work: Callable[[], bool] | None = None,
     ):
         self.server = server
         self.app = app
         self.timeout_seconds = timeout_seconds
         self.poll_seconds = poll_seconds
+        self.has_active_work = has_active_work or (lambda: False)
         self._stop = threading.Event()
         self._thread = threading.Thread(
             target=self._run,
@@ -89,7 +92,12 @@ class IdleShutdownMonitor:
 
     def _run(self) -> None:
         while not self._stop.wait(self.poll_seconds):
-            last_activity = float(getattr(self.app.state, "last_activity", 0.0))
-            if time.monotonic() - last_activity >= self.timeout_seconds:
+            if self.should_shutdown():
                 self.server.should_exit = True
                 return
+
+    def should_shutdown(self) -> bool:
+        if self.has_active_work():
+            return False
+        last_activity = float(getattr(self.app.state, "last_activity", 0.0))
+        return time.monotonic() - last_activity >= self.timeout_seconds

@@ -49,6 +49,10 @@ class ModelResult(BaseModel):
     fallback_used: bool = False
     original_provider: str | None = None
     original_error_category: str | None = None
+    cancellation_requested: bool = False
+    cancellation_acknowledged: bool = False
+    cancellation_supported: bool = False
+    completed_after_cancellation: bool = False
     provider_metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("provider_metadata")
@@ -84,6 +88,10 @@ class ModelResult(BaseModel):
             "fallback_used": self.fallback_used,
             "original_provider": self.original_provider,
             "original_error_category": self.original_error_category,
+            "cancellation_requested": self.cancellation_requested,
+            "cancellation_acknowledged": self.cancellation_acknowledged,
+            "cancellation_supported": self.cancellation_supported,
+            "completed_after_cancellation": self.completed_after_cancellation,
             "provider_metadata": self.provider_metadata,
         }
 

@@ -33,6 +33,25 @@ def test_json_schema_generates_typescript_from_shared_models() -> None:
     assert 'export const CONTROL_PROTOCOL_VERSION = "1.0"' in generated
 
 
+def test_cancellation_lifecycle_is_backward_compatible_protocol_extension() -> None:
+    schema = build_json_schema()
+    lifecycle = schema["$defs"]["CancellationLifecycle"]["properties"]
+    run_summary = schema["$defs"]["RunSummary"]
+
+    assert "cancellation" in run_summary["properties"]
+    assert "cancellation" not in run_summary.get("required", [])
+    assert {
+        "requested",
+        "acknowledged",
+        "acknowledgement_stage",
+        "active_non_interruptible_operation",
+        "tasks_prevented_from_starting",
+        "tasks_completed_after_request",
+        "resume_eligible",
+        "terminal_reason",
+    } <= lifecycle.keys()
+
+
 def test_committed_protocol_artifacts_are_fresh() -> None:
     assert export_protocol(Path("protocol"), check=True) == 0
 

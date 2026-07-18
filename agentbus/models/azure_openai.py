@@ -2,16 +2,23 @@ from __future__ import annotations
 
 import json
 import time
+from contextlib import nullcontext
 from typing import Any, Callable
 from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import BaseModel, ValidationError
 
+from agentbus.execution.cancellation import (
+    CancellationRequested,
+    CancellationState,
+    CancellationToken,
+)
 from agentbus.models.base import validate_json_schema
 from agentbus.models.errors import (
     ModelAuthenticationError,
     ModelAuthorizationError,
     ModelBadRequestError,
+    ModelCancellationError,
     ModelConfigurationError,
     ModelContentPolicyError,
     ModelNotFoundError,
@@ -101,6 +108,7 @@ class AzureOpenAIProvider:
         system_prompt: str | None = None,
         timeout_seconds: float | None = None,
         metadata: dict[str, Any] | None = None,
+        cancellation: CancellationToken | None = None,
     ) -> ModelResult:
         return self._generate(
             prompt,
@@ -109,6 +117,7 @@ class AzureOpenAIProvider:
             system_prompt=system_prompt,
             timeout_seconds=timeout_seconds,
             metadata=metadata,
+            cancellation=cancellation,
         )
 
     def generate_json(
@@ -119,6 +128,7 @@ class AzureOpenAIProvider:
         system_prompt: str | None = None,
         timeout_seconds: float | None = None,
         metadata: dict[str, Any] | None = None,
+        cancellation: CancellationToken | None = None,
     ) -> ModelResult:
         return self._generate(
             prompt,
@@ -127,6 +137,7 @@ class AzureOpenAIProvider:
             system_prompt=system_prompt,
             timeout_seconds=timeout_seconds,
             metadata=metadata,
+            cancellation=cancellation,
         )
 
     def _generate(
@@ -138,27 +149,56 @@ class AzureOpenAIProvider:
         system_prompt: str | None,
         timeout_seconds: float | None,
         metadata: dict[str, Any] | None,
+        cancellation: CancellationToken | None,
     ) -> ModelResult:
         started = self.clock()
         try:
-            if self.api_mode == "responses":
-                response = self._responses_request(
-                    prompt,
-                    schema=schema,
-                    json_requested=json_requested,
-                    system_prompt=system_prompt,
-                    timeout_seconds=timeout_seconds,
-                    metadata=metadata,
+            operation = (
+                cancellation.operation(
+                    "azure_openai.sdk_request",
+                    source="provider:azure",
+                    interruptible=False,
+                    provider=self.provider_name,
                 )
-            else:
-                response = self._chat_request(
-                    prompt,
-                    schema=schema,
-                    json_requested=json_requested,
-                    system_prompt=system_prompt,
-                    timeout_seconds=timeout_seconds,
-                    metadata=metadata,
-                )
+                if cancellation is not None
+                else nullcontext()
+            )
+            with operation:
+                if self.api_mode == "responses":
+                    response = self._responses_request(
+                        prompt,
+                        schema=schema,
+                        json_requested=json_requested,
+                        system_prompt=system_prompt,
+                        timeout_seconds=timeout_seconds,
+                        metadata=metadata,
+                    )
+                else:
+                    response = self._chat_request(
+                        prompt,
+                        schema=schema,
+                        json_requested=json_requested,
+                        system_prompt=system_prompt,
+                        timeout_seconds=timeout_seconds,
+                        metadata=metadata,
+                    )
+                if cancellation is not None and cancellation.is_requested:
+                    cancellation.acknowledge(
+                        "provider:azure",
+                        stage="after-response",
+                        provider=self.provider_name,
+                    )
+        except CancellationRequested as exc:
+            raise ModelCancellationError(
+                "Azure OpenAI request was cancelled before transport started.",
+                provider=self.provider_name,
+                model=self.model_name,
+                metadata={
+                    "acknowledgement_source": exc.source,
+                    "acknowledgement_stage": exc.stage,
+                    "cancellation_supported": False,
+                },
+            ) from exc
         except ModelProviderError:
             raise
         except ValidationError as exc:
@@ -171,12 +211,15 @@ class AzureOpenAIProvider:
             raise map_azure_exception(exc, model=self.model_name) from exc
 
         latency = max(0.0, self.clock() - started)
+        cancellation_state = (
+            cancellation.snapshot() if cancellation is not None else None
+        )
         if not json_requested:
             text = self._extract_text(response)
-            return self._result(text, response, latency)
+            return self._result(text, response, latency, cancellation_state)
 
         parsed = self._extract_json(response, schema)
-        return self._result(parsed, response, latency)
+        return self._result(parsed, response, latency, cancellation_state)
 
     def _responses_request(
         self,
@@ -368,6 +411,7 @@ class AzureOpenAIProvider:
         value: str | dict[str, Any],
         response: Any,
         latency: float,
+        cancellation: CancellationState | None = None,
     ) -> ModelResult:
         return ModelResult(
             value=value,
@@ -378,6 +422,17 @@ class AzureOpenAIProvider:
             usage=_usage(response, self.api_mode),
             finish_status=_finish_status(response, self.api_mode),
             latency_seconds=latency,
+            cancellation_requested=bool(
+                cancellation and cancellation.requested
+            ),
+            cancellation_acknowledged=bool(
+                cancellation
+                and cancellation.provider_cancellation_acknowledged_at
+            ),
+            cancellation_supported=False,
+            completed_after_cancellation=bool(
+                cancellation and cancellation.requested
+            ),
             provider_metadata={"api_mode": self.api_mode},
         )
 

@@ -12,7 +12,8 @@ from agentbus.control.errors import (
 )
 from agentbus.control.models import RunCreateRequest
 from agentbus.control.supervisor import BackgroundRunSupervisor
-from agentbus.execution.models import RunStatus
+from agentbus.execution.cancellation import CancellationState
+from agentbus.execution.models import RunStatus, utc_now
 
 
 class BlockingBackend:
@@ -22,6 +23,7 @@ class BlockingBackend:
         self.executions: list[str] = []
         self.workspaces: dict[str, str] = {}
         self.cancelled: list[str] = []
+        self.cancellation = CancellationState()
 
     def execute_new(self, request: RunCreateRequest, run_id: str) -> None:
         self.executions.append(run_id)
@@ -35,7 +37,27 @@ class BlockingBackend:
 
     def cancel(self, run_id: str, reason: str | None = None) -> RunStatus:
         self.cancelled.append(run_id)
+        now = utc_now()
+        self.cancellation = CancellationState(
+            requested=True,
+            requested_at=now,
+            reason=reason,
+            propagated_at=now,
+            propagation_sources=["control-supervisor"],
+            acknowledged=True,
+            acknowledged_at=now,
+            acknowledgement_source="blocking-backend",
+            acknowledgement_stage="test",
+            scheduling_stopped_at=now,
+            cleanup_completed_at=now,
+            resume_eligible=False,
+            terminal_reason="Cancelled safely.",
+            revision=1,
+        )
         return RunStatus.CANCELLED
+
+    def cancellation_state(self, run_id: str) -> CancellationState:
+        return self.cancellation
 
     def workspace_for(self, run_id: str) -> str:
         return self.workspaces[run_id]
@@ -65,6 +87,7 @@ def test_submit_returns_immediately_and_fences_same_workspace(
     backend = BlockingBackend()
     supervisor = BackgroundRunSupervisor(backend, max_background_runs=2)
     workspace = _isolated_repository(tmp_path / "repo")
+    assert supervisor.has_active_runs() is False
     accepted = supervisor.submit(_request(workspace))
     assert backend.started.wait(timeout=2)
 
@@ -73,8 +96,10 @@ def test_submit_returns_immediately_and_fences_same_workspace(
 
     assert accepted.run_id in backend.executions
     assert supervisor.is_active(accepted.run_id)
+    assert supervisor.has_active_runs() is True
     backend.release.set()
     supervisor.shutdown()
+    assert supervisor.has_active_runs() is False
 
 
 def test_completed_run_releases_workspace_for_next_submission(
@@ -119,6 +144,11 @@ def test_cancel_delegates_to_persisted_backend(tmp_path: Path) -> None:
 
     assert response.status == "cancelled"
     assert backend.cancelled == ["run-1"]
+    assert response.cancellation.requested is True
+    assert response.cancellation.acknowledged is True
+    assert response.cancellation.scheduling_stopped is True
+    assert response.cancellation.cleanup_completed is True
+    assert response.cancellation.resume_eligible is False
     supervisor.shutdown()
 
 

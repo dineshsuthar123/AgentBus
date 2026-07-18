@@ -17,6 +17,7 @@ from agentbus.control.errors import (
 from agentbus.control.models import DaemonRegistryEntry
 
 _REGISTRY_VERSION = 1
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 
 
 def utc_now() -> datetime:
@@ -29,10 +30,10 @@ def default_registry_path() -> Path:
 
 def executable_identity(pid: int | None = None) -> str:
     target_pid = os.getpid() if pid is None else pid
-    if target_pid == os.getpid():
-        return str(Path(sys.executable).resolve())
     if os.name == "nt":
         return _windows_executable(target_pid)
+    if target_pid == os.getpid():
+        return str(Path(sys.executable).resolve())
     executable = Path(f"/proc/{target_pid}/exe")
     try:
         return str(executable.resolve(strict=True))
@@ -56,16 +57,7 @@ def process_start_identity(pid: int | None = None) -> str:
 
 
 def process_matches(entry: DaemonRegistryEntry) -> bool:
-    if not _process_exists(entry.pid):
-        return False
-    actual_start = process_start_identity(entry.pid)
-    actual_executable = executable_identity(entry.pid)
-    return bool(
-        actual_start
-        and actual_executable
-        and actual_start == entry.process_start_identity
-        and _same_path(actual_executable, entry.executable)
-    )
+    return not _process_identity_mismatches(entry)
 
 
 class DaemonRegistry:
@@ -168,9 +160,12 @@ def terminate_registered_daemon(
 ) -> None:
     entry = registry.get(daemon_id)
     if not process_matches(entry):
+        mismatches = _process_identity_mismatches(entry)
+        detail = ", ".join(mismatches) or "identity mismatch"
         registry.remove(daemon_id)
         raise ControlPlaneConflictError(
-            "The registered process identity no longer matches; no process was stopped."
+            "The registered process identity no longer matches "
+            f"({detail}); no process was stopped."
         )
     if entry.pid == os.getpid():
         raise ControlPlaneConflictError(
@@ -189,8 +184,7 @@ def _process_exists(pid: int) -> bool:
     if pid <= 0:
         return False
     if os.name == "nt":
-        kernel32 = ctypes.windll.kernel32
-        handle = kernel32.OpenProcess(0x1000, False, pid)
+        kernel32, handle = _open_windows_process(pid)
         if not handle:
             return False
         kernel32.CloseHandle(handle)
@@ -205,14 +199,23 @@ def _process_exists(pid: int) -> bool:
 
 
 def _windows_executable(pid: int) -> str:
-    kernel32 = ctypes.windll.kernel32
-    handle = kernel32.OpenProcess(0x1000, False, pid)
+    from ctypes import wintypes
+
+    kernel32, handle = _open_windows_process(pid)
     if not handle:
         return ""
     try:
-        size = ctypes.c_ulong(32768)
+        query_image = kernel32.QueryFullProcessImageNameW
+        query_image.argtypes = [
+            wintypes.HANDLE,
+            wintypes.DWORD,
+            wintypes.LPWSTR,
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        query_image.restype = wintypes.BOOL
+        size = wintypes.DWORD(32768)
         buffer = ctypes.create_unicode_buffer(size.value)
-        if not kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
+        if not query_image(handle, 0, buffer, ctypes.byref(size)):
             return ""
         return str(Path(buffer.value).resolve())
     finally:
@@ -220,22 +223,69 @@ def _windows_executable(pid: int) -> str:
 
 
 def _windows_process_start(pid: int) -> str:
-    kernel32 = ctypes.windll.kernel32
-    handle = kernel32.OpenProcess(0x1000, False, pid)
+    from ctypes import wintypes
+
+    kernel32, handle = _open_windows_process(pid)
     if not handle:
         return ""
     try:
-        creation = ctypes.c_ulonglong()
-        exit_time = ctypes.c_ulonglong()
-        kernel_time = ctypes.c_ulonglong()
-        user_time = ctypes.c_ulonglong()
-        success = kernel32.GetProcessTimes(
+        get_process_times = kernel32.GetProcessTimes
+        get_process_times.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(wintypes.FILETIME),
+            ctypes.POINTER(wintypes.FILETIME),
+            ctypes.POINTER(wintypes.FILETIME),
+            ctypes.POINTER(wintypes.FILETIME),
+        ]
+        get_process_times.restype = wintypes.BOOL
+        creation = wintypes.FILETIME()
+        exit_time = wintypes.FILETIME()
+        kernel_time = wintypes.FILETIME()
+        user_time = wintypes.FILETIME()
+        success = get_process_times(
             handle,
             ctypes.byref(creation),
             ctypes.byref(exit_time),
             ctypes.byref(kernel_time),
             ctypes.byref(user_time),
         )
-        return str(creation.value) if success else ""
+        if not success:
+            return ""
+        value = (creation.dwHighDateTime << 32) | creation.dwLowDateTime
+        return str(value)
     finally:
         kernel32.CloseHandle(handle)
+
+
+def _open_windows_process(pid: int):
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    open_process = kernel32.OpenProcess
+    open_process.argtypes = [
+        wintypes.DWORD,
+        wintypes.BOOL,
+        wintypes.DWORD,
+    ]
+    open_process.restype = wintypes.HANDLE
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = [wintypes.HANDLE]
+    close_handle.restype = wintypes.BOOL
+    return kernel32, open_process(
+        _PROCESS_QUERY_LIMITED_INFORMATION,
+        False,
+        pid,
+    )
+
+
+def _process_identity_mismatches(entry: DaemonRegistryEntry) -> list[str]:
+    if not _process_exists(entry.pid):
+        return ["process missing"]
+    actual_start = process_start_identity(entry.pid)
+    actual_executable = executable_identity(entry.pid)
+    mismatches: list[str] = []
+    if not actual_start or actual_start != entry.process_start_identity:
+        mismatches.append("start identity")
+    if not actual_executable or not _same_path(actual_executable, entry.executable):
+        mismatches.append("executable identity")
+    return mismatches

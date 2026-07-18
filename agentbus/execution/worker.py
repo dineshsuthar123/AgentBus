@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable
+from contextlib import nullcontext
 from enum import Enum
 from pathlib import Path
 from typing import Any
 
 from pydantic import Field
 
+from agentbus.execution.cancellation import CancellationRequested, CancellationToken
 from agentbus.execution.leases import LeaseError, LeaseService, WorkerLease
 from agentbus.execution.models import (
     AttemptStatus,
@@ -21,6 +23,7 @@ from agentbus.execution.models import (
 )
 from agentbus.execution.state_store import StateStore, StateStoreError
 from agentbus.git.repository import GitRepository, GitRepositoryError
+from agentbus.models.errors import ModelCancellationError
 from agentbus.worktrees.manager import GitWorktreeManager
 from agentbus.worktrees.models import TaskCommitRecord, WorktreeRecord, WorktreeStatus
 
@@ -50,6 +53,10 @@ ExecutorFactory = Callable[[Path], Any]
 WorkerCrashHook = Callable[[str, str, str], None]
 
 
+class _WorkerCancellation(RuntimeError):
+    pass
+
+
 class LocalTaskWorker:
     def __init__(
         self,
@@ -60,7 +67,7 @@ class LocalTaskWorker:
         worktree_manager: GitWorktreeManager,
         executor_factory: ExecutorFactory,
         heartbeat_seconds: float = 30,
-        cancellation: threading.Event | None = None,
+        cancellation: CancellationToken | threading.Event | None = None,
         crash_hook: WorkerCrashHook | None = None,
     ):
         if heartbeat_seconds <= 0:
@@ -81,8 +88,10 @@ class LocalTaskWorker:
         lease: WorkerLease,
         base_commit: str,
     ) -> WorkerResult:
-        if self.cancellation.is_set():
-            return self._result(task, lease, WorkerStatus.CANCELLED, "Cancelled")
+        try:
+            self._checkpoint("before-worker-start")
+        except (CancellationRequested, ModelCancellationError, _WorkerCancellation):
+            return self._cancel_without_attempt(task, lease)
         self.lease_service.validate_fencing_token(
             lease.lease_id, self.worker_id, lease.fencing_token
         )
@@ -96,12 +105,21 @@ class LocalTaskWorker:
             },
             task_id=task.task_id,
         )
-        worktree = self.worktree_manager.create_task_worktree(
-            run.run_id,
-            task.task_id,
-            base_commit,
-            self.worker_id,
-        )
+        try:
+            with self._operation("worker.create_worktree"):
+                worktree = self.worktree_manager.create_task_worktree(
+                    run.run_id,
+                    task.task_id,
+                    base_commit,
+                    self.worker_id,
+                )
+            self._checkpoint("after-worktree-created")
+        except (CancellationRequested, ModelCancellationError, _WorkerCancellation):
+            return self._cancel_without_attempt(
+                task,
+                lease,
+                worktree=locals().get("worktree"),
+            )
         self._crash("after_worktree_created", run.run_id, task.task_id)
         attempt = self.store.create_attempt(run.run_id, task.task_id)
         stop_heartbeat = threading.Event()
@@ -131,17 +149,22 @@ class LocalTaskWorker:
                     if item.attempt_id != attempt.attempt_id
                 ],
             )
+            self._checkpoint("before-task-executor")
             result = executor.execute(context) if hasattr(executor, "execute") else executor(context)
             if not isinstance(result, TaskExecutionResult):
                 result = TaskExecutionResult.model_validate(result)
             for artifact in result.artifacts:
                 self.store.record_artifact(artifact)
+            if result.failure_category == FailureCategory.CANCELLED:
+                return self._persist_cancellation(
+                    task,
+                    lease,
+                    attempt.attempt_id,
+                    worktree,
+                )
             if not result.succeeded:
                 return self._persist_failure(task, lease, attempt.attempt_id, result, worktree)
-            if self.cancellation.is_set():
-                return self._persist_interruption(
-                    task, lease, attempt.attempt_id, worktree, "Worker cancelled."
-                )
+            self._checkpoint("after-task-executor")
             if lease_lost.is_set():
                 return self._result(
                     task,
@@ -150,79 +173,89 @@ class LocalTaskWorker:
                     "Worker lease was lost during execution.",
                     worktree,
                 )
-            repository = GitRepository(str(worktree.path))
-            changes = repository.change_set(result.changed_files or repository.changed_files())
-            if not changes.commit_files:
-                failure = TaskExecutionResult(
-                    succeeded=False,
-                    summary="Task produced no commit-eligible changes.",
-                    failure_category=FailureCategory.VERIFIER_FAILURE,
-                    error_message="No relevant task files are available to commit.",
-                    retryable=False,
-                    metadata=result.metadata,
+            with self._operation("worker.task_commit"):
+                repository = GitRepository(str(worktree.path))
+                changes = repository.change_set(
+                    result.changed_files or repository.changed_files()
                 )
-                return self._persist_failure(
-                    task, lease, attempt.attempt_id, failure, worktree
+                if not changes.commit_files:
+                    failure = TaskExecutionResult(
+                        succeeded=False,
+                        summary="Task produced no commit-eligible changes.",
+                        failure_category=FailureCategory.VERIFIER_FAILURE,
+                        error_message="No relevant task files are available to commit.",
+                        retryable=False,
+                        metadata=result.metadata,
+                    )
+                    return self._persist_failure(
+                        task, lease, attempt.attempt_id, failure, worktree
+                    )
+                parent = repository.head_commit(short=False)
+                commit_sha = repository.commit(
+                    f"feat: {task.task_id} {task.spec.title}"[:120],
+                    paths=changes.commit_files,
                 )
-            parent = repository.head_commit(short=False)
-            commit_sha = repository.commit(
-                f"feat: {task.task_id} {task.spec.title}"[:120],
-                paths=changes.commit_files,
-            )
-            commit_sha = repository.head_commit(short=False)
-            self._crash("after_task_commit", run.run_id, task.task_id)
-            commit = TaskCommitRecord(
-                run_id=run.run_id,
-                task_id=task.task_id,
-                commit_sha=commit_sha,
-                parent_sha=parent,
-                worktree_id=worktree.worktree_id,
-                changed_files=changes.commit_files,
-            )
-            if lease_lost.is_set():
-                return self._result(
-                    task,
-                    lease,
-                    WorkerStatus.LEASE_LOST,
-                    "Worker lease was lost before commit persistence.",
-                    worktree,
-                    commit_sha,
-                    changes.commit_files,
+                commit_sha = repository.head_commit(short=False)
+                self._crash("after_task_commit", run.run_id, task.task_id)
+                commit = TaskCommitRecord(
+                    run_id=run.run_id,
+                    task_id=task.task_id,
+                    commit_sha=commit_sha,
+                    parent_sha=parent,
+                    worktree_id=worktree.worktree_id,
+                    changed_files=changes.commit_files,
                 )
-            self.store.complete_fenced_task_commit(
-                attempt_id=attempt.attempt_id,
-                lease_id=lease.lease_id,
-                worker_id=self.worker_id,
-                fencing_token=lease.fencing_token,
-                commit=commit,
-                summary=result.summary,
-                metadata={
-                    **result.metadata,
-                    "worker_id": self.worker_id,
-                    "lease_id": lease.lease_id,
-                    "fencing_token": lease.fencing_token,
-                    "worktree_id": worktree.worktree_id,
-                },
-            )
-            self._crash("after_commit_persisted", run.run_id, task.task_id)
-            self.store.update_worktree(
-                worktree.worktree_id,
-                status=WorktreeStatus.COMPLETED,
-                result_commit=commit_sha,
-                event_type="worktree_completed",
-            )
-            self.store.record_event(
-                run.run_id,
-                "worker_finished",
-                {
-                    "worker_id": self.worker_id,
-                    "lease_id": lease.lease_id,
-                    "fencing_token": lease.fencing_token,
-                    "worktree_id": worktree.worktree_id,
-                    "task_commit": commit_sha,
-                },
-                task_id=task.task_id,
-            )
+                if lease_lost.is_set():
+                    return self._result(
+                        task,
+                        lease,
+                        WorkerStatus.LEASE_LOST,
+                        "Worker lease was lost before commit persistence.",
+                        worktree,
+                        commit_sha,
+                        changes.commit_files,
+                    )
+                self.store.complete_fenced_task_commit(
+                    attempt_id=attempt.attempt_id,
+                    lease_id=lease.lease_id,
+                    worker_id=self.worker_id,
+                    fencing_token=lease.fencing_token,
+                    commit=commit,
+                    summary=result.summary,
+                    metadata={
+                        **result.metadata,
+                        "worker_id": self.worker_id,
+                        "lease_id": lease.lease_id,
+                        "fencing_token": lease.fencing_token,
+                        "worktree_id": worktree.worktree_id,
+                    },
+                )
+                self._crash("after_commit_persisted", run.run_id, task.task_id)
+                self.store.update_worktree(
+                    worktree.worktree_id,
+                    status=WorktreeStatus.COMPLETED,
+                    result_commit=commit_sha,
+                    event_type="worktree_completed",
+                )
+                self.store.record_event(
+                    run.run_id,
+                    "worker_finished",
+                    {
+                        "worker_id": self.worker_id,
+                        "lease_id": lease.lease_id,
+                        "fencing_token": lease.fencing_token,
+                        "worktree_id": worktree.worktree_id,
+                        "task_commit": commit_sha,
+                    },
+                    task_id=task.task_id,
+                )
+            if self._is_cancelled() and isinstance(
+                self.cancellation,
+                CancellationToken,
+            ):
+                self.cancellation.record_task_completed_after_request(
+                    task.task_id
+                )
             return self._result(
                 task,
                 lease,
@@ -240,6 +273,13 @@ class LocalTaskWorker:
                 "Worker could not persist success under its lease.",
                 worktree,
                 error=str(exc),
+            )
+        except (CancellationRequested, ModelCancellationError, _WorkerCancellation):
+            return self._persist_cancellation(
+                task,
+                lease,
+                attempt.attempt_id,
+                worktree,
             )
         except Exception as exc:
             return self._persist_interruption(
@@ -325,7 +365,111 @@ class LocalTaskWorker:
             commit.changed_files,
         )
 
+    def _cancel_without_attempt(
+        self,
+        task: TaskRecord,
+        lease: WorkerLease,
+        *,
+        worktree: WorktreeRecord | None = None,
+    ) -> WorkerResult:
+        changed_files: list[str] = []
+        if worktree is not None:
+            changed_files, _ = self._worktree_observations(worktree)
+            self.store.update_worktree(
+                worktree.worktree_id,
+                status=WorktreeStatus.CLEANUP_PENDING,
+                event_type="worktree_cancellation_pending",
+            )
+        current = self.store.get_task(task.run_id, task.task_id)
+        if current.status in {
+            TaskStatus.PENDING,
+            TaskStatus.READY,
+            TaskStatus.RUNNING,
+            TaskStatus.RETRYABLE,
+        }:
+            self.store.update_task_status(
+                task.run_id,
+                task.task_id,
+                TaskStatus.CANCELLED,
+                event_type="worker_cancelled",
+                event_payload={
+                    "worker_id": self.worker_id,
+                    "before_attempt": True,
+                },
+            )
+        if changed_files:
+            run = self.store.get_run(task.run_id)
+            self.store.update_run_details(
+                task.run_id,
+                changed_files=sorted(set(run.changed_files) | set(changed_files)),
+                event_type="cancelled_worker_side_effects_observed",
+            )
+        self._release_lease(lease)
+        return self._result(
+            task,
+            lease,
+            WorkerStatus.CANCELLED,
+            "Worker stopped before task execution.",
+            worktree,
+            changed_files=changed_files,
+        )
+
+    def _persist_cancellation(
+        self,
+        task: TaskRecord,
+        lease: WorkerLease,
+        attempt_id: str,
+        worktree: WorktreeRecord,
+    ) -> WorkerResult:
+        changed_files, artifact_hygiene = self._worktree_observations(worktree)
+        try:
+            self.store.complete_attempt(
+                attempt_id,
+                AttemptStatus.INTERRUPTED,
+                error_category=FailureCategory.CANCELLED,
+                error_message="Worker stopped after cancellation was requested.",
+                metadata={
+                    "changed_files": changed_files,
+                    "artifact_hygiene": artifact_hygiene,
+                },
+                event_type="task_attempt_cancelled",
+            )
+            current = self.store.get_task(task.run_id, task.task_id)
+            if current.status == TaskStatus.RUNNING:
+                self.store.update_task_status(
+                    task.run_id,
+                    task.task_id,
+                    TaskStatus.CANCELLED,
+                    event_type="worker_cancelled",
+                    event_payload={"worker_id": self.worker_id},
+                )
+            self.store.update_worktree(
+                worktree.worktree_id,
+                status=WorktreeStatus.CLEANUP_PENDING,
+                event_type="worktree_cancellation_pending",
+            )
+        except StateStoreError:
+            pass
+        return self._result(
+            task,
+            lease,
+            WorkerStatus.CANCELLED,
+            "Worker stopped after cancellation was requested.",
+            worktree,
+            changed_files=changed_files,
+        )
+
     def _persist_failure(self, task, lease, attempt_id, result, worktree):
+        if (
+            result.failure_category == FailureCategory.CANCELLED
+            or self._is_cancelled()
+        ):
+            return self._persist_cancellation(
+                task,
+                lease,
+                attempt_id,
+                worktree,
+            )
         category = result.failure_category or FailureCategory.UNKNOWN
         changed_files, artifact_hygiene = self._worktree_observations(worktree)
         self.store.complete_attempt(
@@ -429,6 +573,37 @@ class LocalTaskWorker:
             except LeaseError:
                 lost.set()
                 return
+
+    def _checkpoint(self, stage: str) -> None:
+        if isinstance(self.cancellation, CancellationToken):
+            self.cancellation.checkpoint(
+                f"worker:{self.worker_id}",
+                stage=stage,
+            )
+        elif self.cancellation.is_set():
+            raise _WorkerCancellation("Worker cancellation requested.")
+
+    def _operation(self, name: str):
+        if not isinstance(self.cancellation, CancellationToken):
+            return nullcontext()
+        return self.cancellation.operation(
+            name,
+            source=f"worker:{self.worker_id}",
+            interruptible=False,
+        )
+
+    def _is_cancelled(self) -> bool:
+        return self.cancellation.is_set()
+
+    def _release_lease(self, lease: WorkerLease) -> None:
+        try:
+            self.lease_service.release_lease(
+                lease.lease_id,
+                self.worker_id,
+                lease.fencing_token,
+            )
+        except LeaseError:
+            pass
 
     def _crash(self, stage, run_id, task_id):
         if self.crash_hook is not None:

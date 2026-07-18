@@ -67,16 +67,48 @@ class RoleModelOverrides(ProtocolModel):
     summarizer: str | None = Field(default=None, max_length=256)
 
 
+class DeterministicProviderOptions(ProtocolModel):
+    profile: Literal[
+        "python-calculator",
+        "cancellation-two-task",
+    ] = "python-calculator"
+    latency_seconds: float = Field(default=0.0, ge=0, le=60)
+    latency_roles: list[
+        Literal["planner", "coder", "reviewer", "summarizer"]
+    ] = Field(default_factory=list, max_length=4)
+    failure_kind: Literal[
+        "output_error",
+        "timeout",
+        "service_unavailable",
+    ] = "service_unavailable"
+    failure_calls: list[int] = Field(default_factory=list, max_length=32)
+    failure_roles: list[
+        Literal["planner", "coder", "reviewer", "summarizer"]
+    ] = Field(default_factory=list, max_length=4)
+
+    @field_validator("failure_calls")
+    @classmethod
+    def failure_calls_are_positive_and_unique(cls, value: list[int]) -> list[int]:
+        if any(call < 1 for call in value):
+            raise ValueError("failure_calls must contain positive integers")
+        if len(value) != len(set(value)):
+            raise ValueError("failure_calls must not contain duplicates")
+        return value
+
+
 class RunCreateRequest(ProtocolModel):
     task: str = Field(min_length=1, max_length=100_000)
     workspace: str = Field(min_length=1, max_length=4096)
-    provider: Literal["ollama", "azure"] = "ollama"
-    fallback_provider: Literal["ollama", "azure"] | None = None
+    provider: Literal["ollama", "azure", "deterministic"] = "ollama"
+    fallback_provider: Literal["ollama", "azure", "deterministic"] | None = None
     workflow: WorkflowMode = WorkflowMode.MULTI
     durable: bool = False
     parallel: bool = False
     max_workers: int = Field(default=1, ge=1, le=32)
     role_models: RoleModelOverrides = Field(default_factory=RoleModelOverrides)
+    deterministic: DeterministicProviderOptions = Field(
+        default_factory=DeterministicProviderOptions
+    )
     fallback_enabled: bool = False
     live_provider_consent: bool = False
     create_pr: bool = False
@@ -130,6 +162,37 @@ class RunAcceptedResponse(ProtocolModel):
     created_at: datetime
 
 
+class CancellationLifecycle(ProtocolModel):
+    requested: bool = False
+    requested_at: datetime | None = None
+    reason: str | None = None
+    propagated_at: datetime | None = None
+    propagation_sources: list[str] = Field(default_factory=list)
+    provider_cancellation_signalled: bool = False
+    provider_cancellation_requested_at: datetime | None = None
+    provider_names: list[str] = Field(default_factory=list)
+    provider_cancellation_acknowledged: bool = False
+    provider_cancellation_acknowledged_at: datetime | None = None
+    provider_acknowledgement_source: str | None = None
+    acknowledged: bool = False
+    acknowledged_at: datetime | None = None
+    acknowledgement_source: str | None = None
+    acknowledgement_stage: str | None = None
+    active_non_interruptible_operation: str | None = None
+    active_non_interruptible_operations: list[str] = Field(default_factory=list)
+    operations_completed_after_request: list[str] = Field(default_factory=list)
+    completed_after_cancellation_request: bool = False
+    tasks_prevented_from_starting: list[str] = Field(default_factory=list)
+    tasks_completed_after_request: list[str] = Field(default_factory=list)
+    scheduling_stopped: bool = False
+    scheduling_stopped_at: datetime | None = None
+    cleanup_completed: bool = False
+    cleanup_completed_at: datetime | None = None
+    resume_eligible: bool = True
+    terminal_reason: str | None = None
+    revision: int = Field(default=0, ge=0)
+
+
 class RunSummary(ProtocolModel):
     run_id: str
     status: str
@@ -144,6 +207,9 @@ class RunSummary(ProtocolModel):
     failure_reason: str | None = None
     changed_files: list[str] = Field(default_factory=list)
     version: int = Field(ge=1)
+    cancellation: CancellationLifecycle = Field(
+        default_factory=CancellationLifecycle
+    )
 
 
 class RunListResponse(ProtocolModel):
@@ -188,6 +254,9 @@ class SchedulerResponse(ProtocolModel):
     expired_leases: list[dict[str, Any]] = Field(default_factory=list)
     integration_order: list[str] = Field(default_factory=list)
     integration_conflicts: list[dict[str, Any]] = Field(default_factory=list)
+    cancellation: CancellationLifecycle = Field(
+        default_factory=CancellationLifecycle
+    )
 
 
 class WorktreeSummary(ProtocolModel):
@@ -220,6 +289,9 @@ class RunReportResponse(ProtocolModel):
     run_id: str
     status: str
     report: dict[str, Any]
+    cancellation: CancellationLifecycle = Field(
+        default_factory=CancellationLifecycle
+    )
 
 
 class EventEnvelope(ProtocolModel):
@@ -316,7 +388,7 @@ class ProviderListResponse(ProtocolModel):
 
 
 class ProviderCheckRequest(ProtocolModel):
-    provider: Literal["ollama", "azure"]
+    provider: Literal["ollama", "azure", "deterministic"]
     live_consent: bool = False
 
 
@@ -329,6 +401,9 @@ class CancelResponse(ProtocolModel):
     run_id: str
     status: str
     cancellation_requested: bool
+    cancellation: CancellationLifecycle = Field(
+        default_factory=CancellationLifecycle
+    )
 
 
 class ResumeResponse(ProtocolModel):

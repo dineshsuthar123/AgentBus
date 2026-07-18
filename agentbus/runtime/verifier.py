@@ -1,7 +1,9 @@
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
 from agentbus.config import AgentBusConfig
+from agentbus.execution.cancellation import CancellationToken
 from agentbus.repo.test_detection import TestCommandDetector
 from agentbus.tools.command import CommandTools
 
@@ -13,6 +15,7 @@ class Verifier:
         command: list[str] | None = None,
         command_tools: CommandTools | None = None,
         test_detector: TestCommandDetector | None = None,
+        cancellation: CancellationToken | None = None,
     ):
         self.config = config or AgentBusConfig.from_env()
         self.workspace = self.config.workspace_path
@@ -24,8 +27,10 @@ class Verifier:
             workspace=str(self.workspace),
             timeout_seconds=self.config.command_timeout_seconds,
         )
+        self.cancellation = cancellation
 
     def verify(self, *, require_command: bool = False) -> dict[str, Any]:
+        self._checkpoint("before-detection")
         detection = None
         command = self.command
         auto_detected = command is None
@@ -33,6 +38,7 @@ class Verifier:
         if command is None:
             detection = self.test_detector.detect()
             command = detection.get("command")
+        self._checkpoint("after-detection")
 
         if command is None:
             return {
@@ -69,10 +75,21 @@ class Verifier:
         environment_overrides = (
             {"PYTHONDONTWRITEBYTECODE": "1"} if python_verification else None
         )
-        result = self.command_tools.run_command_result(
-            execution_command,
-            environment_overrides=environment_overrides,
+        operation = (
+            self.cancellation.operation(
+                "verifier.command",
+                source="verifier",
+                interruptible=False,
+            )
+            if self.cancellation is not None
+            else nullcontext()
         )
+        with operation:
+            result = self.command_tools.run_command_result(
+                execution_command,
+                environment_overrides=environment_overrides,
+            )
+        self._checkpoint("after-command")
         return {
             "command": result["command"],
             "exit_code": result["exit_code"],
@@ -86,3 +103,7 @@ class Verifier:
             "artifact_suppression_active": python_verification,
             "pytest_cache_disabled": pytest_cache_disabled,
         }
+
+    def _checkpoint(self, stage: str) -> None:
+        if self.cancellation is not None:
+            self.cancellation.checkpoint("verifier", stage=stage)

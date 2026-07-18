@@ -22,8 +22,13 @@ from agentbus.control.models import (
     RunAcceptedResponse,
     RunCreateRequest,
 )
-from agentbus.control.services import WorkspaceService
+from agentbus.control.services import WorkspaceService, cancellation_lifecycle
+from agentbus.execution.cancellation import (
+    CancellationRequested,
+    CancellationState,
+)
 from agentbus.execution.engine import DurableExecutionEngine
+from agentbus.execution.cancellation_registry import CancellationRegistry
 from agentbus.execution.models import (
     AttemptStatus,
     FailureCategory,
@@ -36,11 +41,14 @@ from agentbus.execution.models import (
 from agentbus.execution.state_store import RunNotFoundError, StateStore
 from agentbus.git.repository import GitRepository, GitRepositoryError
 from agentbus.memory.run_log import RunLogger
+from agentbus.models.errors import ModelCancellationError
 from agentbus.runtime.loop import AgentLoop
 from agentbus.runtime.orchestrator import MultiAgentOrchestrator
 
 
 class RunBackend(Protocol):
+    def prepare(self, run_id: str) -> None: ...
+
     def execute_new(self, request: RunCreateRequest, run_id: str) -> None: ...
 
     def resume(self, run_id: str) -> None: ...
@@ -48,6 +56,10 @@ class RunBackend(Protocol):
     def cancel(self, run_id: str, reason: str | None = None) -> RunStatus: ...
 
     def workspace_for(self, run_id: str) -> str: ...
+
+    def finalize_cancellation(self, run_id: str) -> RunStatus: ...
+
+    def cancellation_state(self, run_id: str) -> CancellationState: ...
 
 
 @dataclass
@@ -63,18 +75,31 @@ class AgentBusRunBackend:
     def __init__(self, config: AgentBusConfig, store: StateStore | None = None):
         self.base_config = config
         self.store = store or StateStore(config.state_database_path)
+        self.cancellations = CancellationRegistry(self.store)
+
+    def prepare(self, run_id: str) -> None:
+        self.cancellations.prepare(run_id)
 
     def execute_new(self, request: RunCreateRequest, run_id: str) -> None:
         config = self._config_for(request)
         if request.durable:
             orchestrator = self._orchestrator(config, request, run_id)
-            orchestrator.create_durable_run(request.task, run_id=run_id)
+            try:
+                orchestrator.create_durable_run(request.task, run_id=run_id)
+            except (CancellationRequested, ModelCancellationError):
+                self._persist_preplanning_cancellation(
+                    config,
+                    request,
+                    run_id,
+                )
+                return
             orchestrator.run_durable(run_id)
             return
         self._execute_persisted_non_durable(config, request, run_id)
 
     def resume(self, run_id: str) -> None:
         run = self.store.get_run(run_id)
+        self.cancellations.recover(run_id)
         parallel = run.metadata.get("parallel_execution", {})
         routing = run.metadata.get("model_routing", {})
         config = self.base_config.with_overrides(
@@ -102,13 +127,39 @@ class AgentBusRunBackend:
             config=config,
             state_store=self.store,
             logger=RunLogger(log_dir=config.runs_dir, run_id=run_id),
+            cancellation_registry=self.cancellations,
         ).resume_durable(run_id)
 
     def cancel(self, run_id: str, reason: str | None = None) -> RunStatus:
+        try:
+            return DurableExecutionEngine(
+                self.store,
+                logger=RunLogger(
+                    log_dir=self.base_config.runs_dir,
+                    run_id=run_id,
+                ),
+                cancellation_registry=self.cancellations,
+            ).request_cancellation(run_id, reason).status
+        except RunNotFoundError:
+            if run_id not in self.cancellations.run_ids:
+                raise
+            self.cancellations.get(run_id).request(reason or "Cancelled by user.")
+            return RunStatus.PENDING
+
+    def finalize_cancellation(self, run_id: str) -> RunStatus:
         return DurableExecutionEngine(
             self.store,
             logger=RunLogger(log_dir=self.base_config.runs_dir, run_id=run_id),
-        ).cancel_run(run_id, reason).status
+            cancellation_registry=self.cancellations,
+        ).finalize_cancellation(run_id).status
+
+    def cancellation_state(self, run_id: str) -> CancellationState:
+        if run_id in self.cancellations.run_ids:
+            return self.cancellations.get(run_id).snapshot()
+        return self.store.get_cancellation_state(run_id)
+
+    def shutdown(self) -> None:
+        self.cancellations.shutdown()
 
     def workspace_for(self, run_id: str) -> str:
         return self.store.get_run(run_id).workspace
@@ -123,6 +174,12 @@ class AgentBusRunBackend:
             coder_model=request.role_models.coder,
             reviewer_model=request.role_models.reviewer,
             summarizer_model=request.role_models.summarizer,
+            deterministic_profile=request.deterministic.profile,
+            deterministic_latency_seconds=request.deterministic.latency_seconds,
+            deterministic_latency_roles=tuple(request.deterministic.latency_roles),
+            deterministic_failure_kind=request.deterministic.failure_kind,
+            deterministic_failure_calls=tuple(request.deterministic.failure_calls),
+            deterministic_failure_roles=tuple(request.deterministic.failure_roles),
             parallel_execution=request.parallel,
             max_workers=request.max_workers,
             keep_worktrees=request.keep_worktrees,
@@ -140,6 +197,8 @@ class AgentBusRunBackend:
             logger=RunLogger(log_dir=config.runs_dir, run_id=run_id),
             commit_changes=request.commit_changes,
             open_pr=request.create_pr,
+            cancellation=self.cancellations.get(run_id),
+            cancellation_registry=self.cancellations,
         )
 
     def _execute_persisted_non_durable(
@@ -171,6 +230,14 @@ class AgentBusRunBackend:
             },
         )
         self.store.create_run_with_tasks(run, [task])
+        self.cancellations.synchronize(run_id)
+        cancellation = self.cancellations.get(run_id)
+        if cancellation.is_requested:
+            DurableExecutionEngine(
+                self.store,
+                cancellation_registry=self.cancellations,
+            ).finalize_cancellation(run_id)
+            return
         self.store.update_run_status(
             run_id,
             RunStatus.RUNNING,
@@ -181,7 +248,10 @@ class AgentBusRunBackend:
         attempt = self.store.create_attempt(run_id, task.task_id)
         try:
             if request.workflow == "single":
-                summary = AgentLoop(config=config).run(request.task)
+                summary = AgentLoop(
+                    config=config,
+                    cancellation=cancellation,
+                ).run(request.task)
                 approved = True
                 verifier_status = None
                 reviewer_status = None
@@ -223,6 +293,18 @@ class AgentBusRunBackend:
                 failure_reason=None if approved else summary,
                 event_type="run_succeeded" if approved else "run_failed",
             )
+        except (CancellationRequested, ModelCancellationError):
+            changed_files = self._changed_files(config.workspace_path)
+            if changed_files:
+                self.store.update_run_details(
+                    run_id,
+                    changed_files=changed_files,
+                    event_type="cancelled_run_side_effects_observed",
+                )
+            DurableExecutionEngine(
+                self.store,
+                cancellation_registry=self.cancellations,
+            ).finalize_cancellation(run_id)
         except Exception as exc:
             message = safe_error_message(exc)
             self.store.complete_attempt(
@@ -245,6 +327,50 @@ class AgentBusRunBackend:
                 event_type="run_failed",
             )
             raise
+
+    def _persist_preplanning_cancellation(
+        self,
+        config: AgentBusConfig,
+        request: RunCreateRequest,
+        run_id: str,
+    ) -> None:
+        plan = {
+            "goal": request.task,
+            "steps": [
+                {
+                    "id": "planning",
+                    "title": "Plan requested work",
+                    "description": "Planning stopped after cancellation was requested.",
+                    "risk": "low",
+                    "maximum_attempts": 1,
+                    "expected_outputs": [],
+                    "done_criteria": [],
+                }
+            ],
+            "test_strategy": "Not started because cancellation was requested.",
+            "done_criteria": [],
+        }
+        engine = DurableExecutionEngine(
+            self.store,
+            cancellation_registry=self.cancellations,
+        )
+        engine.create_run(
+            request.task,
+            plan,
+            workflow_type=request.workflow,
+            model=config.resolve_model("coder"),
+            workspace=str(config.workspace_path),
+            metadata={
+                "control_request": request.model_dump(
+                    mode="json",
+                    exclude={"metadata"},
+                ),
+                "model_routing": config.safe_model_summary(),
+                "cancelled_before_planning_completed": True,
+            },
+            run_id=run_id,
+        )
+        engine.finalize_cancellation(run_id)
 
     @staticmethod
     def _changed_files(workspace: Path) -> list[str]:
@@ -291,6 +417,9 @@ class BackgroundRunSupervisor:
             self._ensure_open()
             self._claim_workspace(run_id, workspace.workspace)
             try:
+                prepare = getattr(self.backend, "prepare", None)
+                if prepare is not None:
+                    prepare(run_id)
                 future = self._executor.submit(
                     self.backend.execute_new,
                     request.model_copy(update={"workspace": workspace.workspace}),
@@ -346,23 +475,38 @@ class BackgroundRunSupervisor:
         return ResumeResponse(run_id=run_id, status="running", resumed=True)
 
     def cancel(self, run_id: str, reason: str | None = None) -> CancelResponse:
+        with self._lock:
+            active = self._active.get(run_id)
         try:
             status = self.backend.cancel(run_id, reason)
         except RunNotFoundError as exc:
             raise ControlPlaneNotFoundError("The requested run was not found.") from exc
-        with self._lock:
-            active = self._active.get(run_id)
-            if active is not None:
-                active.future.cancel()
+        if active is None or active.future.done():
+            finalize = getattr(self.backend, "finalize_cancellation", None)
+            if finalize is not None:
+                status = finalize(run_id)
+        lifecycle = None
+        get_cancellation_state = getattr(
+            self.backend,
+            "cancellation_state",
+            None,
+        )
+        if get_cancellation_state is not None:
+            lifecycle = cancellation_lifecycle(get_cancellation_state(run_id))
         return CancelResponse(
             run_id=run_id,
             status=status.value,
             cancellation_requested=True,
+            **({"cancellation": lifecycle} if lifecycle is not None else {}),
         )
 
     def is_active(self, run_id: str) -> bool:
         with self._lock:
             return run_id in self._active
+
+    def has_active_runs(self) -> bool:
+        with self._lock:
+            return bool(self._active)
 
     def shutdown(self, *, wait: bool = True) -> None:
         with self._lock:
@@ -370,6 +514,9 @@ class BackgroundRunSupervisor:
                 return
             self._closed = True
         self._executor.shutdown(wait=wait, cancel_futures=False)
+        backend_shutdown = getattr(self.backend, "shutdown", None)
+        if backend_shutdown is not None:
+            backend_shutdown()
 
     @staticmethod
     def _workspace_request(request: RunCreateRequest):
@@ -395,6 +542,12 @@ class BackgroundRunSupervisor:
         self._workspace_owners[key] = run_id
 
     def _completed(self, active: ActiveRun) -> None:
+        finalize = getattr(self.backend, "finalize_cancellation", None)
+        if finalize is not None:
+            try:
+                finalize(active.run_id)
+            except RunNotFoundError:
+                pass
         with self._lock:
             self._release(active.run_id, active.workspace)
 
