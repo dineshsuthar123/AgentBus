@@ -32,7 +32,7 @@ jobs:
         run: python -m pytest
       - name: Run deterministic core evaluation
         run: python -m agentbus.eval run --suite core-offline --variant durable-parallel-fake
-      - name: Run offline control-plane acceptance
+      - name: Run true offline control-plane lifecycle
         if: matrix.python == '3.12'
         run: python -m agentbus.control.acceptance
       - name: Check patch whitespace
@@ -64,7 +64,7 @@ jobs:
       - name: Compile lint and unit test
         working-directory: extensions/vscode
         run: npm run compile && npm run lint && npm test
-      - name: Run VS Code integration
+      - name: Run real VS Code lifecycle integration
         working-directory: extensions/vscode
         run: xvfb-run -a npm run test:integration
       - name: Package and audit VSIX

@@ -16,8 +16,10 @@ artifact boundaries.
 
 ## Consequences
 
-Provider calls are not forcibly interruptible; cancellation persists intent and
-prevents safe future scheduling while an in-flight request may finish.
-Filesystem edits remain after failure. Worktree cleanup remains explicit.
-Protocol generation allows future IDE clients without coupling them to Python
-database rows.
+Provider calls are not assumed to be forcibly interruptible. Cancellation
+persists request, propagation, acknowledgement, provider, scheduling, cleanup,
+and resumability facts while an in-flight operation may finish. See
+[ADR 0008](0008-cooperative-cancellation-and-real-local-execution.md) for the
+cooperative state machine and true local acceptance decision. Filesystem edits
+remain after failure. Worktree cleanup remains explicit. Protocol generation
+allows future IDE clients without coupling them to Python database rows.
