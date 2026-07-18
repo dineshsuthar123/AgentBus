@@ -46,3 +46,27 @@ test("run store bounds event history and preserves terminal status", () => {
   assert.equal(store.events().length, 2);
   assert.equal(store.run("run-1")?.status, "succeeded");
 });
+
+test("run store reduces cancellation events into lifecycle state", () => {
+  const store = new RunStore();
+  store.replaceRuns([run()]);
+
+  store.apply({
+    ...event(1, "cancellation_requested"),
+    payload: { requested_at: "2026-01-01T00:00:01Z", revision: 1 }
+  });
+  store.apply({
+    ...event(2, "provider_cancellation_acknowledged"),
+    payload: {
+      acknowledged_at: "2026-01-01T00:00:02Z",
+      providers: ["deterministic"],
+      revision: 2
+    }
+  });
+
+  assert.equal(store.run("run-1")?.cancellation?.requested, true);
+  assert.equal(
+    store.run("run-1")?.cancellation?.provider_cancellation_acknowledged,
+    true
+  );
+});

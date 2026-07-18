@@ -8,6 +8,12 @@ import type { RunStore } from "./runStore";
 import { safeError } from "./redaction";
 import { canonicalWorkspacePath, selectWorkspace } from "./workspace";
 import type { AgentBusItem, RunSelection } from "./views";
+import {
+  canCancel,
+  cancellationDetails,
+  cancellationEventMessage,
+  cancellationStatus
+} from "./cancellation";
 
 export interface Refreshers {
   refresh(): void;
@@ -15,6 +21,7 @@ export interface Refreshers {
 
 export class CommandController implements vscode.Disposable {
   private readonly disposables: vscode.Disposable[] = [];
+  private readonly cancellationsInFlight = new Set<string>();
   private stream: ReconnectingSseClient | undefined;
 
   public constructor(
@@ -66,6 +73,10 @@ export class CommandController implements vscode.Disposable {
         client,
         (event) => {
           this.store.apply(event);
+          const message = cancellationEventMessage(event);
+          if (message && event.run_id) {
+            this.output.appendLine(`[${event.run_id}] ${message}`);
+          }
           this.refreshViews();
         },
         { onReconnectFailure: () => this.refresh() }
@@ -107,7 +118,10 @@ export class CommandController implements vscode.Disposable {
     if (!task) return;
     const workspace = await canonicalWorkspacePath(folder);
     const config = vscode.workspace.getConfiguration("agentbus");
-    const provider = config.get<"ollama" | "azure">("defaultProvider", "ollama");
+    const provider = config.get<"ollama" | "azure" | "deterministic">(
+      "defaultProvider",
+      "ollama"
+    );
     let consent = false;
     if (provider === "azure") {
       consent =
@@ -174,14 +188,44 @@ export class CommandController implements vscode.Disposable {
   private async cancel(): Promise<void> {
     const run = await this.chooseRun();
     if (!run) return;
+    if (!canCancel(run) || this.cancellationsInFlight.has(run.run_id)) {
+      const state =
+        cancellationStatus(run.cancellation, run.status) ??
+        `Run is already ${run.status}.`;
+      this.output.appendLine(`[${run.run_id}] ${state}`);
+      void vscode.window.showInformationMessage(state);
+      return;
+    }
     const confirmed = await vscode.window.showWarningMessage(
       `Cancel AgentBus run ${run.run_id}?`,
       { modal: true },
       "Cancel Run"
     );
     if (confirmed !== "Cancel Run") return;
-    await (await this.client()).cancel(run.run_id, "Cancelled by local IDE user");
-    await this.refresh();
+    this.cancellationsInFlight.add(run.run_id);
+    this.output.appendLine(`[${run.run_id}] Cancelling...`);
+    this.status.text = "$(sync~spin) AgentBus cancelling";
+    try {
+      const response = await (await this.client()).cancel(
+        run.run_id,
+        "Cancelled by local IDE user"
+      );
+      this.store.updateCancellation(
+        run.run_id,
+        response.status,
+        response.cancellation
+      );
+      for (const detail of cancellationDetails(
+        response.cancellation,
+        response.status
+      )) {
+        this.output.appendLine(`[${run.run_id}] ${detail}`);
+      }
+      this.refreshViews();
+      await this.refresh();
+    } finally {
+      this.cancellationsInFlight.delete(run.run_id);
+    }
   }
 
   private async openReport(): Promise<void> {
@@ -198,7 +242,7 @@ export class CommandController implements vscode.Disposable {
     const picked = await vscode.window.showQuickPick(
       changes.changes.map((change) => ({
         label: change.path,
-        description: `${change.status}${change.generated ? " · generated" : ""}`,
+        description: `${change.status}${change.generated ? " | generated" : ""}`,
         change
       }))
     );
@@ -253,7 +297,11 @@ export class CommandController implements vscode.Disposable {
   }
 
   private async selectProvider(): Promise<void> {
-    const picked = await vscode.window.showQuickPick(["ollama", "azure"]);
+    const picked = await vscode.window.showQuickPick([
+      "ollama",
+      "azure",
+      "deterministic"
+    ]);
     if (picked) {
       await vscode.workspace.getConfiguration("agentbus").update(
         "defaultProvider",

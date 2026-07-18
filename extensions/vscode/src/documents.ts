@@ -3,6 +3,7 @@ import type { AgentBusClient } from "./apiClient";
 import { AgentBusApiError } from "./apiClient";
 import type { RunReportResponse } from "./generated/protocol";
 import { isSafeRepositoryPath } from "./workspace";
+import { cancellationDetails } from "./cancellation";
 
 export type ClientProvider = () => Promise<AgentBusClient>;
 
@@ -128,6 +129,13 @@ export function formatReport(response: RunReportResponse): string {
     "## Changes",
     "",
     listValue(report.changed_files),
+    "",
+    "## Cancellation",
+    "",
+    listValue({
+      state: cancellationDetails(response.cancellation, response.status),
+      lifecycle: response.cancellation
+    }),
     "",
     "## Retries And Workers",
     "",
