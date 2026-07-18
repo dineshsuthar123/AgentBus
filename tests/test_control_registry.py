@@ -69,6 +69,7 @@ def test_current_process_identity_matches_registry_entry(tmp_path: Path) -> None
 
     assert entry.process_start_identity
     assert entry.executable
+    assert executable_identity() == executable_identity(os.getpid())
     assert process_matches(entry) is True
 
 

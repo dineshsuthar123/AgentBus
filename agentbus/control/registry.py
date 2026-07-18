@@ -30,10 +30,10 @@ def default_registry_path() -> Path:
 
 def executable_identity(pid: int | None = None) -> str:
     target_pid = os.getpid() if pid is None else pid
-    if target_pid == os.getpid():
-        return str(Path(sys.executable).resolve())
     if os.name == "nt":
         return _windows_executable(target_pid)
+    if target_pid == os.getpid():
+        return str(Path(sys.executable).resolve())
     executable = Path(f"/proc/{target_pid}/exe")
     try:
         return str(executable.resolve(strict=True))
@@ -57,16 +57,7 @@ def process_start_identity(pid: int | None = None) -> str:
 
 
 def process_matches(entry: DaemonRegistryEntry) -> bool:
-    if not _process_exists(entry.pid):
-        return False
-    actual_start = process_start_identity(entry.pid)
-    actual_executable = executable_identity(entry.pid)
-    return bool(
-        actual_start
-        and actual_executable
-        and actual_start == entry.process_start_identity
-        and _same_path(actual_executable, entry.executable)
-    )
+    return not _process_identity_mismatches(entry)
 
 
 class DaemonRegistry:
@@ -169,9 +160,12 @@ def terminate_registered_daemon(
 ) -> None:
     entry = registry.get(daemon_id)
     if not process_matches(entry):
+        mismatches = _process_identity_mismatches(entry)
+        detail = ", ".join(mismatches) or "identity mismatch"
         registry.remove(daemon_id)
         raise ControlPlaneConflictError(
-            "The registered process identity no longer matches; no process was stopped."
+            "The registered process identity no longer matches "
+            f"({detail}); no process was stopped."
         )
     if entry.pid == os.getpid():
         raise ControlPlaneConflictError(
@@ -282,3 +276,16 @@ def _open_windows_process(pid: int):
         False,
         pid,
     )
+
+
+def _process_identity_mismatches(entry: DaemonRegistryEntry) -> list[str]:
+    if not _process_exists(entry.pid):
+        return ["process missing"]
+    actual_start = process_start_identity(entry.pid)
+    actual_executable = executable_identity(entry.pid)
+    mismatches: list[str] = []
+    if not actual_start or actual_start != entry.process_start_identity:
+        mismatches.append("start identity")
+    if not actual_executable or not _same_path(actual_executable, entry.executable):
+        mismatches.append("executable identity")
+    return mismatches
