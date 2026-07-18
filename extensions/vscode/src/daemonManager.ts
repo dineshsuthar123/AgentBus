@@ -12,6 +12,7 @@ import {
   type LaunchSettings
 } from "./daemonProtocol";
 import { CONTROL_PROTOCOL_VERSION, type DaemonRegistryEntry } from "./generated/protocol";
+import { waitForChildExit } from "./processLifecycle";
 import { redactText, safeError } from "./redaction";
 
 const secretPrefix = "agentbus.daemonToken.";
@@ -99,8 +100,11 @@ export class DaemonManager implements vscode.Disposable {
   }
 
   public async start(): Promise<DaemonConnection> {
-    if (this.child && this.child.exitCode === null) {
-      throw new Error("AgentBus daemon startup is already in progress.");
+    if (this.child) {
+      if (this.child.exitCode === null && this.child.signalCode === null) {
+        throw new Error("An AgentBus daemon process is already running.");
+      }
+      this.child = undefined;
     }
     const spec = buildLaunchSpec(this.settings());
     const child = spawn(spec.command, spec.args, {
@@ -151,6 +155,9 @@ export class DaemonManager implements vscode.Disposable {
       this.output.append(redactText(data.toString("utf8")));
     });
     child.on("exit", () => {
+      if (this.child === child) {
+        this.child = undefined;
+      }
       if (this.connection?.entry.daemon_id === handshake.daemon_id) {
         this.connection = undefined;
       }
@@ -160,10 +167,14 @@ export class DaemonManager implements vscode.Disposable {
   }
 
   public async stop(): Promise<void> {
+    if (this.connecting) {
+      await this.connecting;
+    }
     const connection = this.connection;
     if (!connection) {
       return;
     }
+    const ownedChild = this.child;
     const spec = buildStopSpec(this.settings(), connection.entry.daemon_id);
     const result = await runChild(spec.command, spec.args);
     if (result.exitCode !== 0) {
@@ -173,15 +184,21 @@ export class DaemonManager implements vscode.Disposable {
         }`
       );
     }
+    if (ownedChild) {
+      await waitForChildExit(ownedChild);
+    }
     await this.context.secrets.delete(
       `${secretPrefix}${connection.entry.daemon_id}`
     );
     this.connection = undefined;
+    if (this.child === ownedChild) {
+      this.child = undefined;
+    }
   }
 
   public async restart(): Promise<DaemonConnection> {
     await this.stop();
-    return this.start();
+    return this.connectOrStart();
   }
 
   public dispose(): void {
@@ -278,6 +295,7 @@ async function runChild(
       shell: false,
       windowsHide: true
     });
+    child.stdout.resume();
     let stderr = "";
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (value: string) => {
@@ -286,7 +304,7 @@ async function runChild(
       }
     });
     child.once("error", reject);
-    child.once("exit", (code) =>
+    child.once("close", (code) =>
       resolve({
         exitCode: code ?? 1,
         stderr: stderr.slice(0, 16_384).trim()
