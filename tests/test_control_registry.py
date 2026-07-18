@@ -124,16 +124,26 @@ def test_safe_termination_refuses_pid_identity_mismatch(
 ) -> None:
     path = tmp_path / "registry.json"
     registry = DaemonRegistry(path)
-    registry.register(_entry(path))
-    killed: list[tuple[int, int]] = []
-    monkeypatch.setattr("agentbus.control.registry.process_matches", lambda entry: False)
+    stale = _entry(path).model_copy(update={"process_start_identity": "stale"})
+    registry.register(stale)
+    signals: list[tuple[int, int]] = []
+    real_kill = os.kill
+
+    def observe_signal(pid: int, sig: int) -> None:
+        signals.append((pid, sig))
+        if sig == 0:
+            real_kill(pid, sig)
+
     monkeypatch.setattr(
         "agentbus.control.registry.os.kill",
-        lambda pid, sig: killed.append((pid, sig)),
+        observe_signal,
     )
 
     with pytest.raises(ControlPlaneConflictError, match="no process was stopped"):
         terminate_registered_daemon(registry, "daemon-1")
 
-    assert killed == []
+    assert [item for item in signals if item[1] != 0] == []
+    if os.name != "nt":
+        assert signals
+        assert all(item == (os.getpid(), 0) for item in signals)
     assert registry.list() == []
