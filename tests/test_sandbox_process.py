@@ -12,6 +12,7 @@ from agentbus.execution.cancellation import CancellationToken
 from agentbus.sandbox import (
     ControlledProcessSupervisor,
     ExecutableCatalog,
+    ExecutableValidationError,
     ProcessSupervisionError,
 )
 from agentbus.tools.protocol import ToolOutputChunk, ToolResourceBudget
@@ -59,6 +60,7 @@ def test_supervisor_uses_contained_cwd_and_sanitized_environment(
         "print(json.dumps({'cwd': str(pathlib.Path.cwd()), "
         "'home': os.environ.get('HOME'), "
         "'temp': os.environ.get('TEMP'), "
+        "'comspec': 'COMSPEC' in os.environ, "
         "'azure': 'AZURE_OPENAI_API_KEY' in os.environ, "
         "'daemon': 'AGENTBUS_DAEMON_TOKEN' in os.environ}))"
     )
@@ -75,6 +77,7 @@ def test_supervisor_uses_contained_cwd_and_sanitized_environment(
     assert payload["daemon"] is False
     assert payload["home"] != "developer-home"
     assert payload["temp"] == payload["home"]
+    assert payload["comspec"] is False
     assert Path(payload["home"]).exists() is False
     diagnostics = result.safe_diagnostic_metadata["environment"]
     assert "variable_names" in diagnostics
@@ -295,6 +298,45 @@ def test_supervisor_rejects_invalid_argument_shapes(tmp_path: Path) -> None:
         supervisor.run("python", "-c")
     with pytest.raises(ProcessSupervisionError, match="NUL"):
         supervisor.run("python", ("bad\x00argument",))
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows batch adapter")
+def test_supervisor_executes_pinned_batch_file_without_shell_true(
+    tmp_path: Path,
+) -> None:
+    batch = tmp_path / "echo-argument.cmd"
+    batch.write_text("@echo off\necho ARG=%~1\n", encoding="utf-8")
+    supervisor = ControlledProcessSupervisor(
+        tmp_path,
+        catalog=ExecutableCatalog({"echo-argument": batch}),
+    )
+
+    result = supervisor.run("echo-argument", ("hello world",))
+
+    assert result.passed is True
+    assert result.stdout.strip() == "ARG=hello world"
+    assert result.safe_diagnostic_metadata["shell"] is False
+    assert result.safe_diagnostic_metadata["launch_backend"] == (
+        "windows-batch-adapter"
+    )
+    assert result.safe_diagnostic_metadata["command_processor"] is not None
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows batch adapter")
+@pytest.mark.parametrize("argument", ["safe && whoami", "%PATH%", "line\nbreak"])
+def test_batch_adapter_rejects_command_language_metacharacters(
+    tmp_path: Path,
+    argument: str,
+) -> None:
+    batch = tmp_path / "echo-argument.cmd"
+    batch.write_text("@echo off\necho ARG=%~1\n", encoding="utf-8")
+    supervisor = ControlledProcessSupervisor(
+        tmp_path,
+        catalog=ExecutableCatalog({"echo-argument": batch}),
+    )
+
+    with pytest.raises(ExecutableValidationError, match="metacharacters"):
+        supervisor.run("echo-argument", (argument,))
 
 
 def _pid_is_running(pid: int) -> bool:

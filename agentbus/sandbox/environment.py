@@ -10,7 +10,6 @@ from agentbus.security.redaction import is_sensitive_environment_key
 
 _PASSTHROUGH_ENVIRONMENT = frozenset(
     {
-        "COMSPEC",
         "LANG",
         "LC_ALL",
         "NO_COLOR",

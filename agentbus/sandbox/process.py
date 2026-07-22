@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import tempfile
 import threading
@@ -30,10 +31,17 @@ from agentbus.sandbox.output import (
     OutputCallback,
     ProcessOutputSnapshot,
 )
-from agentbus.sandbox.platform import ExecutableCatalog, ExecutableIdentity
-from agentbus.sandbox.platform import validate_working_directory
+from agentbus.sandbox.platform import (
+    ExecutableCatalog,
+    ExecutableIdentity,
+    validate_working_directory,
+    windows_system_command_processor,
+)
 from agentbus.sandbox.process_tree import ManagedProcessTree, ProcessTreeMetadata
 from agentbus.tools.protocol import ToolOutputStream, ToolResourceBudget, ToolResourceUsage
+
+
+_BATCH_UNSAFE_ARGUMENT = re.compile(r'[\x00-\x1f"%!&|<>^()]')
 
 
 @dataclass(frozen=True)
@@ -81,13 +89,21 @@ class ControlledProcessSupervisor:
     ) -> None:
         self.worktree = validate_working_directory(worktree)
         self.catalog = catalog or ExecutableCatalog.standard()
+        self._command_processor_catalog = (
+            ExecutableCatalog(
+                {"agentbus-command-processor": windows_system_command_processor()}
+            )
+            if os.name == "nt"
+            else None
+        )
         if poll_interval_seconds <= 0 or termination_grace_seconds <= 0:
             raise ValueError("Process polling and termination grace must be positive.")
         self.poll_interval_seconds = poll_interval_seconds
         self.termination_grace_seconds = termination_grace_seconds
+        self._executable_directories = self.catalog.executable_directories
         self._base_environment = sanitized_process_environment(
             source=source_environment,
-            executable_directories=self.catalog.executable_directories,
+            executable_directories=self._executable_directories,
         )
 
     def run(
@@ -104,7 +120,6 @@ class ControlledProcessSupervisor:
         task_id: str | None = None,
     ) -> ProcessExecutionResult:
         identity = self.catalog.resolve(executable)
-        _validate_launchable(identity)
         command_arguments = _validate_arguments(arguments)
         current_worktree = validate_working_directory(self.worktree)
         if current_worktree != self.worktree:
@@ -163,16 +178,21 @@ class ControlledProcessSupervisor:
     ) -> ProcessExecutionResult:
         capture = BoundedProcessOutput(budget, callback=output_callback)
         started = time.monotonic()
+        command, launch_backend, command_processor, executable_override = (
+            self._launch_command(identity, arguments)
+        )
         with tempfile.TemporaryDirectory(prefix="agentbus-tool-") as isolated_home:
             environment = sanitized_process_environment(
                 source=self._base_environment,
-                executable_directories=self.catalog.executable_directories,
+                executable_directories=self._executable_directories,
                 overrides=environment_overrides,
                 isolated_home=isolated_home,
             )
+            if command_processor is not None:
+                environment["COMSPEC"] = str(command_processor.path)
             try:
                 process = subprocess.Popen(
-                    identity.command(arguments),
+                    command,
                     cwd=cwd,
                     stdin=subprocess.DEVNULL,
                     stdout=subprocess.PIPE,
@@ -180,6 +200,7 @@ class ControlledProcessSupervisor:
                     shell=False,
                     env=environment,
                     close_fds=True,
+                    executable=executable_override,
                     **ManagedProcessTree.launch_options(),
                 )
             except OSError as exc:
@@ -239,6 +260,12 @@ class ControlledProcessSupervisor:
                 "effective_timeout_seconds": effective_timeout,
                 "environment": environment_diagnostics(environment),
                 "process_tree": tree.metadata.safe_metadata(),
+                "launch_backend": launch_backend,
+                "command_processor": (
+                    command_processor.safe_metadata()
+                    if command_processor is not None
+                    else None
+                ),
                 "output_events": output.output_events,
                 "output_events_truncated": output.output_events_truncated,
                 "output_callback_failures": output.callback_failures,
@@ -262,6 +289,45 @@ class ControlledProcessSupervisor:
                 process_tree=tree.metadata,
                 safe_diagnostic_metadata=diagnostic,
             )
+
+    def _launch_command(
+        self,
+        identity: ExecutableIdentity,
+        arguments: tuple[str, ...],
+    ) -> tuple[list[str] | str, str, ExecutableIdentity | None, str | None]:
+        if os.name != "nt" or identity.path.suffix.lower() not in {
+            ".bat",
+            ".cmd",
+        }:
+            return identity.command(arguments), "direct", None, None
+        if self._command_processor_catalog is None:
+            raise ExecutableValidationError(
+                "The trusted Windows batch adapter is unavailable."
+            )
+        _validate_batch_arguments(arguments)
+        command_processor = self._command_processor_catalog.resolve(
+            "agentbus-command-processor"
+        )
+        batch_command = " ".join(
+            _quote_batch_token(token)
+            for token in (str(identity.path), *arguments)
+        )
+        encoded_command = f'"{batch_command}"'
+        # cmd.exe has different quote rules than Python's list2cmdline encoder.
+        # Pin CreateProcess.applicationName while passing a fully validated line.
+        command_line = (
+            f'"{command_processor.path}" /d /v:off /s /c {encoded_command}'
+        )
+        if len(command_line) > 32_767:
+            raise ExecutableValidationError(
+                "Windows batch invocation exceeds the bounded command size."
+            )
+        return (
+            command_line,
+            "windows-batch-adapter",
+            command_processor,
+            str(command_processor.path),
+        )
 
     def _cancelled_before_launch(
         self,
@@ -303,13 +369,6 @@ class ControlledProcessSupervisor:
         )
 
 
-def _validate_launchable(identity: ExecutableIdentity) -> None:
-    if os.name == "nt" and identity.path.suffix.lower() in {".bat", ".cmd"}:
-        raise ExecutableValidationError(
-            "Batch executables require a dedicated argument encoder and are disabled."
-        )
-
-
 def _validate_arguments(arguments: Sequence[str]) -> tuple[str, ...]:
     if isinstance(arguments, (str, bytes)):
         raise ProcessSupervisionError("Process arguments must be a sequence of strings.")
@@ -319,6 +378,22 @@ def _validate_arguments(arguments: Sequence[str]) -> tuple[str, ...]:
     if any("\x00" in argument for argument in normalized):
         raise ProcessSupervisionError("Process arguments must not contain NUL bytes.")
     return normalized
+
+
+def _validate_batch_arguments(arguments: tuple[str, ...]) -> None:
+    for argument in arguments:
+        if _BATCH_UNSAFE_ARGUMENT.search(argument):
+            raise ExecutableValidationError(
+                "Windows batch arguments cannot contain command-language metacharacters."
+            )
+
+
+def _quote_batch_token(value: str) -> str:
+    if _BATCH_UNSAFE_ARGUMENT.search(value):
+        raise ExecutableValidationError(
+            "Windows batch command paths and arguments must be quote-safe."
+        )
+    return f'"{value}"'
 
 
 def _start_pipe_readers(

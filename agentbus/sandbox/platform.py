@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import hashlib
 import os
 import re
@@ -163,6 +164,31 @@ def validate_working_directory(
             "Working directory must remain inside the assigned worktree."
         ) from exc
     return resolved
+
+
+def windows_system_command_processor() -> Path:
+    if os.name != "nt":
+        raise ExecutableValidationError(
+            "The Windows command processor is unavailable on this platform."
+        )
+    try:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.GetSystemDirectoryW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint]
+        kernel32.GetSystemDirectoryW.restype = ctypes.c_uint
+        buffer = ctypes.create_unicode_buffer(32_768)
+        length = kernel32.GetSystemDirectoryW(buffer, len(buffer))
+        if length == 0 or length >= len(buffer):
+            raise OSError("GetSystemDirectoryW failed")
+        command_processor = (Path(buffer.value) / "cmd.exe").resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise ExecutableValidationError(
+            "The trusted Windows command processor could not be resolved."
+        ) from exc
+    if not command_processor.is_file():
+        raise ExecutableValidationError(
+            "The trusted Windows command processor is not a regular file."
+        )
+    return command_processor
 
 
 def _command_parts(command: ExecutableCommand) -> tuple[str, ...]:
