@@ -21,6 +21,10 @@ MAX_DESCRIPTOR_TEXT_CHARS = 4_096
 MAX_INLINE_OUTPUT_CHARS = 65_536
 MAX_SAFE_DIAGNOSTIC_CHARS = 8_192
 MAX_SCHEMA_BYTES = 65_536
+MAX_METADATA_BYTES = 65_536
+MAX_INVOCATION_ARGUMENT_BYTES = 1_048_576
+MAX_STRUCTURED_OUTPUT_BYTES = 1_048_576
+MAX_COLLECTION_ITEMS = 256
 _NAME_PATTERN = re.compile(r"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$")
 _IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
@@ -151,6 +155,8 @@ class CapabilityScope(ToolProtocolModel):
         cls,
         values: tuple[str, ...],
     ) -> tuple[str, ...]:
+        if len(values) > MAX_COLLECTION_ITEMS:
+            raise ValueError("capability scopes support at most 256 entries per field")
         normalized: list[str] = []
         for raw in values:
             value = raw.strip()
@@ -245,7 +251,7 @@ class ToolInvocationContext(ToolProtocolModel):
     @field_validator("policy_context")
     @classmethod
     def policy_context_is_json(cls, value: dict[str, Any]) -> dict[str, Any]:
-        _require_json(value, "policy context")
+        _require_json(value, "policy context", maximum_bytes=MAX_METADATA_BYTES)
         return value
 
 
@@ -277,6 +283,8 @@ class ToolDescriptor(ToolProtocolModel):
     ) -> tuple[ToolCapability, ...]:
         if not capabilities:
             raise ValueError("tool descriptors must declare at least one capability")
+        if len(capabilities) > 64:
+            raise ValueError("tool descriptors support at most 64 capabilities")
         fingerprints = [capability.model_dump_json() for capability in capabilities]
         if len(fingerprints) != len(set(fingerprints)):
             raise ValueError("tool descriptor capabilities must be unique")
@@ -326,7 +334,11 @@ class ToolInvocation(ToolProtocolModel):
     @field_validator("arguments")
     @classmethod
     def arguments_are_json(cls, value: dict[str, Any]) -> dict[str, Any]:
-        _require_json(value, "tool arguments")
+        _require_json(
+            value,
+            "tool arguments",
+            maximum_bytes=MAX_INVOCATION_ARGUMENT_BYTES,
+        )
         return value
 
     @field_validator("requested_capabilities")
@@ -337,6 +349,8 @@ class ToolInvocation(ToolProtocolModel):
     ) -> tuple[ToolCapability, ...]:
         if not capabilities:
             raise ValueError("tool invocations must request at least one capability")
+        if len(capabilities) > 64:
+            raise ValueError("tool invocations support at most 64 capabilities")
         fingerprints = [capability.model_dump_json() for capability in capabilities]
         if len(fingerprints) != len(set(fingerprints)):
             raise ValueError("requested capabilities must be unique")
@@ -358,7 +372,7 @@ class ToolPolicyDecision(ToolProtocolModel):
     @field_validator("safe_metadata")
     @classmethod
     def safe_metadata_is_json(cls, value: dict[str, Any]) -> dict[str, Any]:
-        _require_json(value, "policy metadata")
+        _require_json(value, "policy metadata", maximum_bytes=MAX_METADATA_BYTES)
         return value
 
 
@@ -408,6 +422,12 @@ class ToolError(ToolProtocolModel):
     retryable: bool = False
     safe_metadata: dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("safe_metadata")
+    @classmethod
+    def metadata_is_bounded(cls, value: dict[str, Any]) -> dict[str, Any]:
+        _require_json(value, "tool error metadata", maximum_bytes=MAX_METADATA_BYTES)
+        return value
+
 
 class ToolArtifact(ToolProtocolModel):
     artifact_id: str = Field(min_length=1, max_length=128)
@@ -418,6 +438,16 @@ class ToolArtifact(ToolProtocolModel):
     sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     truncated: bool = False
     safe_metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("safe_metadata")
+    @classmethod
+    def metadata_is_bounded(cls, value: dict[str, Any]) -> dict[str, Any]:
+        _require_json(
+            value,
+            "tool artifact metadata",
+            maximum_bytes=MAX_METADATA_BYTES,
+        )
+        return value
 
 
 class ToolOutputChunk(ToolProtocolModel):
@@ -451,10 +481,34 @@ class ToolResult(ToolProtocolModel):
     approval_id: str | None = Field(default=None, max_length=128)
     safe_diagnostic_metadata: dict[str, Any] = Field(default_factory=dict)
 
-    @field_validator("structured_output", "safe_diagnostic_metadata")
+    @field_validator("structured_output")
     @classmethod
-    def result_metadata_is_json(cls, value: dict[str, Any]) -> dict[str, Any]:
-        _require_json(value, "tool result metadata")
+    def structured_output_is_bounded(cls, value: dict[str, Any]) -> dict[str, Any]:
+        _require_json(
+            value,
+            "structured tool output",
+            maximum_bytes=MAX_STRUCTURED_OUTPUT_BYTES,
+        )
+        return value
+
+    @field_validator("safe_diagnostic_metadata")
+    @classmethod
+    def result_metadata_is_bounded(cls, value: dict[str, Any]) -> dict[str, Any]:
+        _require_json(
+            value,
+            "tool result metadata",
+            maximum_bytes=MAX_METADATA_BYTES,
+        )
+        return value
+
+    @field_validator("artifacts")
+    @classmethod
+    def artifacts_are_bounded(
+        cls,
+        value: tuple[ToolArtifact, ...],
+    ) -> tuple[ToolArtifact, ...]:
+        if len(value) > MAX_COLLECTION_ITEMS:
+            raise ValueError("tool results support at most 256 artifacts")
         return value
 
     @model_validator(mode="after")
@@ -504,14 +558,31 @@ class ToolAuditRecord(ToolProtocolModel):
     @field_validator("affected_resource_hashes")
     @classmethod
     def resource_hashes_are_sha256(cls, value: dict[str, str]) -> dict[str, str]:
+        if len(value) > MAX_COLLECTION_ITEMS:
+            raise ValueError("tool audits support at most 256 resource hashes")
         for digest in value.values():
             if not re.fullmatch(r"[a-f0-9]{64}", digest):
                 raise ValueError("affected resource hashes must be SHA-256 digests")
         return value
 
 
-def _require_json(value: Any, description: str) -> None:
+def _require_json(
+    value: Any,
+    description: str,
+    *,
+    maximum_bytes: int | None = None,
+) -> None:
     try:
-        json.dumps(value, allow_nan=False)
+        encoded = json.dumps(
+            value,
+            allow_nan=False,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{description} must be JSON serializable") from exc
+    if maximum_bytes is not None and len(encoded) > maximum_bytes:
+        raise ValueError(
+            f"{description} must be at most {maximum_bytes} encoded bytes"
+        )

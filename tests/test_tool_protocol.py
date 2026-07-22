@@ -10,7 +10,11 @@ from agentbus.tools.protocol import (
     ToolDescriptor,
     ToolInvocation,
     ToolInvocationContext,
+    ToolInvocationStatus,
+    ToolPolicyDecision,
+    ToolPolicyOutcome,
     ToolResourceBudget,
+    ToolResult,
     ToolSafetyClassification,
     ToolVersion,
     bound_text,
@@ -20,6 +24,7 @@ from agentbus.tools.protocol import (
     require_invocation_revision,
     safe_protocol_dict,
     serialize_protocol_model,
+    sha256_json,
     validate_invocation_against_descriptor,
     validate_protocol_version,
 )
@@ -186,6 +191,40 @@ def test_bounded_text_preserves_utf8_and_reports_truncation() -> None:
     assert text == "alpha-\u20ac"
     assert byte_count == 9
     assert truncated is True
+
+
+def test_structured_protocol_payloads_are_byte_bounded() -> None:
+    with pytest.raises(ValidationError, match="tool arguments must be at most"):
+        _invocation(arguments={"content": "x" * 1_048_577})
+
+    invocation = _invocation()
+    decision = ToolPolicyDecision(
+        outcome=ToolPolicyOutcome.ALLOW,
+        rule_id="allow.read_only",
+        reason="Bounded read",
+        invocation_id=invocation.invocation_id,
+        invocation_revision=invocation.invocation_revision,
+        capability_fingerprint=capability_fingerprint(
+            invocation.requested_capabilities
+        ),
+        arguments_sha256=sha256_json(invocation.arguments),
+    )
+    with pytest.raises(ValidationError, match="structured tool output must be at most"):
+        ToolResult(
+            invocation_id=invocation.invocation_id,
+            invocation_revision=invocation.invocation_revision,
+            status=ToolInvocationStatus.SUCCEEDED,
+            structured_output={"content": "x" * 1_048_577},
+            policy_decision=decision,
+        )
+    with pytest.raises(ValidationError, match="tool result metadata must be at most"):
+        ToolResult(
+            invocation_id=invocation.invocation_id,
+            invocation_revision=invocation.invocation_revision,
+            status=ToolInvocationStatus.SUCCEEDED,
+            policy_decision=decision,
+            safe_diagnostic_metadata={"summary": "x" * 65_537},
+        )
 
 
 def _descriptor() -> ToolDescriptor:
