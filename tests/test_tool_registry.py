@@ -31,19 +31,52 @@ def test_builtin_descriptors_are_deterministic_and_workspace_scoped(
     descriptors = builtin_descriptors(workspace=tmp_path)
     by_name = {descriptor.name: descriptor for descriptor in descriptors}
 
-    assert len(descriptors) == 11
+    assert len(descriptors) == 18
     assert len(by_name) == len(descriptors)
     assert by_name["filesystem.read"].capabilities[0].scope.roots == (
         str(tmp_path.resolve()),
     )
     assert by_name["process.execute"].capabilities[0].scope.network_allowed is False
     assert by_name["git.commit"].idempotent is False
+    assert by_name["filesystem.rename"].capabilities[0].name.value == (
+        "filesystem.rename"
+    )
+    assert by_name["git.stage"].capabilities[0].scope.git_operations == ("stage",)
+    assert by_name["git.show"].capabilities[0].scope.git_operations == ("show",)
     for descriptor in descriptors:
         jsonschema.validators.validator_for(descriptor.argument_schema).check_schema(
             descriptor.argument_schema
         )
         jsonschema.validators.validator_for(descriptor.output_schema).check_schema(
             descriptor.output_schema
+        )
+
+
+def test_builtin_argument_schemas_reject_unknown_and_unbounded_fields(
+    tmp_path: Path,
+) -> None:
+    by_name = {
+        descriptor.name: descriptor
+        for descriptor in builtin_descriptors(workspace=tmp_path)
+    }
+
+    jsonschema.validate(
+        {"path": "module.py", "maximum_bytes": 1024},
+        by_name["filesystem.read"].argument_schema,
+    )
+    jsonschema.validate(
+        {"paths": ["module.py"], "message": "feat: module"},
+        by_name["git.commit"].argument_schema,
+    )
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(
+            {"path": "module.py", "unknown": True},
+            by_name["filesystem.read"].argument_schema,
+        )
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(
+            {"paths": [f"file-{index}.txt" for index in range(257)]},
+            by_name["git.stage"].argument_schema,
         )
 
 
