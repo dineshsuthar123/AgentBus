@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -17,10 +18,13 @@ from agentbus.control.models import (
 from agentbus.control.services import ControlQueryService
 from agentbus.execution.models import RunRecord, TaskSpec
 from agentbus.execution.state_store import StateStore
+from agentbus.mcp import McpServerConfig, mcp_server_capabilities
+from agentbus.sandbox.platform import ExecutableCatalog
 from agentbus.tools.protocol import ToolCapabilityName
 from agentbus.tools.runtime import build_managed_tool_runtime
 
 TOKEN = "test-control-token-that-is-at-least-thirty-two-bytes"
+MCP_FIXTURE = Path(__file__).parent / "fixtures" / "mcp" / "fake_server.py"
 
 
 class StubSupervisor:
@@ -59,7 +63,12 @@ class StubSupervisor:
         return None
 
 
-def _client(tmp_path: Path) -> tuple[TestClient, StubSupervisor]:
+def _client(
+    tmp_path: Path,
+    *,
+    mcp_server_configs: tuple[McpServerConfig, ...] = (),
+    mcp_executable_catalog: ExecutableCatalog | None = None,
+) -> tuple[TestClient, StubSupervisor]:
     store = StateStore(tmp_path / "state.db")
     store.create_run_with_tasks(
         RunRecord(
@@ -80,11 +89,16 @@ def _client(tmp_path: Path) -> tuple[TestClient, StubSupervisor]:
     config = AgentBusConfig(
         workspace_dir=str(tmp_path),
         state_db=str(tmp_path / "state.db"),
+        mcp_server_configs=mcp_server_configs,
     )
     supervisor = StubSupervisor()
     app = create_app(
         token=TOKEN,
-        query_service=ControlQueryService(config, store),
+        query_service=ControlQueryService(
+            config,
+            store,
+            mcp_executable_catalog=mcp_executable_catalog,
+        ),
         supervisor=supervisor,
         context=ControlAppContext(
             daemon_id="daemon-1",
@@ -466,3 +480,97 @@ def test_tool_approval_is_listed_decided_idempotently_and_cancellable(
     assert repeated.json()["idempotent"] is True
     assert conflicting.status_code == 409
     assert target.exists()
+
+
+def test_mcp_diagnostics_check_only_preconfigured_server_and_hide_command(
+    tmp_path: Path,
+) -> None:
+    alias = "control-mcp"
+    private_environment_value = "control-mcp-private-value"
+    config = McpServerConfig(
+        server_id="fixture",
+        transport="stdio",
+        executable_alias=alias,
+        arguments=("--mode", "normal"),
+        environment={"CI": private_environment_value},
+        capability_map={
+            "echo": mcp_server_capabilities("fixture"),
+            "write_note": mcp_server_capabilities("fixture"),
+        },
+    )
+    catalog = ExecutableCatalog(
+        {alias: (sys.executable, "-u", str(MCP_FIXTURE))}
+    )
+    client, _ = _client(
+        tmp_path,
+        mcp_server_configs=(config,),
+        mcp_executable_catalog=catalog,
+    )
+
+    listed = client.get("/api/v1/mcp/servers", headers=_auth())
+    checked = client.post(
+        "/api/v1/mcp/servers/fixture/check",
+        headers=_auth(),
+    )
+    unknown = client.post(
+        "/api/v1/mcp/servers/not-configured/check",
+        headers=_auth(),
+    )
+
+    server = listed.json()["servers"][0]
+    result = checked.json()
+    serialized = listed.text + checked.text
+    assert listed.status_code == 200
+    assert listed.json()["total"] == 1
+    assert server["server_id"] == "fixture"
+    assert server["configured_tools"][0]["namespaced_name"] == "mcp.fixture.echo"
+    assert "arguments" not in server
+    assert "environment" not in server
+    assert private_environment_value not in serialized
+    assert str(MCP_FIXTURE) not in serialized
+    assert checked.status_code == 200
+    assert result["ready"] is True, result["message"]
+    assert result["protocol_version"] == "2025-11-25"
+    assert result["advertised_tools"] == [
+        "mcp.fixture.echo",
+        "mcp.fixture.write_note",
+    ]
+    assert result["cleanup_completed"] is True
+    assert unknown.status_code == 404
+    operation = client.app.openapi()["paths"][
+        "/api/v1/mcp/servers/{server_id}/check"
+    ]["post"]
+    assert "requestBody" not in operation
+
+
+def test_mcp_diagnostic_failure_is_bounded_and_cleans_transport(
+    tmp_path: Path,
+) -> None:
+    alias = "control-mcp-unsupported"
+    config = McpServerConfig(
+        server_id="unsupported",
+        transport="stdio",
+        executable_alias=alias,
+        arguments=("--mode", "unsupported"),
+        capability_map={"echo": mcp_server_capabilities("unsupported")},
+    )
+    catalog = ExecutableCatalog(
+        {alias: (sys.executable, "-u", str(MCP_FIXTURE))}
+    )
+    client, _ = _client(
+        tmp_path,
+        mcp_server_configs=(config,),
+        mcp_executable_catalog=catalog,
+    )
+
+    checked = client.post(
+        "/api/v1/mcp/servers/unsupported/check",
+        headers=_auth(),
+    )
+
+    result = checked.json()
+    assert checked.status_code == 200
+    assert result["ready"] is False
+    assert result["diagnostic_timeout_seconds"] == 10.0
+    assert result["cleanup_completed"] is True
+    assert "unsupported protocol version" in result["message"].lower()

@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from agentbus.config import AgentBusConfig
 from agentbus.mcp import (
     McpServerConfig,
     McpTransportKind,
@@ -32,6 +33,18 @@ def test_stdio_server_requires_explicit_command_and_scoped_capabilities() -> Non
     assert namespace_mcp_tool("local-tools", "read_file") == (
         "mcp.local-tools.read_file"
     )
+
+
+def test_agentbus_config_rejects_duplicate_mcp_server_ids() -> None:
+    server = McpServerConfig(
+        server_id="local",
+        transport=McpTransportKind.STDIO,
+        executable_alias="python",
+        capability_map={"read": mcp_server_capabilities("local")},
+    )
+
+    with pytest.raises(ValueError, match="server IDs must be unique"):
+        AgentBusConfig(mcp_server_configs=(server, server))
 
 
 @pytest.mark.parametrize(

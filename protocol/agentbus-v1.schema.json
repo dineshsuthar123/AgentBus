@@ -1239,6 +1239,257 @@
       "title": "InfoResponse",
       "type": "object"
     },
+    "McpConfiguredToolSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "capabilities": {
+          "items": {
+            "$ref": "#/$defs/ToolCapability"
+          },
+          "maxItems": 64,
+          "title": "Capabilities",
+          "type": "array"
+        },
+        "name": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "namespaced_name": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Namespaced Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "namespaced_name",
+        "capabilities"
+      ],
+      "title": "McpConfiguredToolSummary",
+      "type": "object"
+    },
+    "McpServerCheckResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "advertised_tools": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Advertised Tools",
+          "type": "array"
+        },
+        "capabilities": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "title": "Capabilities",
+          "type": "array"
+        },
+        "checked_at": {
+          "format": "date-time",
+          "title": "Checked At",
+          "type": "string"
+        },
+        "cleanup_completed": {
+          "title": "Cleanup Completed",
+          "type": "boolean"
+        },
+        "diagnostic_timeout_seconds": {
+          "exclusiveMinimum": 0,
+          "maximum": 10,
+          "title": "Diagnostic Timeout Seconds",
+          "type": "number"
+        },
+        "message": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Message"
+        },
+        "protocol_version": {
+          "anyOf": [
+            {
+              "maxLength": 32,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Protocol Version"
+        },
+        "ready": {
+          "title": "Ready",
+          "type": "boolean"
+        },
+        "server": {
+          "$ref": "#/$defs/McpServerSummary"
+        },
+        "server_name": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Server Name"
+        },
+        "server_version": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Server Version"
+        },
+        "tool_count": {
+          "default": 0,
+          "maximum": 256,
+          "minimum": 0,
+          "title": "Tool Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "server",
+        "ready",
+        "checked_at",
+        "diagnostic_timeout_seconds",
+        "cleanup_completed"
+      ],
+      "title": "McpServerCheckResponse",
+      "type": "object"
+    },
+    "McpServerListResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "servers": {
+          "items": {
+            "$ref": "#/$defs/McpServerSummary"
+          },
+          "maxItems": 64,
+          "title": "Servers",
+          "type": "array"
+        },
+        "total": {
+          "maximum": 64,
+          "minimum": 0,
+          "title": "Total",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "servers",
+        "total"
+      ],
+      "title": "McpServerListResponse",
+      "type": "object"
+    },
+    "McpServerSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "configured_tools": {
+          "items": {
+            "$ref": "#/$defs/McpConfiguredToolSummary"
+          },
+          "maxItems": 256,
+          "title": "Configured Tools",
+          "type": "array"
+        },
+        "endpoint_host": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Endpoint Host"
+        },
+        "executable_alias": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Executable Alias"
+        },
+        "request_timeout_seconds": {
+          "exclusiveMinimum": 0,
+          "maximum": 600,
+          "title": "Request Timeout Seconds",
+          "type": "number"
+        },
+        "server_id": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Server Id",
+          "type": "string"
+        },
+        "startup_timeout_seconds": {
+          "exclusiveMinimum": 0,
+          "maximum": 60,
+          "title": "Startup Timeout Seconds",
+          "type": "number"
+        },
+        "supported_protocol_versions": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 8,
+          "title": "Supported Protocol Versions",
+          "type": "array"
+        },
+        "transport": {
+          "enum": [
+            "stdio",
+            "loopback_http"
+          ],
+          "title": "Transport",
+          "type": "string"
+        }
+      },
+      "required": [
+        "server_id",
+        "transport",
+        "configured_tools",
+        "supported_protocol_versions",
+        "startup_timeout_seconds",
+        "request_timeout_seconds"
+      ],
+      "title": "McpServerSummary",
+      "type": "object"
+    },
     "ProviderCheckRequest": {
       "additionalProperties": false,
       "properties": {

@@ -1047,6 +1047,251 @@
         "title": "InfoResponse",
         "type": "object"
       },
+      "McpConfiguredToolSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "capabilities": {
+            "items": {
+              "$ref": "#/components/schemas/ToolCapability"
+            },
+            "maxItems": 64,
+            "title": "Capabilities",
+            "type": "array"
+          },
+          "name": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "namespaced_name": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Namespaced Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "namespaced_name",
+          "capabilities"
+        ],
+        "title": "McpConfiguredToolSummary",
+        "type": "object"
+      },
+      "McpServerCheckResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "advertised_tools": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 256,
+            "title": "Advertised Tools",
+            "type": "array"
+          },
+          "capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 64,
+            "title": "Capabilities",
+            "type": "array"
+          },
+          "checked_at": {
+            "format": "date-time",
+            "title": "Checked At",
+            "type": "string"
+          },
+          "cleanup_completed": {
+            "title": "Cleanup Completed",
+            "type": "boolean"
+          },
+          "diagnostic_timeout_seconds": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 10.0,
+            "title": "Diagnostic Timeout Seconds",
+            "type": "number"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "protocol_version": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Protocol Version"
+          },
+          "ready": {
+            "title": "Ready",
+            "type": "boolean"
+          },
+          "server": {
+            "$ref": "#/components/schemas/McpServerSummary"
+          },
+          "server_name": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Server Name"
+          },
+          "server_version": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Server Version"
+          },
+          "tool_count": {
+            "default": 0,
+            "maximum": 256.0,
+            "minimum": 0.0,
+            "title": "Tool Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "server",
+          "ready",
+          "checked_at",
+          "diagnostic_timeout_seconds",
+          "cleanup_completed"
+        ],
+        "title": "McpServerCheckResponse",
+        "type": "object"
+      },
+      "McpServerListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "servers": {
+            "items": {
+              "$ref": "#/components/schemas/McpServerSummary"
+            },
+            "maxItems": 64,
+            "title": "Servers",
+            "type": "array"
+          },
+          "total": {
+            "maximum": 64.0,
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "servers",
+          "total"
+        ],
+        "title": "McpServerListResponse",
+        "type": "object"
+      },
+      "McpServerSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "configured_tools": {
+            "items": {
+              "$ref": "#/components/schemas/McpConfiguredToolSummary"
+            },
+            "maxItems": 256,
+            "title": "Configured Tools",
+            "type": "array"
+          },
+          "endpoint_host": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Endpoint Host"
+          },
+          "executable_alias": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Executable Alias"
+          },
+          "request_timeout_seconds": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 600.0,
+            "title": "Request Timeout Seconds",
+            "type": "number"
+          },
+          "server_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Server Id",
+            "type": "string"
+          },
+          "startup_timeout_seconds": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 60.0,
+            "title": "Startup Timeout Seconds",
+            "type": "number"
+          },
+          "supported_protocol_versions": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 8,
+            "title": "Supported Protocol Versions",
+            "type": "array"
+          },
+          "transport": {
+            "enum": [
+              "stdio",
+              "loopback_http"
+            ],
+            "title": "Transport",
+            "type": "string"
+          }
+        },
+        "required": [
+          "server_id",
+          "transport",
+          "configured_tools",
+          "supported_protocol_versions",
+          "startup_timeout_seconds",
+          "request_timeout_seconds"
+        ],
+        "title": "McpServerSummary",
+        "type": "object"
+      },
       "ProviderCheckRequest": {
         "additionalProperties": false,
         "properties": {
@@ -4030,6 +4275,193 @@
           }
         },
         "summary": "Info"
+      }
+    },
+    "/api/v1/mcp/servers": {
+      "get": {
+        "operationId": "mcp_servers_api_v1_mcp_servers_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpServerListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          }
+        },
+        "summary": "Mcp Servers"
+      }
+    },
+    "/api/v1/mcp/servers/{server_id}/check": {
+      "post": {
+        "operationId": "check_mcp_server_api_v1_mcp_servers__server_id__check_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "server_id",
+            "required": true,
+            "schema": {
+              "title": "Server Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpServerCheckResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          }
+        },
+        "summary": "Check Mcp Server"
       }
     },
     "/api/v1/policy": {

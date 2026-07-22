@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 from agentbus.security.redaction import safe_endpoint_host
 
 if TYPE_CHECKING:
+    from agentbus.mcp.models import McpServerConfig
     from agentbus.tools.protocol import ToolResourceBudget
 
 
@@ -69,6 +70,10 @@ class AgentBusConfig:
     worktree_root: str | None = None
     keep_worktrees: bool = True
     integration_strategy: str = "cherry-pick"
+    mcp_server_configs: tuple[McpServerConfig, ...] = field(
+        default=(),
+        repr=False,
+    )
 
     provider_name: str = "ollama"
     fallback_provider_name: str = "ollama"
@@ -418,6 +423,19 @@ class AgentBusConfig:
             *self.deterministic_failure_roles,
         ):
             _normalize_role(role)
+        if len(self.mcp_server_configs) > 64:
+            raise ValueError("AgentBus supports at most 64 configured MCP servers")
+        if self.mcp_server_configs:
+            from agentbus.mcp.models import McpServerConfig
+
+            if any(
+                not isinstance(server, McpServerConfig)
+                for server in self.mcp_server_configs
+            ):
+                raise ValueError("MCP server configuration must be validated")
+            server_ids = [server.server_id for server in self.mcp_server_configs]
+            if len(server_ids) != len(set(server_ids)):
+                raise ValueError("Configured MCP server IDs must be unique")
 
     def resolve_model(self, role: str, *, provider: str | None = None) -> str:
         selected_provider = (provider or self.provider_name).lower()

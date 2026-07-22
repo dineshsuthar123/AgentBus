@@ -44,6 +44,8 @@ from agentbus.control.models import (
     FileContentResponse,
     HealthResponse,
     InfoResponse,
+    McpServerCheckResponse,
+    McpServerListResponse,
     ProviderCheckRequest,
     ProviderListResponse,
     ProviderSummary,
@@ -244,6 +246,7 @@ def create_app(
                 "tool-audit",
                 "tool-cancellation",
                 "mcp",
+                "mcp-diagnostics",
             ],
         )
 
@@ -327,6 +330,20 @@ def create_app(
         request: ToolPolicyEvaluationRequest,
     ) -> ToolPolicyEvaluationResponse:
         return query_service.evaluate_tool_policy(request)
+
+    @app.get(
+        f"{API_PREFIX}/mcp/servers",
+        response_model=McpServerListResponse,
+    )
+    def mcp_servers() -> McpServerListResponse:
+        return query_service.mcp_servers()
+
+    @app.post(
+        f"{API_PREFIX}/mcp/servers/{{server_id}}/check",
+        response_model=McpServerCheckResponse,
+    )
+    def check_mcp_server(server_id: str) -> McpServerCheckResponse:
+        return query_service.check_mcp_server(server_id)
 
     @app.post(f"{API_PREFIX}/runs", response_model=RunAcceptedResponse, status_code=202)
     async def create_run(request: RunCreateRequest) -> RunAcceptedResponse:

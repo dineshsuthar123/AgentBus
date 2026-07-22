@@ -519,6 +519,43 @@ class ToolPolicyEvaluationResponse(ProtocolModel):
     required_capabilities: list[ToolCapability]
 
 
+class McpConfiguredToolSummary(ProtocolModel):
+    name: str = Field(min_length=1, max_length=128)
+    namespaced_name: str = Field(min_length=1, max_length=128)
+    capabilities: list[ToolCapability] = Field(max_length=64)
+
+
+class McpServerSummary(ProtocolModel):
+    server_id: str = Field(min_length=1, max_length=64)
+    transport: Literal["stdio", "loopback_http"]
+    executable_alias: str | None = Field(default=None, max_length=64)
+    endpoint_host: str | None = Field(default=None, max_length=255)
+    configured_tools: list[McpConfiguredToolSummary] = Field(max_length=256)
+    supported_protocol_versions: list[str] = Field(max_length=8)
+    startup_timeout_seconds: float = Field(gt=0, le=60)
+    request_timeout_seconds: float = Field(gt=0, le=600)
+
+
+class McpServerListResponse(ProtocolModel):
+    servers: list[McpServerSummary] = Field(max_length=64)
+    total: int = Field(ge=0, le=64)
+
+
+class McpServerCheckResponse(ProtocolModel):
+    server: McpServerSummary
+    ready: bool
+    checked_at: datetime
+    diagnostic_timeout_seconds: float = Field(gt=0, le=10)
+    protocol_version: str | None = Field(default=None, max_length=32)
+    server_name: str | None = Field(default=None, max_length=512)
+    server_version: str | None = Field(default=None, max_length=512)
+    capabilities: list[str] = Field(default_factory=list, max_length=64)
+    advertised_tools: list[str] = Field(default_factory=list, max_length=256)
+    tool_count: int = Field(default=0, ge=0, le=256)
+    cleanup_completed: bool
+    message: str | None = Field(default=None, max_length=512)
+
+
 class ChangeSummary(ProtocolModel):
     path: str
     status: str

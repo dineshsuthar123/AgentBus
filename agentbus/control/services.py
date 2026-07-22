@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 import subprocess
+import threading
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -22,6 +24,10 @@ from agentbus.control.models import (
     DiffResponse,
     DoctorResponse,
     FileContentResponse,
+    McpConfiguredToolSummary,
+    McpServerCheckResponse,
+    McpServerListResponse,
+    McpServerSummary,
     ProviderListResponse,
     ProviderSummary,
     RunListResponse,
@@ -48,7 +54,11 @@ from agentbus.control.models import (
     WorktreeSummary,
 )
 from agentbus.doctor import run_doctor
-from agentbus.execution.cancellation import CancellationState
+from agentbus.execution.cancellation import (
+    CancellationRequested,
+    CancellationState,
+    CancellationToken,
+)
 from agentbus.execution.engine import DurableExecutionEngine, DurableExecutionError
 from agentbus.execution.models import (
     ApprovalOutcome,
@@ -68,10 +78,22 @@ from agentbus.git.repository import (
     GitRepositoryError,
     WorkspaceRepositoryMismatch,
 )
+from agentbus.mcp.errors import McpError
+from agentbus.mcp.importer import build_mcp_client
+from agentbus.mcp.models import (
+    McpServerConfig,
+    McpTransportKind,
+    namespace_mcp_tool,
+)
 from agentbus.repo.artifact_policy import ArtifactCategory
 from agentbus.policy import ToolApprovalDisposition, ToolPolicyEngine
 from agentbus.policy.defaults import DEFAULT_TOOL_POLICY
-from agentbus.security.redaction import sanitize_json
+from agentbus.sandbox.platform import ExecutableCatalog
+from agentbus.security.redaction import (
+    redact_text,
+    safe_endpoint_host,
+    sanitize_json,
+)
 from agentbus.tools.capabilities import derive_required_capabilities
 from agentbus.tools.descriptors import descriptor_map
 from agentbus.tools.protocol import (
@@ -104,6 +126,7 @@ _SECRET_SUFFIXES = {".key", ".pem", ".p12", ".pfx", ".jks", ".keystore"}
 _FORBIDDEN_PARTS = {".git", ".agentbus"}
 _COMMIT_SHA = re.compile(r"^[0-9a-fA-F]{40,64}$")
 _CONTROL_PROCESS_EXECUTABLES = ("git", "pytest", "python")
+_MCP_DIAGNOSTIC_TIMEOUT_SECONDS = 10.0
 _POLICY_RULES = (
     {
         "rule_id": "deny.unsafe_path_syntax",
@@ -493,11 +516,19 @@ class ControlQueryService:
         config: AgentBusConfig,
         store: StateStore | None = None,
         workspace_service: WorkspaceService | None = None,
+        mcp_executable_catalog: ExecutableCatalog | None = None,
     ):
         self.config = config
         self.store = store or StateStore(config.state_database_path)
         self.workspace_service = workspace_service or WorkspaceService()
         self.repository = RepositoryReviewService(self.workspace_service)
+        self._mcp_server_configs = {
+            server.server_id: server for server in config.mcp_server_configs
+        }
+        self._mcp_check_locks = {
+            server_id: threading.Lock() for server_id in self._mcp_server_configs
+        }
+        self._mcp_executable_catalog = mcp_executable_catalog
 
     def get_run(self, run_id: str) -> RunRecord:
         try:
@@ -863,6 +894,120 @@ class ControlQueryService:
             required_capabilities=list(required),
         )
 
+    def mcp_servers(self) -> McpServerListResponse:
+        servers = [
+            self._mcp_server_summary(self._mcp_server_configs[server_id])
+            for server_id in sorted(self._mcp_server_configs)
+        ]
+        return McpServerListResponse(servers=servers, total=len(servers))
+
+    def check_mcp_server(self, server_id: str) -> McpServerCheckResponse:
+        try:
+            config = self._mcp_server_configs[server_id]
+        except KeyError as exc:
+            raise ControlPlaneNotFoundError(
+                "The requested MCP server is not configured."
+            ) from exc
+        lock = self._mcp_check_locks[server_id]
+        if not lock.acquire(blocking=False):
+            raise ControlPlaneConflictError(
+                "An MCP diagnostic check is already running for this server."
+            )
+
+        client = None
+        timer = None
+        ready = False
+        cleanup_completed = True
+        message = None
+        protocol_version = None
+        server_name = None
+        server_version = None
+        capabilities: list[str] = []
+        advertised_tools: list[str] = []
+        try:
+            diagnostic_config = config.model_copy(
+                update={
+                    "startup_timeout_seconds": min(
+                        config.startup_timeout_seconds,
+                        _MCP_DIAGNOSTIC_TIMEOUT_SECONDS,
+                    ),
+                    "request_timeout_seconds": min(
+                        config.request_timeout_seconds,
+                        _MCP_DIAGNOSTIC_TIMEOUT_SECONDS,
+                    ),
+                }
+            )
+            catalog = self._mcp_executable_catalog
+            if (
+                diagnostic_config.transport == McpTransportKind.STDIO
+                and catalog is None
+            ):
+                alias = diagnostic_config.executable_alias
+                if alias is None:
+                    raise ValueError(
+                        "Configured stdio MCP server has no executable alias."
+                    )
+                catalog = ExecutableCatalog.standard((alias,))
+            cancellation = CancellationToken()
+            timer = threading.Timer(
+                _MCP_DIAGNOSTIC_TIMEOUT_SECONDS,
+                cancellation.request,
+                args=("MCP diagnostic deadline exceeded.",),
+            )
+            timer.daemon = True
+            timer.start()
+            client = build_mcp_client(
+                diagnostic_config,
+                worktree=self.config.workspace_path,
+                executable_catalog=catalog,
+            )
+            connection = client.connect(cancellation=cancellation)
+            client.ping(cancellation=cancellation)
+            tools = client.list_tools(cancellation=cancellation)
+            protocol_version = connection.protocol_version
+            server_name = redact_text(connection.server_name, max_chars=512)
+            server_version = redact_text(connection.server_version, max_chars=512)
+            capabilities = [
+                redact_text(name, max_chars=128) or "[redacted]"
+                for name in connection.capabilities[:64]
+            ]
+            advertised_tools = [tool.namespaced_name for tool in tools]
+            ready = True
+        except CancellationRequested:
+            message = "The configured MCP server check exceeded its deadline."
+        except (McpError, ValueError) as exc:
+            message = redact_text(str(exc), max_chars=512) or (
+                "The configured MCP server check failed."
+            )
+        except Exception:
+            message = "The configured MCP server check failed safely."
+        finally:
+            if timer is not None:
+                timer.cancel()
+            if client is not None:
+                try:
+                    client.close()
+                except Exception:
+                    cleanup_completed = False
+                    ready = False
+                    message = "MCP diagnostic transport cleanup could not be confirmed."
+            lock.release()
+
+        return McpServerCheckResponse(
+            server=self._mcp_server_summary(config),
+            ready=ready,
+            checked_at=datetime.now(timezone.utc),
+            diagnostic_timeout_seconds=_MCP_DIAGNOSTIC_TIMEOUT_SECONDS,
+            protocol_version=protocol_version,
+            server_name=server_name,
+            server_version=server_version,
+            capabilities=capabilities,
+            advertised_tools=advertised_tools,
+            tool_count=len(advertised_tools),
+            cleanup_completed=cleanup_completed,
+            message=message,
+        )
+
     def approvals(self, run_id: str) -> ApprovalListResponse:
         self.get_run(run_id)
         tool_records = self.store.list_tool_approvals(run_id, limit=1000)
@@ -1069,6 +1214,27 @@ class ControlQueryService:
         return descriptor_map(
             workspace=workspace,
             process_executables=_CONTROL_PROCESS_EXECUTABLES,
+        )
+
+    @staticmethod
+    def _mcp_server_summary(config: McpServerConfig) -> McpServerSummary:
+        configured_tools = [
+            McpConfiguredToolSummary(
+                name=name,
+                namespaced_name=namespace_mcp_tool(config.server_id, name),
+                capabilities=list(config.capability_map[name]),
+            )
+            for name in sorted(config.capability_map)
+        ]
+        return McpServerSummary(
+            server_id=config.server_id,
+            transport=config.transport.value,
+            executable_alias=config.executable_alias,
+            endpoint_host=safe_endpoint_host(config.endpoint_url),
+            configured_tools=configured_tools,
+            supported_protocol_versions=list(config.supported_protocol_versions),
+            startup_timeout_seconds=config.startup_timeout_seconds,
+            request_timeout_seconds=config.request_timeout_seconds,
         )
 
     def providers(self) -> ProviderListResponse:

@@ -202,6 +202,43 @@ export interface InfoResponse {
   "capabilities"?: Array<string>;
 }
 
+export interface McpConfiguredToolSummary {
+  "name": string;
+  "namespaced_name": string;
+  "capabilities": Array<ToolCapability>;
+}
+
+export interface McpServerCheckResponse {
+  "server": McpServerSummary;
+  "ready": boolean;
+  "checked_at": string;
+  "diagnostic_timeout_seconds": number;
+  "protocol_version"?: string | null;
+  "server_name"?: string | null;
+  "server_version"?: string | null;
+  "capabilities"?: Array<string>;
+  "advertised_tools"?: Array<string>;
+  "tool_count"?: number;
+  "cleanup_completed": boolean;
+  "message"?: string | null;
+}
+
+export interface McpServerListResponse {
+  "servers": Array<McpServerSummary>;
+  "total": number;
+}
+
+export interface McpServerSummary {
+  "server_id": string;
+  "transport": "stdio" | "loopback_http";
+  "executable_alias"?: string | null;
+  "endpoint_host"?: string | null;
+  "configured_tools": Array<McpConfiguredToolSummary>;
+  "supported_protocol_versions": Array<string>;
+  "startup_timeout_seconds": number;
+  "request_timeout_seconds": number;
+}
+
 export interface ProviderCheckRequest {
   "provider": "ollama" | "azure" | "deterministic";
   "live_consent"?: boolean;
