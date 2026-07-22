@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import type { AgentBusClient } from "./apiClient";
 import type {
   ApprovalSummary,
+  McpServerSummary,
   ProviderSummary,
   RunSummary,
   TaskSummary,
@@ -10,6 +11,7 @@ import type {
 } from "./generated/protocol";
 import type { RunStore } from "./runStore";
 import { formatApprovalTooltip } from "./approvalPresentation";
+import { formatMcpServerTooltip } from "./mcpPresentation";
 import {
   canCancel,
   cancellationDetails,
@@ -337,6 +339,20 @@ function approvalItem(approval: ApprovalSummary): AgentBusItem {
   return item;
 }
 
+export class McpServersProvider extends RefreshableProvider {
+  public constructor(private readonly client: () => Promise<AgentBusClient>) {
+    super();
+  }
+
+  public async getChildren(): Promise<AgentBusItem[]> {
+    const response = await (await this.client()).mcpServers();
+    if (response.servers.length === 0) {
+      return [messageItem("No local MCP servers are configured.")];
+    }
+    return response.servers.map(mcpServerItem);
+  }
+}
+
 function toolInvocationItem(
   invocation: ToolInvocationSummary,
   approvalState?: string
@@ -405,6 +421,24 @@ function providerItem(provider: ProviderSummary): AgentBusItem {
     provider.ready ? "pass-filled" : "warning"
   );
   item.contextValue = "agentbusProvider";
+  return item;
+}
+
+function mcpServerItem(server: McpServerSummary): AgentBusItem {
+  const item = new AgentBusItem(
+    server.server_id,
+    vscode.TreeItemCollapsibleState.None,
+    server
+  );
+  item.description = `${server.transport} | ${server.configured_tools.length} tool(s)`;
+  item.tooltip = new vscode.MarkdownString(formatMcpServerTooltip(server));
+  item.iconPath = new vscode.ThemeIcon("server-process");
+  item.contextValue = "agentbusMcpServer";
+  item.command = {
+    command: "agentbus.showMcpServer",
+    title: "Show MCP Server",
+    arguments: [item]
+  };
   return item;
 }
 

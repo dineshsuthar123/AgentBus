@@ -27,6 +27,7 @@
   "activationEvents": [
     "onView:agentbus.runs",
     "onView:agentbus.tools",
+    "onView:agentbus.mcp",
     "onCommand:agentbus.startTask"
   ],
   "contributes": {
@@ -82,6 +83,14 @@
       {
         "command": "agentbus.refreshToolRegistry",
         "title": "AgentBus: Refresh Tool Registry"
+      },
+      {
+        "command": "agentbus.checkMcpServer",
+        "title": "AgentBus: Check MCP Server"
+      },
+      {
+        "command": "agentbus.showMcpServer",
+        "title": "AgentBus: Show MCP Server"
       },
       {
         "command": "agentbus.approveAction",
@@ -150,6 +159,10 @@
         {
           "id": "agentbus.providers",
           "name": "Providers"
+        },
+        {
+          "id": "agentbus.mcp",
+          "name": "MCP Servers"
         }
       ]
     },
@@ -196,6 +209,16 @@
           "command": "agentbus.openToolArtifact",
           "when": "viewItem == agentbusToolCancellable || viewItem == agentbusToolTerminal",
           "group": "navigation"
+        },
+        {
+          "command": "agentbus.showMcpServer",
+          "when": "viewItem == agentbusMcpServer",
+          "group": "inline"
+        },
+        {
+          "command": "agentbus.checkMcpServer",
+          "when": "viewItem == agentbusMcpServer",
+          "group": "inline@2"
         }
       ]
     },

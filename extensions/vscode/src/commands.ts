@@ -9,6 +9,7 @@ import { toolInvocationUri, toolPolicyUri } from "./toolDocuments";
 import type {
   ApprovalSummary,
   CancelResponse,
+  McpServerSummary,
   RunAcceptedResponse,
   RunCreateRequest,
   RunSummary,
@@ -17,6 +18,8 @@ import type {
 import { ReconnectingSseClient } from "./sse";
 import type { RunStore } from "./runStore";
 import { safeError } from "./redaction";
+import { mcpServerUri } from "./mcpDocuments";
+import { formatMcpServerCheck } from "./mcpPresentation";
 import { canonicalWorkspacePath, selectWorkspace } from "./workspace";
 import type { AgentBusItem, RunSelection } from "./views";
 import {
@@ -80,6 +83,8 @@ export class CommandController implements vscode.Disposable {
     );
     command("agentbus.showToolPolicy", () => this.showToolPolicy());
     command("agentbus.refreshToolRegistry", () => this.refreshToolRegistry());
+    command("agentbus.showMcpServer", (item) => this.showMcpServer(item));
+    command("agentbus.checkMcpServer", (item) => this.checkMcpServer(item));
     command("agentbus.approveAction", (item) => this.decide(item, "approve"));
     command("agentbus.rejectAction", (item) => this.decide(item, "reject"));
     command("agentbus.runDoctor", () => this.doctor());
@@ -480,6 +485,56 @@ export class CommandController implements vscode.Disposable {
     void vscode.window.showInformationMessage(
       `AgentBus loaded ${response.total} managed tool descriptor(s).`
     );
+  }
+
+  private async showMcpServer(raw?: unknown): Promise<void> {
+    const server = await this.chooseMcpServer(raw);
+    if (!server) return;
+    const document = await vscode.workspace.openTextDocument(
+      mcpServerUri(server.server_id)
+    );
+    await vscode.window.showTextDocument(document, { preview: true });
+  }
+
+  private async checkMcpServer(raw?: unknown): Promise<void> {
+    const requested = await this.chooseMcpServer(raw);
+    if (!requested) return;
+    const configured = await (await this.client()).mcpServers();
+    const server = configured.servers.find(
+      (candidate) => candidate.server_id === requested.server_id
+    );
+    if (!server) {
+      throw new Error("MCP diagnostics are limited to configured servers.");
+    }
+    const response = await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `Checking local MCP server ${server.server_id}`
+      },
+      async () => (await this.client()).checkMcpServer(server.server_id)
+    );
+    const document = await vscode.workspace.openTextDocument({
+      content: formatMcpServerCheck(response),
+      language: "markdown"
+    });
+    await vscode.window.showTextDocument(document, { preview: true });
+  }
+
+  private async chooseMcpServer(
+    raw?: unknown
+  ): Promise<McpServerSummary | undefined> {
+    const item = raw as AgentBusItem | undefined;
+    const selected = item?.value as McpServerSummary | undefined;
+    if (selected) return selected;
+    const response = await (await this.client()).mcpServers();
+    return (await vscode.window.showQuickPick(
+      response.servers.map((server) => ({
+        label: server.server_id,
+        description: `${server.transport} | ${server.configured_tools.length} tool(s)`,
+        server
+      })),
+      { title: "Select Configured MCP Server" }
+    ))?.server;
   }
 
   private async openChange(runId: string, path: string): Promise<void> {
