@@ -17,10 +17,12 @@ from agentbus.tools.protocol import (
     ToolCapabilityName,
     ToolInvocation,
     ToolInvocationContext,
+    ToolInvocationStatus,
     ToolResourceBudget,
     ToolResourceUsage,
     ToolVersion,
 )
+from agentbus.tools.records import ToolInvocationRecord, invocation_record_values
 
 
 def invocation(
@@ -163,25 +165,120 @@ def test_completion_records_actual_usage_before_reporting_overrun(tmp_path: Path
 def test_process_concurrency_limit_is_atomic_across_threads(tmp_path: Path) -> None:
     ledger = ToolBudgetLedger()
     budget = ToolResourceBudget(concurrent_processes=2)
+    reservations = [
+        ledger.begin(
+            invocation(tmp_path, f"invocation-{index}", budget=budget),
+            process_slot=True,
+        )
+        for index in range(12)
+    ]
 
-    def reserve(index: int):
+    def activate(reservation):
         try:
-            return ledger.begin(
-                invocation(tmp_path, f"invocation-{index}", budget=budget),
-                process_slot=True,
-            )
+            ledger.activate_process(reservation)
+            return reservation
         except ToolBudgetExceeded:
             return None
 
     with ThreadPoolExecutor(max_workers=12) as pool:
-        reservations = list(pool.map(reserve, range(12)))
+        activated = list(pool.map(activate, reservations))
 
-    accepted = [reservation for reservation in reservations if reservation is not None]
+    accepted = [reservation for reservation in activated if reservation is not None]
     assert len(accepted) == 2
     assert ledger.snapshot("run-1").active_processes == 2
-    for reservation in accepted:
+    for reservation in reservations:
         ledger.abort(reservation)
     assert ledger.snapshot("run-1").active_processes == 0
+
+
+def test_process_slot_requires_process_capability_and_is_idempotent(
+    tmp_path: Path,
+) -> None:
+    ledger = ToolBudgetLedger()
+    ordinary = ledger.begin(invocation(tmp_path, "invocation-1"))
+    process = ledger.begin(
+        invocation(tmp_path, "invocation-2"),
+        process_slot=True,
+    )
+    duplicate_process = ledger.begin(
+        invocation(tmp_path, "invocation-2"),
+        process_slot=True,
+    )
+
+    with pytest.raises(ToolBudgetConflict, match="process execution"):
+        ledger.activate_process(ordinary)
+    first = ledger.activate_process(duplicate_process)
+    duplicate = ledger.activate_process(process)
+
+    assert first.active_processes == duplicate.active_processes == 1
+    ledger.abort(ordinary)
+    assert ledger.abort(process).active_processes == 0
+
+
+def test_persisted_budget_state_restores_usage_reservations_and_processes(
+    tmp_path: Path,
+) -> None:
+    budget = ToolResourceBudget(
+        concurrent_processes=1,
+        file_mutations=3,
+        total_written_bytes=30,
+    )
+    completed_invocation = invocation(
+        tmp_path,
+        "invocation-1",
+        budget=budget,
+    )
+    active_invocation = invocation(
+        tmp_path,
+        "invocation-2",
+        budget=budget,
+    )
+    completed_values = invocation_record_values(
+        completed_invocation,
+        anticipated_usage=ToolResourceUsage(file_mutations=1, written_bytes=10),
+        updated_at=completed_invocation.requested_at,
+    )
+    active_values = invocation_record_values(
+        active_invocation,
+        anticipated_usage=ToolResourceUsage(file_mutations=1, written_bytes=5),
+        process_slot=True,
+        updated_at=active_invocation.requested_at,
+    )
+    completed = ToolInvocationRecord(
+        invocation_sequence=4,
+        **completed_values,
+    ).model_copy(
+        update={
+            "status": ToolInvocationStatus.SUCCEEDED,
+            "resource_usage": ToolResourceUsage(
+                file_mutations=1,
+                written_bytes=10,
+            ),
+        }
+    )
+    running = ToolInvocationRecord(
+        invocation_sequence=9,
+        **active_values,
+    ).model_copy(update={"status": ToolInvocationStatus.RUNNING})
+    ledger = ToolBudgetLedger()
+
+    ledger.restore(completed)
+    restored = ledger.restore(running)
+    duplicate = ledger.restore(running)
+
+    assert duplicate == restored
+    assert restored.invocation_count == 2
+    assert restored.file_mutations == 1
+    assert restored.written_bytes == 10
+    assert restored.reserved_file_mutations == 1
+    assert restored.reserved_written_bytes == 5
+    assert restored.active_processes == 1
+    with pytest.raises(ToolBudgetExceeded, match="Concurrent process"):
+        next_process = ledger.begin(
+            invocation(tmp_path, "invocation-3", budget=budget),
+            process_slot=True,
+        )
+        ledger.activate_process(next_process)
 
 
 def test_task_limits_are_independent_and_aborts_still_consume_ids(

@@ -5,11 +5,16 @@ from dataclasses import dataclass, field, replace
 
 from agentbus.tools.protocol import (
     ToolInvocation,
+    ToolInvocationStatus,
     ToolResourceBudget,
     ToolResourceUsage,
     canonical_json,
 )
-from agentbus.tools.records import invocation_identity_sha256
+from agentbus.tools.records import (
+    TERMINAL_TOOL_STATUSES,
+    ToolInvocationRecord,
+    invocation_identity_sha256,
+)
 
 
 class ToolBudgetError(RuntimeError):
@@ -64,6 +69,7 @@ class _InvocationState:
     budget_json: str
     active: bool = True
     completed: bool = False
+    process_active: bool = False
     usage: ToolResourceUsage = field(default_factory=ToolResourceUsage)
 
 
@@ -140,11 +146,6 @@ class ToolBudgetLedger:
                     "invocations_per_task",
                     "Tool invocation count exceeds the task budget.",
                 )
-            if process_slot and state.active_processes + 1 > state.process_limit:
-                raise ToolBudgetExceeded(
-                    "concurrent_processes",
-                    "Concurrent process count exceeds the run budget.",
-                )
             self._require_cumulative_capacity(state, anticipated)
 
             state.sequence += 1
@@ -165,9 +166,114 @@ class ToolBudgetLedger:
             state.task_invocation_counts[invocation.task_id] = task_count
             state.reserved_file_mutations += anticipated.file_mutations
             state.reserved_written_bytes += anticipated.written_bytes
-            if process_slot:
-                state.active_processes += 1
             return reservation
+
+    def activate_process(
+        self,
+        reservation: ToolBudgetReservation,
+    ) -> ToolBudgetSnapshot:
+        with self._lock:
+            state, invocation_state = self._active_state(reservation)
+            if not reservation.process_slot:
+                raise ToolBudgetConflict(
+                    "The invocation did not reserve process execution capability."
+                )
+            if invocation_state.process_active:
+                return self._snapshot(state)
+            if state.active_processes + 1 > state.process_limit:
+                raise ToolBudgetExceeded(
+                    "concurrent_processes",
+                    "Concurrent process count exceeds the run budget.",
+                )
+            invocation_state.process_active = True
+            state.active_processes += 1
+            return self._snapshot(state)
+
+    def restore(self, record: ToolInvocationRecord) -> ToolBudgetSnapshot:
+        if record.status not in TERMINAL_TOOL_STATUSES:
+            self._validate_usage(record.resource_budget, record.anticipated_usage)
+        budget_json = canonical_json(record.resource_budget.model_dump(mode="json"))
+        with self._lock:
+            state = self._runs.get(record.run_id)
+            if state is None:
+                state = _RunState(
+                    run_id=record.run_id,
+                    invocation_limit=record.resource_budget.invocations_per_run,
+                    process_limit=record.resource_budget.concurrent_processes,
+                    file_mutation_limit=record.resource_budget.file_mutations,
+                    written_bytes_limit=record.resource_budget.total_written_bytes,
+                )
+                self._runs[record.run_id] = state
+            existing = state.invocations.get(record.invocation_id)
+            if existing is not None:
+                if (
+                    existing.invocation_fingerprint != record.invocation_sha256
+                    or existing.budget_json != budget_json
+                    or existing.reservation.anticipated_usage
+                    != record.anticipated_usage
+                    or existing.reservation.process_slot != record.process_slot
+                ):
+                    raise ToolBudgetConflict(
+                        "Persisted invocation conflicts with restored budget state."
+                    )
+                return self._snapshot(state)
+
+            self._tighten_limits(state, record.resource_budget, record.task_id)
+            if len(state.invocations) + 1 > state.invocation_limit:
+                raise ToolBudgetExceeded(
+                    "invocations_per_run",
+                    "Persisted invocation count exceeds the run budget.",
+                )
+            task_count = state.task_invocation_counts.get(record.task_id, 0) + 1
+            if task_count > state.task_invocation_limits[record.task_id]:
+                raise ToolBudgetExceeded(
+                    "invocations_per_task",
+                    "Persisted task invocation count exceeds the task budget.",
+                )
+
+            active = record.status not in TERMINAL_TOOL_STATUSES
+            process_active = (
+                active
+                and record.status == ToolInvocationStatus.RUNNING
+                and record.process_slot
+            )
+            if active:
+                self._require_cumulative_capacity(state, record.anticipated_usage)
+            if process_active and state.active_processes + 1 > state.process_limit:
+                raise ToolBudgetExceeded(
+                    "concurrent_processes",
+                    "Persisted active processes exceed the run budget.",
+                )
+
+            reservation = ToolBudgetReservation(
+                invocation_id=record.invocation_id,
+                invocation_revision=record.invocation_revision,
+                run_id=record.run_id,
+                task_id=record.task_id,
+                sequence=record.invocation_sequence,
+                anticipated_usage=record.anticipated_usage,
+                process_slot=record.process_slot,
+            )
+            state.invocations[record.invocation_id] = _InvocationState(
+                reservation=reservation,
+                invocation_fingerprint=record.invocation_sha256,
+                budget_json=budget_json,
+                active=active,
+                completed=not active,
+                process_active=process_active,
+                usage=record.resource_usage,
+            )
+            state.sequence = max(state.sequence, record.invocation_sequence)
+            state.task_invocation_counts[record.task_id] = task_count
+            if active:
+                state.reserved_file_mutations += record.anticipated_usage.file_mutations
+                state.reserved_written_bytes += record.anticipated_usage.written_bytes
+            else:
+                state.file_mutations += record.resource_usage.file_mutations
+                state.written_bytes += record.resource_usage.written_bytes
+            if process_active:
+                state.active_processes += 1
+            return self._snapshot(state)
 
     def complete(
         self,
@@ -363,7 +469,11 @@ class ToolBudgetLedger:
             if state is not None
             else None
         )
-        if invocation_state is None or invocation_state.reservation != reservation:
+        canonical_reservation = replace(reservation, duplicate=False)
+        if (
+            invocation_state is None
+            or invocation_state.reservation != canonical_reservation
+        ):
             raise ToolBudgetConflict("Unknown or mismatched budget reservation.")
         if not invocation_state.active:
             raise ToolBudgetConflict("Budget reservation is already terminal.")
@@ -380,8 +490,9 @@ class ToolBudgetLedger:
         state.reserved_written_bytes -= reservation.anticipated_usage.written_bytes
         state.file_mutations += usage.file_mutations
         state.written_bytes += usage.written_bytes
-        if reservation.process_slot:
+        if invocation_state.process_active:
             state.active_processes -= 1
+            invocation_state.process_active = False
         invocation_state.active = False
         invocation_state.completed = True
         invocation_state.usage = usage
