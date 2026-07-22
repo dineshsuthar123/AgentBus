@@ -10,7 +10,11 @@ from agentbus.agents.coder import CoderAgent
 from agentbus.config import AgentBusConfig
 from agentbus.execution.models import RunRecord, TaskExecutionContext, TaskSpec
 from agentbus.execution.state_store import StateStore
-from agentbus.git.repository import GitRepository, WorkspaceRepositoryMismatch
+from agentbus.git.repository import (
+    GitRepository,
+    GitRepositoryError,
+    WorkspaceRepositoryMismatch,
+)
 from agentbus.runtime.durable_workflow import MultiAgentTaskExecutor
 from agentbus.runtime.loop import AgentLoop
 from agentbus.runtime.orchestrator import MultiAgentOrchestrator
@@ -107,6 +111,29 @@ def test_git_diff_and_changed_files_are_scoped_to_workspace(tmp_path):
     assert changed == ["calculator.py"]
     assert "calculator.py" in diff
     assert "unrelated-parent.txt" not in diff
+
+
+def test_git_diffs_and_commits_exclude_protected_workspace_files(tmp_path):
+    workspace = init_repository(tmp_path / "target")
+    (workspace / "module.py").write_text("value = 1\n", encoding="utf-8")
+    (workspace / ".env").write_text(
+        "API_KEY=must-not-reach-review\n",
+        encoding="utf-8",
+    )
+
+    repository = GitRepository(str(workspace))
+    changes = repository.change_set()
+    diff = repository.full_diff()
+
+    assert changes.protected_files == [".env"]
+    assert ".env" in changes.changed_files
+    assert ".env" in changes.review_excluded_files
+    assert ".env" not in changes.review_files
+    assert ".env" not in changes.commit_files
+    assert "must-not-reach-review" not in diff
+    assert "module.py" in diff
+    with pytest.raises(GitRepositoryError, match="Protected"):
+        repository.full_diff(paths=[".env"])
 
 
 def test_path_scoped_commit_does_not_include_unrelated_staged_changes(

@@ -4,7 +4,7 @@ import hashlib
 import os
 import re
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
 
@@ -14,6 +14,11 @@ from agentbus.repo.artifact_policy import (
 )
 from agentbus.sandbox.platform import ExecutableCatalog
 from agentbus.security.redaction import redact_text, safe_child_environment
+from agentbus.tools.filesystem_security import (
+    ContainedPathResolver,
+    FileSystemSecurityError,
+    normalize_relative_tool_path,
+)
 
 
 _GIT_IDENTITY_ENVIRONMENT = frozenset(
@@ -52,6 +57,7 @@ class RepositoryChangeSet:
     review_files: list[str]
     review_excluded_files: list[str]
     commit_files: list[str]
+    protected_files: list[str] = field(default_factory=list)
 
     def to_metadata(self) -> dict[str, list[str]]:
         return {
@@ -63,6 +69,7 @@ class RepositoryChangeSet:
             "review_files": self.review_files,
             "review_excluded_files": self.review_excluded_files,
             "commit_eligible_files": self.commit_files,
+            "protected_files": self.protected_files,
         }
 
 
@@ -85,6 +92,7 @@ class GitRepository:
         )
         self.maximum_command_output_chars = maximum_command_output_chars
         self._validated_top_level: Path | None = None
+        self._path_resolver: ContainedPathResolver | None = None
 
     def discover_top_level(self) -> Path:
         output = self._run_unvalidated(["git", "rev-parse", "--show-toplevel"])
@@ -137,7 +145,7 @@ class GitRepository:
 
     def create_branch_at(self, branch_name: str, commit_sha: str) -> str:
         self._validate_branch_name(branch_name)
-        resolved = self._run(["git", "rev-parse", "--verify", f"{commit_sha}^{{commit}}"])
+        resolved = self._resolve_commit(commit_sha)
         self._run(["git", "branch", branch_name, resolved])
         return f"Created branch: {branch_name} at {resolved}"
 
@@ -182,11 +190,24 @@ class GitRepository:
         max_chars: int = 30_000,
         paths: Iterable[str] | None = None,
     ) -> str:
-        selected = self._normalize_paths(paths)
-        if paths is not None and not selected:
+        if max_chars < 1 or max_chars > self.maximum_command_output_chars:
+            raise ValueError(
+                "max_chars must be positive and within the command output limit"
+            )
+        requested = self._normalize_paths(paths)
+        if paths is None:
+            selected = self._exclude_protected(self.changed_files())
+        else:
+            protected = self._protected_paths(requested)
+            if protected:
+                raise GitRepositoryError(
+                    "Protected repository paths cannot be included in Git diffs."
+                )
+            selected = requested
+        if not selected:
             self.validate_workspace()
             return "No diff."
-        pathspec = selected or ["."]
+        pathspec = selected
         staged = self._run(
             [
                 "git",
@@ -212,7 +233,7 @@ class GitRepository:
         )
         parts = [part for part in [staged, unstaged] if part]
 
-        changed = set(selected or self.changed_files())
+        changed = set(selected)
         tracked = set(self._tracked_files(changed))
         for path in sorted(changed - tracked):
             parts.append(self._untracked_diff(path))
@@ -240,8 +261,18 @@ class GitRepository:
         return self.full_diff(max_chars=max_chars, paths=changes.review_files)
 
     def changed_files_between(self, base_commit: str, head: str = "HEAD") -> list[str]:
+        base_revision = self._resolve_commit(base_commit)
+        head_revision = self._resolve_commit(head)
         output = self._run(
-            ["git", "diff", "--name-only", "-z", f"{base_commit}..{head}", "--", "."]
+            [
+                "git",
+                "diff",
+                "--name-only",
+                "-z",
+                f"{base_revision}..{head_revision}",
+                "--",
+                ".",
+            ]
         )
         return sorted(
             self._normalize_relative_path(path)
@@ -265,6 +296,8 @@ class GitRepository:
         )
         if not review_files:
             return "No diff."
+        base_revision = self._resolve_commit(base_commit)
+        head_revision = self._resolve_commit(head)
         diff = self._run(
             [
                 "git",
@@ -272,7 +305,7 @@ class GitRepository:
                 "--no-color",
                 "--no-ext-diff",
                 "--no-textconv",
-                f"{base_commit}..{head}",
+                f"{base_revision}..{head_revision}",
                 "--",
                 *review_files,
             ]
@@ -325,10 +358,13 @@ class GitRepository:
         generated = {
             path for path in selected if self.artifact_policy.is_generated(path)
         }
+        protected = set(self._protected_paths(selected))
         tracked_generated = generated & tracked
-        relevant = (set(selected) - ignored - generated) | tracked_generated
-        review_excluded = (generated - tracked_generated) | ignored
-        commit_files = set(selected) - ignored - generated
+        relevant = (
+            (set(selected) - ignored - generated - protected) | tracked_generated
+        ) - protected
+        review_excluded = (generated - tracked_generated) | ignored | protected
+        commit_files = set(selected) - ignored - generated - protected
         return RepositoryChangeSet(
             changed_files=sorted(selected),
             relevant_files=sorted(relevant),
@@ -338,6 +374,7 @@ class GitRepository:
             review_files=sorted(relevant),
             review_excluded_files=sorted(review_excluded),
             commit_files=sorted(commit_files),
+            protected_files=sorted(protected),
         )
 
     def worktree_snapshot(self) -> dict[str, str]:
@@ -361,8 +398,12 @@ class GitRepository:
         )
 
     def commit(self, message: str, paths: Iterable[str] | None = None) -> str:
-        if not message.strip():
+        if not isinstance(message, str) or not message.strip():
             raise GitRepositoryError("Commit message must not be empty.")
+        if len(message) > 512 or any(ord(character) < 32 for character in message):
+            raise GitRepositoryError(
+                "Commit message must be at most 512 characters and single-line."
+            )
 
         requested = self._normalize_paths(paths)
         if paths is not None and not requested:
@@ -494,6 +535,8 @@ class GitRepository:
         return [path for path in output.split("\0") if path]
 
     def _untracked_diff(self, relative: str) -> str:
+        if self._is_protected_path(relative):
+            return f"Protected file content omitted: {relative}"
         path = self.workspace / relative
         if not path.is_file():
             return ""
@@ -527,19 +570,52 @@ class GitRepository:
         return sorted({self._normalize_relative_path(path) for path in paths})
 
     def _normalize_relative_path(self, value: str) -> str:
-        candidate = Path(value)
-        if candidate.is_absolute():
-            try:
-                candidate = candidate.resolve().relative_to(self.workspace)
-            except ValueError as exc:
-                raise GitRepositoryError(
-                    f"Git returned a path outside the workspace: {value}"
-                ) from exc
-        normalized = candidate.as_posix()
         try:
+            normalized = normalize_relative_tool_path(value)
+            if normalized.startswith("-"):
+                raise GitRepositoryError(
+                    "Repository paths cannot begin with an option marker."
+                )
+            if any(ord(character) < 32 for character in normalized):
+                raise GitRepositoryError(
+                    "Repository paths cannot contain control characters."
+                )
             return self.artifact_policy.normalize(normalized)
-        except ArtifactPolicyError as exc:
+        except (ArtifactPolicyError, FileSystemSecurityError) as exc:
             raise GitRepositoryError(str(exc)) from exc
+
+    def _resolve_commit(self, revision: str) -> str:
+        self._validate_revision(revision)
+        resolved = self._run(
+            ["git", "rev-parse", "--verify", f"{revision}^{{commit}}"]
+        )
+        if not re.fullmatch(r"[a-fA-F0-9]{40,64}", resolved):
+            raise GitRepositoryError("Git returned an invalid commit identifier.")
+        return resolved.lower()
+
+    @staticmethod
+    def _validate_revision(revision: str) -> None:
+        if (
+            not isinstance(revision, str)
+            or not revision
+            or len(revision) > 255
+            or revision.startswith("-")
+            or ".." in revision
+            or "@{" in revision
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]*", revision)
+        ):
+            raise GitRepositoryError("Git revision contains unsafe syntax.")
+
+    def _protected_paths(self, paths: Iterable[str]) -> list[str]:
+        return sorted(path for path in paths if self._is_protected_path(path))
+
+    def _exclude_protected(self, paths: Iterable[str]) -> list[str]:
+        return sorted(path for path in paths if not self._is_protected_path(path))
+
+    def _is_protected_path(self, path: str) -> bool:
+        if self._path_resolver is None:
+            self._path_resolver = ContainedPathResolver(self.workspace)
+        return self._path_resolver.classify(path).protected
 
     def _validate_branch_name(self, branch_name: str) -> None:
         if not branch_name or branch_name.startswith("-"):

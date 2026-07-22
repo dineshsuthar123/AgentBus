@@ -6,7 +6,7 @@ import pytest
 
 from agentbus.git.branching import generate_branch_name
 from agentbus.git.commit_message import generate_commit_message
-from agentbus.git.repository import GitRepository
+from agentbus.git.repository import GitRepository, GitRepositoryError
 from agentbus.github.pr import GitHubPullRequestClient
 from agentbus.github.pr_body import build_pr_body
 
@@ -97,6 +97,43 @@ def test_git_repository_parses_changed_files(monkeypatch, tmp_path):
     )
 
     assert repo.changed_files() == ["app.py", "new.py", "tests/test_app.py"]
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "../outside.py",
+        "-n",
+        ":(glob)**",
+        "name.txt:stream",
+        "line\nbreak.txt",
+    ],
+)
+def test_git_repository_rejects_unsafe_pathspecs(tmp_path, path):
+    repository = GitRepository(str(tmp_path))
+
+    with pytest.raises(GitRepositoryError):
+        repository.full_diff(paths=[path])
+
+
+@pytest.mark.parametrize(
+    "revision",
+    ["--output=outside", "HEAD..other", "HEAD@{1}", "HEAD^", "refs/*"],
+)
+def test_git_repository_rejects_revision_injection(tmp_path, revision):
+    repository = GitRepository(str(tmp_path))
+
+    with pytest.raises(GitRepositoryError, match="unsafe syntax"):
+        repository.changed_files_between(revision)
+
+
+def test_commit_message_is_bounded_and_single_line(tmp_path):
+    repository = GitRepository(str(tmp_path))
+
+    with pytest.raises(GitRepositoryError, match="single-line"):
+        repository.commit("fix: first line\nsecond line", paths=["module.py"])
+    with pytest.raises(GitRepositoryError, match="512"):
+        repository.commit("x" * 513, paths=["module.py"])
 
 
 def test_pr_body_builder_includes_required_sections():
