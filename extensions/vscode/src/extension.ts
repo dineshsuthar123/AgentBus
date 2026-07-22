@@ -28,6 +28,7 @@ import {
 export interface AgentBusExtensionApi {
   client(): Promise<AgentBusClient>;
   daemonId(): string | undefined;
+  eventStreamConnected(): boolean;
   events(): readonly EventEnvelope[];
   runs(): RunSummary[];
 }
@@ -105,6 +106,7 @@ export function activate(context: vscode.ExtensionContext): AgentBusExtensionApi
   return {
     client,
     daemonId: () => daemon.current()?.entry.daemon_id,
+    eventStreamConnected: () => controller.eventStreamConnected(),
     events: () => store.events(),
     runs: () => store.runs()
   };

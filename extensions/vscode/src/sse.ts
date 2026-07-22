@@ -60,6 +60,7 @@ export interface SseClientOptions {
 export class ReconnectingSseClient {
   private controller: AbortController | undefined;
   private running = false;
+  private connected = false;
   private lastSequence = 0;
 
   public constructor(
@@ -78,11 +79,16 @@ export class ReconnectingSseClient {
 
   public stop(): void {
     this.running = false;
+    this.connected = false;
     this.controller?.abort();
   }
 
   public get cursor(): number {
     return this.lastSequence;
+  }
+
+  public get isConnected(): boolean {
+    return this.connected;
   }
 
   private async run(runId?: string): Promise<void> {
@@ -103,8 +109,11 @@ export class ReconnectingSseClient {
         if (!response.ok || !response.body) {
           throw new Error(`SSE connection failed with HTTP ${response.status}.`);
         }
+        this.connected = true;
         await this.consume(response.body);
+        this.connected = false;
       } catch {
+        this.connected = false;
         if (!this.running || this.controller.signal.aborted) {
           return;
         }

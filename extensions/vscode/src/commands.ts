@@ -101,6 +101,10 @@ export class CommandController implements vscode.Disposable {
     for (const item of this.disposables) item.dispose();
   }
 
+  public eventStreamConnected(): boolean {
+    return this.stream?.isConnected ?? false;
+  }
+
   private async client(): Promise<AgentBusClient> {
     return (await this.daemon.connectOrStart()).client;
   }
