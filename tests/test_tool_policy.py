@@ -195,7 +195,12 @@ def test_exact_approval_allows_original_delete_invocation(tmp_path: Path) -> Non
     [
         {"task_id": "step-2"},
         {"invocation_revision": 2},
-        {"arguments": {"path": "src/different.py"}},
+        {
+            "arguments": {
+                "path": "src/different.py",
+                "expected_sha256": "0" * 64,
+            }
+        },
     ],
 )
 def test_approval_cannot_be_reused_for_changed_invocation(
@@ -305,6 +310,8 @@ def _invocation(
     trusted: bool = True,
     **arguments,
 ):
+    if tool_name == "filesystem.delete":
+        arguments.setdefault("expected_sha256", "0" * 64)
     descriptor = descriptor_map(workspace=root)[tool_name]
     requested = tuple(
         _scope_capability(capability, root, arguments)

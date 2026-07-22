@@ -79,6 +79,13 @@ def validate_invocation_against_descriptor(
         raise ToolCapabilityEscalationError(
             f"Invocation requested undeclared capabilities: {names}."
         )
+    if not capability_set_contains(
+        descriptor.capabilities,
+        invocation.requested_capabilities,
+    ):
+        raise ToolCapabilityEscalationError(
+            "Invocation capability scope exceeds the descriptor declaration."
+        )
 
 
 def validate_tool_arguments(
@@ -109,6 +116,14 @@ def scope_contains(allowed: CapabilityScope, requested: CapabilityScope) -> bool
     for field_name in _SCOPE_FIELDS:
         allowed_values = set(getattr(allowed, field_name))
         requested_values = set(getattr(requested, field_name))
+        if (
+            field_name == "affected_paths"
+            and not allowed_values
+            and allowed.roots
+        ):
+            # Concrete paths narrow a root-scoped descriptor. Policy and the
+            # contained implementation still validate each path against roots.
+            continue
         if not requested_values.issubset(allowed_values):
             return False
     return True

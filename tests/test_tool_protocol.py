@@ -169,6 +169,19 @@ def test_descriptor_validation_rejects_downgrade_and_capability_expansion() -> N
             descriptor,
         )
 
+    expanded_scope = ToolCapability(
+        name=ToolCapabilityName.FILESYSTEM_READ,
+        scope=CapabilityScope(
+            roots=("C:/repo", "C:/outside"),
+            patterns=("src/**", "tests/**"),
+        ),
+    )
+    with pytest.raises(ToolCapabilityEscalationError, match="scope exceeds"):
+        validate_invocation_against_descriptor(
+            _invocation(capabilities=(expanded_scope,)),
+            descriptor,
+        )
+
 
 def test_descriptor_schema_validation_rejects_malformed_arguments_safely() -> None:
     descriptor = ToolDescriptor(
