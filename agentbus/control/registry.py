@@ -6,6 +6,7 @@ import os
 import signal
 import sys
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -172,6 +173,33 @@ def terminate_registered_daemon(
             "The current process cannot terminate itself through registry management."
         )
     os.kill(entry.pid, signal.SIGTERM)
+
+
+def wait_for_registered_daemon_exit(
+    registry: DaemonRegistry,
+    daemon_id: str,
+    *,
+    timeout_seconds: float = 2.0,
+    poll_seconds: float = 0.05,
+) -> bool:
+    """Remove a registration only after its identity-bound process has exited."""
+    if timeout_seconds < 0 or poll_seconds <= 0:
+        raise ValueError(
+            "Daemon exit timeout must be non-negative and polling must be positive."
+        )
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        try:
+            entry = registry.get(daemon_id)
+        except ControlPlaneNotFoundError:
+            return True
+        if not process_matches(entry):
+            registry.remove(daemon_id)
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(poll_seconds, remaining))
 
 
 def _same_path(left: str, right: str) -> bool:

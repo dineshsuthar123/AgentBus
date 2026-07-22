@@ -17,6 +17,7 @@ from agentbus.control.registry import (
     process_matches,
     process_start_identity,
     terminate_registered_daemon,
+    wait_for_registered_daemon_exit,
 )
 
 
@@ -147,3 +148,42 @@ def test_safe_termination_refuses_pid_identity_mismatch(
         assert signals
         assert all(item == (os.getpid(), 0) for item in signals)
     assert registry.list() == []
+
+
+def test_exit_wait_removes_only_stale_registration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "registry.json"
+    registry = DaemonRegistry(path)
+    registry.register(_entry(path))
+    monkeypatch.setattr(
+        "agentbus.control.registry.process_matches",
+        lambda _entry: False,
+    )
+
+    assert wait_for_registered_daemon_exit(registry, "daemon-1") is True
+    assert registry.list() == []
+
+
+def test_exit_wait_preserves_registration_while_process_still_matches(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "registry.json"
+    registry = DaemonRegistry(path)
+    registry.register(_entry(path))
+    monkeypatch.setattr(
+        "agentbus.control.registry.process_matches",
+        lambda _entry: True,
+    )
+
+    assert (
+        wait_for_registered_daemon_exit(
+            registry,
+            "daemon-1",
+            timeout_seconds=0,
+        )
+        is False
+    )
+    assert [entry.daemon_id for entry in registry.list()] == ["daemon-1"]
