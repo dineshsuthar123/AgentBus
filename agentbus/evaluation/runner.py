@@ -711,9 +711,22 @@ class OfflineCoder:
             self.model.add(result)
             with self.probe.active(task_id):
                 tools = FileSystemTools(str(self.workspace))
-                for action in self.case.metadata.get("actions", {}).get(task_id, []):
+                actions = self.case.metadata.get("actions", {}).get(task_id, [])
+                for action_index, action in enumerate(actions, start=1):
                     if action.get("action") == "write_file":
-                        tools.write_file(str(action["path"]), str(action.get("content", "")))
+                        invocation_id = uuid.uuid5(
+                            uuid.NAMESPACE_URL,
+                            (
+                                f"agentbus-eval:{self.case.case_id}:{task_id}:"
+                                f"{attempt}:{action_index}"
+                            ),
+                        ).hex
+                        tools.write_file(
+                            str(action["path"]),
+                            str(action.get("content", "")),
+                            task_id=str(task_id),
+                            invocation_id=invocation_id,
+                        )
                     else:
                         raise ValueError(f"Unsupported offline evaluation action: {action}")
             value = result.json_value()

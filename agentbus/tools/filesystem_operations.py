@@ -433,6 +433,7 @@ class ContainedFileSystem:
         path: str | None = None,
         *,
         recursive: bool = False,
+        recurse_generated: bool = True,
         maximum_entries: int | None = None,
     ) -> FileListResult:
         limit = (
@@ -539,7 +540,11 @@ class ContainedFileSystem:
                         generated=resolved.classification.generated,
                     )
                 )
-                if recursive and is_directory:
+                if (
+                    recursive
+                    and is_directory
+                    and (recurse_generated or not resolved.classification.generated)
+                ):
                     pending.append((resolved.relative_path, resolved.path))
         self.resolver.validate_root_identity()
         return FileListResult(

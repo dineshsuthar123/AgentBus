@@ -119,7 +119,7 @@ class AgentLoop:
 
                 try:
                     self._checkpoint(f"before-tool-step-{step}")
-                    observation = self._execute(action)
+                    observation = self._execute(action, step=step)
                     self._checkpoint(f"after-tool-step-{step}")
                 except (CancellationRequested, ModelCancellationError):
                     raise
@@ -165,7 +165,7 @@ Previous observations:
 Return the next JSON action.
 """
 
-    def _execute(self, action: AgentAction) -> str:
+    def _execute(self, action: AgentAction, *, step: int) -> str:
         if action.action == "list_files":
             return self.fs.list_files()
 
@@ -174,7 +174,14 @@ Return the next JSON action.
 
         if action.action == "write_file":
             with self._operation("tool.write_file"):
-                return self.fs.write_file(action.path, action.content)
+                return self.fs.write_file(
+                    action.path,
+                    action.content,
+                    task_id=f"step-{step}",
+                    invocation_id=(
+                        f"{self.logger.run_id}:step-{step}:filesystem-write"
+                    ),
+                )
 
         if action.action == "run_command":
             with self._operation("tool.run_command"):

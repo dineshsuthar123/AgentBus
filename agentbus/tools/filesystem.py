@@ -1,70 +1,202 @@
+from __future__ import annotations
+
+import uuid
 from pathlib import Path
+
+from agentbus.tools.filesystem_operations import (
+    ContainedFileSystem,
+    FileListResult,
+    FileMutationRecord,
+    FileReadResult,
+    FileStatResult,
+)
 
 
 class FileSystemTools:
-    def __init__(self, workspace: str = "workspace"):
-        self.workspace = Path(workspace).resolve()
-        self.workspace.mkdir(parents=True, exist_ok=True)
+    """Compatibility facade over the contained filesystem implementation."""
+
+    def __init__(
+        self,
+        workspace: str = "workspace",
+        *,
+        maximum_file_bytes: int = 2_097_152,
+        maximum_list_entries: int = 10_000,
+    ) -> None:
+        self._filesystem = ContainedFileSystem(
+            workspace,
+            create_root=True,
+            maximum_file_bytes=maximum_file_bytes,
+            maximum_list_entries=maximum_list_entries,
+        )
+        self.workspace = self._filesystem.root
 
     def _safe_path(self, path: str) -> Path:
-        if Path(path).is_absolute():
-            raise ValueError(f"Unsafe absolute path blocked: {path}")
-
-        target = (self.workspace / path).resolve()
-
-        try:
-            target.relative_to(self.workspace)
-        except ValueError:
-            raise ValueError(f"Unsafe path blocked: {path}")
-
-        return target
+        return self._filesystem.resolver.resolve(path).lexical_path
 
     def list_files(self) -> str:
-        ignored_dirs = {
-            ".git",
-            "__pycache__",
-            ".pytest_cache",
-            "node_modules",
-            ".venv",
-            "venv",
-            "target",
-            "build",
-            "dist",
-        }
-
-        files = []
-
-        for path in self.workspace.rglob("*"):
-            if any(part in ignored_dirs for part in path.parts):
-                continue
-
-            if path.is_file():
-                files.append(str(path.relative_to(self.workspace)))
-
+        result = self.list_directory(recursive=True, recurse_generated=False)
+        files = [
+            entry.relative_path
+            for entry in result.entries
+            if entry.is_file and not entry.generated
+        ]
         if not files:
             return "No files found."
-
-        return "\n".join(sorted(files))
+        return "\n".join(files)
 
     def read_file(self, path: str, max_chars: int = 20_000) -> str:
-        target = self._safe_path(path)
-
-        if not target.exists():
+        if max_chars < 1:
+            raise ValueError("max_chars must be positive")
+        try:
+            result = self.read_file_result(
+                path,
+                maximum_bytes=min(
+                    self._filesystem.maximum_file_bytes,
+                    max_chars * 4,
+                ),
+            )
+        except FileNotFoundError:
             return f"File not found: {path}"
-
-        if not target.is_file():
+        except IsADirectoryError:
             return f"Not a file: {path}"
-
-        content = target.read_text(encoding="utf-8", errors="replace")
-
+        if result.content is None:
+            return (
+                f"Binary file not displayed: {result.relative_path} "
+                f"({result.size_bytes} bytes)."
+            )
+        content = result.content
+        truncated = result.truncated or len(content) > max_chars
         if len(content) > max_chars:
-            return content[:max_chars] + "\n\n[File truncated]"
-
+            content = content[:max_chars]
+        if truncated:
+            return content + "\n\n[File truncated]"
         return content
 
-    def write_file(self, path: str, content: str) -> str:
-        target = self._safe_path(path)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
-
+    def write_file(
+        self,
+        path: str,
+        content: str,
+        *,
+        task_id: str = "legacy-filesystem",
+        invocation_id: str | None = None,
+        expected_sha256: str | None = None,
+    ) -> str:
+        self.write_file_result(
+            path,
+            content,
+            task_id=task_id,
+            invocation_id=invocation_id or uuid.uuid4().hex,
+            expected_sha256=expected_sha256,
+        )
         return f"Wrote file: {path}"
+
+    def read_file_result(
+        self,
+        path: str,
+        *,
+        maximum_bytes: int | None = None,
+    ) -> FileReadResult:
+        return self._filesystem.read(path, maximum_bytes=maximum_bytes)
+
+    def stat_path(self, path: str) -> FileStatResult:
+        return self._filesystem.stat(path)
+
+    def list_directory(
+        self,
+        path: str | None = None,
+        *,
+        recursive: bool = False,
+        recurse_generated: bool = True,
+        maximum_entries: int | None = None,
+    ) -> FileListResult:
+        return self._filesystem.list_directory(
+            path,
+            recursive=recursive,
+            recurse_generated=recurse_generated,
+            maximum_entries=maximum_entries,
+        )
+
+    def create_file(
+        self,
+        path: str,
+        content: str | bytes,
+        *,
+        task_id: str,
+        invocation_id: str,
+    ) -> FileMutationRecord:
+        return self._filesystem.create(
+            path,
+            content,
+            task_id=task_id,
+            invocation_id=invocation_id,
+        )
+
+    def write_file_result(
+        self,
+        path: str,
+        content: str | bytes,
+        *,
+        task_id: str,
+        invocation_id: str,
+        expected_sha256: str | None = None,
+    ) -> FileMutationRecord:
+        return self._filesystem.write(
+            path,
+            content,
+            task_id=task_id,
+            invocation_id=invocation_id,
+            expected_sha256=expected_sha256,
+        )
+
+    def patch_file(
+        self,
+        path: str,
+        expected: str,
+        replacement: str,
+        *,
+        task_id: str,
+        invocation_id: str,
+        expected_sha256: str | None = None,
+        expected_occurrences: int = 1,
+    ) -> FileMutationRecord:
+        return self._filesystem.patch(
+            path,
+            expected,
+            replacement,
+            task_id=task_id,
+            invocation_id=invocation_id,
+            expected_sha256=expected_sha256,
+            expected_occurrences=expected_occurrences,
+        )
+
+    def rename_file(
+        self,
+        source: str,
+        destination: str,
+        *,
+        task_id: str,
+        invocation_id: str,
+        expected_sha256: str | None = None,
+    ) -> FileMutationRecord:
+        return self._filesystem.rename(
+            source,
+            destination,
+            task_id=task_id,
+            invocation_id=invocation_id,
+            expected_sha256=expected_sha256,
+        )
+
+    def delete_file(
+        self,
+        path: str,
+        *,
+        task_id: str,
+        invocation_id: str,
+        expected_sha256: str,
+    ) -> FileMutationRecord:
+        return self._filesystem.delete(
+            path,
+            task_id=task_id,
+            invocation_id=invocation_id,
+            expected_sha256=expected_sha256,
+        )
