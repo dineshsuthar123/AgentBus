@@ -144,6 +144,7 @@ def test_http_server_must_be_explicit_authenticated_and_loopback_only() -> None:
     for endpoint in (
         "https://example.com/mcp",
         "http://192.168.1.10/mcp",
+        "http://localhost:8765/mcp",
         "file:///tmp/mcp.sock",
     ):
         with pytest.raises(ValidationError, match="loopback|http or https"):

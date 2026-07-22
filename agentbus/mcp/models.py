@@ -219,9 +219,9 @@ class McpServerConfig(BaseModel):
         parsed = urlsplit(self.endpoint_url)
         if parsed.scheme not in {"http", "https"}:
             raise ValueError("MCP HTTP endpoints must use http or https")
-        if parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
+        if parsed.hostname not in {"127.0.0.1", "::1"}:
             raise ValueError(
-                "MCP HTTP endpoints must resolve to an explicit loopback host"
+                "MCP HTTP endpoints require an explicit numeric loopback host"
             )
         if parsed.username or parsed.password or parsed.fragment or parsed.query:
             raise ValueError("MCP HTTP endpoints cannot contain credentials or URL extras")
