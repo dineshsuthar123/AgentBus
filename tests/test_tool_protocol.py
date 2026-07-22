@@ -27,6 +27,7 @@ from agentbus.tools.protocol import (
     sha256_json,
     validate_invocation_against_descriptor,
     validate_protocol_version,
+    validate_tool_output,
 )
 from agentbus.tools.protocol.errors import (
     ToolCapabilityEscalationError,
@@ -167,6 +168,60 @@ def test_descriptor_validation_rejects_downgrade_and_capability_expansion() -> N
             _invocation(timeout_seconds=91),
             descriptor,
         )
+
+
+def test_descriptor_schema_validation_rejects_malformed_arguments_safely() -> None:
+    descriptor = ToolDescriptor(
+        name="filesystem.read",
+        version=ToolVersion(major=1),
+        description="Read a bounded text file inside the assigned worktree.",
+        capabilities=(_capability(),),
+        argument_schema={
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["path"],
+            "properties": {"path": {"type": "string", "maxLength": 20}},
+        },
+        output_schema={
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["text"],
+            "properties": {"text": {"type": "string"}},
+        },
+    )
+
+    validate_invocation_against_descriptor(_invocation(), descriptor)
+    secret = "credential-value-that-must-not-leak"
+    with pytest.raises(
+        ToolProtocolValidationError,
+        match="Tool arguments failed descriptor JSON Schema validation",
+    ) as captured:
+        validate_invocation_against_descriptor(
+            _invocation(arguments={"path": "src/app.py", "token": secret}),
+            descriptor,
+        )
+    assert secret not in str(captured.value)
+
+    validate_tool_output({"text": "bounded"}, descriptor)
+    with pytest.raises(
+        ToolProtocolValidationError,
+        match="Structured tool output failed descriptor JSON Schema validation",
+    ):
+        validate_tool_output({"unexpected": True}, descriptor)
+
+
+def test_descriptor_validation_rejects_invalid_json_schema() -> None:
+    descriptor = ToolDescriptor(
+        name="filesystem.read",
+        version=ToolVersion(major=1),
+        description="Read a bounded text file inside the assigned worktree.",
+        capabilities=(_capability(),),
+        argument_schema={"type": "not-a-json-schema-type"},
+        output_schema={"type": "object"},
+    )
+
+    with pytest.raises(ToolProtocolValidationError, match="not a valid JSON Schema"):
+        validate_invocation_against_descriptor(_invocation(), descriptor)
 
 
 def test_approval_binding_rejects_scope_and_revision_changes() -> None:

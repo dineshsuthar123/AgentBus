@@ -49,6 +49,8 @@ from agentbus.tools.protocol.validation import (
     validate_descriptor,
     validate_invocation_against_descriptor,
     validate_protocol_version,
+    validate_tool_arguments,
+    validate_tool_output,
 )
 from agentbus.tools.protocol.version import (
     SUPPORTED_TOOL_PROTOCOL_VERSIONS,
@@ -106,4 +108,6 @@ __all__ = [
     "validate_descriptor",
     "validate_invocation_against_descriptor",
     "validate_protocol_version",
+    "validate_tool_arguments",
+    "validate_tool_output",
 ]
