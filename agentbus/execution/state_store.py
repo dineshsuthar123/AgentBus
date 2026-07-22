@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import uuid
@@ -46,6 +47,7 @@ from agentbus.policy.models import ToolApprovalDisposition, ToolApprovalGrant
 from agentbus.security.redaction import is_sensitive_key, redact_text
 from agentbus.tools.protocol import (
     ToolApprovalRequest,
+    ToolAuditRecord,
     ToolDescriptor,
     ToolErrorCategory,
     ToolInvocation,
@@ -54,10 +56,12 @@ from agentbus.tools.protocol import (
     ToolPolicyOutcome,
     ToolResourceUsage,
     ToolResult,
+    canonical_json,
 )
 from agentbus.tools.records import (
     TERMINAL_TOOL_STATUSES,
     ToolApprovalRecord,
+    ToolAuditEntry,
     ToolInvocationRecord,
     approval_request_scope_sha256,
     invocation_identity_sha256,
@@ -66,6 +70,8 @@ from agentbus.tools.records import (
     safe_persisted_tool_result,
     safe_policy_decision,
     safe_tool_approval_request,
+    safe_tool_audit_record,
+    tool_audit_scope_sha256,
 )
 from agentbus.worktrees.models import (
     IntegrationRecord,
@@ -102,6 +108,10 @@ class ToolInvocationConflictError(StateStoreError):
 
 
 class ToolApprovalNotFoundError(StateStoreError):
+    pass
+
+
+class ToolAuditNotFoundError(StateStoreError):
     pass
 
 
@@ -1465,6 +1475,125 @@ class StateStore:
             ).fetchall()
         return [self._tool_approval_from_row(row) for row in rows]
 
+    def record_tool_audit(self, audit: ToolAuditRecord) -> ToolAuditEntry:
+        persisted_audit = safe_tool_audit_record(audit)
+        with self._write_transaction() as connection:
+            invocation_row = self._require_tool_invocation_row(
+                connection,
+                persisted_audit.run_id,
+                persisted_audit.invocation_id,
+            )
+            invocation = self._tool_invocation_from_row(invocation_row)
+            self._validate_tool_audit_binding(invocation, persisted_audit)
+            persisted_audit = persisted_audit.model_copy(
+                update={"policy_decision": invocation.policy_decision}
+            )
+            scope_sha256 = tool_audit_scope_sha256(persisted_audit)
+
+            row = connection.execute(
+                "SELECT * FROM tool_audit_records WHERE audit_id = ?",
+                (persisted_audit.audit_id,),
+            ).fetchone()
+            if row is not None:
+                existing = self._tool_audit_from_row(row)
+                if tool_audit_scope_sha256(existing.record) == scope_sha256:
+                    return existing
+                raise ToolInvocationConflictError(
+                    "Tool audit identity was reused with different content."
+                )
+
+            row = connection.execute(
+                """SELECT * FROM tool_audit_records
+                WHERE invocation_id = ? AND invocation_revision = ?""",
+                (
+                    persisted_audit.invocation_id,
+                    persisted_audit.invocation_revision,
+                ),
+            ).fetchone()
+            if row is not None:
+                existing = self._tool_audit_from_row(row)
+                if tool_audit_scope_sha256(existing.record) == scope_sha256:
+                    return existing
+                raise ToolInvocationConflictError(
+                    "Tool invocation revision already has a different audit record."
+                )
+
+            encoded = canonical_json(persisted_audit.model_dump(mode="json"))
+            record_sha256 = _sha256_text(encoded)
+            cursor = connection.execute(
+                """INSERT INTO tool_audit_records(
+                    audit_id, invocation_id, invocation_revision, run_id,
+                    task_id, record_sha256, record_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    persisted_audit.audit_id,
+                    persisted_audit.invocation_id,
+                    persisted_audit.invocation_revision,
+                    persisted_audit.run_id,
+                    persisted_audit.task_id,
+                    record_sha256,
+                    encoded,
+                    _timestamp(persisted_audit.created_at),
+                ),
+            )
+            self._insert_event(
+                connection,
+                persisted_audit.run_id,
+                persisted_audit.task_id,
+                "tool_audit_recorded",
+                {
+                    "audit_id": persisted_audit.audit_id,
+                    "audit_sequence": int(cursor.lastrowid),
+                    "invocation_id": persisted_audit.invocation_id,
+                    "invocation_revision": persisted_audit.invocation_revision,
+                    "outcome": persisted_audit.outcome.value,
+                    "record_sha256": record_sha256,
+                },
+            )
+            inserted = connection.execute(
+                "SELECT * FROM tool_audit_records WHERE audit_sequence = ?",
+                (int(cursor.lastrowid),),
+            ).fetchone()
+        return self._tool_audit_from_row(inserted)
+
+    def get_tool_audit(self, run_id: str, audit_id: str) -> ToolAuditEntry:
+        _require_id(run_id, "run")
+        _require_id(audit_id, "tool audit")
+        with self._connection() as connection:
+            self._require_run_row(connection, run_id)
+            row = connection.execute(
+                """SELECT * FROM tool_audit_records
+                WHERE run_id = ? AND audit_id = ?""",
+                (run_id, audit_id),
+            ).fetchone()
+        if row is None:
+            raise ToolAuditNotFoundError(
+                f"Tool audit '{audit_id}' was not found in run '{run_id}'."
+            )
+        return self._tool_audit_from_row(row)
+
+    def list_tool_audits(
+        self,
+        run_id: str,
+        *,
+        after_sequence: int = 0,
+        limit: int = 100,
+    ) -> list[ToolAuditEntry]:
+        _require_id(run_id, "run")
+        if after_sequence < 0:
+            raise StateStoreError("Tool audit cursor must not be negative.")
+        if limit < 1 or limit > 1000:
+            raise StateStoreError("Tool audit page limit must be between 1 and 1000.")
+        with self._connection() as connection:
+            self._require_run_row(connection, run_id)
+            rows = connection.execute(
+                """SELECT * FROM tool_audit_records
+                WHERE run_id = ? AND audit_sequence > ?
+                ORDER BY audit_sequence LIMIT ?""",
+                (run_id, after_sequence, limit),
+            ).fetchall()
+        return [self._tool_audit_from_row(row) for row in rows]
+
     def mark_tool_invocation_started(
         self,
         run_id: str,
@@ -1813,6 +1942,47 @@ class StateStore:
                 "The exact persisted tool approval has not been approved."
             )
         return approval
+
+    @staticmethod
+    def _validate_tool_audit_binding(
+        invocation: ToolInvocationRecord,
+        audit: ToolAuditRecord,
+    ) -> None:
+        result = invocation.safe_result
+        expected_artifacts = result.artifacts if result is not None else ()
+        expected_timed_out = result.timed_out if result is not None else False
+        policy_matches = (
+            invocation.policy_decision is not None
+            and policy_decision_sha256(invocation.policy_decision)
+            == policy_decision_sha256(audit.policy_decision)
+        )
+        matches = (
+            invocation.status in TERMINAL_TOOL_STATUSES
+            and audit.invocation_id == invocation.invocation_id
+            and audit.invocation_revision == invocation.invocation_revision
+            and audit.run_id == invocation.run_id
+            and audit.task_id == invocation.task_id
+            and audit.tool_name == invocation.tool_name
+            and audit.tool_version == invocation.tool_version
+            and audit.protocol_version == invocation.protocol_version
+            and audit.caller_role == invocation.caller_role
+            and audit.capabilities == invocation.capabilities
+            and policy_matches
+            and audit.approval_id == invocation.approval_id
+            and audit.arguments_sha256 == invocation.arguments_sha256
+            and audit.started_at == invocation.started_at
+            and audit.completed_at == invocation.completed_at
+            and audit.cancellation == invocation.cancellation
+            and audit.timed_out == expected_timed_out
+            and audit.resource_usage == invocation.resource_usage
+            and audit.artifacts == expected_artifacts
+            and audit.outcome == invocation.status
+            and audit.error_category == invocation.error_category
+        )
+        if not matches:
+            raise ToolInvocationConflictError(
+                "Tool audit does not match the terminal invocation lifecycle."
+            )
 
     def persist_cancellation_state(
         self,
@@ -2640,6 +2810,29 @@ class StateStore:
         )
 
     @staticmethod
+    @_domain_decode("tool audit record")
+    def _tool_audit_from_row(row: sqlite3.Row) -> ToolAuditEntry:
+        if _sha256_text(row["record_json"]) != row["record_sha256"]:
+            raise ValueError("tool audit record digest does not match its payload")
+        record = ToolAuditRecord.model_validate(
+            _load_json(row["record_json"], "tool audit payload")
+        )
+        if (
+            record.audit_id != row["audit_id"]
+            or record.invocation_id != row["invocation_id"]
+            or record.invocation_revision != row["invocation_revision"]
+            or record.run_id != row["run_id"]
+            or record.task_id != row["task_id"]
+            or _timestamp(record.created_at) != row["created_at"]
+        ):
+            raise ValueError("tool audit columns do not match the payload")
+        return ToolAuditEntry(
+            audit_sequence=row["audit_sequence"],
+            record=record,
+            record_sha256=row["record_sha256"],
+        )
+
+    @staticmethod
     def _worktree_from_row(row: sqlite3.Row) -> WorktreeRecord:
         return WorktreeRecord(
             worktree_id=row["worktree_id"],
@@ -2935,3 +3128,7 @@ def _load_json(value: str, description: str) -> Any:
         raise StateStoreError(
             f"Stored {description} is not valid JSON; recovery cannot continue safely."
         ) from exc
+
+
+def _sha256_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()

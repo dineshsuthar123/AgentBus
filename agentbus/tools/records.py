@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
+from uuid import uuid4
 
 from pydantic import Field
 
 from agentbus.tools.protocol import (
     ToolArtifact,
     ToolApprovalRequest,
+    ToolAuditRecord,
     ToolCancellationSnapshot,
     ToolCapability,
     ToolError,
@@ -77,6 +79,12 @@ class ToolApprovalRecord(ToolProtocolModel):
     reason: str | None = Field(default=None, max_length=2_048)
     created_at: datetime
     decided_at: datetime | None = None
+
+
+class ToolAuditEntry(ToolProtocolModel):
+    audit_sequence: int = Field(ge=1)
+    record: ToolAuditRecord
+    record_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
 TERMINAL_TOOL_STATUSES = frozenset(
@@ -221,6 +229,77 @@ def safe_tool_approval_request(
     request: ToolApprovalRequest,
 ) -> ToolApprovalRequest:
     return ToolApprovalRequest.model_validate(safe_protocol_dict(request))
+
+
+def build_tool_audit_record(
+    invocation: ToolInvocation,
+    result: ToolResult,
+    *,
+    started_at: datetime | None,
+    completed_at: datetime | None,
+    affected_resource_hashes: dict[str, str] | None = None,
+    audit_id: str | None = None,
+    created_at: datetime | None = None,
+) -> ToolAuditRecord:
+    if result.invocation_id != invocation.invocation_id or (
+        result.invocation_revision != invocation.invocation_revision
+    ):
+        raise ValueError("tool audit result does not match its invocation")
+    if (
+        result.policy_decision.invocation_id != invocation.invocation_id
+        or result.policy_decision.invocation_revision
+        != invocation.invocation_revision
+        or result.policy_decision.capability_fingerprint
+        != capability_fingerprint(invocation.requested_capabilities)
+        or result.policy_decision.arguments_sha256
+        != sha256_json(invocation.arguments)
+    ):
+        raise ValueError("tool audit policy does not match invocation arguments")
+    return ToolAuditRecord(
+        audit_id=audit_id or f"tool-audit-{uuid4().hex}",
+        invocation_id=invocation.invocation_id,
+        invocation_revision=invocation.invocation_revision,
+        run_id=invocation.run_id,
+        task_id=invocation.task_id,
+        tool_name=invocation.tool_name,
+        tool_version=invocation.tool_version,
+        protocol_version=invocation.protocol_version,
+        caller_role=invocation.context.caller_role,
+        capabilities=invocation.requested_capabilities,
+        policy_decision=safe_policy_decision(result.policy_decision),
+        approval_id=result.approval_id,
+        arguments_sha256=sha256_json(invocation.arguments),
+        affected_resource_hashes=affected_resource_hashes or {},
+        started_at=started_at,
+        completed_at=completed_at,
+        cancellation=ToolCancellationSnapshot.model_validate(
+            safe_protocol_dict(result.cancellation)
+        ),
+        timed_out=result.timed_out,
+        resource_usage=ToolResourceUsage.model_validate(
+            safe_protocol_dict(result.resource_usage)
+        ),
+        artifacts=tuple(
+            ToolArtifact.model_validate(safe_protocol_dict(artifact))
+            for artifact in result.artifacts
+        ),
+        outcome=result.status,
+        error_category=(result.error.category if result.error is not None else None),
+        created_at=created_at or datetime.now(timezone.utc),
+    )
+
+
+def safe_tool_audit_record(record: ToolAuditRecord) -> ToolAuditRecord:
+    payload = safe_protocol_dict(record)
+    payload["affected_resource_hashes"] = dict(record.affected_resource_hashes)
+    return ToolAuditRecord.model_validate(payload)
+
+
+def tool_audit_scope_sha256(record: ToolAuditRecord) -> str:
+    payload = record.model_dump(mode="json")
+    payload.pop("audit_id", None)
+    payload.pop("created_at", None)
+    return sha256_json(payload)
 
 
 def _safe_error(error: ToolError | None) -> ToolError | None:

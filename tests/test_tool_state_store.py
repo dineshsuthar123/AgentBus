@@ -26,6 +26,8 @@ from agentbus.tools.protocol import (
     ToolCapability,
     ToolCapabilityName,
     ToolDescriptor,
+    ToolError,
+    ToolErrorCategory,
     ToolInvocation,
     ToolInvocationContext,
     ToolInvocationStatus,
@@ -37,6 +39,7 @@ from agentbus.tools.protocol import (
     capability_fingerprint,
     sha256_json,
 )
+from agentbus.tools.records import build_tool_audit_record
 
 
 def create_store(tmp_path: Path) -> StateStore:
@@ -629,3 +632,128 @@ def test_rejected_tool_approval_transitions_invocation_to_denied(
             current.invocation_id,
             approval_id=request.approval_id,
         )
+
+
+def test_tool_audit_is_append_only_ordered_and_idempotent(tmp_path: Path) -> None:
+    store = create_store(tmp_path)
+    current = invocation(tmp_path, "invocation-1", idempotency_key=None)
+    decision = policy_decision(current)
+    store.record_tool_invocation(current)
+    store.record_tool_policy_decision("run-1", decision)
+    started = store.mark_tool_invocation_started("run-1", current.invocation_id)
+    result = ToolResult(
+        invocation_id=current.invocation_id,
+        invocation_revision=current.invocation_revision,
+        status=ToolInvocationStatus.SUCCEEDED,
+        structured_output={"content": "audit-output-is-not-persisted"},
+        stdout="audit-stdout-is-not-persisted",
+        resource_usage=ToolResourceUsage(
+            stdout_bytes=29,
+            file_mutations=1,
+            written_bytes=26,
+        ),
+        policy_decision=decision,
+    )
+    completed = store.complete_tool_invocation("run-1", result)
+    audit = build_tool_audit_record(
+        current,
+        result,
+        audit_id="audit-1",
+        started_at=started.started_at,
+        completed_at=completed.completed_at,
+        affected_resource_hashes={
+            "module.py": "a" * 64,
+            "token": "c" * 64,
+        },
+    )
+
+    entry = store.record_tool_audit(audit)
+    duplicate = store.record_tool_audit(
+        audit.model_copy(
+            update={
+                "audit_id": "audit-replayed",
+                "created_at": audit.created_at + timedelta(seconds=1),
+            }
+        )
+    )
+
+    assert duplicate == entry
+    assert entry.audit_sequence == 1
+    assert entry.record.affected_resource_hashes["token"] == "c" * 64
+    assert entry.record == store.get_tool_audit("run-1", "audit-1").record
+    assert store.list_tool_audits("run-1") == [entry]
+    assert len(entry.record_sha256) == 64
+    with pytest.raises(ToolInvocationConflictError, match="different audit"):
+        store.record_tool_audit(
+            audit.model_copy(
+                update={
+                    "audit_id": "audit-changed",
+                    "affected_resource_hashes": {"module.py": "b" * 64},
+                }
+            )
+        )
+    with pytest.raises(ToolInvocationConflictError, match="terminal invocation"):
+        store.record_tool_audit(
+            audit.model_copy(update={"caller_role": "reviewer"})
+        )
+
+    with sqlite3.connect(store.database_path) as connection:
+        with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+            connection.execute(
+                "UPDATE tool_audit_records SET record_sha256 = ?",
+                ("b" * 64,),
+            )
+    with sqlite3.connect(store.database_path) as connection:
+        with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+            connection.execute("DELETE FROM tool_audit_records")
+
+    persisted_bytes = b"".join(
+        path.read_bytes()
+        for path in store.database_path.parent.glob(f"{store.database_path.name}*")
+    )
+    assert b"audit-output-is-not-persisted" not in persisted_bytes
+    assert b"audit-stdout-is-not-persisted" not in persisted_bytes
+
+    with sqlite3.connect(store.database_path) as connection:
+        connection.execute("DROP TRIGGER tool_audit_records_no_update")
+        connection.execute(
+            "UPDATE tool_audit_records SET record_json = '{}' WHERE audit_id = ?",
+            ("audit-1",),
+        )
+        connection.commit()
+    with pytest.raises(StateStoreError, match="tool audit record is invalid"):
+        store.get_tool_audit("run-1", "audit-1")
+
+
+def test_policy_denial_produces_a_terminal_audit_without_starting(
+    tmp_path: Path,
+) -> None:
+    store = create_store(tmp_path)
+    current = invocation(tmp_path, "invocation-1", idempotency_key=None)
+    denied = policy_decision(current, ToolPolicyOutcome.DENY)
+    store.record_tool_invocation(current)
+    terminal = store.record_tool_policy_decision("run-1", denied)
+    result = ToolResult(
+        invocation_id=current.invocation_id,
+        invocation_revision=current.invocation_revision,
+        status=ToolInvocationStatus.DENIED,
+        error=ToolError(
+            category=ToolErrorCategory.POLICY_DENIED,
+            code="policy_denied",
+            message=denied.reason,
+        ),
+        policy_decision=denied,
+    )
+    audit = build_tool_audit_record(
+        current,
+        result,
+        audit_id="audit-denied",
+        started_at=None,
+        completed_at=terminal.completed_at,
+    )
+
+    entry = store.record_tool_audit(audit)
+
+    assert terminal.started_at is None
+    assert entry.record.outcome == ToolInvocationStatus.DENIED
+    assert entry.record.error_category == ToolErrorCategory.POLICY_DENIED

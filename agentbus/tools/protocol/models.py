@@ -599,10 +599,54 @@ class ToolAuditRecord(ToolProtocolModel):
     def resource_hashes_are_sha256(cls, value: dict[str, str]) -> dict[str, str]:
         if len(value) > MAX_COLLECTION_ITEMS:
             raise ValueError("tool audits support at most 256 resource hashes")
+        if any(len(resource) > 2_048 for resource in value):
+            raise ValueError("tool audit resource names must be at most 2048 characters")
         for digest in value.values():
             if not re.fullmatch(r"[a-f0-9]{64}", digest):
                 raise ValueError("affected resource hashes must be SHA-256 digests")
         return value
+
+    @field_validator("capabilities")
+    @classmethod
+    def audit_capabilities_are_bounded(
+        cls,
+        value: tuple[ToolCapability, ...],
+    ) -> tuple[ToolCapability, ...]:
+        if len(value) > 64:
+            raise ValueError("tool audits support at most 64 capabilities")
+        return value
+
+    @field_validator("artifacts")
+    @classmethod
+    def audit_artifacts_are_bounded(
+        cls,
+        value: tuple[ToolArtifact, ...],
+    ) -> tuple[ToolArtifact, ...]:
+        if len(value) > MAX_COLLECTION_ITEMS:
+            raise ValueError("tool audits support at most 256 artifacts")
+        return value
+
+    @model_validator(mode="after")
+    def audit_timeline_and_outcome_are_consistent(self) -> "ToolAuditRecord":
+        if (
+            self.started_at is not None
+            and self.completed_at is not None
+            and self.completed_at < self.started_at
+        ):
+            raise ValueError("tool audit completion cannot precede start")
+        if self.completed_at is not None and self.created_at < self.completed_at:
+            raise ValueError("tool audit creation cannot precede completion")
+        if self.timed_out != (self.outcome == ToolInvocationStatus.TIMED_OUT):
+            raise ValueError("tool audit timeout flag must match its outcome")
+        if self.outcome not in {
+            ToolInvocationStatus.SUCCEEDED,
+            ToolInvocationStatus.FAILED,
+            ToolInvocationStatus.DENIED,
+            ToolInvocationStatus.CANCELLED,
+            ToolInvocationStatus.TIMED_OUT,
+        }:
+            raise ValueError("tool audits require a terminal outcome")
+        return self
 
 
 def _require_json(
