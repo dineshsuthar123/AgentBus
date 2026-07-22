@@ -999,36 +999,17 @@ class StateStore:
         )
         with self._write_transaction() as connection:
             self._require_task_row(connection, invocation.run_id, invocation.task_id)
-            row = connection.execute(
-                "SELECT * FROM tool_invocations WHERE invocation_id = ?",
-                (invocation.invocation_id,),
-            ).fetchone()
-            if row is not None:
-                return self._require_matching_tool_invocation(
-                    row,
-                    invocation_sha256=str(values["invocation_sha256"]),
-                    operation_sha256=str(values["operation_sha256"]),
-                    anticipated_usage=anticipated,
-                    process_slot=process_slot,
-                )
+            existing = self._find_matching_tool_invocation(
+                connection,
+                invocation,
+                values,
+                anticipated,
+                process_slot,
+            )
+            if existing is not None:
+                return existing
 
             idempotency_digest = values["idempotency_key_sha256"]
-            if idempotency_digest is not None:
-                row = connection.execute(
-                    """SELECT * FROM tool_invocations
-                    WHERE run_id = ? AND task_id = ?
-                        AND idempotency_key_sha256 = ?""",
-                    (invocation.run_id, invocation.task_id, idempotency_digest),
-                ).fetchone()
-                if row is not None:
-                    return self._require_matching_tool_invocation(
-                        row,
-                        invocation_sha256=None,
-                        operation_sha256=str(values["operation_sha256"]),
-                        anticipated_usage=anticipated,
-                        process_slot=process_slot,
-                    )
-
             cursor = connection.execute(
                 """
                 INSERT INTO tool_invocations(
@@ -1098,6 +1079,30 @@ class StateStore:
                 (int(cursor.lastrowid),),
             ).fetchone()
         return self._tool_invocation_from_row(row)
+
+    def find_tool_invocation_request(
+        self,
+        invocation: ToolInvocation,
+        *,
+        anticipated_usage: ToolResourceUsage | None = None,
+        process_slot: bool = False,
+    ) -> ToolInvocationRecord | None:
+        anticipated = anticipated_usage or ToolResourceUsage()
+        values = invocation_record_values(
+            invocation,
+            anticipated_usage=anticipated,
+            process_slot=process_slot,
+            updated_at=utc_now(),
+        )
+        with self._connection() as connection:
+            self._require_task_row(connection, invocation.run_id, invocation.task_id)
+            return self._find_matching_tool_invocation(
+                connection,
+                invocation,
+                values,
+                anticipated,
+                process_slot,
+            )
 
     def get_tool_invocation(
         self,
@@ -1935,6 +1940,46 @@ class StateStore:
                 "Tool invocation or idempotency identity was reused with different scope."
             )
         return record
+
+    def _find_matching_tool_invocation(
+        self,
+        connection: sqlite3.Connection,
+        invocation: ToolInvocation,
+        values: dict[str, object],
+        anticipated_usage: ToolResourceUsage,
+        process_slot: bool,
+    ) -> ToolInvocationRecord | None:
+        row = connection.execute(
+            "SELECT * FROM tool_invocations WHERE invocation_id = ?",
+            (invocation.invocation_id,),
+        ).fetchone()
+        if row is not None:
+            return self._require_matching_tool_invocation(
+                row,
+                invocation_sha256=str(values["invocation_sha256"]),
+                operation_sha256=str(values["operation_sha256"]),
+                anticipated_usage=anticipated_usage,
+                process_slot=process_slot,
+            )
+
+        idempotency_digest = values["idempotency_key_sha256"]
+        if idempotency_digest is None:
+            return None
+        row = connection.execute(
+            """SELECT * FROM tool_invocations
+            WHERE run_id = ? AND task_id = ?
+                AND idempotency_key_sha256 = ?""",
+            (invocation.run_id, invocation.task_id, idempotency_digest),
+        ).fetchone()
+        if row is None:
+            return None
+        return self._require_matching_tool_invocation(
+            row,
+            invocation_sha256=None,
+            operation_sha256=str(values["operation_sha256"]),
+            anticipated_usage=anticipated_usage,
+            process_slot=process_slot,
+        )
 
     @staticmethod
     def _validate_tool_policy_binding(

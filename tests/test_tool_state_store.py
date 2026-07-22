@@ -220,6 +220,28 @@ def test_exact_duplicate_is_idempotent_across_request_timestamps(
     assert len(requested) == 1
 
 
+def test_request_lookup_deduplicates_without_inserting(
+    tmp_path: Path,
+) -> None:
+    store = create_store(tmp_path)
+    original = invocation(tmp_path, "invocation-1")
+    assert store.find_tool_invocation_request(original) is None
+    persisted = store.record_tool_invocation(original)
+
+    duplicate = invocation(tmp_path, "invocation-2")
+    found = store.find_tool_invocation_request(duplicate)
+
+    assert found is not None
+    assert found.invocation_id == persisted.invocation_id
+    assert len(store.list_tool_invocations("run-1")) == 1
+
+    changed = duplicate.model_copy(
+        update={"arguments": {"path": "other.py", "content": "changed"}}
+    )
+    with pytest.raises(ToolInvocationConflictError, match="different scope"):
+        store.find_tool_invocation_request(changed)
+
+
 def test_invocation_identity_rejects_argument_and_reservation_changes(
     tmp_path: Path,
 ) -> None:
