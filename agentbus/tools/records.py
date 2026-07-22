@@ -8,6 +8,7 @@ from pydantic import Field
 
 from agentbus.tools.protocol import (
     ToolArtifact,
+    ToolApprovalRequest,
     ToolCancellationSnapshot,
     ToolCapability,
     ToolError,
@@ -66,6 +67,18 @@ class ToolInvocationRecord(ToolProtocolModel):
     updated_at: datetime
 
 
+class ToolApprovalRecord(ToolProtocolModel):
+    approval_sequence: int = Field(ge=1)
+    approval_id: str = Field(min_length=1, max_length=128)
+    request: ToolApprovalRequest
+    request_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    binding_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    disposition: str | None = Field(default=None, pattern=r"^(approved|rejected)$")
+    reason: str | None = Field(default=None, max_length=2_048)
+    created_at: datetime
+    decided_at: datetime | None = None
+
+
 TERMINAL_TOOL_STATUSES = frozenset(
     {
         ToolInvocationStatus.SUCCEEDED,
@@ -102,6 +115,12 @@ def invocation_idempotency_sha256(invocation: ToolInvocation) -> str | None:
 def policy_decision_sha256(decision: ToolPolicyDecision) -> str:
     payload = decision.model_dump(mode="json")
     payload.pop("evaluated_at", None)
+    return sha256_json(payload)
+
+
+def approval_request_scope_sha256(request: ToolApprovalRequest) -> str:
+    payload = request.model_dump(mode="json")
+    payload.pop("created_at", None)
     return sha256_json(payload)
 
 
@@ -196,6 +215,12 @@ def safe_persisted_tool_result(result: ToolResult) -> ToolResult:
 
 def safe_policy_decision(decision: ToolPolicyDecision) -> ToolPolicyDecision:
     return ToolPolicyDecision.model_validate(safe_protocol_dict(decision))
+
+
+def safe_tool_approval_request(
+    request: ToolApprovalRequest,
+) -> ToolApprovalRequest:
+    return ToolApprovalRequest.model_validate(safe_protocol_dict(request))
 
 
 def _safe_error(error: ToolError | None) -> ToolError | None:

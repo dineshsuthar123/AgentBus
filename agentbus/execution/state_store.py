@@ -36,8 +36,17 @@ from agentbus.execution.transitions import (
     validate_run_transition,
     validate_task_transition,
 )
+from agentbus.policy.approvals import (
+    approval_binding_sha256,
+    build_tool_approval_request,
+    validate_tool_approval,
+)
+from agentbus.policy.errors import ToolApprovalBindingError
+from agentbus.policy.models import ToolApprovalDisposition, ToolApprovalGrant
 from agentbus.security.redaction import is_sensitive_key, redact_text
 from agentbus.tools.protocol import (
+    ToolApprovalRequest,
+    ToolDescriptor,
     ToolErrorCategory,
     ToolInvocation,
     ToolInvocationStatus,
@@ -48,11 +57,15 @@ from agentbus.tools.protocol import (
 )
 from agentbus.tools.records import (
     TERMINAL_TOOL_STATUSES,
+    ToolApprovalRecord,
     ToolInvocationRecord,
+    approval_request_scope_sha256,
+    invocation_identity_sha256,
     invocation_record_values,
     policy_decision_sha256,
     safe_persisted_tool_result,
     safe_policy_decision,
+    safe_tool_approval_request,
 )
 from agentbus.worktrees.models import (
     IntegrationRecord,
@@ -85,6 +98,10 @@ class ToolInvocationNotFoundError(StateStoreError):
 
 
 class ToolInvocationConflictError(StateStoreError):
+    pass
+
+
+class ToolApprovalNotFoundError(StateStoreError):
     pass
 
 
@@ -1161,9 +1178,20 @@ class StateStore:
                     raise InvalidToolInvocationTransition(
                         "Initial tool policy evaluation requires requested state."
                     )
-                if approval_id is not None:
+                if approval_id is not None and (
+                    persisted_decision.outcome
+                    != ToolPolicyOutcome.REQUIRE_APPROVAL
+                ):
                     raise ToolInvocationConflictError(
-                        "Initial tool policy evaluation cannot attach an approval."
+                        "Only approval-required policy may attach an approval ID."
+                    )
+                if (
+                    persisted_decision.outcome
+                    == ToolPolicyOutcome.REQUIRE_APPROVAL
+                    and approval_id is None
+                ):
+                    raise ToolInvocationConflictError(
+                        "Approval-required policy must allocate a stable approval ID."
                     )
             else:
                 self._validate_approved_policy_transition(
@@ -1171,6 +1199,15 @@ class StateStore:
                     persisted_decision,
                     approval_id,
                 )
+                if (
+                    persisted_decision.outcome
+                    == ToolPolicyOutcome.ALLOW_WITH_CONSTRAINTS
+                ):
+                    self._require_approved_tool_grant(
+                        connection,
+                        record,
+                        approval_id,
+                    )
 
             status = record.status
             completed_at = record.completed_at
@@ -1226,6 +1263,208 @@ class StateStore:
             )
         return self._tool_invocation_from_row(updated)
 
+    def record_tool_approval_request(
+        self,
+        request: ToolApprovalRequest,
+        invocation: ToolInvocation,
+        descriptor: ToolDescriptor,
+    ) -> ToolApprovalRecord:
+        persisted_request = safe_tool_approval_request(request)
+        request_sha256 = approval_request_scope_sha256(persisted_request)
+        with self._write_transaction() as connection:
+            invocation_row = self._require_tool_invocation_row(
+                connection,
+                request.run_id,
+                request.invocation_id,
+            )
+            invocation_record = self._tool_invocation_from_row(invocation_row)
+            self._validate_tool_approval_request_binding(
+                invocation_record,
+                persisted_request,
+                invocation,
+                descriptor,
+            )
+
+            row = connection.execute(
+                "SELECT * FROM tool_approvals WHERE approval_id = ?",
+                (request.approval_id,),
+            ).fetchone()
+            if row is not None:
+                record = self._tool_approval_from_row(row)
+                if record.request_sha256 != request_sha256:
+                    raise ToolInvocationConflictError(
+                        "Tool approval identity was reused with different scope."
+                    )
+                return record
+
+            row = connection.execute(
+                """SELECT * FROM tool_approvals
+                WHERE invocation_id = ? AND invocation_revision = ?""",
+                (request.invocation_id, request.invocation_revision),
+            ).fetchone()
+            if row is not None:
+                raise ToolInvocationConflictError(
+                    "A tool invocation revision already has an approval request."
+                )
+
+            cursor = connection.execute(
+                """INSERT INTO tool_approvals(
+                    approval_id, invocation_id, invocation_revision, run_id,
+                    task_id, request_json, request_sha256, binding_sha256,
+                    disposition, reason, created_at, decided_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, NULL)""",
+                (
+                    request.approval_id,
+                    request.invocation_id,
+                    request.invocation_revision,
+                    request.run_id,
+                    request.task_id,
+                    _dump_json(persisted_request.model_dump(mode="json")),
+                    request_sha256,
+                    _timestamp(request.created_at),
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM tool_approvals WHERE approval_sequence = ?",
+                (int(cursor.lastrowid),),
+            ).fetchone()
+        return self._tool_approval_from_row(row)
+
+    def record_tool_approval_grant(
+        self,
+        grant: ToolApprovalGrant,
+        invocation: ToolInvocation,
+        descriptor: ToolDescriptor,
+    ) -> ToolApprovalRecord:
+        persisted_request = safe_tool_approval_request(grant.request)
+        request_sha256 = approval_request_scope_sha256(persisted_request)
+        with self._write_transaction() as connection:
+            row = self._require_tool_approval_row(
+                connection,
+                grant.request.run_id,
+                grant.approval_id,
+            )
+            record = self._tool_approval_from_row(row)
+            invocation_row = self._require_tool_invocation_row(
+                connection,
+                grant.request.run_id,
+                grant.request.invocation_id,
+            )
+            invocation_record = self._tool_invocation_from_row(invocation_row)
+            if invocation_record.invocation_sha256 != invocation_identity_sha256(
+                invocation
+            ):
+                raise ToolInvocationConflictError(
+                    "Tool approval grant invocation does not match durable state."
+                )
+            if record.request_sha256 != request_sha256:
+                raise ToolInvocationConflictError(
+                    "Tool approval grant does not match its persisted request."
+                )
+            expected_binding = approval_binding_sha256(grant.request, invocation)
+            if grant.binding_sha256 != expected_binding:
+                raise ToolInvocationConflictError(
+                    "Tool approval grant binding does not match the invocation."
+                )
+            if record.disposition is not None:
+                if (
+                    record.disposition == grant.disposition.value
+                    and record.binding_sha256 == grant.binding_sha256
+                    and record.reason == _safe_text(grant.reason)
+                    and record.decided_at == grant.decided_at
+                ):
+                    return record
+                raise ToolInvocationConflictError(
+                    "A decided tool approval cannot be replaced."
+                )
+            if grant.disposition == ToolApprovalDisposition.APPROVED:
+                try:
+                    validate_tool_approval(grant, invocation, descriptor)
+                except ToolApprovalBindingError as exc:
+                    raise ToolInvocationConflictError(str(exc)) from exc
+
+            connection.execute(
+                """UPDATE tool_approvals
+                SET binding_sha256 = ?, disposition = ?, reason = ?, decided_at = ?
+                WHERE approval_id = ? AND disposition IS NULL""",
+                (
+                    grant.binding_sha256,
+                    grant.disposition.value,
+                    _safe_text(grant.reason),
+                    _timestamp(grant.decided_at),
+                    grant.approval_id,
+                ),
+            )
+            self._insert_event(
+                connection,
+                grant.request.run_id,
+                grant.request.task_id,
+                (
+                    "tool_approval_approved"
+                    if grant.disposition.value == "approved"
+                    else "tool_approval_rejected"
+                ),
+                {
+                    "approval_id": grant.approval_id,
+                    "invocation_id": grant.request.invocation_id,
+                    "invocation_revision": grant.request.invocation_revision,
+                    "disposition": grant.disposition.value,
+                    "reason": grant.reason,
+                },
+            )
+            updated = self._require_tool_approval_row(
+                connection,
+                grant.request.run_id,
+                grant.approval_id,
+            )
+        return self._tool_approval_from_row(updated)
+
+    def get_tool_approval(
+        self,
+        run_id: str,
+        approval_id: str,
+    ) -> ToolApprovalRecord:
+        _require_id(run_id, "run")
+        _require_id(approval_id, "tool approval")
+        with self._connection() as connection:
+            self._require_run_row(connection, run_id)
+            row = connection.execute(
+                """SELECT * FROM tool_approvals
+                WHERE run_id = ? AND approval_id = ?""",
+                (run_id, approval_id),
+            ).fetchone()
+        if row is None:
+            raise ToolApprovalNotFoundError(
+                f"Tool approval '{approval_id}' was not found in run '{run_id}'."
+            )
+        return self._tool_approval_from_row(row)
+
+    def list_tool_approvals(
+        self,
+        run_id: str,
+        *,
+        pending_only: bool = False,
+        after_sequence: int = 0,
+        limit: int = 100,
+    ) -> list[ToolApprovalRecord]:
+        _require_id(run_id, "run")
+        if after_sequence < 0:
+            raise StateStoreError("Tool approval cursor must not be negative.")
+        if limit < 1 or limit > 1000:
+            raise StateStoreError(
+                "Tool approval page limit must be between 1 and 1000."
+            )
+        with self._connection() as connection:
+            self._require_run_row(connection, run_id)
+            rows = connection.execute(
+                """SELECT * FROM tool_approvals
+                WHERE run_id = ? AND approval_sequence > ?
+                    AND (? = 0 OR disposition IS NULL)
+                ORDER BY approval_sequence LIMIT ?""",
+                (run_id, after_sequence, int(pending_only), limit),
+            ).fetchall()
+        return [self._tool_approval_from_row(row) for row in rows]
+
     def mark_tool_invocation_started(
         self,
         run_id: str,
@@ -1271,6 +1510,11 @@ class StateStore:
                     raise ToolInvocationConflictError(
                         "The exact persisted tool approval is required before start."
                     )
+                self._require_approved_tool_grant(
+                    connection,
+                    record,
+                    approval_id,
+                )
             elif record.status != ToolInvocationStatus.REQUESTED:
                 raise InvalidToolInvocationTransition(
                     f"Tool invocation cannot start from '{record.status.value}'."
@@ -1485,6 +1729,90 @@ class StateStore:
             raise ToolInvocationConflictError(
                 "Tool policy may change only after its exact approval is evaluated."
             )
+
+    @staticmethod
+    def _validate_tool_approval_request_binding(
+        invocation_record: ToolInvocationRecord,
+        request: ToolApprovalRequest,
+        invocation: ToolInvocation,
+        descriptor: ToolDescriptor,
+    ) -> None:
+        policy = invocation_record.policy_decision
+        matches = (
+            invocation_record.status == ToolInvocationStatus.AWAITING_APPROVAL
+            and invocation_record.approval_id == request.approval_id
+            and invocation_record.invocation_id == request.invocation_id
+            and invocation_record.invocation_revision == request.invocation_revision
+            and invocation_record.run_id == request.run_id
+            and invocation_record.task_id == request.task_id
+            and invocation_record.tool_name == request.tool_name
+            and invocation_record.tool_version == request.tool_version
+            and invocation_record.protocol_version == request.protocol_version
+            and invocation_record.capabilities == request.requested_capabilities
+            and invocation_record.capability_fingerprint
+            == request.capability_fingerprint
+            and invocation_record.arguments_sha256 == request.arguments_sha256
+            and invocation_record.workspace_identity == request.workspace_identity
+            and invocation_record.worktree_identity == request.worktree_identity
+            and invocation_record.resource_budget == request.resource_budget
+            and invocation_record.invocation_sha256
+            == invocation_identity_sha256(invocation)
+            and descriptor.name == request.tool_name
+            and descriptor.version == request.tool_version
+            and descriptor.protocol_version == request.protocol_version
+            and policy is not None
+            and policy.outcome == ToolPolicyOutcome.REQUIRE_APPROVAL
+            and policy.rule_id == request.policy_rule
+            and policy.reason == request.reason
+            and policy.constraints == request.proposed_constraints
+        )
+        if not matches:
+            raise ToolInvocationConflictError(
+                "Tool approval request does not match the persisted invocation scope."
+            )
+        expected = safe_tool_approval_request(
+            build_tool_approval_request(
+                invocation,
+                descriptor,
+                policy,
+                approval_id=request.approval_id,
+                expires_at=request.expires_at,
+            )
+        )
+        if approval_request_scope_sha256(expected) != approval_request_scope_sha256(
+            request
+        ):
+            raise ToolInvocationConflictError(
+                "Tool approval request resource summary does not match the invocation."
+            )
+
+    def _require_approved_tool_grant(
+        self,
+        connection: sqlite3.Connection,
+        invocation: ToolInvocationRecord,
+        approval_id: str | None,
+    ) -> ToolApprovalRecord:
+        if approval_id is None:
+            raise ToolInvocationConflictError(
+                "An approved tool policy transition requires an approval ID."
+            )
+        row = self._require_tool_approval_row(
+            connection,
+            invocation.run_id,
+            approval_id,
+        )
+        approval = self._tool_approval_from_row(row)
+        if (
+            approval.disposition != ToolApprovalDisposition.APPROVED.value
+            or approval.request.invocation_id != invocation.invocation_id
+            or approval.request.invocation_revision
+            != invocation.invocation_revision
+            or approval.binding_sha256 is None
+        ):
+            raise ToolInvocationConflictError(
+                "The exact persisted tool approval has not been approved."
+            )
+        return approval
 
     def persist_cancellation_state(
         self,
@@ -2114,6 +2442,23 @@ class StateStore:
         return row
 
     @staticmethod
+    def _require_tool_approval_row(
+        connection: sqlite3.Connection,
+        run_id: str,
+        approval_id: str,
+    ) -> sqlite3.Row:
+        row = connection.execute(
+            """SELECT * FROM tool_approvals
+            WHERE run_id = ? AND approval_id = ?""",
+            (run_id, approval_id),
+        ).fetchone()
+        if row is None:
+            raise ToolApprovalNotFoundError(
+                f"Tool approval '{approval_id}' was not found in run '{run_id}'."
+            )
+        return row
+
+    @staticmethod
     @_domain_decode("run record")
     def _run_from_row(row: sqlite3.Row) -> RunRecord:
         return RunRecord(
@@ -2266,6 +2611,32 @@ class StateStore:
             started_at=_parse_timestamp(row["started_at"]),
             completed_at=_parse_timestamp(row["completed_at"]),
             updated_at=_parse_timestamp(row["updated_at"]),
+        )
+
+    @staticmethod
+    @_domain_decode("tool approval record")
+    def _tool_approval_from_row(row: sqlite3.Row) -> ToolApprovalRecord:
+        request = ToolApprovalRequest.model_validate(
+            _load_json(row["request_json"], "tool approval request")
+        )
+        if (
+            request.approval_id != row["approval_id"]
+            or request.invocation_id != row["invocation_id"]
+            or request.invocation_revision != row["invocation_revision"]
+            or request.run_id != row["run_id"]
+            or request.task_id != row["task_id"]
+        ):
+            raise ValueError("tool approval columns do not match the request")
+        return ToolApprovalRecord(
+            approval_sequence=row["approval_sequence"],
+            approval_id=row["approval_id"],
+            request=request,
+            request_sha256=row["request_sha256"],
+            binding_sha256=row["binding_sha256"],
+            disposition=row["disposition"],
+            reason=row["reason"],
+            created_at=_parse_timestamp(row["created_at"]),
+            decided_at=_parse_timestamp(row["decided_at"]),
         )
 
     @staticmethod

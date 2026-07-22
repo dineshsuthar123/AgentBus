@@ -14,10 +14,18 @@ from agentbus.execution.state_store import (
     ToolInvocationConflictError,
     ToolInvocationNotFoundError,
 )
+from agentbus.policy import (
+    ToolApprovalDisposition,
+    ToolPolicyEngine,
+    build_tool_approval_request,
+    decide_tool_approval,
+)
+from agentbus.tools.descriptors import descriptor_map
 from agentbus.tools.protocol import (
     CapabilityScope,
     ToolCapability,
     ToolCapabilityName,
+    ToolDescriptor,
     ToolInvocation,
     ToolInvocationContext,
     ToolInvocationStatus,
@@ -116,6 +124,41 @@ def policy_decision(
             {"approval_id": approval_id} if approval_id is not None else {}
         ),
     )
+
+
+def approval_invocation(
+    root: Path,
+    invocation_id: str = "approval-invocation-1",
+) -> tuple[ToolInvocation, ToolDescriptor]:
+    descriptor = descriptor_map(workspace=root, worktree=root)[
+        "filesystem.delete"
+    ]
+    current = ToolInvocation(
+        invocation_id=invocation_id,
+        run_id="run-1",
+        task_id="task-1",
+        tool_name=descriptor.name,
+        tool_version=descriptor.version,
+        arguments={"path": "obsolete.py", "expected_sha256": "0" * 64},
+        requested_capabilities=(
+            ToolCapability(
+                name=ToolCapabilityName.FILESYSTEM_DELETE,
+                scope=CapabilityScope(
+                    roots=(str(root.resolve()),),
+                    affected_paths=("obsolete.py",),
+                ),
+            ),
+        ),
+        context=ToolInvocationContext(
+            workspace_identity=str(root.resolve()),
+            worktree_identity=str(root.resolve()),
+            caller_role="coder",
+            workspace_trusted=True,
+            provider_consented=True,
+        ),
+        idempotency_key=f"delete-{invocation_id}",
+    )
+    return current, descriptor
 
 
 def test_tool_invocation_round_trips_without_raw_arguments_or_keys(
@@ -403,4 +446,186 @@ def test_policy_and_result_bindings_reject_cross_invocation_reuse(
                 status=ToolInvocationStatus.SUCCEEDED,
                 policy_decision=first_decision,
             ),
+        )
+
+
+def test_tool_approval_round_trips_and_allows_exact_invocation(
+    tmp_path: Path,
+) -> None:
+    store = create_store(tmp_path)
+    current, descriptor = approval_invocation(tmp_path)
+    engine = ToolPolicyEngine()
+    decision = engine.evaluate(current, descriptor)
+    request = build_tool_approval_request(
+        current,
+        descriptor,
+        decision,
+        approval_id="approval-1",
+    )
+    store.record_tool_invocation(current)
+    waiting = store.record_tool_policy_decision(
+        "run-1",
+        decision,
+        approval_id=request.approval_id,
+    )
+
+    pending = store.record_tool_approval_request(request, current, descriptor)
+    regenerated_request = build_tool_approval_request(
+        current,
+        descriptor,
+        decision,
+        approval_id=request.approval_id,
+    )
+    duplicate_pending = store.record_tool_approval_request(
+        regenerated_request,
+        current,
+        descriptor,
+    )
+    grant = decide_tool_approval(
+        request,
+        current,
+        disposition=ToolApprovalDisposition.APPROVED,
+        reason="approved; token=raw-sensitive-approval-reason",
+    )
+    approved = store.record_tool_approval_grant(grant, current, descriptor)
+    duplicate_approved = store.record_tool_approval_grant(
+        grant,
+        current,
+        descriptor,
+    )
+    final_decision = engine.evaluate(current, descriptor, approval=grant)
+    store.record_tool_policy_decision(
+        "run-1",
+        final_decision,
+        approval_id=request.approval_id,
+    )
+    started = store.mark_tool_invocation_started(
+        "run-1",
+        current.invocation_id,
+        approval_id=request.approval_id,
+    )
+
+    assert waiting.status == ToolInvocationStatus.AWAITING_APPROVAL
+    assert pending == duplicate_pending
+    assert approved == duplicate_approved
+    assert approved.disposition == "approved"
+    assert approved.reason == "approved; token=[REDACTED]"
+    assert store.get_tool_approval("run-1", "approval-1") == approved
+    assert store.list_tool_approvals("run-1", pending_only=True) == []
+    assert started.status == ToolInvocationStatus.RUNNING
+    assert started.approval_id == "approval-1"
+    persisted_bytes = b"".join(
+        path.read_bytes()
+        for path in store.database_path.parent.glob(f"{store.database_path.name}*")
+    )
+    assert b"raw-sensitive-approval-reason" not in persisted_bytes
+
+
+def test_tool_approval_rejects_changed_resource_summary_and_grant(
+    tmp_path: Path,
+) -> None:
+    store = create_store(tmp_path)
+    current, descriptor = approval_invocation(tmp_path)
+    decision = ToolPolicyEngine().evaluate(current, descriptor)
+    request = build_tool_approval_request(
+        current,
+        descriptor,
+        decision,
+        approval_id="approval-1",
+    )
+    store.record_tool_invocation(current)
+    with pytest.raises(ToolInvocationConflictError, match="stable approval ID"):
+        store.record_tool_policy_decision("run-1", decision)
+    store.record_tool_policy_decision(
+        "run-1", decision, approval_id=request.approval_id
+    )
+
+    with pytest.raises(ToolInvocationConflictError, match="resource summary"):
+        store.record_tool_approval_request(
+            request.model_copy(update={"affected_paths": ("different.py",)}),
+            current,
+            descriptor,
+        )
+    with pytest.raises(ToolInvocationConflictError, match="persisted invocation"):
+        store.record_tool_approval_request(
+            request,
+            current.model_copy(
+                update={"arguments": {"path": "different.py"}}
+            ),
+            descriptor,
+        )
+
+    store.record_tool_approval_request(request, current, descriptor)
+    fabricated_allow = decision.model_copy(
+        update={
+            "outcome": ToolPolicyOutcome.ALLOW_WITH_CONSTRAINTS,
+            "rule_id": "allow.approved_invocation",
+            "safe_metadata": {"approval_id": request.approval_id},
+        }
+    )
+    with pytest.raises(ToolInvocationConflictError, match="has not been approved"):
+        store.record_tool_policy_decision(
+            "run-1",
+            fabricated_allow,
+            approval_id=request.approval_id,
+        )
+    approved = decide_tool_approval(
+        request,
+        current,
+        disposition=ToolApprovalDisposition.APPROVED,
+    )
+    store.record_tool_approval_grant(approved, current, descriptor)
+    with pytest.raises(ToolInvocationConflictError, match="cannot be replaced"):
+        store.record_tool_approval_grant(
+            approved.model_copy(
+                update={"disposition": ToolApprovalDisposition.REJECTED}
+            ),
+            current,
+            descriptor,
+        )
+
+
+def test_rejected_tool_approval_transitions_invocation_to_denied(
+    tmp_path: Path,
+) -> None:
+    store = create_store(tmp_path)
+    current, descriptor = approval_invocation(tmp_path)
+    engine = ToolPolicyEngine()
+    decision = engine.evaluate(current, descriptor)
+    request = build_tool_approval_request(
+        current,
+        descriptor,
+        decision,
+        approval_id="approval-1",
+    )
+    store.record_tool_invocation(current)
+    store.record_tool_policy_decision(
+        "run-1", decision, approval_id=request.approval_id
+    )
+    store.record_tool_approval_request(request, current, descriptor)
+    rejected = decide_tool_approval(
+        request,
+        current,
+        disposition=ToolApprovalDisposition.REJECTED,
+        reason="not approved",
+    )
+
+    stored_rejection = store.record_tool_approval_grant(
+        rejected,
+        current,
+        descriptor,
+    )
+    denied = store.record_tool_policy_decision(
+        "run-1",
+        engine.evaluate(current, descriptor, approval=rejected),
+        approval_id=request.approval_id,
+    )
+
+    assert stored_rejection.disposition == "rejected"
+    assert denied.status == ToolInvocationStatus.DENIED
+    with pytest.raises(InvalidToolInvocationTransition, match="terminal"):
+        store.mark_tool_invocation_started(
+            "run-1",
+            current.invocation_id,
+            approval_id=request.approval_id,
         )

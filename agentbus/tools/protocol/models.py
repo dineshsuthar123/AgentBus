@@ -402,6 +402,45 @@ class ToolApprovalRequest(ToolProtocolModel):
     expires_at: datetime | None = None
     created_at: datetime = Field(default_factory=utc_now)
 
+    @field_validator("requested_capabilities", "proposed_constraints")
+    @classmethod
+    def approval_capabilities_are_bounded(
+        cls,
+        value: tuple[ToolCapability, ...],
+    ) -> tuple[ToolCapability, ...]:
+        if len(value) > 64:
+            raise ValueError("tool approvals support at most 64 capabilities")
+        return value
+
+    @field_validator("affected_paths")
+    @classmethod
+    def approval_paths_are_bounded(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if len(value) > MAX_COLLECTION_ITEMS:
+            raise ValueError("tool approvals support at most 256 affected paths")
+        if any(len(path) > 2_048 for path in value):
+            raise ValueError("tool approval paths must be at most 2048 characters")
+        return value
+
+    @field_validator("arguments_summary")
+    @classmethod
+    def approval_arguments_are_bounded(
+        cls,
+        value: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        if len(value) > 32:
+            raise ValueError("tool approvals support at most 32 argument summaries")
+        if any(len(argument) > 256 for argument in value):
+            raise ValueError(
+                "tool approval argument summaries must be at most 256 characters"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def approval_expiry_follows_creation(self) -> "ToolApprovalRequest":
+        if self.expires_at is not None and self.expires_at <= self.created_at:
+            raise ValueError("tool approval expiry must follow creation")
+        return self
+
 
 class ToolCancellationSnapshot(ToolProtocolModel):
     requested: bool = False

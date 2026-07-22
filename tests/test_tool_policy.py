@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from agentbus.policy import (
     ToolApprovalBindingError,
@@ -257,6 +258,20 @@ def test_approval_rejects_capability_expansion_and_expiry(tmp_path: Path) -> Non
             invocation,
             descriptor,
             now=expires_at + timedelta(seconds=1),
+        )
+    with pytest.raises(ValidationError, match="expiry must follow creation"):
+        type(request).model_validate(
+            {
+                **request.model_dump(mode="json"),
+                "expires_at": request.created_at - timedelta(seconds=1),
+            }
+        )
+    with pytest.raises(ValidationError, match="cannot precede"):
+        type(grant).model_validate(
+            {
+                **grant.model_dump(mode="json"),
+                "decided_at": request.created_at - timedelta(seconds=1),
+            }
         )
 
 

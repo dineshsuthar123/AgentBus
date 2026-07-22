@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import Enum
 
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, model_validator
 
 from agentbus.tools.protocol import (
     ToolApprovalRequest,
@@ -38,6 +38,12 @@ class ToolApprovalGrant(PolicyModel):
     binding_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     reason: str | None = Field(default=None, max_length=2_048)
     decided_at: datetime
+
+    @model_validator(mode="after")
+    def decision_follows_request(self) -> "ToolApprovalGrant":
+        if self.decided_at < self.request.created_at:
+            raise ValueError("tool approval decision cannot precede its request")
+        return self
 
 
 class PolicyEvaluationRecord(PolicyModel):
