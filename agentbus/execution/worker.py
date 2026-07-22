@@ -526,12 +526,17 @@ class LocalTaskWorker:
             )
             current = self.store.get_task(task.run_id, task.task_id)
             if current.status == TaskStatus.RUNNING:
+                retry = current.current_attempt_count < current.spec.maximum_attempts
                 self.store.update_task_status(
                     task.run_id,
                     task.task_id,
-                    TaskStatus.RETRYABLE,
+                    TaskStatus.RETRYABLE if retry else TaskStatus.FAILED,
                     event_type="worker_failed",
-                    event_payload={"worker_id": self.worker_id, "interrupted": True},
+                    event_payload={
+                        "worker_id": self.worker_id,
+                        "interrupted": True,
+                        "retry_exhausted": not retry,
+                    },
                 )
         except StateStoreError:
             pass

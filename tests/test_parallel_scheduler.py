@@ -694,3 +694,65 @@ def test_failed_parallel_run_reports_retained_file_side_effects(tmp_path):
     task_worktree = Path(report.task_worktrees["task-A"])
     assert (task_worktree / "broken.py").read_text(encoding="utf-8") == "BROKEN = True\n"
     assert git(source, "status", "--porcelain") == ""
+
+
+def test_interrupted_worker_stops_after_persisted_attempt_limit(tmp_path):
+    source, base = setup_repository(tmp_path / "repo")
+    store = StateStore(tmp_path / "state.db")
+    DurableExecutionEngine(store).create_run(
+        "Bound unexpected worker interruption",
+        {**PLAN, "steps": [PLAN["steps"][0]]},
+        model="fake",
+        workspace=str(source),
+        run_id="interrupted-run",
+        metadata={
+            "parallel_execution": {
+                "enabled": True,
+                "max_workers": 1,
+                "base_commit": base,
+                "worktree_root": str(tmp_path / "worktrees"),
+            }
+        },
+    )
+    manager = GitWorktreeManager(source, tmp_path / "worktrees", store)
+    leases = LeaseService(store)
+    executions = 0
+
+    class InterruptingExecutor:
+        def execute(self, context):
+            nonlocal executions
+            executions += 1
+            raise RuntimeError("simulated unexpected worker interruption")
+
+    scheduler = ParallelExecutionScheduler(
+        store=store,
+        worktree_manager=manager,
+        lease_service=leases,
+        integration=IntegrationCoordinator(store, manager),
+        worker_factory=lambda worker_id: LocalTaskWorker(
+            worker_id=worker_id,
+            store=store,
+            lease_service=leases,
+            worktree_manager=manager,
+            executor_factory=lambda path: InterruptingExecutor(),
+            heartbeat_seconds=5,
+        ),
+        max_workers=1,
+    )
+
+    report = scheduler.run("interrupted-run")
+
+    task = store.get_task("interrupted-run", "task-A")
+    attempts = store.list_attempts("interrupted-run", "task-A")
+    assert report.status == RunStatus.FAILED
+    assert task.status == TaskStatus.FAILED
+    assert task.current_attempt_count == task.spec.maximum_attempts == 2
+    assert executions == 2
+    assert [attempt.status.value for attempt in attempts] == [
+        "interrupted",
+        "interrupted",
+    ]
+    assert all(
+        lease.status.value != "active"
+        for lease in leases.list_leases("interrupted-run")
+    )
