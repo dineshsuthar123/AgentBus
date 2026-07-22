@@ -7,6 +7,10 @@ import {
   ReportDocumentProvider
 } from "./documents";
 import { RunStore } from "./runStore";
+import {
+  ToolInvocationDocumentProvider,
+  ToolPolicyDocumentProvider
+} from "./toolDocuments";
 import type { EventEnvelope, RunSummary } from "./generated/protocol";
 import {
   ApprovalsProvider,
@@ -65,6 +69,14 @@ export function activate(context: vscode.ExtensionContext): AgentBusExtensionApi
     vscode.workspace.registerTextDocumentContentProvider(
       "agentbus-report",
       new ReportDocumentProvider(client)
+    ),
+    vscode.workspace.registerTextDocumentContentProvider(
+      "agentbus-tool",
+      new ToolInvocationDocumentProvider(client)
+    ),
+    vscode.workspace.registerTextDocumentContentProvider(
+      "agentbus-policy",
+      new ToolPolicyDocumentProvider(client)
     )
   );
   const controller = new CommandController(

@@ -1,5 +1,7 @@
 import type {
   ToolCapability,
+  ToolInvocationDetail,
+  ToolPolicyResponse,
   ToolInvocationSummary
 } from "./generated/protocol";
 
@@ -74,6 +76,138 @@ export function toolResourceSummary(
 
 export function escapeMarkdown(value: string): string {
   return value.replace(/[\\`*_{}[\]()<>#+.!|~-]/g, "\\$&");
+}
+
+export function isSafeControlId(value: string): boolean {
+  return Boolean(
+    value &&
+      value.length <= 128 &&
+      value !== "." &&
+      value !== ".." &&
+      !/[\0/\\\r\n]/.test(value)
+  );
+}
+
+export function formatToolInvocation(
+  invocation: ToolInvocationDetail
+): string {
+  const decision = invocation.policy_decision;
+  const result = invocation.result;
+  const lines = [
+    `# ${escapeMarkdown(invocation.tool_name)}`,
+    "",
+    markdownTable([
+      ["Status", invocation.status],
+      ["Run", invocation.run_id],
+      ["Task", invocation.task_id],
+      ["Invocation", invocation.invocation_id],
+      ["Revision", invocation.invocation_revision],
+      ["Tool version", toolVersion(invocation)],
+      ["Protocol", invocation.protocol_version],
+      ["Caller", invocation.caller_role],
+      ["Duration", toolDuration(invocation)],
+      ["Approval", invocation.approval_id ?? "none"],
+      ["Policy", decision?.outcome ?? "not evaluated"],
+      ["Policy rule", decision?.rule_id ?? "n/a"]
+    ]),
+    "",
+    "## Policy",
+    "",
+    decision
+      ? indentedJson({
+          outcome: decision.outcome,
+          rule_id: decision.rule_id,
+          reason: decision.reason,
+          constraints: decision.constraints ?? [],
+          evaluated_at: decision.evaluated_at
+        })
+      : "Not evaluated.",
+    "",
+    "## Capabilities",
+    "",
+    indentedJson(invocation.capabilities),
+    "",
+    "## Resources",
+    "",
+    indentedJson({
+      budget: invocation.resource_budget,
+      usage: invocation.resource_usage
+    }),
+    "",
+    "## Cancellation",
+    "",
+    indentedJson(invocation.cancellation),
+    "",
+    "## Result",
+    "",
+    indentedJson(
+      result
+        ? {
+            status: result.status,
+            exit_code: result.exit_code,
+            duration_seconds: result.duration_seconds,
+            timed_out: result.timed_out,
+            stdout_truncated: result.stdout_truncated,
+            stderr_truncated: result.stderr_truncated,
+            error: result.error,
+            structured_output_summary: result.structured_output,
+            safe_diagnostic_metadata: result.safe_diagnostic_metadata,
+            artifacts: result.artifacts ?? []
+          }
+        : null
+    ),
+    "",
+    "_Raw tool arguments, stdout, stderr, and unrestricted output bodies are not displayed._",
+    ""
+  ];
+  return lines.join("\n");
+}
+
+export function formatToolPolicy(policy: ToolPolicyResponse): string {
+  const rows = policy.rules.map((rule) => [
+    rule.rule_id ?? "unknown",
+    rule.outcome ?? "unknown",
+    rule.description ?? ""
+  ]);
+  return [
+    `# Tool Policy ${escapeMarkdown(policy.policy_id ?? "agentbus-default-v1")}`,
+    "",
+    "## Outcomes",
+    "",
+    policy.outcomes.map((outcome) => `- ${escapeMarkdown(outcome)}`).join("\n"),
+    "",
+    "## Rules",
+    "",
+    markdownTable(rows, ["Rule", "Outcome", "Description"]),
+    "",
+    "## Configuration",
+    "",
+    indentedJson(policy.configuration),
+    ""
+  ].join("\n");
+}
+
+function markdownTable(
+  rows: Array<Array<string | number>>,
+  headers: string[] = ["Field", "Value"]
+): string {
+  const values = [
+    `| ${headers.map(escapeMarkdown).join(" | ")} |`,
+    `| ${headers.map(() => "---").join(" | ")} |`
+  ];
+  for (const row of rows) {
+    values.push(
+      `| ${row.map((value) => escapeMarkdown(String(value))).join(" | ")} |`
+    );
+  }
+  return values.join("\n");
+}
+
+function indentedJson(value: unknown): string {
+  return JSON.stringify(value ?? null, null, 2)
+    .split("\n")
+    .map((line) => `    ${line}`)
+    .join("\n");
 }
 
 function formatSeconds(value: number): string {

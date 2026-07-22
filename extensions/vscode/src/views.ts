@@ -371,6 +371,11 @@ function toolInvocationItem(
   item.contextValue = canCancelTool(invocation.status)
     ? "agentbusToolCancellable"
     : "agentbusToolTerminal";
+  item.command = {
+    command: "agentbus.showToolInvocation",
+    title: "Show Tool Invocation",
+    arguments: [item]
+  };
   return item;
 }
 

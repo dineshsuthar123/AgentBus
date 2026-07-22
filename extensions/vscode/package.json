@@ -64,6 +64,18 @@
         "title": "AgentBus: Open Changes"
       },
       {
+        "command": "agentbus.showToolInvocation",
+        "title": "AgentBus: Show Tool Invocation"
+      },
+      {
+        "command": "agentbus.showToolPolicy",
+        "title": "AgentBus: Show Tool Policy"
+      },
+      {
+        "command": "agentbus.refreshToolRegistry",
+        "title": "AgentBus: Refresh Tool Registry"
+      },
+      {
         "command": "agentbus.approveAction",
         "title": "AgentBus: Approve Action"
       },
@@ -160,6 +172,11 @@
         {
           "command": "agentbus.rejectAction",
           "when": "viewItem == agentbusApproval",
+          "group": "inline"
+        },
+        {
+          "command": "agentbus.showToolInvocation",
+          "when": "viewItem == agentbusToolCancellable || viewItem == agentbusToolTerminal",
           "group": "inline"
         }
       ]

@@ -2,12 +2,14 @@ import * as vscode from "vscode";
 import type { AgentBusClient } from "./apiClient";
 import type { DaemonManager } from "./daemonManager";
 import { changeUri, reportUri } from "./documents";
+import { toolInvocationUri, toolPolicyUri } from "./toolDocuments";
 import type {
   ApprovalSummary,
   CancelResponse,
   RunAcceptedResponse,
   RunCreateRequest,
-  RunSummary
+  RunSummary,
+  ToolInvocationSummary
 } from "./generated/protocol";
 import { ReconnectingSseClient } from "./sse";
 import type { RunStore } from "./runStore";
@@ -60,6 +62,11 @@ export class CommandController implements vscode.Disposable {
     command("agentbus.cancelRun", () => this.cancel());
     command("agentbus.openRunReport", () => this.openReport());
     command("agentbus.openChanges", () => this.openChanges());
+    command("agentbus.showToolInvocation", (item) =>
+      this.showToolInvocation(item)
+    );
+    command("agentbus.showToolPolicy", () => this.showToolPolicy());
+    command("agentbus.refreshToolRegistry", () => this.refreshToolRegistry());
     command("agentbus.approveAction", (item) => this.decide(item, "approve"));
     command("agentbus.rejectAction", (item) => this.decide(item, "reject"));
     command("agentbus.runDoctor", () => this.doctor());
@@ -306,6 +313,41 @@ export class CommandController implements vscode.Disposable {
     );
     if (!picked) return;
     await this.openChange(run.run_id, picked.change.path);
+  }
+
+  private async showToolInvocation(raw?: unknown): Promise<void> {
+    const item = raw as AgentBusItem | undefined;
+    let invocation = item?.value as ToolInvocationSummary | undefined;
+    if (!invocation) {
+      const run = await this.chooseRun();
+      if (!run) return;
+      const response = await (await this.client()).toolInvocations(run.run_id);
+      invocation = (await vscode.window.showQuickPick(
+        response.invocations.map((value) => ({
+          label: value.tool_name,
+          description: `${value.status} | ${value.task_id}`,
+          value
+        }))
+      ))?.value;
+    }
+    if (!invocation) return;
+    const document = await vscode.workspace.openTextDocument(
+      toolInvocationUri(invocation.run_id, invocation.invocation_id)
+    );
+    await vscode.window.showTextDocument(document, { preview: true });
+  }
+
+  private async showToolPolicy(): Promise<void> {
+    const document = await vscode.workspace.openTextDocument(toolPolicyUri());
+    await vscode.window.showTextDocument(document, { preview: true });
+  }
+
+  private async refreshToolRegistry(): Promise<void> {
+    const response = await (await this.client()).tools();
+    this.refreshViews();
+    void vscode.window.showInformationMessage(
+      `AgentBus loaded ${response.total} managed tool descriptor(s).`
+    );
   }
 
   private async openChange(runId: string, path: string): Promise<void> {

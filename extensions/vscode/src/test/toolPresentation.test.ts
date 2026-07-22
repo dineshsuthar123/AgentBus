@@ -6,6 +6,9 @@ import {
   canCancelTool,
   capabilityNames,
   escapeMarkdown,
+  formatToolInvocation,
+  formatToolPolicy,
+  isSafeControlId,
   toolDuration,
   toolGroup,
   toolResourceSummary,
@@ -84,4 +87,56 @@ test("tool tooltip values escape Markdown control characters", () => {
     escapeMarkdown("[tool](command:evil) `unsafe`"),
     "\\[tool\\]\\(command:evil\\) \\`unsafe\\`"
   );
+});
+
+test("tool detail formatting omits raw output bodies", () => {
+  const summary = invocation("succeeded");
+  const rendered = formatToolInvocation({
+    ...summary,
+    workspace: "C:/workspace",
+    worktree: "C:/workspace",
+    arguments_sha256: "a".repeat(64),
+    capability_fingerprint: "b".repeat(64),
+    result: {
+      invocation_id: summary.invocation_id,
+      invocation_revision: 1,
+      status: "succeeded",
+      stdout: "raw-private-stdout",
+      stderr: "raw-private-stderr",
+      structured_output: { persisted_summary: true, sha256: "c".repeat(64) },
+      policy_decision: {
+        outcome: "allow",
+        rule_id: "allow.read_only",
+        reason: "bounded read",
+        invocation_id: summary.invocation_id,
+        invocation_revision: 1,
+        capability_fingerprint: "b".repeat(64),
+        arguments_sha256: "a".repeat(64)
+      }
+    }
+  });
+
+  assert.match(rendered, /persisted_summary/);
+  assert.doesNotMatch(rendered, /raw-private-stdout/);
+  assert.doesNotMatch(rendered, /raw-private-stderr/);
+});
+
+test("policy formatting escapes untrusted Markdown and control IDs are strict", () => {
+  const rendered = formatToolPolicy({
+    outcomes: ["allow"],
+    configuration: { automatic_path_limit: 25 },
+    rules: [
+      {
+        rule_id: "deny.test",
+        outcome: "deny",
+        description: "[unsafe](command:evil)"
+      }
+    ]
+  });
+
+  assert.doesNotMatch(rendered, /\[unsafe\]\(command:evil\)/);
+  assert.match(rendered, /\\\[unsafe\\\]/);
+  assert.equal(isSafeControlId("run-123"), true);
+  assert.equal(isSafeControlId("../run"), false);
+  assert.equal(isSafeControlId("run\\child"), false);
 });
