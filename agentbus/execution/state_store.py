@@ -1235,7 +1235,11 @@ class StateStore:
             elif persisted_decision.outcome == ToolPolicyOutcome.DENY:
                 status = ToolInvocationStatus.DENIED
                 completed_at = now
-                error_category = ToolErrorCategory.POLICY_DENIED.value
+                error_category = (
+                    ToolErrorCategory.APPROVAL_INVALID.value
+                    if persisted_decision.rule_id == "deny.invalid_approval"
+                    else ToolErrorCategory.POLICY_DENIED.value
+                )
                 error_message = _safe_text(persisted_decision.reason)
 
             connection.execute(

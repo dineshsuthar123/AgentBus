@@ -650,6 +650,7 @@ def test_rejected_tool_approval_transitions_invocation_to_denied(
 
     assert stored_rejection.disposition == "rejected"
     assert denied.status == ToolInvocationStatus.DENIED
+    assert denied.error_category == ToolErrorCategory.APPROVAL_INVALID
     with pytest.raises(InvalidToolInvocationTransition, match="terminal"):
         store.mark_tool_invocation_started(
             "run-1",

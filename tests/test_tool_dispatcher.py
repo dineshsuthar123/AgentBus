@@ -19,12 +19,18 @@ from agentbus.policy import (
 )
 from agentbus.sandbox.platform import ExecutableCatalog
 from agentbus.tools import builtin_tool_registry
-from agentbus.tools.capabilities import derive_required_capabilities
+from agentbus.tools.budget import ToolBudgetExceeded
+from agentbus.tools.capabilities import (
+    anticipated_tool_usage,
+    derive_required_capabilities,
+    requires_process_slot,
+)
 from agentbus.tools.dispatcher import ToolDispatcher
 from agentbus.tools.protocol import (
     ToolInvocation,
     ToolInvocationContext,
     ToolInvocationStatus,
+    ToolErrorCategory,
     ToolResourceBudget,
 )
 
@@ -266,6 +272,211 @@ def test_dispatcher_streams_and_cancels_real_process_tree(tmp_path: Path) -> Non
     )
 
 
+def test_dispatcher_classifies_nonzero_timeout_and_excessive_output(
+    tmp_path: Path,
+) -> None:
+    dispatcher, store = _runtime(tmp_path)
+    failed = dispatcher.dispatch(
+        _invocation(
+            dispatcher,
+            tmp_path,
+            "process.execute",
+            {
+                "executable": "python",
+                "arguments": ["-c", "raise SystemExit(7)"],
+            },
+            invocation_id="inv-failed",
+        )
+    ).result
+    timed_out = dispatcher.dispatch(
+        _invocation(
+            dispatcher,
+            tmp_path,
+            "process.execute",
+            {
+                "executable": "python",
+                "arguments": ["-c", "import time; time.sleep(5)"],
+            },
+            invocation_id="inv-timeout",
+            budget=ToolResourceBudget(wall_clock_seconds=0.1),
+        )
+    ).result
+    excessive = dispatcher.dispatch(
+        _invocation(
+            dispatcher,
+            tmp_path,
+            "process.execute",
+            {
+                "executable": "python",
+                "arguments": ["-c", "print('x' * 100)"],
+            },
+            invocation_id="inv-output",
+            budget=ToolResourceBudget(
+                stdout_bytes=8,
+                stderr_bytes=8,
+                combined_output_bytes=16,
+            ),
+        )
+    ).result
+
+    assert failed.status == ToolInvocationStatus.FAILED
+    assert failed.error.category == ToolErrorCategory.PROCESS
+    assert failed.exit_code == 7
+    assert timed_out.status == ToolInvocationStatus.TIMED_OUT
+    assert timed_out.error.category == ToolErrorCategory.TIMED_OUT
+    assert timed_out.timed_out is True
+    assert excessive.status == ToolInvocationStatus.FAILED
+    assert excessive.error.category == ToolErrorCategory.RESOURCE_EXHAUSTED
+    assert excessive.stdout_truncated is True
+    assert len(excessive.stdout.encode("utf-8")) <= 8
+    assert len(store.list_tool_audits("run-1")) == 3
+
+
+def test_dispatcher_rejects_capability_mismatch_before_persistence(
+    tmp_path: Path,
+) -> None:
+    dispatcher, store = _runtime(tmp_path)
+    invocation = _invocation(
+        dispatcher,
+        tmp_path,
+        "filesystem.read",
+        {"path": "module.py"},
+    )
+    descriptor = dispatcher.registry.descriptor("filesystem.read")
+
+    with pytest.raises(ValueError, match="exactly match"):
+        dispatcher.dispatch(
+            invocation.model_copy(
+                update={"requested_capabilities": descriptor.capabilities}
+            )
+        )
+
+    assert store.list_tool_invocations("run-1") == []
+
+
+def test_dispatcher_reports_budget_rejection_before_second_mutation(
+    tmp_path: Path,
+) -> None:
+    dispatcher, store = _runtime(tmp_path)
+    budget = ToolResourceBudget(total_written_bytes=5)
+    dispatcher.dispatch(
+        _invocation(
+            dispatcher,
+            tmp_path,
+            "filesystem.create",
+            {"path": "first.txt", "content": "first"},
+            invocation_id="inv-first",
+            budget=budget,
+        )
+    )
+    second = _invocation(
+        dispatcher,
+        tmp_path,
+        "filesystem.create",
+        {"path": "second.txt", "content": "x"},
+        invocation_id="inv-second",
+        budget=budget,
+    )
+
+    with pytest.raises(ToolBudgetExceeded, match="reservation exceeds"):
+        dispatcher.dispatch(second)
+
+    assert (tmp_path / "second.txt").exists() is False
+    assert len(store.list_tool_invocations("run-1")) == 1
+    rejected = [
+        event
+        for event in store.list_events("run-1")
+        if event["event_type"] == "tool_budget_rejected"
+    ]
+    assert rejected[0]["payload"]["limit_name"] == "total_written_bytes"
+
+
+def test_rejected_approval_denies_without_deleting_file(tmp_path: Path) -> None:
+    target = tmp_path / "keep.py"
+    target.write_text("keep\n", encoding="utf-8")
+    dispatcher, _ = _runtime(tmp_path)
+    invocation = _invocation(
+        dispatcher,
+        tmp_path,
+        "filesystem.delete",
+        {
+            "path": "keep.py",
+            "expected_sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
+        },
+    )
+    pending = dispatcher.dispatch(invocation)
+    grant = decide_tool_approval(
+        pending.approval_request,
+        invocation,
+        disposition=ToolApprovalDisposition.REJECTED,
+        reason="Keep this file",
+    )
+
+    denied = dispatcher.dispatch(invocation, approval=grant)
+
+    assert denied.result.status == ToolInvocationStatus.DENIED
+    assert denied.result.error.category == ToolErrorCategory.APPROVAL_INVALID
+    assert target.exists() is True
+
+
+def test_recover_run_terminalizes_and_audits_interrupted_invocation(
+    tmp_path: Path,
+) -> None:
+    dispatcher, store = _runtime(tmp_path)
+    invocation = _invocation(
+        dispatcher,
+        tmp_path,
+        "filesystem.read",
+        {"path": "module.py"},
+    )
+    descriptor = dispatcher.registry.descriptor(invocation.tool_name)
+    anticipated = anticipated_tool_usage(invocation)
+    store.record_tool_invocation(
+        invocation,
+        anticipated_usage=anticipated,
+        process_slot=requires_process_slot(invocation),
+    )
+    decision = dispatcher.policy_engine.evaluate(invocation, descriptor)
+    store.record_tool_policy_decision("run-1", decision)
+    store.mark_tool_invocation_started("run-1", invocation.invocation_id)
+
+    reconciled = dispatcher.recover_run("run-1")
+
+    assert reconciled[0].status == ToolInvocationStatus.FAILED
+    assert reconciled[0].safe_result.error.retryable is False
+    assert len(store.list_tool_audits("run-1")) == 1
+    assert dispatcher.budget_ledger.snapshot("run-1").active_invocations == ()
+    replay = dispatcher.dispatch(invocation)
+    assert replay.replayed is True
+    assert replay.record.status == ToolInvocationStatus.FAILED
+
+
+def test_recover_run_repairs_missing_restart_audit_without_rerun(
+    tmp_path: Path,
+) -> None:
+    dispatcher, store = _runtime(tmp_path)
+    invocation = _invocation(
+        dispatcher,
+        tmp_path,
+        "filesystem.read",
+        {"path": "module.py"},
+    )
+    descriptor = dispatcher.registry.descriptor(invocation.tool_name)
+    store.record_tool_invocation(invocation)
+    store.record_tool_policy_decision(
+        "run-1",
+        dispatcher.policy_engine.evaluate(invocation, descriptor),
+    )
+    store.mark_tool_invocation_started("run-1", invocation.invocation_id)
+    store.reconcile_running_tool_invocations("run-1")
+    assert store.list_tool_audits("run-1") == []
+
+    reconciled = dispatcher.recover_run("run-1")
+
+    assert reconciled == ()
+    assert len(store.list_tool_audits("run-1")) == 1
+
+
 def _runtime(
     root: Path,
     *,
@@ -317,12 +528,13 @@ def _invocation(
     tool_name: str,
     arguments: dict,
     *,
+    invocation_id: str = "inv-1",
     idempotency_key: str | None = None,
     budget: ToolResourceBudget | None = None,
 ) -> ToolInvocation:
     descriptor = dispatcher.registry.descriptor(tool_name)
     provisional = ToolInvocation(
-        invocation_id="inv-1",
+        invocation_id=invocation_id,
         run_id="run-1",
         task_id="task-1",
         tool_name=tool_name,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import threading
 import time
 from dataclasses import dataclass
@@ -34,6 +35,7 @@ from agentbus.tools.filesystem_security import FileSystemSecurityError
 from agentbus.tools.interfaces import ToolExecutionOutput
 from agentbus.tools.protocol import (
     ToolApprovalRequest,
+    ToolAuditRecord,
     ToolCancellationSnapshot,
     ToolError,
     ToolErrorCategory,
@@ -148,11 +150,25 @@ class ToolDispatcher:
                     stage="before-policy",
                 )
 
-            reservation = self.budget_ledger.begin(
-                normalized,
-                anticipated_usage=anticipated,
-                process_slot=process_slot,
-            )
+            try:
+                reservation = self.budget_ledger.begin(
+                    normalized,
+                    anticipated_usage=anticipated,
+                    process_slot=process_slot,
+                )
+            except ToolBudgetExceeded as exc:
+                self.state_store.record_event(
+                    normalized.run_id,
+                    "tool_budget_rejected",
+                    {
+                        "invocation_id": normalized.invocation_id,
+                        "invocation_revision": normalized.invocation_revision,
+                        "tool_name": normalized.tool_name,
+                        "limit_name": exc.limit_name,
+                    },
+                    task_id=normalized.task_id,
+                )
+                raise
             try:
                 record = existing or self.state_store.record_tool_invocation(
                     normalized,
@@ -219,6 +235,23 @@ class ToolDispatcher:
             reconciled = tuple(
                 self.state_store.reconcile_running_tool_invocations(run_id)
             )
+            after = 0
+            while True:
+                records = self.state_store.list_tool_invocations(
+                    run_id,
+                    after_sequence=after,
+                    limit=1000,
+                )
+                for record in records:
+                    error = record.safe_result.error if record.safe_result else None
+                    if error is not None and error.code in {
+                        "restart_cancelled",
+                        "restart_interrupted",
+                    }:
+                        self._audit_reconciled_record(record)
+                if len(records) < 1000:
+                    break
+                after = records[-1].invocation_sequence
             self._ensure_restored(run_id)
             return reconciled
 
@@ -391,16 +424,26 @@ class ToolDispatcher:
             try:
                 self.budget_ledger.complete(reservation, usage)
             except ToolBudgetExceeded as exc:
-                result = self._failed_result(
-                    invocation,
-                    record.policy_decision,
-                    record.approval_id,
-                    category=ToolErrorCategory.RESOURCE_EXHAUSTED,
-                    code=f"budget_{exc.limit_name}",
-                    message=str(exc),
-                    usage=usage,
-                    output=output,
-                )
+                if output.timed_out or output.cancelled:
+                    result = self._result_from_output(
+                        invocation,
+                        record.policy_decision,
+                        record.approval_id,
+                        output,
+                        usage,
+                        cancellation,
+                    )
+                else:
+                    result = self._failed_result(
+                        invocation,
+                        record.policy_decision,
+                        record.approval_id,
+                        category=ToolErrorCategory.RESOURCE_EXHAUSTED,
+                        code=f"budget_{exc.limit_name}",
+                        message=str(exc),
+                        usage=usage,
+                        output=output,
+                    )
             else:
                 result = self._result_from_output(
                     invocation,
@@ -809,6 +852,44 @@ class ToolDispatcher:
                     break
                 after = records[-1].invocation_sequence
             self._restored_runs.add(run_id)
+
+    def _audit_reconciled_record(self, record: ToolInvocationRecord) -> None:
+        result = record.safe_result
+        policy = record.policy_decision
+        if result is None or policy is None or record.completed_at is None:
+            raise RuntimeError(
+                "Reconciled tool invocation is missing terminal audit metadata."
+            )
+        digest = hashlib.sha256(
+            f"{record.invocation_id}:{record.invocation_revision}".encode("utf-8")
+        ).hexdigest()[:32]
+        self.state_store.record_tool_audit(
+            ToolAuditRecord(
+                audit_id=f"tool-audit-recovery-{digest}",
+                invocation_id=record.invocation_id,
+                invocation_revision=record.invocation_revision,
+                run_id=record.run_id,
+                task_id=record.task_id,
+                tool_name=record.tool_name,
+                tool_version=record.tool_version,
+                protocol_version=record.protocol_version,
+                caller_role=record.caller_role,
+                capabilities=record.capabilities,
+                policy_decision=policy,
+                approval_id=record.approval_id,
+                arguments_sha256=record.arguments_sha256,
+                affected_resource_hashes=_affected_resource_hashes(result),
+                started_at=record.started_at,
+                completed_at=record.completed_at,
+                cancellation=record.cancellation,
+                timed_out=result.timed_out,
+                resource_usage=record.resource_usage,
+                artifacts=result.artifacts,
+                outcome=record.status,
+                error_category=record.error_category,
+                created_at=record.completed_at,
+            )
+        )
 
     def _run_lock(self, run_id: str) -> threading.RLock:
         with self._guard:
