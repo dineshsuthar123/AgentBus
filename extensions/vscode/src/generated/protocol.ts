@@ -29,6 +29,18 @@ export interface ApprovalSummary {
   "created_at": string;
   "state": string;
   "revision"?: number;
+  "approval_kind"?: "task" | "tool";
+  "tool_name"?: string | null;
+  "tool_version"?: ToolVersion | null;
+  "capabilities"?: Array<ToolCapability>;
+  "arguments_summary"?: Array<string>;
+  "executable"?: string | null;
+  "working_directory"?: string | null;
+  "network_destination"?: string | null;
+  "policy_rule"?: string | null;
+  "proposed_constraints"?: Array<ToolCapability>;
+  "resource_budget"?: ToolResourceBudget | null;
+  "expires_at"?: string | null;
 }
 
 export interface CancelResponse {
@@ -67,6 +79,19 @@ export interface CancellationLifecycle {
   "resume_eligible"?: boolean;
   "terminal_reason"?: string | null;
   "revision"?: number;
+}
+
+export interface CapabilityScope {
+  "roots"?: Array<string>;
+  "patterns"?: Array<string>;
+  "affected_paths"?: Array<string>;
+  "executables"?: Array<string>;
+  "working_directories"?: Array<string>;
+  "network_allowed"?: boolean;
+  "network_destinations"?: Array<string>;
+  "environment_keys"?: Array<string>;
+  "git_operations"?: Array<string>;
+  "mcp_servers"?: Array<string>;
 }
 
 export interface ChangeListResponse {
@@ -322,6 +347,248 @@ export interface TaskSummary {
   "updated_at": string;
 }
 
+export interface ToolArtifact {
+  "artifact_id": string;
+  "kind": ToolArtifactKind;
+  "relative_path"?: string | null;
+  "media_type"?: string;
+  "size_bytes": number;
+  "sha256": string;
+  "truncated"?: boolean;
+  "safe_metadata"?: Record<string, unknown>;
+}
+
+export type ToolArtifactKind = "file" | "diff" | "report" | "test_result" | "process_output" | "metadata";
+
+export interface ToolAuditEntryResponse {
+  "audit_sequence": number;
+  "record": ToolAuditRecord;
+}
+
+export interface ToolAuditListResponse {
+  "run_id": string;
+  "records": Array<ToolAuditEntryResponse>;
+  "after_sequence"?: number;
+  "next_sequence"?: number;
+  "truncated"?: boolean;
+}
+
+export interface ToolAuditRecord {
+  "audit_id": string;
+  "invocation_id": string;
+  "invocation_revision": number;
+  "run_id": string;
+  "task_id": string;
+  "tool_name": string;
+  "tool_version": ToolVersion;
+  "protocol_version"?: string;
+  "caller_role": string;
+  "capabilities": Array<ToolCapability>;
+  "policy_decision": ToolPolicyDecision;
+  "approval_id"?: string | null;
+  "arguments_sha256": string;
+  "affected_resource_hashes"?: Record<string, string>;
+  "started_at"?: string | null;
+  "completed_at"?: string | null;
+  "cancellation"?: ToolCancellationSnapshot;
+  "timed_out"?: boolean;
+  "resource_usage"?: ToolResourceUsage;
+  "artifacts"?: Array<ToolArtifact>;
+  "outcome": ToolInvocationStatus;
+  "error_category"?: ToolErrorCategory | null;
+  "created_at"?: string;
+}
+
+export interface ToolCancellationSnapshot {
+  "requested"?: boolean;
+  "revision"?: number;
+  "requested_at"?: string | null;
+  "signal_sent"?: boolean;
+  "acknowledged"?: boolean;
+  "process_terminated"?: boolean;
+  "operation_completed_after_request"?: boolean;
+  "cleanup_completed"?: boolean;
+  "reason"?: string | null;
+}
+
+export interface ToolCapability {
+  "name": ToolCapabilityName;
+  "scope"?: CapabilityScope;
+}
+
+export type ToolCapabilityName = "filesystem.read" | "filesystem.write" | "filesystem.create" | "filesystem.delete" | "filesystem.rename" | "process.execute" | "process.network" | "git.read" | "git.write" | "git.commit" | "git.branch" | "git.worktree" | "test.execute" | "package.install" | "environment.read_safe" | "mcp.connect" | "mcp.invoke";
+
+export interface ToolDescriptorDetail {
+  "name": string;
+  "version": ToolVersion;
+  "protocol_version": string;
+  "description": string;
+  "capabilities": Array<ToolCapability>;
+  "safety": string;
+  "idempotent": boolean;
+  "supports_cancellation": boolean;
+  "maximum_timeout_seconds": number;
+  "argument_schema": Record<string, unknown>;
+  "output_schema": Record<string, unknown>;
+}
+
+export interface ToolDescriptorSummary {
+  "name": string;
+  "version": ToolVersion;
+  "protocol_version": string;
+  "description": string;
+  "capabilities": Array<ToolCapability>;
+  "safety": string;
+  "idempotent": boolean;
+  "supports_cancellation": boolean;
+  "maximum_timeout_seconds": number;
+}
+
+export interface ToolError {
+  "category": ToolErrorCategory;
+  "code": string;
+  "message": string;
+  "retryable"?: boolean;
+  "safe_metadata"?: Record<string, unknown>;
+}
+
+export type ToolErrorCategory = "validation" | "policy_denied" | "approval_required" | "approval_invalid" | "cancelled" | "timed_out" | "resource_exhausted" | "filesystem" | "process" | "git" | "mcp" | "protocol" | "internal";
+
+export interface ToolInvocationCancelRequest {
+  "reason"?: string | null;
+}
+
+export interface ToolInvocationCancelResponse {
+  "run_id": string;
+  "invocation_id": string;
+  "invocation_status": string;
+  "run_cancellation_requested": boolean;
+  "cancellation"?: CancellationLifecycle;
+}
+
+export interface ToolInvocationDetail {
+  "invocation_sequence": number;
+  "invocation_id": string;
+  "invocation_revision": number;
+  "run_id": string;
+  "task_id": string;
+  "tool_name": string;
+  "tool_version": ToolVersion;
+  "protocol_version": string;
+  "caller_role": string;
+  "status": string;
+  "capabilities": Array<ToolCapability>;
+  "policy_decision"?: ToolPolicyDecision | null;
+  "approval_id"?: string | null;
+  "resource_budget": ToolResourceBudget;
+  "resource_usage": ToolResourceUsage;
+  "cancellation": ToolCancellationSnapshot;
+  "error_category"?: string | null;
+  "error_message"?: string | null;
+  "requested_at": string;
+  "started_at"?: string | null;
+  "completed_at"?: string | null;
+  "updated_at": string;
+  "workspace": string;
+  "worktree": string;
+  "arguments_sha256": string;
+  "capability_fingerprint": string;
+  "idempotency_key_sha256"?: string | null;
+  "process_slot"?: boolean;
+  "result"?: ToolResult | null;
+}
+
+export interface ToolInvocationListResponse {
+  "run_id": string;
+  "invocations": Array<ToolInvocationSummary>;
+  "after_sequence"?: number;
+  "next_sequence"?: number;
+  "truncated"?: boolean;
+}
+
+export type ToolInvocationStatus = "requested" | "awaiting_approval" | "running" | "succeeded" | "failed" | "denied" | "cancelled" | "timed_out";
+
+export interface ToolInvocationSummary {
+  "invocation_sequence": number;
+  "invocation_id": string;
+  "invocation_revision": number;
+  "run_id": string;
+  "task_id": string;
+  "tool_name": string;
+  "tool_version": ToolVersion;
+  "protocol_version": string;
+  "caller_role": string;
+  "status": string;
+  "capabilities": Array<ToolCapability>;
+  "policy_decision"?: ToolPolicyDecision | null;
+  "approval_id"?: string | null;
+  "resource_budget": ToolResourceBudget;
+  "resource_usage": ToolResourceUsage;
+  "cancellation": ToolCancellationSnapshot;
+  "error_category"?: string | null;
+  "error_message"?: string | null;
+  "requested_at": string;
+  "started_at"?: string | null;
+  "completed_at"?: string | null;
+  "updated_at": string;
+}
+
+export interface ToolLimitUsage {
+  "requested"?: number | number | null;
+  "supported": boolean;
+  "enforced": boolean;
+  "observed"?: number | number | null;
+  "diagnostic"?: string | null;
+}
+
+export interface ToolListResponse {
+  "tools": Array<ToolDescriptorSummary>;
+  "total": number;
+}
+
+export interface ToolPolicyDecision {
+  "outcome": ToolPolicyOutcome;
+  "rule_id": string;
+  "reason": string;
+  "invocation_id": string;
+  "invocation_revision": number;
+  "capability_fingerprint": string;
+  "arguments_sha256": string;
+  "constraints"?: Array<ToolCapability>;
+  "evaluated_at"?: string;
+  "safe_metadata"?: Record<string, unknown>;
+}
+
+export interface ToolPolicyEvaluationRequest {
+  "run_id": string;
+  "task_id": string;
+  "tool_name": string;
+  "arguments"?: Record<string, unknown>;
+  "expected_capabilities"?: Array<ToolCapabilityName>;
+  "caller_role"?: "planner" | "coder" | "verifier" | "reviewer";
+  "workspace_trusted"?: boolean;
+  "provider_consented"?: boolean;
+  "timeout_seconds"?: number | null;
+  "resource_budget"?: ToolResourceBudget;
+  "invocation_revision"?: number;
+}
+
+export interface ToolPolicyEvaluationResponse {
+  "diagnostic_only"?: true;
+  "persisted"?: false;
+  "decision": ToolPolicyDecision;
+  "required_capabilities": Array<ToolCapability>;
+}
+
+export type ToolPolicyOutcome = "allow" | "deny" | "require_approval" | "allow_with_constraints";
+
+export interface ToolPolicyResponse {
+  "policy_id"?: "agentbus-default-v1";
+  "outcomes": Array<string>;
+  "configuration": Record<string, unknown>;
+  "rules": Array<Record<string, string>>;
+}
+
 export interface ToolResourceBudget {
   "wall_clock_seconds"?: number;
   "stdout_bytes"?: number;
@@ -337,6 +604,46 @@ export interface ToolResourceBudget {
   "maximum_file_bytes"?: number;
   "memory_bytes"?: number | null;
   "cpu_seconds"?: number | null;
+}
+
+export interface ToolResourceUsage {
+  "wall_clock_seconds"?: number;
+  "stdout_bytes"?: number;
+  "stderr_bytes"?: number;
+  "artifact_bytes"?: number;
+  "child_processes"?: number;
+  "file_mutations"?: number;
+  "written_bytes"?: number;
+  "memory_bytes"?: number | null;
+  "cpu_seconds"?: number | null;
+  "limits"?: Record<string, ToolLimitUsage>;
+}
+
+export interface ToolResult {
+  "invocation_id": string;
+  "invocation_revision": number;
+  "status": ToolInvocationStatus;
+  "structured_output"?: Record<string, unknown>;
+  "stdout"?: string;
+  "stderr"?: string;
+  "stdout_truncated"?: boolean;
+  "stderr_truncated"?: boolean;
+  "artifacts"?: Array<ToolArtifact>;
+  "error"?: ToolError | null;
+  "exit_code"?: number | null;
+  "duration_seconds"?: number;
+  "timed_out"?: boolean;
+  "cancellation"?: ToolCancellationSnapshot;
+  "resource_usage"?: ToolResourceUsage;
+  "policy_decision": ToolPolicyDecision;
+  "approval_id"?: string | null;
+  "safe_diagnostic_metadata"?: Record<string, unknown>;
+}
+
+export interface ToolVersion {
+  "major": number;
+  "minor"?: number;
+  "patch"?: number;
 }
 
 export interface UsageResponse {

@@ -82,6 +82,29 @@
           "title": "Approval Id",
           "type": "string"
         },
+        "approval_kind": {
+          "default": "task",
+          "enum": [
+            "task",
+            "tool"
+          ],
+          "title": "Approval Kind",
+          "type": "string"
+        },
+        "arguments_summary": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Arguments Summary",
+          "type": "array"
+        },
+        "capabilities": {
+          "items": {
+            "$ref": "#/$defs/ToolCapability"
+          },
+          "title": "Capabilities",
+          "type": "array"
+        },
         "command": {
           "anyOf": [
             {
@@ -102,6 +125,62 @@
           "title": "Created At",
           "type": "string"
         },
+        "executable": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Executable"
+        },
+        "expires_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expires At"
+        },
+        "network_destination": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Network Destination"
+        },
+        "policy_rule": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Policy Rule"
+        },
+        "proposed_constraints": {
+          "items": {
+            "$ref": "#/$defs/ToolCapability"
+          },
+          "title": "Proposed Constraints",
+          "type": "array"
+        },
         "reason": {
           "anyOf": [
             {
@@ -117,6 +196,17 @@
         "requested_action": {
           "title": "Requested Action",
           "type": "string"
+        },
+        "resource_budget": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolResourceBudget"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "revision": {
           "default": 1,
@@ -139,6 +229,41 @@
         "task_id": {
           "title": "Task Id",
           "type": "string"
+        },
+        "tool_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tool Name"
+        },
+        "tool_version": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolVersion"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "working_directory": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Working Directory"
         }
       },
       "required": [
@@ -436,6 +561,90 @@
         }
       },
       "title": "CancellationLifecycle",
+      "type": "object"
+    },
+    "CapabilityScope": {
+      "additionalProperties": false,
+      "properties": {
+        "affected_paths": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Affected Paths",
+          "type": "array"
+        },
+        "environment_keys": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Environment Keys",
+          "type": "array"
+        },
+        "executables": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Executables",
+          "type": "array"
+        },
+        "git_operations": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Git Operations",
+          "type": "array"
+        },
+        "mcp_servers": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Mcp Servers",
+          "type": "array"
+        },
+        "network_allowed": {
+          "default": false,
+          "title": "Network Allowed",
+          "type": "boolean"
+        },
+        "network_destinations": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Network Destinations",
+          "type": "array"
+        },
+        "patterns": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Patterns",
+          "type": "array"
+        },
+        "roots": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Roots",
+          "type": "array"
+        },
+        "working_directories": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Working Directories",
+          "type": "array"
+        }
+      },
+      "title": "CapabilityScope",
       "type": "object"
     },
     "ChangeListResponse": {
@@ -1866,6 +2075,1405 @@
       "title": "TaskSummary",
       "type": "object"
     },
+    "ToolArtifact": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Artifact Id",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ToolArtifactKind"
+        },
+        "media_type": {
+          "default": "application/octet-stream",
+          "maxLength": 255,
+          "title": "Media Type",
+          "type": "string"
+        },
+        "relative_path": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relative Path"
+        },
+        "safe_metadata": {
+          "additionalProperties": true,
+          "title": "Safe Metadata",
+          "type": "object"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size_bytes": {
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        },
+        "truncated": {
+          "default": false,
+          "title": "Truncated",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "kind",
+        "size_bytes",
+        "sha256"
+      ],
+      "title": "ToolArtifact",
+      "type": "object"
+    },
+    "ToolArtifactKind": {
+      "enum": [
+        "file",
+        "diff",
+        "report",
+        "test_result",
+        "process_output",
+        "metadata"
+      ],
+      "title": "ToolArtifactKind",
+      "type": "string"
+    },
+    "ToolAuditEntryResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "audit_sequence": {
+          "minimum": 1,
+          "title": "Audit Sequence",
+          "type": "integer"
+        },
+        "record": {
+          "$ref": "#/$defs/ToolAuditRecord"
+        }
+      },
+      "required": [
+        "audit_sequence",
+        "record"
+      ],
+      "title": "ToolAuditEntryResponse",
+      "type": "object"
+    },
+    "ToolAuditListResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "after_sequence": {
+          "default": 0,
+          "minimum": 0,
+          "title": "After Sequence",
+          "type": "integer"
+        },
+        "next_sequence": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Next Sequence",
+          "type": "integer"
+        },
+        "records": {
+          "items": {
+            "$ref": "#/$defs/ToolAuditEntryResponse"
+          },
+          "title": "Records",
+          "type": "array"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "truncated": {
+          "default": false,
+          "title": "Truncated",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "run_id",
+        "records"
+      ],
+      "title": "ToolAuditListResponse",
+      "type": "object"
+    },
+    "ToolAuditRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "affected_resource_hashes": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Affected Resource Hashes",
+          "type": "object"
+        },
+        "approval_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Approval Id"
+        },
+        "arguments_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Arguments Sha256",
+          "type": "string"
+        },
+        "artifacts": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ToolArtifact"
+          },
+          "title": "Artifacts",
+          "type": "array"
+        },
+        "audit_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Audit Id",
+          "type": "string"
+        },
+        "caller_role": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Caller Role",
+          "type": "string"
+        },
+        "cancellation": {
+          "$ref": "#/$defs/ToolCancellationSnapshot"
+        },
+        "capabilities": {
+          "items": {
+            "$ref": "#/$defs/ToolCapability"
+          },
+          "title": "Capabilities",
+          "type": "array"
+        },
+        "completed_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Completed At"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "error_category": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolErrorCategory"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "invocation_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Invocation Id",
+          "type": "string"
+        },
+        "invocation_revision": {
+          "minimum": 1,
+          "title": "Invocation Revision",
+          "type": "integer"
+        },
+        "outcome": {
+          "$ref": "#/$defs/ToolInvocationStatus"
+        },
+        "policy_decision": {
+          "$ref": "#/$defs/ToolPolicyDecision"
+        },
+        "protocol_version": {
+          "default": "1.0",
+          "title": "Protocol Version",
+          "type": "string"
+        },
+        "resource_usage": {
+          "$ref": "#/$defs/ToolResourceUsage"
+        },
+        "run_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
+        },
+        "started_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Started At"
+        },
+        "task_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Task Id",
+          "type": "string"
+        },
+        "timed_out": {
+          "default": false,
+          "title": "Timed Out",
+          "type": "boolean"
+        },
+        "tool_name": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Tool Name",
+          "type": "string"
+        },
+        "tool_version": {
+          "$ref": "#/$defs/ToolVersion"
+        }
+      },
+      "required": [
+        "audit_id",
+        "invocation_id",
+        "invocation_revision",
+        "run_id",
+        "task_id",
+        "tool_name",
+        "tool_version",
+        "caller_role",
+        "capabilities",
+        "policy_decision",
+        "arguments_sha256",
+        "outcome"
+      ],
+      "title": "ToolAuditRecord",
+      "type": "object"
+    },
+    "ToolCancellationSnapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "acknowledged": {
+          "default": false,
+          "title": "Acknowledged",
+          "type": "boolean"
+        },
+        "cleanup_completed": {
+          "default": false,
+          "title": "Cleanup Completed",
+          "type": "boolean"
+        },
+        "operation_completed_after_request": {
+          "default": false,
+          "title": "Operation Completed After Request",
+          "type": "boolean"
+        },
+        "process_terminated": {
+          "default": false,
+          "title": "Process Terminated",
+          "type": "boolean"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "maxLength": 1024,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        },
+        "requested": {
+          "default": false,
+          "title": "Requested",
+          "type": "boolean"
+        },
+        "requested_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Requested At"
+        },
+        "revision": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "signal_sent": {
+          "default": false,
+          "title": "Signal Sent",
+          "type": "boolean"
+        }
+      },
+      "title": "ToolCancellationSnapshot",
+      "type": "object"
+    },
+    "ToolCapability": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/ToolCapabilityName"
+        },
+        "scope": {
+          "$ref": "#/$defs/CapabilityScope"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "ToolCapability",
+      "type": "object"
+    },
+    "ToolCapabilityName": {
+      "enum": [
+        "filesystem.read",
+        "filesystem.write",
+        "filesystem.create",
+        "filesystem.delete",
+        "filesystem.rename",
+        "process.execute",
+        "process.network",
+        "git.read",
+        "git.write",
+        "git.commit",
+        "git.branch",
+        "git.worktree",
+        "test.execute",
+        "package.install",
+        "environment.read_safe",
+        "mcp.connect",
+        "mcp.invoke"
+      ],
+      "title": "ToolCapabilityName",
+      "type": "string"
+    },
+    "ToolDescriptorDetail": {
+      "additionalProperties": false,
+      "properties": {
+        "argument_schema": {
+          "additionalProperties": true,
+          "title": "Argument Schema",
+          "type": "object"
+        },
+        "capabilities": {
+          "items": {
+            "$ref": "#/$defs/ToolCapability"
+          },
+          "title": "Capabilities",
+          "type": "array"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "idempotent": {
+          "title": "Idempotent",
+          "type": "boolean"
+        },
+        "maximum_timeout_seconds": {
+          "exclusiveMinimum": 0,
+          "title": "Maximum Timeout Seconds",
+          "type": "number"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "output_schema": {
+          "additionalProperties": true,
+          "title": "Output Schema",
+          "type": "object"
+        },
+        "protocol_version": {
+          "title": "Protocol Version",
+          "type": "string"
+        },
+        "safety": {
+          "title": "Safety",
+          "type": "string"
+        },
+        "supports_cancellation": {
+          "title": "Supports Cancellation",
+          "type": "boolean"
+        },
+        "version": {
+          "$ref": "#/$defs/ToolVersion"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "protocol_version",
+        "description",
+        "capabilities",
+        "safety",
+        "idempotent",
+        "supports_cancellation",
+        "maximum_timeout_seconds",
+        "argument_schema",
+        "output_schema"
+      ],
+      "title": "ToolDescriptorDetail",
+      "type": "object"
+    },
+    "ToolDescriptorSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "capabilities": {
+          "items": {
+            "$ref": "#/$defs/ToolCapability"
+          },
+          "title": "Capabilities",
+          "type": "array"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "idempotent": {
+          "title": "Idempotent",
+          "type": "boolean"
+        },
+        "maximum_timeout_seconds": {
+          "exclusiveMinimum": 0,
+          "title": "Maximum Timeout Seconds",
+          "type": "number"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "protocol_version": {
+          "title": "Protocol Version",
+          "type": "string"
+        },
+        "safety": {
+          "title": "Safety",
+          "type": "string"
+        },
+        "supports_cancellation": {
+          "title": "Supports Cancellation",
+          "type": "boolean"
+        },
+        "version": {
+          "$ref": "#/$defs/ToolVersion"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "protocol_version",
+        "description",
+        "capabilities",
+        "safety",
+        "idempotent",
+        "supports_cancellation",
+        "maximum_timeout_seconds"
+      ],
+      "title": "ToolDescriptorSummary",
+      "type": "object"
+    },
+    "ToolError": {
+      "additionalProperties": false,
+      "properties": {
+        "category": {
+          "$ref": "#/$defs/ToolErrorCategory"
+        },
+        "code": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Code",
+          "type": "string"
+        },
+        "message": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Message",
+          "type": "string"
+        },
+        "retryable": {
+          "default": false,
+          "title": "Retryable",
+          "type": "boolean"
+        },
+        "safe_metadata": {
+          "additionalProperties": true,
+          "title": "Safe Metadata",
+          "type": "object"
+        }
+      },
+      "required": [
+        "category",
+        "code",
+        "message"
+      ],
+      "title": "ToolError",
+      "type": "object"
+    },
+    "ToolErrorCategory": {
+      "enum": [
+        "validation",
+        "policy_denied",
+        "approval_required",
+        "approval_invalid",
+        "cancelled",
+        "timed_out",
+        "resource_exhausted",
+        "filesystem",
+        "process",
+        "git",
+        "mcp",
+        "protocol",
+        "internal"
+      ],
+      "title": "ToolErrorCategory",
+      "type": "string"
+    },
+    "ToolInvocationCancelRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "anyOf": [
+            {
+              "maxLength": 2000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        }
+      },
+      "title": "ToolInvocationCancelRequest",
+      "type": "object"
+    },
+    "ToolInvocationCancelResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "cancellation": {
+          "$ref": "#/$defs/CancellationLifecycle"
+        },
+        "invocation_id": {
+          "title": "Invocation Id",
+          "type": "string"
+        },
+        "invocation_status": {
+          "title": "Invocation Status",
+          "type": "string"
+        },
+        "run_cancellation_requested": {
+          "title": "Run Cancellation Requested",
+          "type": "boolean"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "invocation_id",
+        "invocation_status",
+        "run_cancellation_requested"
+      ],
+      "title": "ToolInvocationCancelResponse",
+      "type": "object"
+    },
+    "ToolInvocationDetail": {
+      "additionalProperties": false,
+      "properties": {
+        "approval_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Approval Id"
+        },
+        "arguments_sha256": {
+          "title": "Arguments Sha256",
+          "type": "string"
+        },
+        "caller_role": {
+          "title": "Caller Role",
+          "type": "string"
+        },
+        "cancellation": {
+          "$ref": "#/$defs/ToolCancellationSnapshot"
+        },
+        "capabilities": {
+          "items": {
+            "$ref": "#/$defs/ToolCapability"
+          },
+          "title": "Capabilities",
+          "type": "array"
+        },
+        "capability_fingerprint": {
+          "title": "Capability Fingerprint",
+          "type": "string"
+        },
+        "completed_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Completed At"
+        },
+        "error_category": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error Category"
+        },
+        "error_message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error Message"
+        },
+        "idempotency_key_sha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Idempotency Key Sha256"
+        },
+        "invocation_id": {
+          "title": "Invocation Id",
+          "type": "string"
+        },
+        "invocation_revision": {
+          "minimum": 1,
+          "title": "Invocation Revision",
+          "type": "integer"
+        },
+        "invocation_sequence": {
+          "minimum": 1,
+          "title": "Invocation Sequence",
+          "type": "integer"
+        },
+        "policy_decision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolPolicyDecision"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "process_slot": {
+          "default": false,
+          "title": "Process Slot",
+          "type": "boolean"
+        },
+        "protocol_version": {
+          "title": "Protocol Version",
+          "type": "string"
+        },
+        "requested_at": {
+          "format": "date-time",
+          "title": "Requested At",
+          "type": "string"
+        },
+        "resource_budget": {
+          "$ref": "#/$defs/ToolResourceBudget"
+        },
+        "resource_usage": {
+          "$ref": "#/$defs/ToolResourceUsage"
+        },
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolResult"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "started_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Started At"
+        },
+        "status": {
+          "title": "Status",
+          "type": "string"
+        },
+        "task_id": {
+          "title": "Task Id",
+          "type": "string"
+        },
+        "tool_name": {
+          "title": "Tool Name",
+          "type": "string"
+        },
+        "tool_version": {
+          "$ref": "#/$defs/ToolVersion"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        },
+        "workspace": {
+          "title": "Workspace",
+          "type": "string"
+        },
+        "worktree": {
+          "title": "Worktree",
+          "type": "string"
+        }
+      },
+      "required": [
+        "invocation_sequence",
+        "invocation_id",
+        "invocation_revision",
+        "run_id",
+        "task_id",
+        "tool_name",
+        "tool_version",
+        "protocol_version",
+        "caller_role",
+        "status",
+        "capabilities",
+        "resource_budget",
+        "resource_usage",
+        "cancellation",
+        "requested_at",
+        "updated_at",
+        "workspace",
+        "worktree",
+        "arguments_sha256",
+        "capability_fingerprint"
+      ],
+      "title": "ToolInvocationDetail",
+      "type": "object"
+    },
+    "ToolInvocationListResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "after_sequence": {
+          "default": 0,
+          "minimum": 0,
+          "title": "After Sequence",
+          "type": "integer"
+        },
+        "invocations": {
+          "items": {
+            "$ref": "#/$defs/ToolInvocationSummary"
+          },
+          "title": "Invocations",
+          "type": "array"
+        },
+        "next_sequence": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Next Sequence",
+          "type": "integer"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "truncated": {
+          "default": false,
+          "title": "Truncated",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "run_id",
+        "invocations"
+      ],
+      "title": "ToolInvocationListResponse",
+      "type": "object"
+    },
+    "ToolInvocationStatus": {
+      "enum": [
+        "requested",
+        "awaiting_approval",
+        "running",
+        "succeeded",
+        "failed",
+        "denied",
+        "cancelled",
+        "timed_out"
+      ],
+      "title": "ToolInvocationStatus",
+      "type": "string"
+    },
+    "ToolInvocationSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "approval_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Approval Id"
+        },
+        "caller_role": {
+          "title": "Caller Role",
+          "type": "string"
+        },
+        "cancellation": {
+          "$ref": "#/$defs/ToolCancellationSnapshot"
+        },
+        "capabilities": {
+          "items": {
+            "$ref": "#/$defs/ToolCapability"
+          },
+          "title": "Capabilities",
+          "type": "array"
+        },
+        "completed_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Completed At"
+        },
+        "error_category": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error Category"
+        },
+        "error_message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error Message"
+        },
+        "invocation_id": {
+          "title": "Invocation Id",
+          "type": "string"
+        },
+        "invocation_revision": {
+          "minimum": 1,
+          "title": "Invocation Revision",
+          "type": "integer"
+        },
+        "invocation_sequence": {
+          "minimum": 1,
+          "title": "Invocation Sequence",
+          "type": "integer"
+        },
+        "policy_decision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolPolicyDecision"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "protocol_version": {
+          "title": "Protocol Version",
+          "type": "string"
+        },
+        "requested_at": {
+          "format": "date-time",
+          "title": "Requested At",
+          "type": "string"
+        },
+        "resource_budget": {
+          "$ref": "#/$defs/ToolResourceBudget"
+        },
+        "resource_usage": {
+          "$ref": "#/$defs/ToolResourceUsage"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "started_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Started At"
+        },
+        "status": {
+          "title": "Status",
+          "type": "string"
+        },
+        "task_id": {
+          "title": "Task Id",
+          "type": "string"
+        },
+        "tool_name": {
+          "title": "Tool Name",
+          "type": "string"
+        },
+        "tool_version": {
+          "$ref": "#/$defs/ToolVersion"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "invocation_sequence",
+        "invocation_id",
+        "invocation_revision",
+        "run_id",
+        "task_id",
+        "tool_name",
+        "tool_version",
+        "protocol_version",
+        "caller_role",
+        "status",
+        "capabilities",
+        "resource_budget",
+        "resource_usage",
+        "cancellation",
+        "requested_at",
+        "updated_at"
+      ],
+      "title": "ToolInvocationSummary",
+      "type": "object"
+    },
+    "ToolLimitUsage": {
+      "additionalProperties": false,
+      "properties": {
+        "diagnostic": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Diagnostic"
+        },
+        "enforced": {
+          "title": "Enforced",
+          "type": "boolean"
+        },
+        "observed": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Observed"
+        },
+        "requested": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Requested"
+        },
+        "supported": {
+          "title": "Supported",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "supported",
+        "enforced"
+      ],
+      "title": "ToolLimitUsage",
+      "type": "object"
+    },
+    "ToolListResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "tools": {
+          "items": {
+            "$ref": "#/$defs/ToolDescriptorSummary"
+          },
+          "title": "Tools",
+          "type": "array"
+        },
+        "total": {
+          "minimum": 0,
+          "title": "Total",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "tools",
+        "total"
+      ],
+      "title": "ToolListResponse",
+      "type": "object"
+    },
+    "ToolPolicyDecision": {
+      "additionalProperties": false,
+      "properties": {
+        "arguments_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Arguments Sha256",
+          "type": "string"
+        },
+        "capability_fingerprint": {
+          "maxLength": 64,
+          "minLength": 64,
+          "title": "Capability Fingerprint",
+          "type": "string"
+        },
+        "constraints": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ToolCapability"
+          },
+          "title": "Constraints",
+          "type": "array"
+        },
+        "evaluated_at": {
+          "format": "date-time",
+          "title": "Evaluated At",
+          "type": "string"
+        },
+        "invocation_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Invocation Id",
+          "type": "string"
+        },
+        "invocation_revision": {
+          "minimum": 1,
+          "title": "Invocation Revision",
+          "type": "integer"
+        },
+        "outcome": {
+          "$ref": "#/$defs/ToolPolicyOutcome"
+        },
+        "reason": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "rule_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Rule Id",
+          "type": "string"
+        },
+        "safe_metadata": {
+          "additionalProperties": true,
+          "title": "Safe Metadata",
+          "type": "object"
+        }
+      },
+      "required": [
+        "outcome",
+        "rule_id",
+        "reason",
+        "invocation_id",
+        "invocation_revision",
+        "capability_fingerprint",
+        "arguments_sha256"
+      ],
+      "title": "ToolPolicyDecision",
+      "type": "object"
+    },
+    "ToolPolicyEvaluationRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "arguments": {
+          "additionalProperties": true,
+          "title": "Arguments",
+          "type": "object"
+        },
+        "caller_role": {
+          "default": "coder",
+          "enum": [
+            "planner",
+            "coder",
+            "verifier",
+            "reviewer"
+          ],
+          "title": "Caller Role",
+          "type": "string"
+        },
+        "expected_capabilities": {
+          "items": {
+            "$ref": "#/$defs/ToolCapabilityName"
+          },
+          "maxItems": 64,
+          "title": "Expected Capabilities",
+          "type": "array"
+        },
+        "invocation_revision": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Invocation Revision",
+          "type": "integer"
+        },
+        "provider_consented": {
+          "default": false,
+          "title": "Provider Consented",
+          "type": "boolean"
+        },
+        "resource_budget": {
+          "$ref": "#/$defs/ToolResourceBudget"
+        },
+        "run_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
+        },
+        "task_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Task Id",
+          "type": "string"
+        },
+        "timeout_seconds": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 86400,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Timeout Seconds"
+        },
+        "tool_name": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Tool Name",
+          "type": "string"
+        },
+        "workspace_trusted": {
+          "default": false,
+          "title": "Workspace Trusted",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "run_id",
+        "task_id",
+        "tool_name"
+      ],
+      "title": "ToolPolicyEvaluationRequest",
+      "type": "object"
+    },
+    "ToolPolicyEvaluationResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "decision": {
+          "$ref": "#/$defs/ToolPolicyDecision"
+        },
+        "diagnostic_only": {
+          "const": true,
+          "default": true,
+          "title": "Diagnostic Only",
+          "type": "boolean"
+        },
+        "persisted": {
+          "const": false,
+          "default": false,
+          "title": "Persisted",
+          "type": "boolean"
+        },
+        "required_capabilities": {
+          "items": {
+            "$ref": "#/$defs/ToolCapability"
+          },
+          "title": "Required Capabilities",
+          "type": "array"
+        }
+      },
+      "required": [
+        "decision",
+        "required_capabilities"
+      ],
+      "title": "ToolPolicyEvaluationResponse",
+      "type": "object"
+    },
+    "ToolPolicyOutcome": {
+      "enum": [
+        "allow",
+        "deny",
+        "require_approval",
+        "allow_with_constraints"
+      ],
+      "title": "ToolPolicyOutcome",
+      "type": "string"
+    },
+    "ToolPolicyResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "configuration": {
+          "additionalProperties": true,
+          "title": "Configuration",
+          "type": "object"
+        },
+        "outcomes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Outcomes",
+          "type": "array"
+        },
+        "policy_id": {
+          "const": "agentbus-default-v1",
+          "default": "agentbus-default-v1",
+          "title": "Policy Id",
+          "type": "string"
+        },
+        "rules": {
+          "items": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "title": "Rules",
+          "type": "array"
+        }
+      },
+      "required": [
+        "outcomes",
+        "configuration",
+        "rules"
+      ],
+      "title": "ToolPolicyResponse",
+      "type": "object"
+    },
     "ToolResourceBudget": {
       "additionalProperties": false,
       "properties": {
@@ -1982,6 +3590,241 @@
         }
       },
       "title": "ToolResourceBudget",
+      "type": "object"
+    },
+    "ToolResourceUsage": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_bytes": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Artifact Bytes",
+          "type": "integer"
+        },
+        "child_processes": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Child Processes",
+          "type": "integer"
+        },
+        "cpu_seconds": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cpu Seconds"
+        },
+        "file_mutations": {
+          "default": 0,
+          "minimum": 0,
+          "title": "File Mutations",
+          "type": "integer"
+        },
+        "limits": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ToolLimitUsage"
+          },
+          "title": "Limits",
+          "type": "object"
+        },
+        "memory_bytes": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Memory Bytes"
+        },
+        "stderr_bytes": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Stderr Bytes",
+          "type": "integer"
+        },
+        "stdout_bytes": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Stdout Bytes",
+          "type": "integer"
+        },
+        "wall_clock_seconds": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Wall Clock Seconds",
+          "type": "number"
+        },
+        "written_bytes": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Written Bytes",
+          "type": "integer"
+        }
+      },
+      "title": "ToolResourceUsage",
+      "type": "object"
+    },
+    "ToolResult": {
+      "additionalProperties": false,
+      "properties": {
+        "approval_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Approval Id"
+        },
+        "artifacts": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ToolArtifact"
+          },
+          "title": "Artifacts",
+          "type": "array"
+        },
+        "cancellation": {
+          "$ref": "#/$defs/ToolCancellationSnapshot"
+        },
+        "duration_seconds": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Duration Seconds",
+          "type": "number"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolError"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "exit_code": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exit Code"
+        },
+        "invocation_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Invocation Id",
+          "type": "string"
+        },
+        "invocation_revision": {
+          "minimum": 1,
+          "title": "Invocation Revision",
+          "type": "integer"
+        },
+        "policy_decision": {
+          "$ref": "#/$defs/ToolPolicyDecision"
+        },
+        "resource_usage": {
+          "$ref": "#/$defs/ToolResourceUsage"
+        },
+        "safe_diagnostic_metadata": {
+          "additionalProperties": true,
+          "title": "Safe Diagnostic Metadata",
+          "type": "object"
+        },
+        "status": {
+          "$ref": "#/$defs/ToolInvocationStatus"
+        },
+        "stderr": {
+          "default": "",
+          "maxLength": 65536,
+          "title": "Stderr",
+          "type": "string"
+        },
+        "stderr_truncated": {
+          "default": false,
+          "title": "Stderr Truncated",
+          "type": "boolean"
+        },
+        "stdout": {
+          "default": "",
+          "maxLength": 65536,
+          "title": "Stdout",
+          "type": "string"
+        },
+        "stdout_truncated": {
+          "default": false,
+          "title": "Stdout Truncated",
+          "type": "boolean"
+        },
+        "structured_output": {
+          "additionalProperties": true,
+          "title": "Structured Output",
+          "type": "object"
+        },
+        "timed_out": {
+          "default": false,
+          "title": "Timed Out",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "invocation_id",
+        "invocation_revision",
+        "status",
+        "policy_decision"
+      ],
+      "title": "ToolResult",
+      "type": "object"
+    },
+    "ToolVersion": {
+      "additionalProperties": false,
+      "properties": {
+        "major": {
+          "maximum": 65535,
+          "minimum": 0,
+          "title": "Major",
+          "type": "integer"
+        },
+        "minor": {
+          "default": 0,
+          "maximum": 65535,
+          "minimum": 0,
+          "title": "Minor",
+          "type": "integer"
+        },
+        "patch": {
+          "default": 0,
+          "maximum": 65535,
+          "minimum": 0,
+          "title": "Patch",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "major"
+      ],
+      "title": "ToolVersion",
       "type": "object"
     },
     "UsageResponse": {

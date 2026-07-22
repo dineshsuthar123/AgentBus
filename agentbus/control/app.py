@@ -56,6 +56,16 @@ from agentbus.control.models import (
     RunSummary,
     SchedulerResponse,
     TaskListResponse,
+    ToolAuditListResponse,
+    ToolDescriptorDetail,
+    ToolInvocationCancelRequest,
+    ToolInvocationCancelResponse,
+    ToolInvocationDetail,
+    ToolInvocationListResponse,
+    ToolListResponse,
+    ToolPolicyEvaluationRequest,
+    ToolPolicyEvaluationResponse,
+    ToolPolicyResponse,
     UsageResponse,
     WorkspaceValidationRequest,
     WorkspaceValidationResponse,
@@ -229,6 +239,10 @@ def create_app(
                 "sse-replay",
                 "approvals",
                 "repository-diffs",
+                "tool-runtime",
+                "tool-policy",
+                "tool-audit",
+                "tool-cancellation",
                 "mcp",
             ],
         )
@@ -290,6 +304,30 @@ def create_app(
     async def doctor(workspace: str | None = None) -> DoctorResponse:
         return query_service.doctor(workspace)
 
+    @app.get(f"{API_PREFIX}/tools", response_model=ToolListResponse)
+    async def tools() -> ToolListResponse:
+        return query_service.tools()
+
+    @app.get(
+        f"{API_PREFIX}/tools/{{tool_name}}",
+        response_model=ToolDescriptorDetail,
+    )
+    async def tool(tool_name: str) -> ToolDescriptorDetail:
+        return query_service.tool(tool_name)
+
+    @app.get(f"{API_PREFIX}/policy", response_model=ToolPolicyResponse)
+    async def tool_policy() -> ToolPolicyResponse:
+        return query_service.tool_policy()
+
+    @app.post(
+        f"{API_PREFIX}/policy/evaluate",
+        response_model=ToolPolicyEvaluationResponse,
+    )
+    async def evaluate_tool_policy(
+        request: ToolPolicyEvaluationRequest,
+    ) -> ToolPolicyEvaluationResponse:
+        return query_service.evaluate_tool_policy(request)
+
     @app.post(f"{API_PREFIX}/runs", response_model=RunAcceptedResponse, status_code=202)
     async def create_run(request: RunCreateRequest) -> RunAcceptedResponse:
         return supervisor.submit(request)
@@ -334,6 +372,72 @@ def create_app(
     @app.get(f"{API_PREFIX}/runs/{{run_id}}/usage", response_model=UsageResponse)
     async def usage(run_id: str) -> UsageResponse:
         return query_service.usage(run_id)
+
+    @app.get(
+        f"{API_PREFIX}/runs/{{run_id}}/tool-invocations",
+        response_model=ToolInvocationListResponse,
+    )
+    async def tool_invocations(
+        run_id: str,
+        after: int = Query(default=0, ge=0),
+        limit: int = Query(default=100, ge=1, le=500),
+    ) -> ToolInvocationListResponse:
+        return query_service.tool_invocations(
+            run_id,
+            after_sequence=after,
+            limit=limit,
+        )
+
+    @app.get(
+        f"{API_PREFIX}/runs/{{run_id}}/tool-invocations/{{invocation_id}}",
+        response_model=ToolInvocationDetail,
+    )
+    async def tool_invocation(
+        run_id: str,
+        invocation_id: str,
+    ) -> ToolInvocationDetail:
+        return query_service.tool_invocation(run_id, invocation_id)
+
+    @app.post(
+        f"{API_PREFIX}/runs/{{run_id}}/tool-invocations/{{invocation_id}}/cancel",
+        response_model=ToolInvocationCancelResponse,
+    )
+    async def cancel_tool_invocation(
+        run_id: str,
+        invocation_id: str,
+        request: ToolInvocationCancelRequest | None = None,
+    ) -> ToolInvocationCancelResponse:
+        invocation = query_service.cancellable_tool_invocation(
+            run_id,
+            invocation_id,
+        )
+        reason = request.reason if request else None
+        cancelled = supervisor.cancel(
+            run_id,
+            reason or f"Cancel tool invocation {invocation_id}.",
+        )
+        return ToolInvocationCancelResponse(
+            run_id=run_id,
+            invocation_id=invocation_id,
+            invocation_status=invocation.status.value,
+            run_cancellation_requested=cancelled.cancellation_requested,
+            cancellation=cancelled.cancellation,
+        )
+
+    @app.get(
+        f"{API_PREFIX}/runs/{{run_id}}/tool-audit",
+        response_model=ToolAuditListResponse,
+    )
+    async def tool_audit(
+        run_id: str,
+        after: int = Query(default=0, ge=0),
+        limit: int = Query(default=100, ge=1, le=500),
+    ) -> ToolAuditListResponse:
+        return query_service.tool_audit(
+            run_id,
+            after_sequence=after,
+            limit=limit,
+        )
 
     @app.get(
         f"{API_PREFIX}/runs/{{run_id}}/report",

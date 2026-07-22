@@ -1,12 +1,23 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from enum import Enum
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from agentbus.tools.protocol import ToolResourceBudget
+from agentbus.tools.protocol import (
+    ToolAuditRecord,
+    ToolCapability,
+    ToolCapabilityName,
+    ToolCancellationSnapshot,
+    ToolPolicyDecision,
+    ToolResourceBudget,
+    ToolResourceUsage,
+    ToolResult,
+    ToolVersion,
+)
 
 CONTROL_PROTOCOL_VERSION = "1.0"
 API_PREFIX = "/api/v1"
@@ -339,6 +350,18 @@ class ApprovalSummary(ProtocolModel):
     created_at: datetime
     state: str
     revision: int = Field(default=1, ge=1)
+    approval_kind: Literal["task", "tool"] = "task"
+    tool_name: str | None = None
+    tool_version: ToolVersion | None = None
+    capabilities: list[ToolCapability] = Field(default_factory=list)
+    arguments_summary: list[str] = Field(default_factory=list)
+    executable: str | None = None
+    working_directory: str | None = None
+    network_destination: str | None = None
+    policy_rule: str | None = None
+    proposed_constraints: list[ToolCapability] = Field(default_factory=list)
+    resource_budget: ToolResourceBudget | None = None
+    expires_at: datetime | None = None
 
 
 class ApprovalListResponse(ProtocolModel):
@@ -354,6 +377,146 @@ class ApprovalDecisionRequest(ProtocolModel):
 class ApprovalDecisionResponse(ProtocolModel):
     approval: ApprovalSummary
     idempotent: bool = False
+
+
+class ToolDescriptorSummary(ProtocolModel):
+    name: str
+    version: ToolVersion
+    protocol_version: str
+    description: str
+    capabilities: list[ToolCapability]
+    safety: str
+    idempotent: bool
+    supports_cancellation: bool
+    maximum_timeout_seconds: float = Field(gt=0)
+
+
+class ToolDescriptorDetail(ToolDescriptorSummary):
+    argument_schema: dict[str, Any]
+    output_schema: dict[str, Any]
+
+
+class ToolListResponse(ProtocolModel):
+    tools: list[ToolDescriptorSummary]
+    total: int = Field(ge=0)
+
+
+class ToolInvocationSummary(ProtocolModel):
+    invocation_sequence: int = Field(ge=1)
+    invocation_id: str
+    invocation_revision: int = Field(ge=1)
+    run_id: str
+    task_id: str
+    tool_name: str
+    tool_version: ToolVersion
+    protocol_version: str
+    caller_role: str
+    status: str
+    capabilities: list[ToolCapability]
+    policy_decision: ToolPolicyDecision | None = None
+    approval_id: str | None = None
+    resource_budget: ToolResourceBudget
+    resource_usage: ToolResourceUsage
+    cancellation: ToolCancellationSnapshot
+    error_category: str | None = None
+    error_message: str | None = None
+    requested_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    updated_at: datetime
+
+
+class ToolInvocationDetail(ToolInvocationSummary):
+    workspace: str
+    worktree: str
+    arguments_sha256: str
+    capability_fingerprint: str
+    idempotency_key_sha256: str | None = None
+    process_slot: bool = False
+    result: ToolResult | None = None
+
+
+class ToolInvocationListResponse(ProtocolModel):
+    run_id: str
+    invocations: list[ToolInvocationSummary]
+    after_sequence: int = Field(default=0, ge=0)
+    next_sequence: int = Field(default=0, ge=0)
+    truncated: bool = False
+
+
+class ToolInvocationCancelRequest(ProtocolModel):
+    reason: str | None = Field(default=None, max_length=2000)
+
+
+class ToolInvocationCancelResponse(ProtocolModel):
+    run_id: str
+    invocation_id: str
+    invocation_status: str
+    run_cancellation_requested: bool
+    cancellation: CancellationLifecycle = Field(
+        default_factory=CancellationLifecycle
+    )
+
+
+class ToolAuditEntryResponse(ProtocolModel):
+    audit_sequence: int = Field(ge=1)
+    record: ToolAuditRecord
+
+
+class ToolAuditListResponse(ProtocolModel):
+    run_id: str
+    records: list[ToolAuditEntryResponse]
+    after_sequence: int = Field(default=0, ge=0)
+    next_sequence: int = Field(default=0, ge=0)
+    truncated: bool = False
+
+
+class ToolPolicyResponse(ProtocolModel):
+    policy_id: Literal["agentbus-default-v1"] = "agentbus-default-v1"
+    outcomes: list[str]
+    configuration: dict[str, Any]
+    rules: list[dict[str, str]]
+
+
+class ToolPolicyEvaluationRequest(ProtocolModel):
+    run_id: str = Field(min_length=1, max_length=128)
+    task_id: str = Field(min_length=1, max_length=128)
+    tool_name: str = Field(min_length=1, max_length=128)
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    expected_capabilities: list[ToolCapabilityName] = Field(
+        default_factory=list,
+        max_length=64,
+    )
+    caller_role: Literal["planner", "coder", "verifier", "reviewer"] = "coder"
+    workspace_trusted: bool = False
+    provider_consented: bool = False
+    timeout_seconds: float | None = Field(default=None, gt=0, le=86_400)
+    resource_budget: ToolResourceBudget = Field(default_factory=ToolResourceBudget)
+    invocation_revision: int = Field(default=1, ge=1)
+
+    @field_validator("arguments")
+    @classmethod
+    def arguments_are_bounded_json(cls, value: dict[str, Any]) -> dict[str, Any]:
+        try:
+            encoded = json.dumps(
+                value,
+                ensure_ascii=True,
+                allow_nan=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            raise ValueError("tool policy arguments must be finite JSON") from exc
+        if len(encoded) > 65_536:
+            raise ValueError("tool policy arguments must be at most 65536 bytes")
+        return value
+
+
+class ToolPolicyEvaluationResponse(ProtocolModel):
+    diagnostic_only: Literal[True] = True
+    persisted: Literal[False] = False
+    decision: ToolPolicyDecision
+    required_capabilities: list[ToolCapability]
 
 
 class ChangeSummary(ProtocolModel):
