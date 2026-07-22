@@ -112,7 +112,7 @@ def test_v1_database_migrates_transactionally_and_reopens(tmp_path):
 
     store = StateStore(database)
 
-    assert store.schema_version == 3
+    assert store.schema_version == 4
     assert store.get_run("legacy-run").original_task == "Legacy task"
     assert store.get_task("legacy-run", "step-1").current_attempt_count == 1
     assert store.get_attempt("legacy-attempt").status.value == "running"
@@ -129,8 +129,11 @@ def test_v1_database_migrates_transactionally_and_reopens(tmp_path):
         "task_commits",
         "integration_attempts",
         "cancellations",
+        "tool_invocations",
+        "tool_approvals",
+        "tool_audit_records",
     } <= tables
-    assert StateStore(database).schema_version == 3
+    assert StateStore(database).schema_version == 4
 
 
 def test_v2_database_adds_cancellation_state_without_changing_runs(tmp_path):
@@ -146,13 +149,46 @@ def test_v2_database_adds_cancellation_state_without_changing_runs(tmp_path):
 
     store = StateStore(database)
 
-    assert store.schema_version == 3
+    assert store.schema_version == 4
     assert store.get_run("legacy-run").original_task == "Legacy task"
     with sqlite3.connect(database) as connection:
         cancellation_table = connection.execute(
             "SELECT name FROM sqlite_master WHERE name = 'cancellations'"
         ).fetchone()
     assert cancellation_table == ("cancellations",)
+
+
+def test_v3_database_adds_tool_runtime_state_and_immutable_audit(tmp_path):
+    database = tmp_path / "v3.db"
+    create_v1_database(database)
+    with sqlite3.connect(database) as connection:
+        for version in (1, 2):
+            for statement in MIGRATIONS[version]:
+                connection.execute(statement)
+        connection.execute(
+            "UPDATE schema_metadata SET value = '3' WHERE key = 'schema_version'"
+        )
+        connection.commit()
+
+    store = StateStore(database)
+
+    assert store.schema_version == 4
+    assert store.get_run("legacy-run").original_task == "Legacy task"
+    with sqlite3.connect(database) as connection:
+        objects = {
+            (row[0], row[1])
+            for row in connection.execute(
+                """SELECT name, type FROM sqlite_master
+                WHERE name LIKE 'tool_%' ORDER BY name"""
+            )
+        }
+    assert {
+        ("tool_invocations", "table"),
+        ("tool_approvals", "table"),
+        ("tool_audit_records", "table"),
+        ("tool_audit_records_no_update", "trigger"),
+        ("tool_audit_records_no_delete", "trigger"),
+    } <= objects
 
 
 def test_failed_migration_rolls_back_schema_and_version(tmp_path, monkeypatch):
@@ -184,7 +220,7 @@ def test_failed_migration_rolls_back_schema_and_version(tmp_path, monkeypatch):
 def test_state_database_backup_is_explicit_and_reopenable(tmp_path):
     store = StateStore(tmp_path / "state.db")
 
-    backup = store.backup(tmp_path / "backups" / "state-v3.db")
+    backup = store.backup(tmp_path / "backups" / "state-v4.db")
 
     assert backup.is_file()
-    assert StateStore(backup).schema_version == 3
+    assert StateStore(backup).schema_version == 4
