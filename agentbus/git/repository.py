@@ -609,7 +609,7 @@ class GitRepository:
             if not field or len(field) < 4:
                 continue
             status = field[:2]
-            path = self._normalize_relative_path(field[3:])
+            path = self._normalize_status_path(field[3:])
             entries.append(
                 GitStatusEntry(
                     path=path,
@@ -662,6 +662,13 @@ class GitRepository:
         if paths is None:
             return []
         return sorted({self._normalize_relative_path(path) for path in paths})
+
+    def _normalize_status_path(self, value: str) -> str:
+        # Porcelain status uses one trailing slash to identify an ignored directory.
+        # Strip only that Git-owned marker; caller-supplied paths stay strict.
+        if value.endswith("/") and not value.endswith("//"):
+            value = value[:-1]
+        return self._normalize_relative_path(value)
 
     def _normalize_relative_path(self, value: str) -> str:
         try:

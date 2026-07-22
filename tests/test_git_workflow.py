@@ -99,6 +99,20 @@ def test_git_repository_parses_changed_files(monkeypatch, tmp_path):
     assert repo.changed_files() == ["app.py", "new.py", "tests/test_app.py"]
 
 
+def test_git_repository_accepts_porcelain_ignored_directory_marker(
+    monkeypatch, tmp_path
+):
+    repository = GitRepository(str(tmp_path))
+    monkeypatch.setattr(
+        repository,
+        "_run",
+        lambda command: "?? app.py\0!! .pytest_cache/v/\0",
+    )
+
+    assert repository.changed_files() == ["app.py"]
+    assert repository.ignored_files() == [".pytest_cache/v"]
+
+
 @pytest.mark.parametrize(
     "path",
     [
