@@ -39,11 +39,13 @@ from agentbus.tools.protocol import (
     ToolErrorCategory,
     ToolInvocation,
     ToolInvocationStatus,
+    ToolOutputChunk,
     ToolPolicyDecision,
     ToolPolicyOutcome,
     ToolProtocolError,
     ToolResourceUsage,
     ToolResult,
+    safe_protocol_dict,
     validate_tool_output,
 )
 from agentbus.tools.records import (
@@ -219,6 +221,38 @@ class ToolDispatcher:
             )
             self._ensure_restored(run_id)
             return reconciled
+
+    def record_output_chunk(
+        self,
+        invocation: ToolInvocation,
+        chunk: ToolOutputChunk,
+    ) -> None:
+        record = self.state_store.get_tool_invocation(
+            invocation.run_id,
+            invocation.invocation_id,
+        )
+        if (
+            record.status != ToolInvocationStatus.RUNNING
+            or record.task_id != invocation.task_id
+            or record.tool_name != invocation.tool_name
+            or record.invocation_revision != invocation.invocation_revision
+        ):
+            raise RuntimeError(
+                "Tool output can be recorded only for its running invocation."
+            )
+        payload = safe_protocol_dict(chunk)
+        payload.update(
+            {
+                "invocation_id": invocation.invocation_id,
+                "invocation_revision": invocation.invocation_revision,
+            }
+        )
+        self.state_store.record_event(
+            invocation.run_id,
+            "tool_output_chunk",
+            payload,
+            task_id=invocation.task_id,
+        )
 
     def discard_run(self, run_id: str) -> None:
         with self._guard:
@@ -425,10 +459,57 @@ class ToolDispatcher:
         *,
         replayed: bool,
     ) -> ToolDispatchResponse:
+        if result.cancellation.requested:
+            self.state_store.record_event(
+                invocation.run_id,
+                "tool_cancel_requested",
+                {
+                    "invocation_id": invocation.invocation_id,
+                    "invocation_revision": invocation.invocation_revision,
+                    "cancellation_revision": result.cancellation.revision,
+                    "signal_sent": result.cancellation.signal_sent,
+                },
+                task_id=invocation.task_id,
+            )
+            if result.cancellation.acknowledged:
+                self.state_store.record_event(
+                    invocation.run_id,
+                    "tool_cancel_acknowledged",
+                    {
+                        "invocation_id": invocation.invocation_id,
+                        "invocation_revision": invocation.invocation_revision,
+                        "process_terminated": (
+                            result.cancellation.process_terminated
+                        ),
+                    },
+                    task_id=invocation.task_id,
+                )
+        for artifact in result.artifacts:
+            self.state_store.record_event(
+                invocation.run_id,
+                "tool_artifact_created",
+                {
+                    "invocation_id": invocation.invocation_id,
+                    "invocation_revision": invocation.invocation_revision,
+                    "artifact": safe_protocol_dict(artifact),
+                },
+                task_id=invocation.task_id,
+            )
         record = self.state_store.complete_tool_invocation(
             invocation.run_id,
             result,
         )
+        if result.cancellation.cleanup_completed:
+            self.state_store.record_event(
+                invocation.run_id,
+                "tool_cleanup_completed",
+                {
+                    "invocation_id": invocation.invocation_id,
+                    "invocation_revision": invocation.invocation_revision,
+                    "process_terminated": result.cancellation.process_terminated,
+                },
+                task_id=invocation.task_id,
+            )
         audit = self.state_store.record_tool_audit(
             build_tool_audit_record(
                 invocation,

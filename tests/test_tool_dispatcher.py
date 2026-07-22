@@ -2,11 +2,21 @@ from __future__ import annotations
 
 import hashlib
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 
+import pytest
+
+from agentbus.execution.cancellation import CancellationRequested, CancellationToken
+from agentbus.execution.cancellation_registry import CancellationRegistry
 from agentbus.execution.models import RunRecord, TaskSpec
 from agentbus.execution.state_store import StateStore
-from agentbus.policy import ToolApprovalDisposition, decide_tool_approval
+from agentbus.policy import (
+    ToolApprovalDisposition,
+    ToolPolicyEngine,
+    decide_tool_approval,
+)
 from agentbus.sandbox.platform import ExecutableCatalog
 from agentbus.tools import builtin_tool_registry
 from agentbus.tools.capabilities import derive_required_capabilities
@@ -15,6 +25,7 @@ from agentbus.tools.protocol import (
     ToolInvocation,
     ToolInvocationContext,
     ToolInvocationStatus,
+    ToolResourceBudget,
 )
 
 
@@ -138,7 +149,129 @@ def test_dispatcher_suspends_and_resumes_exact_delete_approval(
     assert approval.disposition == ToolApprovalDisposition.APPROVED.value
 
 
-def _runtime(root: Path) -> tuple[ToolDispatcher, StateStore]:
+def test_dispatcher_cancels_between_policy_and_execution_without_side_effect(
+    tmp_path: Path,
+) -> None:
+    token = CancellationToken()
+    policy = _CancellingPolicyEngine(token)
+    dispatcher, store = _runtime(tmp_path, policy_engine=policy)
+    invocation = _invocation(
+        dispatcher,
+        tmp_path,
+        "filesystem.create",
+        {"path": "never-created.py", "content": "unsafe\n"},
+    )
+
+    response = dispatcher.dispatch(invocation, cancellation=token)
+
+    assert response.result is not None
+    assert response.result.status == ToolInvocationStatus.CANCELLED
+    assert response.result.cancellation.signal_sent is False
+    assert response.result.cancellation.process_terminated is False
+    assert response.result.cancellation.cleanup_completed is True
+    assert (tmp_path / "never-created.py").exists() is False
+    assert dispatcher.budget_ledger.snapshot("run-1").active_invocations == ()
+    event_types = [event["event_type"] for event in store.list_events("run-1")]
+    assert event_types.index("tool_cancel_requested") < event_types.index(
+        "tool_cancelled"
+    )
+    assert event_types.index("tool_cancelled") < event_types.index(
+        "tool_cleanup_completed"
+    )
+
+
+def test_completed_idempotent_result_replays_after_run_cancellation(
+    tmp_path: Path,
+) -> None:
+    dispatcher, _ = _runtime(tmp_path)
+    invocation = _invocation(
+        dispatcher,
+        tmp_path,
+        "filesystem.create",
+        {"path": "completed.py", "content": "complete\n"},
+        idempotency_key="completed-before-cancel",
+    )
+    dispatcher.dispatch(invocation)
+    cancellation = CancellationToken()
+    cancellation.request("cancel remaining work")
+
+    replay = dispatcher.dispatch(invocation, cancellation=cancellation)
+
+    assert replay.replayed is True
+    assert replay.record.status == ToolInvocationStatus.SUCCEEDED
+
+
+def test_new_invocation_is_rejected_before_policy_after_cancellation(
+    tmp_path: Path,
+) -> None:
+    dispatcher, store = _runtime(tmp_path)
+    invocation = _invocation(
+        dispatcher,
+        tmp_path,
+        "filesystem.create",
+        {"path": "blocked.py", "content": "blocked\n"},
+    )
+    cancellation = CancellationToken()
+    cancellation.request("stop run")
+
+    with pytest.raises(CancellationRequested):
+        dispatcher.dispatch(invocation, cancellation=cancellation)
+
+    assert store.list_tool_invocations("run-1") == []
+    assert (tmp_path / "blocked.py").exists() is False
+
+
+def test_dispatcher_streams_and_cancels_real_process_tree(tmp_path: Path) -> None:
+    output_observed = Event()
+    dispatcher, store = _runtime(tmp_path, output_observed=output_observed)
+    cancellation = CancellationRegistry(store).get("run-1")
+    invocation = _invocation(
+        dispatcher,
+        tmp_path,
+        "process.execute",
+        {
+            "executable": "python",
+            "arguments": [
+                "-c",
+                "import time; print('ready', flush=True); time.sleep(30)",
+            ],
+        },
+        budget=ToolResourceBudget(wall_clock_seconds=10),
+    )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(
+            dispatcher.dispatch,
+            invocation,
+            cancellation=cancellation,
+        )
+        operation = cancellation.wait_for_active_operation(
+            source="sandbox-process",
+            timeout_seconds=5,
+        )
+        assert operation is not None
+        assert output_observed.wait(timeout=5)
+        cancellation.request("stop managed process")
+        response = future.result(timeout=10)
+
+    assert response.result is not None
+    assert response.result.status == ToolInvocationStatus.CANCELLED
+    assert response.result.cancellation.signal_sent is True
+    assert response.result.cancellation.acknowledged is True
+    assert response.result.cancellation.process_terminated is True
+    event_types = [event["event_type"] for event in store.list_events("run-1")]
+    assert "tool_output_chunk" in event_types
+    assert event_types.index("tool_cancel_acknowledged") < event_types.index(
+        "tool_cancelled"
+    )
+
+
+def _runtime(
+    root: Path,
+    *,
+    policy_engine: ToolPolicyEngine | None = None,
+    output_observed: Event | None = None,
+) -> tuple[ToolDispatcher, StateStore]:
     store = StateStore(root / "state.db")
     store.create_run_with_tasks(
         RunRecord(
@@ -157,11 +290,25 @@ def _runtime(root: Path) -> tuple[ToolDispatcher, StateStore]:
             )
         ],
     )
+    dispatcher_holder = {}
+
+    def record_output(invocation, chunk) -> None:
+        dispatcher_holder["dispatcher"].record_output_chunk(invocation, chunk)
+        if output_observed is not None:
+            output_observed.set()
+
     registry = builtin_tool_registry(
         workspace=root,
         executable_catalog=ExecutableCatalog({"python": sys.executable}),
+        output_callback=record_output,
     )
-    return ToolDispatcher(registry, store), store
+    dispatcher = ToolDispatcher(
+        registry,
+        store,
+        policy_engine=policy_engine,
+    )
+    dispatcher_holder["dispatcher"] = dispatcher
+    return dispatcher, store
 
 
 def _invocation(
@@ -171,6 +318,7 @@ def _invocation(
     arguments: dict,
     *,
     idempotency_key: str | None = None,
+    budget: ToolResourceBudget | None = None,
 ) -> ToolInvocation:
     descriptor = dispatcher.registry.descriptor(tool_name)
     provisional = ToolInvocation(
@@ -189,9 +337,25 @@ def _invocation(
             provider_consented=True,
         ),
         idempotency_key=idempotency_key,
+        resource_budget=budget or ToolResourceBudget(),
     )
     required = derive_required_capabilities(provisional, descriptor)
     return ToolInvocation.model_validate(
         provisional.model_dump(mode="python")
         | {"requested_capabilities": required}
     )
+
+
+class _CancellingPolicyEngine(ToolPolicyEngine):
+    def __init__(self, cancellation: CancellationToken) -> None:
+        super().__init__()
+        self._cancellation = cancellation
+
+    def evaluate(self, invocation, descriptor, *, approval=None):
+        decision = super().evaluate(
+            invocation,
+            descriptor,
+            approval=approval,
+        )
+        self._cancellation.request("cancel after policy")
+        return decision
