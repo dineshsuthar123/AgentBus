@@ -22,6 +22,32 @@ AgentBus `0.1.0-alpha.1` is an early developer release. It has no production
 SLA, does not provide complete sandbox isolation, and does not automatically
 roll back filesystem or external side effects.
 
+## Managed Tool Runtime
+
+AgentBus v0.3 routes repository, filesystem, Git, test, process, and explicitly
+configured local MCP calls through the versioned `agentbus.tool` protocol.
+Every invocation uses independently derived capabilities, deterministic policy,
+exact scoped approval where required, cumulative resource budgets, persisted
+cancellation, bounded redacted output, and immutable audit records.
+
+Built-in process calls use an absolute revalidated executable identity,
+separate arguments, `shell=False`, a sanitized environment, and process-tree
+cleanup. Filesystem tools reject traversal, protected credentials,
+symlink/junction mutation, Windows device and alternate-data-stream paths, and
+worktree escape. Managed Git mutation is available only in AgentBus-owned
+worktrees and does not expose push, reset, clean, remote mutation, or global
+configuration changes.
+
+These controls are defense in depth, not kernel-grade sandboxing or a promise
+that generated code is harmless. Failed runs retain created and modified files
+for inspection; AgentBus never performs automatic destructive rollback.
+
+See [Managed Tool Runtime](docs/tool-runtime.md),
+[Tool Capability Policy](docs/tool-policy.md),
+[Sandbox Security](docs/sandbox-security.md),
+[MCP Integration](docs/mcp-integration.md), and
+[ADR 0009](docs/adr/0009-capability-tool-runtime.md).
+
 ## Quick Start
 
 Install from a source checkout with standard Python packaging:
@@ -535,13 +561,22 @@ The runner also reads these environment variables:
 
 AgentBus is intentionally local and conservative:
 
-- File reads and writes are restricted to the configured workspace directory.
-- Path traversal and absolute file paths are blocked.
-- Commands must be JSON arrays of strings and run with `shell=False`.
-- Only a small command allowlist is available.
-- Obvious destructive commands, destructive arguments, shell syntax, and remote access helpers are blocked.
-- Verifier subprocesses remove common credential-bearing environment variables.
-- Git automation uses safe `git` subprocess calls with `shell=False`.
+- Managed tools declare explicit, scoped capabilities that are derived and
+  checked independently from model output.
+- Policy evaluates every invocation; denials cannot be overridden and risky
+  calls require approval bound to the exact arguments, scope, worktree,
+  revision, protocol, and budget.
+- File reads and writes are restricted to canonical assigned worktrees.
+- Traversal, absolute and UNC paths, protected files, device paths, alternate
+  data streams, and symlink or junction mutation are blocked.
+- Processes use pinned executable identities, argument arrays, `shell=False`,
+  sanitized environments, bounded output, timeout, cancellation, and
+  process-tree cleanup.
+- Git automation validates the exact repository root and constrains managed
+  operations to safe reads plus path-scoped stage and commit in owned
+  worktrees.
+- Local MCP servers require explicit configuration and capability maps; every
+  imported call requires normal policy evaluation and exact approval.
 - AgentBus does not reset, clean, rebase, force push, deploy, or apply infrastructure.
 - Run logs are JSONL files in the configured runs directory and do not include environment variables or secrets.
 - API keys are held only in provider configuration/client state and are excluded from config repr, diagnostics, logs, durable metadata, and exceptions.
@@ -550,6 +585,13 @@ AgentBus is intentionally local and conservative:
 ## Current Limitations
 
 - AgentBus is a local runner, not a multi-tenant service.
+- The managed tool runtime is a policy and process boundary, not a VM,
+  container, OS firewall, or kernel-grade sandbox. Local code and MCP peers run
+  with the AgentBus account's permissions.
+- POSIX process groups terminate descendants but do not currently enforce
+  memory, CPU, or child-count budgets. Reports mark unsupported limits
+  truthfully. Windows uses Job Objects where available and reports fallback
+  limitations.
 - The multi-agent workflow supports one reviewer retry for now.
 - Parallel execution is bounded, local, foreground, and opt-in. There is no daemon, remote queue, multi-host consensus, distributed lease, or speculative execution.
 - Durable recovery cannot roll back arbitrary filesystem, command, network, or other external side effects. Interrupted tasks may run again within their bounded attempt policy unless a safe task commit is recovered.
@@ -565,7 +607,9 @@ AgentBus is intentionally local and conservative:
 - Azure authentication supports API keys in this checkpoint. Entra ID and managed identity are a future enhancement.
 - AgentBus does not discover or provision Azure resources/deployments and does not automatically switch API modes.
 - Some Azure deployments do not support Responses API or strict structured outputs; select a compatible deployment or configure `chat_completions` explicitly.
-- The command allowlist is intentionally narrow, so some legitimate workflows may need explicit tool support before they are available.
+- The capability registry and executable catalog are intentionally narrow, so
+  some legitimate workflows need an explicit adapter, capability map, or policy
+  before they are available.
 
 ## Project Information
 

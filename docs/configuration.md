@@ -20,6 +20,7 @@ workspace_dir = "C:\\projects\\sample"
 state_dir = "C:\\agentbus-state"
 state_db = "state.db"
 runs_dir = "C:\\agentbus-state\\runs"
+tool_resource_budget = { wall_clock_seconds = 60, invocations_per_task = 32, invocations_per_run = 256 }
 ```
 
 JSON may contain the same keys either at the root or below `agentbus`. Unknown
@@ -53,6 +54,50 @@ only whether a value is configured. Azure endpoints are reduced to their host.
 Role model variables are `AGENTBUS_PLANNER_MODEL`, `AGENTBUS_CODER_MODEL`,
 `AGENTBUS_REVIEWER_MODEL`, and `AGENTBUS_SUMMARIZER_MODEL`.
 
+## Tool resource budget
+
+`tool_resource_budget` is a validated JSON or TOML object. Omitted fields use
+the secure protocol defaults. The complete fields are:
+
+| Field | Default |
+| --- | ---: |
+| `wall_clock_seconds` | 90 |
+| `stdout_bytes` | 65,536 |
+| `stderr_bytes` | 65,536 |
+| `combined_output_bytes` | 131,072 |
+| `artifact_bytes` | 5,242,880 |
+| `child_processes` | 8 |
+| `concurrent_processes` | 2 |
+| `invocations_per_task` | 64 |
+| `invocations_per_run` | 512 |
+| `file_mutations` | 100 |
+| `total_written_bytes` | 10,485,760 |
+| `maximum_file_bytes` | 2,097,152 |
+| `memory_bytes` | unset |
+| `cpu_seconds` | unset |
+
+The loader rejects unknown fields, inconsistent output limits, a per-task
+invocation limit above the run limit, and invalid numeric ranges. Budgets
+accumulate across retries and duplicate invocation IDs and may only tighten
+during a run. Platform reports distinguish requested, supported, enforced, and
+observed values. See [Managed Tool Runtime](tool-runtime.md) and
+[Sandbox Security](sandbox-security.md).
+
+## MCP servers
+
+`mcp_server_configs` is an explicit list available only in a named JSON or TOML
+configuration file or typed Python configuration. It is not populated by
+automatic discovery or a broad environment variable. Each entry must select
+`stdio` or explicitly authenticated `loopback_http`, declare a unique server
+ID, and map every imported tool to exact capabilities. Safe configuration
+output shows only server ID, transport, and configured tool names.
+
+Stdio commands use allowlisted executable aliases and sanitized environments.
+HTTP endpoints require numeric loopback, explicit opt-in, and a bearer token.
+If a config file contains that token, protect the file and keep it out of
+source control. See [MCP Integration](mcp-integration.md) for complete schemas
+and examples.
+
 ## Deterministic provider
 
 The `deterministic` provider is network-free and uses the same provider
@@ -68,8 +113,15 @@ python -m agentbus.main --provider deterministic --workflow multi --durable `
   "Create and verify the deterministic calculator"
 ```
 
-Profiles are `python-calculator` and `cancellation-two-task`. Failure and
-latency injection use `AGENTBUS_DETERMINISTIC_LATENCY_SECONDS`,
+Profiles include `python-calculator`, `cancellation-two-task`,
+`tool-safe-read`, `tool-atomic-write`, `tool-source-patch`, `tool-pytest`,
+`tool-git-diff`, `tool-git-commit`, `tool-delete-approval`,
+`tool-deny-outside-read`, `tool-deny-credential-read`,
+`tool-process-timeout`, `tool-process-cancel`, `tool-excessive-output`,
+`tool-budget-exhaustion`, `tool-local-mcp`, `tool-loop-limit`, and
+`tool-control-acceptance`. They exercise the real managed runtime without a
+provider or public MCP call. Failure and latency injection use
+`AGENTBUS_DETERMINISTIC_LATENCY_SECONDS`,
 `AGENTBUS_DETERMINISTIC_LATENCY_ROLES`,
 `AGENTBUS_DETERMINISTIC_FAILURE_KIND`,
 `AGENTBUS_DETERMINISTIC_FAILURE_CALLS`, and
