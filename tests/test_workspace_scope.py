@@ -15,10 +15,24 @@ from agentbus.git.repository import (
     GitRepositoryError,
     WorkspaceRepositoryMismatch,
 )
+from agentbus.runtime import loop as loop_module
 from agentbus.runtime.durable_workflow import MultiAgentTaskExecutor
 from agentbus.runtime.loop import AgentLoop
 from agentbus.runtime.orchestrator import MultiAgentOrchestrator
 from agentbus.tools.git_tools import GitTools
+
+
+def _capture_agent_loop_runtimes(monkeypatch):
+    runtimes = []
+    build_runtime = loop_module.build_managed_tool_runtime
+
+    def capture_runtime(**kwargs):
+        runtime = build_runtime(**kwargs)
+        runtimes.append(runtime)
+        return runtime
+
+    monkeypatch.setattr(loop_module, "build_managed_tool_runtime", capture_runtime)
+    return runtimes
 
 
 def init_repository(path: Path) -> Path:
@@ -244,7 +258,10 @@ def test_unrelated_parent_files_never_reach_task_reviewer(tmp_path):
     assert "unrelated-parent.txt" not in reviewer.task_input["task_diff"]
 
 
-def test_explicit_absolute_workspace_propagates_to_runtime_components(tmp_path):
+def test_explicit_absolute_workspace_propagates_to_runtime_components(
+    tmp_path,
+    monkeypatch,
+):
     workspace = init_repository(tmp_path / "target")
     settings = AgentBusConfig(
         workspace_dir=str(workspace),
@@ -280,6 +297,7 @@ def test_explicit_absolute_workspace_propagates_to_runtime_components(tmp_path):
         coder=coder,
         state_store=store,
     )
+    loop_runtimes = _capture_agent_loop_runtimes(monkeypatch)
     loop = AgentLoop(config=settings, model=Model())
     loop.run("Initialize managed tools")
     run_id = runner.create_durable_run("Check workspace propagation")
@@ -296,9 +314,10 @@ def test_explicit_absolute_workspace_propagates_to_runtime_components(tmp_path):
     assert runner.git_repository.workspace == workspace
     assert runner.pr_client.workspace == workspace
     assert coder.config.workspace_path == workspace
-    assert loop.tool_runtime is not None
-    assert loop.tool_runtime.workspace == workspace
-    assert loop.tool_runtime.worktree == workspace
+    assert loop.tool_runtime is None
+    assert len(loop_runtimes) == 1
+    assert loop_runtimes[0].workspace == workspace
+    assert loop_runtimes[0].worktree == workspace
     assert executor.git_repository.workspace == workspace
     assert executor.workspace == workspace
     assert executor.tool_runtime is not None
@@ -307,7 +326,10 @@ def test_explicit_absolute_workspace_propagates_to_runtime_components(tmp_path):
     assert store.get_run(run_id).workspace == str(workspace)
 
 
-def test_parallel_worker_runtime_propagates_isolated_absolute_workspace(tmp_path):
+def test_parallel_worker_runtime_propagates_isolated_absolute_workspace(
+    tmp_path,
+    monkeypatch,
+):
     source = init_repository(tmp_path / "source")
     worker_workspace = (tmp_path / "worktrees" / "task-A").resolve()
     worker_workspace.mkdir(parents=True)
@@ -321,10 +343,12 @@ def test_parallel_worker_runtime_propagates_isolated_absolute_workspace(tmp_path
     runner = MultiAgentOrchestrator(config=settings)
 
     executor = runner._parallel_task_executor(worker_workspace)
+
     class Model:
         def generate_json(self, prompt, **kwargs):
             return {"action": "finish", "summary": "workspace checked"}
 
+    loop_runtimes = _capture_agent_loop_runtimes(monkeypatch)
     loop = AgentLoop(config=executor.coder.config, model=Model())
     loop.run("Initialize managed tools")
 
@@ -340,6 +364,7 @@ def test_parallel_worker_runtime_propagates_isolated_absolute_workspace(tmp_path
     assert executor.tool_runtime.workspace == source
     assert executor.tool_runtime.worktree == worker_workspace
     assert Path(loop.workspace) == worker_workspace
-    assert loop.tool_runtime is not None
-    assert loop.tool_runtime.workspace == worker_workspace
-    assert loop.tool_runtime.worktree == worker_workspace
+    assert loop.tool_runtime is None
+    assert len(loop_runtimes) == 1
+    assert loop_runtimes[0].workspace == worker_workspace
+    assert loop_runtimes[0].worktree == worker_workspace
