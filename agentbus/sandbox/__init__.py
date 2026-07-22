@@ -15,6 +15,11 @@ from agentbus.sandbox.platform import (
     ExecutableIdentity,
     validate_working_directory,
 )
+from agentbus.sandbox.output import (
+    BoundedProcessOutput,
+    OutputCallback,
+    ProcessOutputSnapshot,
+)
 
 __all__ = [
     "EnvironmentValidationError",
@@ -25,6 +30,9 @@ __all__ = [
     "WorkingDirectoryValidationError",
     "ExecutableCatalog",
     "ExecutableIdentity",
+    "BoundedProcessOutput",
+    "OutputCallback",
+    "ProcessOutputSnapshot",
     "environment_diagnostics",
     "sanitized_process_environment",
     "validate_working_directory",
