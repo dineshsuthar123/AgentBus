@@ -1,19 +1,29 @@
 import { realpath } from "node:fs/promises";
 import * as vscode from "vscode";
+import { requireWorkspaceTrust } from "./workspaceTrust";
 
 export { isSafeRepositoryPath } from "./repositoryPath";
+
+export async function ensureWorkspaceTrust(
+  operation = "execution"
+): Promise<boolean> {
+  return requireWorkspaceTrust(
+    {
+      isTrusted: vscode.workspace.isTrusted,
+      showWarning: async (message, action) =>
+        vscode.window.showWarningMessage(message, action),
+      manageTrust: async () => {
+        await vscode.commands.executeCommand("workbench.trust.manage");
+      }
+    },
+    operation
+  );
+}
 
 export async function selectWorkspace(
   requireTrust: boolean
 ): Promise<vscode.WorkspaceFolder | undefined> {
-  if (requireTrust && !vscode.workspace.isTrusted) {
-    const choice = await vscode.window.showWarningMessage(
-      "AgentBus execution requires a trusted workspace. Diagnostics remain available.",
-      "Manage Workspace Trust"
-    );
-    if (choice === "Manage Workspace Trust") {
-      await vscode.commands.executeCommand("workbench.trust.manage");
-    }
+  if (requireTrust && !(await ensureWorkspaceTrust())) {
     return undefined;
   }
   const folders = vscode.workspace.workspaceFolders ?? [];

@@ -20,7 +20,11 @@ import type { RunStore } from "./runStore";
 import { safeError } from "./redaction";
 import { mcpServerUri } from "./mcpDocuments";
 import { formatMcpServerCheck } from "./mcpPresentation";
-import { canonicalWorkspacePath, selectWorkspace } from "./workspace";
+import {
+  canonicalWorkspacePath,
+  ensureWorkspaceTrust,
+  selectWorkspace
+} from "./workspace";
 import type { AgentBusItem, RunSelection } from "./views";
 import {
   canCancel,
@@ -241,6 +245,7 @@ export class CommandController implements vscode.Disposable {
   }
 
   private async resume(): Promise<void> {
+    if (!(await ensureWorkspaceTrust("run resume"))) return;
     const run = await this.chooseRun();
     if (!run) return;
     await (await this.client()).resume(run.run_id);
@@ -551,6 +556,9 @@ export class CommandController implements vscode.Disposable {
   }
 
   private async decide(raw: unknown, decision: "approve" | "reject"): Promise<void> {
+    if (decision === "approve" && !(await ensureWorkspaceTrust("approval"))) {
+      return;
+    }
     const item = raw as AgentBusItem | undefined;
     let approval = item?.value as ApprovalSummary | undefined;
     if (!approval) {
