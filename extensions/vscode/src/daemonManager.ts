@@ -226,6 +226,7 @@ export class DaemonManager implements vscode.Disposable {
     return {
       executablePath: configuration.get<string>("executablePath") || undefined,
       pythonPath: configuration.get<string>("pythonPath") || undefined,
+      configPath: configuration.get<string>("configPath") || undefined,
       registryPath: configuration.get<string>("registryPath") || undefined,
       logLevel: configuration.get<"error" | "warning" | "info">(
         "logLevel",

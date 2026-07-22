@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { resolve } from "node:path";
 import {
   buildLaunchSpec,
   buildStopSpec,
@@ -59,6 +60,7 @@ test("registry parser rejects secret fields", () => {
 test("launch and stop specs never put bearer tokens in arguments", () => {
   const settings = {
     pythonPath: "C:/Python/python.exe",
+    configPath: "C:/safe/agentbus.json",
     registryPath: "C:/safe/daemons.json",
     logLevel: "error" as const
   };
@@ -66,6 +68,9 @@ test("launch and stop specs never put bearer tokens in arguments", () => {
   const stop = buildStopSpec(settings, "daemon-1");
 
   assert.deepEqual(launch.args.slice(0, 3), ["-m", "agentbus.cli", "serve"]);
+  assert.ok(launch.args.includes("--config"));
+  assert.ok(launch.args.includes(resolve("C:/safe/agentbus.json")));
   assert.ok(stop.args.includes("daemon-1"));
+  assert.equal(stop.args.includes("--config"), false);
   assert.equal(JSON.stringify({ launch, stop }).includes(token), false);
 });

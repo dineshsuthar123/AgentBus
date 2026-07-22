@@ -235,6 +235,11 @@
           "default": "",
           "description": "Python executable used with -m agentbus.cli when no AgentBus executable is set."
         },
+        "agentbus.configPath": {
+          "type": "string",
+          "default": "",
+          "description": "Explicit AgentBus JSON or TOML configuration file passed to the local daemon."
+        },
         "agentbus.autoStartDaemon": {
           "type": "boolean",
           "default": true
