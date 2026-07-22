@@ -29,13 +29,20 @@ _LAZY_ADAPTER_EXPORTS = frozenset(
         "ProcessManagedTool",
         "RepositoryScanManagedTool",
         "builtin_tool_registry",
+        "ToolDispatchResponse",
+        "ToolDispatcher",
     }
 )
 
 
 def __getattr__(name: str):
     if name in _LAZY_ADAPTER_EXPORTS:
-        return getattr(import_module("agentbus.tools.adapters"), name)
+        module_name = (
+            "agentbus.tools.dispatcher"
+            if name in {"ToolDispatchResponse", "ToolDispatcher"}
+            else "agentbus.tools.adapters"
+        )
+        return getattr(import_module(module_name), name)
     raise AttributeError(f"module 'agentbus.tools' has no attribute {name!r}")
 
 __all__ = [
@@ -48,6 +55,8 @@ __all__ = [
     "ProcessManagedTool",
     "RepositoryScanManagedTool",
     "ToolExecutionOutput",
+    "ToolDispatchResponse",
+    "ToolDispatcher",
     "ToolNotFoundError",
     "ToolOutputCallback",
     "ToolRegistry",
