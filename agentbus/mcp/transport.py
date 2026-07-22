@@ -37,14 +37,23 @@ _END_OF_STREAM = object()
 class McpTransport(Protocol):
     def start(self) -> None: ...
 
-    def send(self, message: dict[str, Any]) -> None: ...
-
-    def receive(
+    def request(
         self,
+        message: dict[str, Any],
         *,
         timeout_seconds: float,
         cancellation: CancellationToken | None = None,
     ) -> dict[str, Any]: ...
+
+    def notify(
+        self,
+        message: dict[str, Any],
+        *,
+        timeout_seconds: float,
+        cancellation: CancellationToken | None = None,
+    ) -> None: ...
+
+    def set_protocol_version(self, protocol_version: str) -> None: ...
 
     def close(self) -> None: ...
 
@@ -75,6 +84,7 @@ class McpStdioTransport:
             queue.Queue(maxsize=MAX_MCP_MESSAGE_BATCH)
         )
         self._write_lock = threading.Lock()
+        self._request_lock = threading.Lock()
         self._state_lock = threading.RLock()
         self._output_lock = threading.Lock()
         self._closing = threading.Event()
@@ -102,6 +112,8 @@ class McpStdioTransport:
         with self._state_lock:
             if self._process is not None:
                 raise McpTransportError("MCP stdio transport was already started.")
+            if self._closing.is_set():
+                raise McpTransportError("MCP stdio transport cannot be restarted.")
             alias = self.config.executable_alias
             if alias is None:
                 raise McpTransportError("MCP stdio executable is not configured.")
@@ -194,6 +206,82 @@ class McpStdioTransport:
                 raise McpTransportError(
                     "MCP server closed its input stream unexpectedly."
                 ) from exc
+
+    def request(
+        self,
+        message: dict[str, Any],
+        *,
+        timeout_seconds: float,
+        cancellation: CancellationToken | None = None,
+    ) -> dict[str, Any]:
+        request_id = message.get("id")
+        if request_id is None:
+            raise McpProtocolError("MCP stdio requests require a JSON-RPC ID.")
+        effective_timeout = min(
+            timeout_seconds,
+            self.config.request_timeout_seconds,
+        )
+        deadline = time.monotonic() + effective_timeout
+        with self._request_lock:
+            self.send(message)
+            while True:
+                if cancellation is not None and cancellation.is_requested:
+                    self._best_effort_cancel(request_id, "AgentBus run cancelled")
+                    cancellation.mark_propagated("mcp-stdio")
+                    self.close()
+                    cancellation.checkpoint(
+                        "mcp-stdio",
+                        stage="process-tree-terminated",
+                    )
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    self._best_effort_cancel(request_id, "AgentBus request timed out")
+                    raise McpRequestTimeout(
+                        f"MCP server request timed out: {self.config.server_id}."
+                    )
+                try:
+                    response = self.receive(
+                        timeout_seconds=min(remaining, 0.05),
+                    )
+                except McpRequestTimeout:
+                    continue
+                if _request_ids_match(response.get("id"), request_id):
+                    return response
+                if "id" in response and "method" in response:
+                    self.send(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": response["id"],
+                            "error": {
+                                "code": -32601,
+                                "message": "Server-initiated requests are not supported",
+                            },
+                        }
+                    )
+                    continue
+                if "method" in response and "id" not in response:
+                    continue
+                raise McpProtocolError(
+                    "MCP server returned a response for an unexpected request ID."
+                )
+
+    def notify(
+        self,
+        message: dict[str, Any],
+        *,
+        timeout_seconds: float,
+        cancellation: CancellationToken | None = None,
+    ) -> None:
+        del timeout_seconds
+        if "id" in message:
+            raise McpProtocolError("MCP notifications must not contain an ID.")
+        if cancellation is not None:
+            cancellation.checkpoint("mcp-stdio", stage="before-notification")
+        self.send(message)
+
+    def set_protocol_version(self, protocol_version: str) -> None:
+        if protocol_version not in self.config.supported_protocol_versions:
+            raise McpProtocolError("Cannot set an unsupported MCP protocol version.")
 
     def receive(
         self,
@@ -398,3 +486,21 @@ class McpStdioTransport:
         )
         suffix = f" Diagnostic: {stderr}" if stderr else ""
         return f"MCP server exited unexpectedly: {self.config.server_id}.{suffix}"
+
+    def _best_effort_cancel(self, request_id: str | int, reason: str) -> None:
+        try:
+            self.send(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "notifications/cancelled",
+                    "params": {"requestId": request_id, "reason": reason},
+                }
+            )
+        except McpTransportError:
+            pass
+
+
+def _request_ids_match(candidate: Any, expected: str | int) -> bool:
+    if isinstance(candidate, bool) or isinstance(expected, bool):
+        return False
+    return type(candidate) is type(expected) and candidate == expected

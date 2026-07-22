@@ -28,7 +28,12 @@ def test_stdio_transport_uses_allowlist_sanitized_environment_and_json_lines(
 
     with transport:
         transport.send(
-            {"jsonrpc": "2.0", "id": 7, "method": "ping", "params": {}}
+            {
+                "jsonrpc": "2.0",
+                "id": 7,
+                "method": "inspect_environment",
+                "params": {},
+            }
         )
         response = transport.receive(timeout_seconds=5)
         diagnostics = transport.safe_diagnostics

@@ -11,7 +11,14 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--mode",
-        choices=("normal", "oversized", "malformed", "hang"),
+        choices=(
+            "normal",
+            "oversized",
+            "malformed",
+            "hang",
+            "unsupported",
+            "boolean-id",
+        ),
         default="normal",
     )
     args = parser.parse_args()
@@ -33,13 +40,30 @@ def main() -> int:
         if args.mode == "hang":
             time.sleep(30)
             continue
-        result = {
-            "echo": message.get("params", {}),
-            "environment_names": sorted(os.environ),
-        }
+        method = message.get("method")
+        if method == "initialize":
+            requested = message.get("params", {}).get("protocolVersion")
+            result = {
+                "protocolVersion": (
+                    "2099-01-01" if args.mode == "unsupported" else requested
+                ),
+                "capabilities": {"tools": {"listChanged": False}},
+                "serverInfo": {"name": "offline-fixture", "version": "1.0.0"},
+            }
+        elif method == "ping":
+            result = {}
+        else:
+            result = {
+                "echo": message.get("params", {}),
+                "environment_names": sorted(os.environ),
+            }
         sys.stdout.write(
             json.dumps(
-                {"jsonrpc": "2.0", "id": message["id"], "result": result},
+                {
+                    "jsonrpc": "2.0",
+                    "id": True if args.mode == "boolean-id" else message["id"],
+                    "result": result,
+                },
                 separators=(",", ":"),
             )
             + "\n"

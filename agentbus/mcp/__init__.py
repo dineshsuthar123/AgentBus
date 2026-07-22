@@ -1,3 +1,4 @@
+from agentbus.mcp.client import McpClient, McpConnectionInfo
 from agentbus.mcp.http_transport import McpHttpTransport
 from agentbus.mcp.models import (
     LATEST_MCP_PROTOCOL_VERSION,
@@ -13,6 +14,8 @@ __all__ = [
     "LATEST_MCP_PROTOCOL_VERSION",
     "SUPPORTED_MCP_PROTOCOL_VERSIONS",
     "McpHttpTransport",
+    "McpClient",
+    "McpConnectionInfo",
     "McpServerConfig",
     "McpStdioTransport",
     "McpTransport",

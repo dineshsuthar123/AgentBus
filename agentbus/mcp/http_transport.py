@@ -78,7 +78,11 @@ class McpHttpTransport:
             cancellation=cancellation,
             notification=False,
         )
-        matches = [item for item in responses if item.get("id") == request_id]
+        matches = [
+            item
+            for item in responses
+            if _request_ids_match(item.get("id"), request_id)
+        ]
         if len(matches) != 1:
             raise McpProtocolError(
                 "MCP HTTP response did not contain exactly one matching request ID."
@@ -373,3 +377,9 @@ def _decode_sse(raw: bytes) -> list[Any]:
     if not values:
         raise McpProtocolError("MCP HTTP SSE response contained no data events.")
     return values
+
+
+def _request_ids_match(candidate: Any, expected: str | int) -> bool:
+    if isinstance(candidate, bool) or isinstance(expected, bool):
+        return False
+    return type(candidate) is type(expected) and candidate == expected
