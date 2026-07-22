@@ -80,6 +80,11 @@ def test_builtin_argument_schemas_reject_unknown_and_unbounded_fields(
         )
 
 
+def test_builtin_descriptors_reject_empty_process_allowlist(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="must not be empty"):
+        builtin_descriptors(workspace=tmp_path, process_executables=())
+
+
 def test_registry_rejects_duplicates_without_partial_batch_registration(
     tmp_path: Path,
 ) -> None:

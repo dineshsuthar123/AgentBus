@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from collections.abc import Iterable
 from typing import Any
 
 from agentbus.tools.protocol import (
@@ -20,6 +21,7 @@ def builtin_descriptors(
     *,
     workspace: str | Path,
     worktree: str | Path | None = None,
+    process_executables: Iterable[str] | None = None,
 ) -> tuple[ToolDescriptor, ...]:
     workspace_root = str(Path(workspace).expanduser().resolve())
     worktree_root = str(
@@ -29,16 +31,12 @@ def builtin_descriptors(
         roots=(worktree_root,),
         working_directories=(worktree_root,),
     )
+    executable_scope = _process_executable_scope(
+        process_executables
+    )
     process_scope = CapabilityScope(
         roots=(worktree_root,),
-        executables=(
-            "python",
-            "python3",
-            "pytest",
-            "node",
-            "npm",
-            "git",
-        ),
+        executables=executable_scope,
         working_directories=(worktree_root,),
         network_allowed=False,
     )
@@ -53,7 +51,7 @@ def builtin_descriptors(
             "Inspect bounded repository metadata inside the assigned worktree.",
             (_capability(ToolCapabilityName.FILESYSTEM_READ, filesystem_scope),),
             _object_schema(),
-            _object_schema(),
+            _repository_scan_output_schema(),
         ),
         _descriptor(
             "filesystem.read",
@@ -188,7 +186,7 @@ def builtin_descriptors(
                 _capability(ToolCapabilityName.PROCESS_EXECUTE, process_scope),
             ),
             _command_schema(),
-            _object_schema(),
+            _process_output_schema(),
             supports_cancellation=True,
         ),
         _descriptor(
@@ -196,7 +194,7 @@ def builtin_descriptors(
             "Execute an allowlisted program without shell interpretation.",
             (_capability(ToolCapabilityName.PROCESS_EXECUTE, process_scope),),
             _command_schema(),
-            _object_schema(),
+            _process_output_schema(),
             safety=ToolSafetyClassification.RISKY,
             supports_cancellation=True,
         ),
@@ -207,10 +205,15 @@ def descriptor_map(
     *,
     workspace: str | Path,
     worktree: str | Path | None = None,
+    process_executables: Iterable[str] | None = None,
 ) -> dict[str, ToolDescriptor]:
     return {
         descriptor.name: descriptor
-        for descriptor in builtin_descriptors(workspace=workspace, worktree=worktree)
+        for descriptor in builtin_descriptors(
+            workspace=workspace,
+            worktree=worktree,
+            process_executables=process_executables,
+        )
     }
 
 
@@ -458,6 +461,11 @@ def _command_schema() -> dict[str, Any]:
                 "maxItems": 256,
                 "items": {"type": "string", "maxLength": 8192},
             },
+            "working_directory": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048,
+            },
         },
     }
 
@@ -487,6 +495,80 @@ def _text_output_schema() -> dict[str, Any]:
         "properties": {
             "text": {"type": "string", "maxLength": 4_194_304},
             "truncated": {"type": "boolean"},
+        },
+    }
+
+
+def _repository_scan_output_schema() -> dict[str, Any]:
+    list_schema = {
+        "type": "array",
+        "maxItems": 10_000,
+        "items": {"type": "string", "maxLength": 2048},
+    }
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "workspace",
+            "files",
+            "directories",
+            "detected_languages",
+            "detected_frameworks",
+            "package_managers",
+            "test_files",
+            "config_files",
+            "entrypoints",
+            "important_files",
+            "ignored_dirs",
+            "skipped_paths",
+            "truncated",
+        ],
+        "properties": {
+            "workspace": {"type": "string", "maxLength": 2048},
+            "files": list_schema,
+            "directories": list_schema,
+            "detected_languages": list_schema,
+            "detected_frameworks": list_schema,
+            "package_managers": list_schema,
+            "test_files": list_schema,
+            "config_files": list_schema,
+            "entrypoints": list_schema,
+            "important_files": list_schema,
+            "ignored_dirs": list_schema,
+            "skipped_paths": list_schema,
+            "truncated": {"type": "boolean"},
+        },
+    }
+
+
+def _process_output_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "executable",
+            "working_directory",
+            "pid",
+            "passed",
+            "timed_out",
+            "cancelled",
+            "termination_reason",
+            "stdout_truncated",
+            "stderr_truncated",
+        ],
+        "properties": {
+            "executable": {"type": "string", "maxLength": 64},
+            "working_directory": {"type": "string", "maxLength": 2048},
+            "pid": {"type": ["integer", "null"], "minimum": 0},
+            "passed": {"type": "boolean"},
+            "timed_out": {"type": "boolean"},
+            "cancelled": {"type": "boolean"},
+            "termination_reason": {
+                "type": ["string", "null"],
+                "maxLength": 256,
+            },
+            "stdout_truncated": {"type": "boolean"},
+            "stderr_truncated": {"type": "boolean"},
         },
     }
 
@@ -677,3 +759,21 @@ def _classification_schema() -> dict[str, Any]:
             "generated_reason": {"type": ["string", "null"], "maxLength": 2048},
         },
     }
+
+
+def _process_executable_scope(
+    configured: Iterable[str] | None,
+) -> tuple[str, ...]:
+    values = (
+        ("python", "python3", "pytest", "node", "npm", "git")
+        if configured is None
+        else configured
+    )
+    if isinstance(values, (str, bytes)):
+        raise TypeError("process executables must be a collection of aliases")
+    aliases = tuple(dict.fromkeys(values))
+    if not aliases:
+        raise ValueError("process executables must not be empty")
+    if any(not isinstance(alias, str) for alias in aliases):
+        raise TypeError("process executable aliases must be strings")
+    return aliases

@@ -1,5 +1,11 @@
+from importlib import import_module
+
 from agentbus.tools.descriptors import BUILTIN_TOOL_VERSION, builtin_descriptors
-from agentbus.tools.interfaces import ManagedTool, ToolExecutionOutput
+from agentbus.tools.interfaces import (
+    ManagedTool,
+    ToolExecutionOutput,
+    ToolOutputCallback,
+)
 from agentbus.tools.registry import (
     DuplicateToolError,
     ToolNotFoundError,
@@ -8,14 +14,39 @@ from agentbus.tools.registry import (
     ToolVersionMismatchError,
 )
 
+
+_LAZY_ADAPTER_EXPORTS = frozenset(
+    {
+        "FileSystemManagedTool",
+        "GitManagedTool",
+        "ManagedToolContextError",
+        "ProcessManagedTool",
+        "RepositoryScanManagedTool",
+        "builtin_tool_registry",
+    }
+)
+
+
+def __getattr__(name: str):
+    if name in _LAZY_ADAPTER_EXPORTS:
+        return getattr(import_module("agentbus.tools.adapters"), name)
+    raise AttributeError(f"module 'agentbus.tools' has no attribute {name!r}")
+
 __all__ = [
     "BUILTIN_TOOL_VERSION",
     "DuplicateToolError",
+    "FileSystemManagedTool",
+    "GitManagedTool",
     "ManagedTool",
+    "ManagedToolContextError",
+    "ProcessManagedTool",
+    "RepositoryScanManagedTool",
     "ToolExecutionOutput",
     "ToolNotFoundError",
+    "ToolOutputCallback",
     "ToolRegistry",
     "ToolRegistryError",
     "ToolVersionMismatchError",
     "builtin_descriptors",
+    "builtin_tool_registry",
 ]
