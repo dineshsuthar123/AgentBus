@@ -185,6 +185,78 @@ class GitRepository:
         summary = "\n".join(part for part in [status, staged_stat, diff_stat] if part)
         return summary or "No changes."
 
+    def bounded_status(self, max_chars: int = 30_000) -> str:
+        return self._bound_output(self.diff_summary(), max_chars, "status")
+
+    def show_commit(
+        self,
+        revision: str = "HEAD",
+        *,
+        path: str | None = None,
+        max_chars: int = 30_000,
+    ) -> str:
+        resolved = self._resolve_commit(revision)
+        if path is None:
+            selected = self._changed_paths_in_commit(resolved)
+        else:
+            selected = self._normalize_paths((path,))
+            if self._protected_paths(selected):
+                raise GitRepositoryError(
+                    "Protected repository paths cannot be included in Git output."
+                )
+        command = [
+            "git",
+            "show",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--format=fuller",
+        ]
+        if selected:
+            command.extend(["--patch", "--stat", resolved, "--", *selected])
+        else:
+            command.extend(["--no-patch", resolved])
+        return self._bound_output(self._run(command), max_chars, "show")
+
+    def log_entries(
+        self,
+        *,
+        maximum_entries: int = 20,
+        max_chars: int = 30_000,
+    ) -> str:
+        if maximum_entries < 1 or maximum_entries > 100:
+            raise ValueError("maximum_entries must be between 1 and 100")
+        output = self._run(
+            [
+                "git",
+                "log",
+                f"--max-count={maximum_entries}",
+                "--date=iso-strict",
+                "--pretty=format:%H%x09%aI%x09%an%x09%s",
+            ]
+        )
+        return self._bound_output(output or "No commits.", max_chars, "log")
+
+    def branches(
+        self,
+        *,
+        maximum_entries: int = 100,
+        max_chars: int = 30_000,
+    ) -> str:
+        if maximum_entries < 1 or maximum_entries > 1_000:
+            raise ValueError("maximum_entries must be between 1 and 1000")
+        output = self._run(
+            [
+                "git",
+                "for-each-ref",
+                f"--count={maximum_entries}",
+                "--sort=refname",
+                "--format=%(refname:short)%09%(objectname)",
+                "refs/heads/",
+            ]
+        )
+        return self._bound_output(output or "No local branches.", max_chars, "branches")
+
     def full_diff(
         self,
         max_chars: int = 30_000,
@@ -241,9 +313,7 @@ class GitRepository:
         diff = "\n".join(part for part in parts if part)
         if not diff:
             return "No diff."
-        if len(diff) > max_chars:
-            return diff[:max_chars] + "\n\n[diff truncated]"
-        return diff
+        return _truncate_with_marker(diff, max_chars, "diff truncated")
 
     def raw_diff(
         self,
@@ -310,9 +380,11 @@ class GitRepository:
                 *review_files,
             ]
         )
-        if len(diff) > max_chars:
-            return diff[:max_chars] + "\n\n[diff truncated]"
-        return diff or "No diff."
+        return _truncate_with_marker(
+            diff or "No diff.",
+            max_chars,
+            "diff truncated",
+        )
 
     def changed_files(self) -> list[str]:
         return sorted(
@@ -425,6 +497,28 @@ class GitRepository:
         commit_command = ["git", "commit", "-m", message, "--only", "--", *pathspec]
         self._run(commit_command)
         return self._run(["git", "rev-parse", "--short", "HEAD"])
+
+    def stage(self, paths: Iterable[str]) -> list[str]:
+        requested = self._normalize_paths(paths)
+        if not requested:
+            raise GitRepositoryError("At least one repository path must be staged.")
+        selected = self.change_set(requested).commit_files
+        if selected != requested:
+            raise GitRepositoryError(
+                "Generated, ignored, protected, or unavailable paths cannot be staged."
+            )
+        self._run(["git", "add", "--all", "--", *selected])
+        staged_output = self._run(
+            ["git", "diff", "--cached", "--name-only", "-z", "--", *selected]
+        )
+        staged = sorted(
+            self._normalize_relative_path(path)
+            for path in staged_output.split("\0")
+            if path
+        )
+        if not staged:
+            raise GitRepositoryError("No selected changes were staged.")
+        return staged
 
     def remote_url(self) -> str | None:
         try:
@@ -593,6 +687,28 @@ class GitRepository:
             raise GitRepositoryError("Git returned an invalid commit identifier.")
         return resolved.lower()
 
+    def _changed_paths_in_commit(self, resolved: str) -> list[str]:
+        output = self._run(
+            [
+                "git",
+                "diff-tree",
+                "--root",
+                "--no-commit-id",
+                "--name-only",
+                "-r",
+                "-z",
+                resolved,
+                "--",
+                ".",
+            ]
+        )
+        changed = [
+            self._normalize_relative_path(path)
+            for path in output.split("\0")
+            if path
+        ]
+        return self._exclude_protected(changed)
+
     @staticmethod
     def _validate_revision(revision: str) -> None:
         if (
@@ -616,6 +732,19 @@ class GitRepository:
         if self._path_resolver is None:
             self._path_resolver = ContainedPathResolver(self.workspace)
         return self._path_resolver.classify(path).protected
+
+    def _bound_output(self, output: str, max_chars: int, operation: str) -> str:
+        if max_chars < 1 or max_chars > self.maximum_command_output_chars:
+            raise ValueError(
+                "max_chars must be positive and within the command output limit"
+            )
+        if len(output) <= max_chars:
+            return output
+        return _truncate_with_marker(
+            output,
+            max_chars,
+            f"{operation} output truncated",
+        )
 
     def _validate_branch_name(self, branch_name: str) -> None:
         if not branch_name or branch_name.startswith("-"):
@@ -645,3 +774,12 @@ def _git_environment() -> dict[str, str]:
         }
     )
     return environment
+
+
+def _truncate_with_marker(value: str, maximum: int, marker: str) -> str:
+    if len(value) <= maximum:
+        return value
+    suffix = f"\n[{marker}]"
+    if len(suffix) >= maximum:
+        return suffix[:maximum]
+    return value[: maximum - len(suffix)] + suffix
