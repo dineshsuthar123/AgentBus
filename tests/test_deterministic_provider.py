@@ -48,7 +48,8 @@ def test_deterministic_provider_routes_all_roles_through_structured_schemas():
 
     assert plan.provider == "deterministic"
     assert plan.json_value()["steps"][0]["id"] == "step-1"
-    assert coder.json_value()["action"] == "write_file"
+    assert coder.json_value()["action"] == "tool_call"
+    assert coder.json_value()["tool_call"]["tool_name"] == "filesystem.write"
     assert review.json_value()["approved"] is True
     assert "Deterministic summarizer summary" in summary.text_value()
 
@@ -73,9 +74,15 @@ def test_deterministic_coder_sequence_is_scoped_and_repeatable():
     )
 
     assert first.request_id == "det-coder-0001"
-    assert first.json_value()["path"] == "agentbus_result.py"
-    assert second.json_value()["path"] == "test_agentbus_result.py"
-    assert other_task.json_value()["path"] == "agentbus_secondary.py"
+    assert first.json_value()["tool_call"]["arguments"]["path"] == (
+        "agentbus_result.py"
+    )
+    assert second.json_value()["tool_call"]["arguments"]["path"] == (
+        "test_agentbus_result.py"
+    )
+    assert other_task.json_value()["tool_call"]["arguments"]["path"] == (
+        "agentbus_secondary.py"
+    )
     assert first.usage.total_tokens == (
         first.usage.input_tokens + first.usage.output_tokens
     )

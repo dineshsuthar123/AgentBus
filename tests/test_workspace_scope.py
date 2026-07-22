@@ -269,7 +269,8 @@ def test_explicit_absolute_workspace_propagates_to_runtime_components(tmp_path):
             }
 
     class Model:
-        pass
+        def generate_json(self, prompt, **kwargs):
+            return {"action": "finish", "summary": "workspace checked"}
 
     coder = CoderAgent(config=settings, model=Model())
     store = StateStore(settings.state_database_path)
@@ -280,6 +281,7 @@ def test_explicit_absolute_workspace_propagates_to_runtime_components(tmp_path):
         state_store=store,
     )
     loop = AgentLoop(config=settings, model=Model())
+    loop.run("Initialize managed tools")
     run_id = runner.create_durable_run("Check workspace propagation")
     executor = runner._durable_engine(run_id).task_executor
 
@@ -294,9 +296,9 @@ def test_explicit_absolute_workspace_propagates_to_runtime_components(tmp_path):
     assert runner.git_repository.workspace == workspace
     assert runner.pr_client.workspace == workspace
     assert coder.config.workspace_path == workspace
-    assert loop.fs.workspace == workspace
-    assert loop.cmd.workspace == workspace
-    assert loop.git.workspace == workspace
+    assert loop.tool_runtime is not None
+    assert loop.tool_runtime.workspace == workspace
+    assert loop.tool_runtime.worktree == workspace
     assert executor.git_repository.workspace == workspace
     assert executor.workspace == workspace
     assert store.get_run(run_id).workspace == str(workspace)
@@ -316,7 +318,12 @@ def test_parallel_worker_runtime_propagates_isolated_absolute_workspace(tmp_path
     runner = MultiAgentOrchestrator(config=settings)
 
     executor = runner._parallel_task_executor(worker_workspace)
-    loop = AgentLoop(config=executor.coder.config, model=object())
+    class Model:
+        def generate_json(self, prompt, **kwargs):
+            return {"action": "finish", "summary": "workspace checked"}
+
+    loop = AgentLoop(config=executor.coder.config, model=Model())
+    loop.run("Initialize managed tools")
 
     assert executor.workspace == worker_workspace
     assert executor.git_repository.workspace == worker_workspace
@@ -327,6 +334,6 @@ def test_parallel_worker_runtime_propagates_isolated_absolute_workspace(tmp_path
     assert executor.verifier.command_tools.workspace == worker_workspace
     assert executor.verifier.test_detector.workspace == worker_workspace
     assert Path(loop.workspace) == worker_workspace
-    assert loop.fs.workspace == worker_workspace
-    assert loop.cmd.workspace == worker_workspace
-    assert loop.git.workspace == worker_workspace
+    assert loop.tool_runtime is not None
+    assert loop.tool_runtime.workspace == worker_workspace
+    assert loop.tool_runtime.worktree == worker_workspace

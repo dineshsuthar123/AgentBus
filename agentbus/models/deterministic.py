@@ -303,9 +303,19 @@ class DeterministicProvider:
         if task_id == "step-2":
             actions = [
                 {
-                    "action": "write_file",
-                    "path": "agentbus_secondary.py",
-                    "content": 'MESSAGE = "scheduled"\n',
+                    "action": "tool_call",
+                    "tool_call": {
+                        "tool_name": "filesystem.write",
+                        "arguments": {
+                            "path": "agentbus_secondary.py",
+                            "content": 'MESSAGE = "scheduled"\n',
+                        },
+                        "expected_capabilities": [
+                            "filesystem.write",
+                            "filesystem.create",
+                        ],
+                        "idempotency_key": f"{task_id}:write-secondary",
+                    },
                 },
                 {
                     "action": "finish",
@@ -315,28 +325,67 @@ class DeterministicProvider:
         else:
             actions = [
                 {
-                    "action": "write_file",
-                    "path": "agentbus_result.py",
-                    "content": (
-                        '"""Deterministic AgentBus acceptance artifact."""\n\n'
-                        "def add(left: int, right: int) -> int:\n"
-                        "    return left + right\n"
-                    ),
+                    "action": "tool_call",
+                    "tool_call": {
+                        "tool_name": "filesystem.write",
+                        "arguments": {
+                            "path": "agentbus_result.py",
+                            "content": (
+                                '"""Deterministic AgentBus acceptance artifact."""\n\n'
+                                "def add(left: int, right: int) -> int:\n"
+                                "    return left + right\n"
+                            ),
+                        },
+                        "expected_capabilities": [
+                            "filesystem.write",
+                            "filesystem.create",
+                        ],
+                        "idempotency_key": f"{task_id}:write-result",
+                    },
                 },
                 {
-                    "action": "write_file",
-                    "path": "test_agentbus_result.py",
-                    "content": (
-                        "from agentbus_result import add\n\n\n"
-                        "def test_add() -> None:\n"
-                        "    assert add(2, 3) == 5\n"
-                    ),
+                    "action": "tool_call",
+                    "tool_call": {
+                        "tool_name": "filesystem.write",
+                        "arguments": {
+                            "path": "test_agentbus_result.py",
+                            "content": (
+                                "from agentbus_result import add\n\n\n"
+                                "def test_add() -> None:\n"
+                                "    assert add(2, 3) == 5\n"
+                            ),
+                        },
+                        "expected_capabilities": [
+                            "filesystem.write",
+                            "filesystem.create",
+                        ],
+                        "idempotency_key": f"{task_id}:write-test",
+                    },
                 },
                 {
-                    "action": "run_command",
-                    "command": ["python", "-m", "pytest", "-q"],
+                    "action": "tool_call",
+                    "tool_call": {
+                        "tool_name": "test.execute",
+                        "arguments": {
+                            "executable": "python",
+                            "arguments": ["-m", "pytest", "-q"],
+                        },
+                        "expected_capabilities": [
+                            "test.execute",
+                            "process.execute",
+                        ],
+                        "idempotency_key": f"{task_id}:pytest",
+                    },
                 },
-                {"action": "git_diff"},
+                {
+                    "action": "tool_call",
+                    "tool_call": {
+                        "tool_name": "git.diff",
+                        "arguments": {},
+                        "expected_capabilities": ["git.read"],
+                        "idempotency_key": f"{task_id}:git-diff",
+                    },
+                },
                 {
                     "action": "finish",
                     "summary": (

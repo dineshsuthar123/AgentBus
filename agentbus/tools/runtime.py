@@ -14,9 +14,12 @@ from agentbus.policy import ToolApprovalGrant, ToolPolicyEngine
 from agentbus.sandbox.platform import ExecutableCatalog
 from agentbus.tools.adapters import builtin_tool_registry
 from agentbus.tools.budget import ToolBudgetLedger
+from agentbus.tools.capabilities import derive_required_capabilities
 from agentbus.tools.dispatcher import ToolDispatcher, ToolDispatchResponse
 from agentbus.tools.protocol import (
     StructuredToolCall,
+    ToolCapabilityEscalationError,
+    ToolCapabilityName,
     ToolDescriptor,
     ToolInvocation,
     ToolInvocationContext,
@@ -66,6 +69,56 @@ class ManagedToolRuntime:
             budget_ledger=budget_ledger,
         )
         dispatcher_holder["dispatcher"] = self.dispatcher
+
+    def prepare_model_call(
+        self,
+        *,
+        tool_name: str,
+        arguments: dict[str, Any],
+        expected_capabilities: tuple[ToolCapabilityName, ...],
+        run_id: str,
+        task_id: str,
+        caller_role: str,
+        workspace_trusted: bool,
+        provider_consented: bool,
+        timeout_seconds: float | None = None,
+        invocation_revision: int = 1,
+        idempotency_key: str | None = None,
+        resource_budget: ToolResourceBudget | None = None,
+        policy_context: dict[str, Any] | None = None,
+    ) -> StructuredToolCall:
+        """Validate model claims before creating an authoritative scoped call."""
+        descriptor = self.registry.descriptor(tool_name)
+        provisional = StructuredToolCall(
+            tool_name=tool_name,
+            arguments=arguments,
+            expected_capabilities=descriptor.capabilities,
+            timeout_seconds=timeout_seconds,
+            invocation_revision=invocation_revision,
+            idempotency_key=idempotency_key,
+        )
+        invocation = self.invocation_from_call(
+            provisional,
+            run_id=run_id,
+            task_id=task_id,
+            caller_role=caller_role,
+            workspace_trusted=workspace_trusted,
+            provider_consented=provider_consented,
+            resource_budget=resource_budget,
+            policy_context=policy_context,
+        )
+        required = derive_required_capabilities(invocation, descriptor)
+        expected_names = tuple(expected_capabilities)
+        required_names = tuple(capability.name for capability in required)
+        if (
+            len(expected_names) != len(set(expected_names))
+            or set(expected_names) != set(required_names)
+        ):
+            raise ToolCapabilityEscalationError(
+                "Model-declared capability names do not exactly match runtime "
+                "derivation."
+            )
+        return provisional.model_copy(update={"expected_capabilities": required})
 
     def invocation_from_call(
         self,
