@@ -30,6 +30,25 @@ from agentbus.tools.protocol.models import (
     ToolSafetyClassification,
     ToolVersion,
 )
+from agentbus.tools.protocol.serialization import (
+    bound_text,
+    canonical_json,
+    capability_fingerprint,
+    deserialize_protocol_model,
+    output_chunk,
+    safe_protocol_dict,
+    serialize_protocol_model,
+    sha256_json,
+)
+from agentbus.tools.protocol.validation import (
+    capability_set_contains,
+    require_capabilities_unchanged,
+    require_invocation_revision,
+    scope_contains,
+    validate_descriptor,
+    validate_invocation_against_descriptor,
+    validate_protocol_version,
+)
 from agentbus.tools.protocol.version import (
     SUPPORTED_TOOL_PROTOCOL_VERSIONS,
     TOOL_PROTOCOL_NAME,
@@ -69,5 +88,20 @@ __all__ = [
     "ToolResult",
     "ToolSafetyClassification",
     "ToolVersion",
+    "bound_text",
+    "canonical_json",
+    "capability_fingerprint",
+    "capability_set_contains",
+    "deserialize_protocol_model",
     "is_supported_protocol_version",
+    "output_chunk",
+    "require_capabilities_unchanged",
+    "require_invocation_revision",
+    "safe_protocol_dict",
+    "scope_contains",
+    "serialize_protocol_model",
+    "sha256_json",
+    "validate_descriptor",
+    "validate_invocation_against_descriptor",
+    "validate_protocol_version",
 ]

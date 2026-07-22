@@ -13,6 +13,20 @@ from agentbus.tools.protocol import (
     ToolResourceBudget,
     ToolSafetyClassification,
     ToolVersion,
+    bound_text,
+    capability_fingerprint,
+    deserialize_protocol_model,
+    require_capabilities_unchanged,
+    require_invocation_revision,
+    safe_protocol_dict,
+    serialize_protocol_model,
+    validate_invocation_against_descriptor,
+    validate_protocol_version,
+)
+from agentbus.tools.protocol.errors import (
+    ToolCapabilityEscalationError,
+    ToolProtocolValidationError,
+    ToolProtocolVersionError,
 )
 
 
@@ -102,3 +116,110 @@ def test_resource_budget_rejects_reset_and_inconsistent_output_limits() -> None:
 def test_scope_deduplicates_without_mutating_order() -> None:
     scope = CapabilityScope(patterns=("src/**", "tests/**", "src/**"))
     assert scope.patterns == ("src/**", "tests/**")
+
+
+def test_protocol_serialization_is_stable_and_redacts_sensitive_arguments() -> None:
+    invocation = _invocation(arguments={"path": "src/app.py", "token": "secret"})
+    serialized = serialize_protocol_model(invocation)
+
+    assert "secret" not in serialized
+    assert "[REDACTED]" in serialized
+    assert serialize_protocol_model(invocation) == serialized
+    assert deserialize_protocol_model(
+        serialize_protocol_model(invocation, safe=False),
+        ToolInvocation,
+    ) == invocation
+    assert safe_protocol_dict(invocation)["arguments"]["token"] == "[REDACTED]"
+
+
+def test_capability_fingerprint_is_order_independent() -> None:
+    read = _capability()
+    execute = ToolCapability(
+        name=ToolCapabilityName.PROCESS_EXECUTE,
+        scope=CapabilityScope(executables=("python",)),
+    )
+    assert capability_fingerprint((read, execute)) == capability_fingerprint(
+        (execute, read)
+    )
+
+
+def test_descriptor_validation_rejects_downgrade_and_capability_expansion() -> None:
+    descriptor = _descriptor()
+    with pytest.raises(ToolProtocolVersionError, match="Unsupported"):
+        validate_protocol_version("0.9")
+
+    invocation = _invocation(
+        capabilities=(
+            _capability(),
+            ToolCapability(name=ToolCapabilityName.PROCESS_NETWORK),
+        )
+    )
+    with pytest.raises(ToolCapabilityEscalationError, match="undeclared"):
+        validate_invocation_against_descriptor(invocation, descriptor)
+
+    with pytest.raises(ToolProtocolValidationError, match="timeout"):
+        validate_invocation_against_descriptor(
+            _invocation(timeout_seconds=91),
+            descriptor,
+        )
+
+
+def test_approval_binding_rejects_scope_and_revision_changes() -> None:
+    approved = (_capability(),)
+    expanded = (
+        ToolCapability(
+            name=ToolCapabilityName.FILESYSTEM_READ,
+            scope=CapabilityScope(
+                roots=("C:/repo", "C:/other"),
+                patterns=("src/**", "tests/**"),
+            ),
+        ),
+    )
+    with pytest.raises(ToolCapabilityEscalationError, match="changed"):
+        require_capabilities_unchanged(approved, expanded)
+    with pytest.raises(ToolCapabilityEscalationError, match="revision"):
+        require_invocation_revision(approved_revision=1, current_revision=2)
+
+
+def test_bounded_text_preserves_utf8_and_reports_truncation() -> None:
+    text, byte_count, truncated = bound_text("alpha-\u20ac-omega", 9)
+    assert text == "alpha-\u20ac"
+    assert byte_count == 9
+    assert truncated is True
+
+
+def _descriptor() -> ToolDescriptor:
+    return ToolDescriptor(
+        name="filesystem.read",
+        version=ToolVersion(major=1),
+        description="Read a bounded text file inside the assigned worktree.",
+        capabilities=(_capability(),),
+        argument_schema={"type": "object"},
+        output_schema={"type": "object"},
+        safety=ToolSafetyClassification.SAFE,
+    )
+
+
+def _invocation(
+    *,
+    arguments: dict | None = None,
+    capabilities: tuple[ToolCapability, ...] | None = None,
+    timeout_seconds: float = 90,
+) -> ToolInvocation:
+    return ToolInvocation(
+        invocation_id="inv-1",
+        run_id="run-1",
+        task_id="step-1",
+        tool_name="filesystem.read",
+        tool_version=ToolVersion(major=1),
+        arguments=arguments or {"path": "src/app.py"},
+        requested_capabilities=capabilities or (_capability(),),
+        context=ToolInvocationContext(
+            workspace_identity="C:/repo",
+            worktree_identity="C:/repo",
+            caller_role="coder",
+            workspace_trusted=True,
+            provider_consented=True,
+        ),
+        timeout_seconds=timeout_seconds,
+    )
