@@ -212,9 +212,23 @@ def test_independent_tasks_overlap_and_dependency_waits_for_integration(tmp_path
         def __init__(self):
             self.calls = 0
 
-        def verify(self, require_command=False):
+        def verify(
+            self,
+            require_command=False,
+            *,
+            tool_runtime=None,
+            run_id=None,
+            task_id=None,
+            invocation_key=None,
+            **kwargs,
+        ):
             self.calls += 1
             assert require_command is True
+            assert tool_runtime.workspace == source
+            assert tool_runtime.worktree == Path(integrated)
+            assert run_id == "parallel-run"
+            assert task_id == "task-C"
+            assert invocation_key == "final-integration"
             assert all(
                 (Path(integrated) / name).is_file()
                 for name in ("module_a.py", "module_b.py", "integration_test.py")

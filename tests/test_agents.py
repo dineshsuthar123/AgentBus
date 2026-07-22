@@ -23,6 +23,10 @@ def test_planner_agent_parses_valid_model_output():
                     "title": "Add module",
                     "description": "Create calculator.py",
                     "risk": "low",
+                    "required_capabilities": [
+                        "filesystem.write",
+                        "filesystem.create",
+                    ],
                 }
             ],
             "test_strategy": "Run pytest",
@@ -35,6 +39,10 @@ def test_planner_agent_parses_valid_model_output():
 
     assert plan["goal"] == "Create calculator functions"
     assert plan["steps"][0]["risk"] == "low"
+    assert plan["steps"][0]["required_capabilities"] == [
+        "filesystem.write",
+        "filesystem.create",
+    ]
     assert "dependencies" not in plan["steps"][0]
     assert "done_criteria" not in plan["steps"][0]
     assert "create calculator" in model.prompts[0]

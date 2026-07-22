@@ -6,6 +6,7 @@ from agentbus.agents.base import BaseAgent
 from agentbus.config import AgentBusConfig
 from agentbus.models.router import ModelRouter
 from agentbus.models.types import ModelRole
+from agentbus.tools.protocol import ToolCapabilityName
 
 
 class PlanStep(BaseModel):
@@ -20,6 +21,7 @@ class PlanStep(BaseModel):
     maximum_attempts: int = Field(default=2, ge=1)
     expected_outputs: list[str] = Field(default_factory=list)
     done_criteria: list[str] | None = None
+    required_capabilities: list[ToolCapabilityName] | None = None
 
 
 class PlannerOutput(BaseModel):
@@ -69,7 +71,8 @@ Return ONLY valid JSON with this shape:
       "assigned_role": "coder",
       "maximum_attempts": 2,
       "expected_outputs": ["..."],
-      "done_criteria": ["..."]
+      "done_criteria": ["..."],
+      "required_capabilities": ["filesystem.read", "filesystem.write"]
     }}
   ],
   "test_strategy": "...",
@@ -83,7 +86,7 @@ Repo context:
 {context}
 """
         output = self.generate_json(prompt, schema=PlannerOutput)
-        return PlannerOutput(**output).model_dump(exclude_none=True)
+        return PlannerOutput(**output).model_dump(mode="json", exclude_none=True)
 
     def summarize(self, plan: dict) -> str:
         step_count = len(plan.get("steps", []))

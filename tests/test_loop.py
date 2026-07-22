@@ -228,3 +228,43 @@ def test_loop_suspends_for_exact_managed_tool_approval(tmp_path):
     assert approval.request.invocation_id == captured.value.invocation_id
     assert store.get_run(loop.run_id).status.value == "waiting_for_approval"
     assert not (workspace / ".github/workflows/ci.yml").exists()
+
+
+def test_loop_rejects_capability_outside_planner_requirements(tmp_path):
+    class OverreachingModel:
+        def __init__(self):
+            self.calls = 0
+
+        def generate_json(self, prompt, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "action": "tool_call",
+                    "tool_call": {
+                        "tool_name": "filesystem.write",
+                        "arguments": {"path": "result.py", "content": "VALUE = 1\n"},
+                        "expected_capabilities": [
+                            "filesystem.write",
+                            "filesystem.create",
+                        ],
+                        "idempotency_key": "planner-overreach",
+                    },
+                }
+            assert "exceeds the planner-declared" in prompt
+            return {"action": "finish", "summary": "overreach rejected"}
+
+    workspace = tmp_path / "workspace"
+    config = AgentBusConfig(
+        workspace_dir=str(workspace),
+        runs_dir=str(tmp_path / "runs"),
+        state_dir=str(tmp_path / "state"),
+        max_steps=2,
+    )
+    loop = AgentLoop(
+        config=config,
+        model=OverreachingModel(),
+        policy_context={"planned_capabilities": ["filesystem.read"]},
+    )
+
+    assert loop.run("respect plan") == "overreach rejected"
+    assert not (workspace / "result.py").exists()

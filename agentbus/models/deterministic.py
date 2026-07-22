@@ -270,6 +270,13 @@ class DeterministicProvider:
                     "The calculator adds two integers.",
                     "The deterministic test passes.",
                 ],
+                "required_capabilities": [
+                    "filesystem.write",
+                    "filesystem.create",
+                    "test.execute",
+                    "process.execute",
+                    "git.read",
+                ],
             }
         ]
         if self.profile == "cancellation-two-task":
@@ -286,6 +293,10 @@ class DeterministicProvider:
                     "maximum_attempts": 1,
                     "expected_outputs": ["agentbus_secondary.py"],
                     "done_criteria": ["The secondary artifact is present."],
+                    "required_capabilities": [
+                        "filesystem.write",
+                        "filesystem.create",
+                    ],
                 }
             )
         return {

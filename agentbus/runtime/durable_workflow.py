@@ -78,6 +78,12 @@ class MultiAgentTaskExecutor:
                     "policy_context": {
                         "attempt_number": context.attempt_number,
                         "assigned_role": context.task.assigned_role,
+                        "planned_capabilities": list(
+                            context.task.metadata.get(
+                                "required_capabilities",
+                                [],
+                            )
+                        ),
                     },
                 }
                 coder_summary = self.coder.execute(
@@ -375,6 +381,9 @@ class MultiAgentTaskExecutor:
                     "assigned_role": task.assigned_role,
                     "expected_outputs": task.expected_outputs,
                     "done_criteria": task.done_criteria,
+                    "required_capabilities": list(
+                        task.metadata.get("required_capabilities", [])
+                    ),
                 }
             ],
             "test_strategy": context.run.planner_output.get(

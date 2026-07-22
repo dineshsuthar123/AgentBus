@@ -27,7 +27,10 @@ from agentbus.models.router import ModelRouter, model_request_context
 from agentbus.models.types import ModelRole
 from agentbus.runtime.prompts import SYSTEM_PROMPT
 from agentbus.runtime.schemas import AgentAction
-from agentbus.tools.protocol import ToolResourceBudget
+from agentbus.tools.protocol import (
+    ToolCapabilityEscalationError,
+    ToolResourceBudget,
+)
 from agentbus.tools.runtime import ManagedToolRuntime, build_managed_tool_runtime
 
 
@@ -222,6 +225,19 @@ Return the next JSON action.
             raise RuntimeError("Managed tool execution requires run and task IDs.")
 
         requested = action.tool_call
+        planned_capabilities = self.policy_context.get("planned_capabilities")
+        if isinstance(planned_capabilities, list) and planned_capabilities:
+            declared = {
+                str(getattr(value, "value", value))
+                for value in planned_capabilities
+            }
+            requested_names = {
+                capability.value for capability in requested.expected_capabilities
+            }
+            if not requested_names.issubset(declared):
+                raise ToolCapabilityEscalationError(
+                    "Tool call exceeds the planner-declared capability requirements."
+                )
         call = self.tool_runtime.prepare_model_call(
             tool_name=requested.tool_name,
             arguments=requested.arguments,

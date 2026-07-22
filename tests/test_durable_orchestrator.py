@@ -287,8 +287,14 @@ def test_task_reviews_are_scoped_and_final_review_runs_last(tmp_path):
             return super().execute(user_task, plan, reviewer_feedback)
 
     class TimelineVerifier(FakeVerifier):
-        def verify(self):
+        def verify(self, **kwargs):
             timeline.append("verify")
+            if kwargs.get("invocation_key") == "final-run":
+                assert kwargs["run_id"]
+                assert kwargs["task_id"] == "step-2"
+                assert kwargs["tool_runtime"].workspace == (
+                    tmp_path / "workspace"
+                ).resolve()
             return super().verify()
 
     class TimelineReviewer(FakeReviewer):

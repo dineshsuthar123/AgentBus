@@ -609,7 +609,7 @@ class MultiAgentOrchestrator:
                 )
                 return self.get_durable_report(run_id)
 
-        verifier_result = self._verify_final()
+        verifier_result = self._verify_final(run_id)
         cancellation.checkpoint(
             "final-review",
             stage="after-final-verification",
@@ -779,11 +779,26 @@ class MultiAgentOrchestrator:
             {"integration_worktree": str(integration_path)},
         )
         verify = verifier.verify
-        verifier_result = (
-            verify(require_command=True)
-            if "require_command" in inspect.signature(verify).parameters
-            else verify()
-        )
+        with build_managed_tool_runtime(
+            workspace=self.workspace,
+            worktree=integration_path,
+            state_store=self.state_store,
+            cancellation_registry=self._cancellation_registry_for_use(),
+            owned_worktree=True,
+        ) as tool_runtime:
+            tool_runtime.recover_run(run_id)
+            verifier_result = self._call_with_supported_arguments(
+                verify,
+                {
+                    "require_command": True,
+                    "tool_runtime": tool_runtime,
+                    "run_id": run_id,
+                    "task_id": self._final_tool_task_id(run_id),
+                    "invocation_key": "final-integration",
+                    "workspace_trusted": True,
+                    "provider_consented": True,
+                },
+            )
         cancellation.checkpoint(
             "final-review",
             stage="after-integration-verification",
@@ -1019,11 +1034,51 @@ class MultiAgentOrchestrator:
             )
         return self.get_durable_report(run_id)
 
-    def _verify_final(self) -> dict[str, Any]:
+    def _verify_final(self, run_id: str) -> dict[str, Any]:
         verify = self.verifier.verify
-        if "require_command" in inspect.signature(verify).parameters:
-            return verify(require_command=True)
-        return verify()
+        with build_managed_tool_runtime(
+            workspace=self.workspace,
+            state_store=self.state_store,
+            cancellation_registry=self._cancellation_registry_for_use(),
+        ) as tool_runtime:
+            tool_runtime.recover_run(run_id)
+            return self._call_with_supported_arguments(
+                verify,
+                {
+                    "require_command": True,
+                    "tool_runtime": tool_runtime,
+                    "run_id": run_id,
+                    "task_id": self._final_tool_task_id(run_id),
+                    "invocation_key": "final-run",
+                    "workspace_trusted": True,
+                    "provider_consented": True,
+                },
+            )
+
+    def _final_tool_task_id(self, run_id: str) -> str:
+        tasks = self.state_store.list_tasks(run_id)
+        if not tasks:
+            raise StateStoreError(
+                "Final verification requires at least one persisted task."
+            )
+        return tasks[-1].task_id
+
+    @staticmethod
+    def _call_with_supported_arguments(callable_object, arguments):
+        parameters = inspect.signature(callable_object).parameters.values()
+        if any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters
+        ):
+            return callable_object(**arguments)
+        supported = {parameter.name for parameter in parameters}
+        return callable_object(
+            **{
+                name: value
+                for name, value in arguments.items()
+                if name in supported
+            }
+        )
 
     def _validate_workspace_repository(self):
         validate = getattr(self.git_repository, "validate_workspace", None)
