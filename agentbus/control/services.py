@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import subprocess
 import threading
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -612,7 +613,9 @@ class ControlQueryService:
     def report(self, run_id: str) -> RunReportResponse:
         self.get_run(run_id)
         report = DurableExecutionEngine(self.store).get_report(run_id)
-        safe = sanitize_json(report.model_dump(mode="json"))
+        payload = report.model_dump(mode="json")
+        payload["tool_runtime"] = self._tool_runtime_report(run_id)
+        safe = sanitize_json(payload)
         cancellation = cancellation_lifecycle(
             self.store.get_cancellation_state(run_id)
         )
@@ -1236,6 +1239,152 @@ class ControlQueryService:
             startup_timeout_seconds=config.startup_timeout_seconds,
             request_timeout_seconds=config.request_timeout_seconds,
         )
+
+    def _tool_runtime_report(self, run_id: str) -> dict[str, Any]:
+        invocations = self.store.list_tool_invocations(run_id, limit=1000)
+        invocation_records_truncated = bool(
+            len(invocations) == 1000
+            and self.store.list_tool_invocations(
+                run_id,
+                after_sequence=invocations[-1].invocation_sequence,
+                limit=1,
+            )
+        )
+        approvals = self.store.list_tool_approvals(run_id, limit=1000)
+        approval_records_truncated = bool(
+            len(approvals) == 1000
+            and self.store.list_tool_approvals(
+                run_id,
+                after_sequence=approvals[-1].approval_sequence,
+                limit=1,
+            )
+        )
+        audits = self.store.list_tool_audits(run_id, limit=1000)
+        audit_records_truncated = bool(
+            len(audits) == 1000
+            and self.store.list_tool_audits(
+                run_id,
+                after_sequence=audits[-1].audit_sequence,
+                limit=1,
+            )
+        )
+
+        status_counts: Counter[str] = Counter()
+        policy_outcomes: Counter[str] = Counter()
+        policy_rules: Counter[str] = Counter()
+        versions: dict[str, set[str]] = {}
+        mcp_servers: set[str] = set()
+        resource_totals: Counter[str] = Counter()
+        denied_operations: list[dict[str, Any]] = []
+        artifacts: list[dict[str, Any]] = []
+        artifact_count = 0
+        output_truncation_count = 0
+        timeout_count = 0
+        cancellation_count = 0
+
+        for invocation in invocations:
+            status_counts[invocation.status.value] += 1
+            versions.setdefault(invocation.tool_name, set()).add(
+                str(invocation.tool_version)
+            )
+            decision = invocation.policy_decision
+            if decision is not None:
+                policy_outcomes[decision.outcome.value] += 1
+                policy_rules[decision.rule_id] += 1
+            if invocation.status.value == "denied" and len(denied_operations) < 50:
+                denied_operations.append(
+                    {
+                        "invocation_id": invocation.invocation_id,
+                        "tool_name": invocation.tool_name,
+                        "rule_id": decision.rule_id if decision else None,
+                        "error_category": (
+                            invocation.error_category.value
+                            if invocation.error_category
+                            else None
+                        ),
+                    }
+                )
+            if invocation.status.value == "timed_out":
+                timeout_count += 1
+            if invocation.status.value == "cancelled":
+                cancellation_count += 1
+            for capability in invocation.capabilities:
+                mcp_servers.update(capability.scope.mcp_servers)
+            usage = invocation.resource_usage
+            for name in (
+                "wall_clock_seconds",
+                "stdout_bytes",
+                "stderr_bytes",
+                "artifact_bytes",
+                "child_processes",
+                "file_mutations",
+                "written_bytes",
+            ):
+                resource_totals[name] += getattr(usage, name)
+            if usage.memory_bytes is not None:
+                resource_totals["memory_bytes"] += usage.memory_bytes
+            if usage.cpu_seconds is not None:
+                resource_totals["cpu_seconds"] += usage.cpu_seconds
+            result = invocation.safe_result
+            if result is None:
+                continue
+            if result.stdout_truncated or result.stderr_truncated:
+                output_truncation_count += 1
+            for artifact in result.artifacts:
+                artifact_count += 1
+                if len(artifacts) < 256:
+                    artifacts.append(artifact.model_dump(mode="json"))
+
+        approval_states = Counter(
+            approval.disposition or "pending" for approval in approvals
+        )
+        return {
+            "invocation_count": len(invocations),
+            "invocation_records_truncated": invocation_records_truncated,
+            "aggregates_truncated": invocation_records_truncated,
+            "status_counts": dict(sorted(status_counts.items())),
+            "tool_versions": [
+                {"tool_name": name, "versions": sorted(values)}
+                for name, values in sorted(versions.items())
+            ],
+            "policy_decisions": {
+                "outcomes": dict(sorted(policy_outcomes.items())),
+                "rules": dict(sorted(policy_rules.items())),
+            },
+            "approvals": {
+                "count": len(approvals),
+                "states": dict(sorted(approval_states.items())),
+                "records_truncated": approval_records_truncated,
+            },
+            "denied_operations": denied_operations,
+            "denied_operations_truncated": status_counts["denied"] > 50,
+            "resource_consumption": dict(sorted(resource_totals.items())),
+            "output_truncation_count": output_truncation_count,
+            "timeout_count": timeout_count,
+            "cancellation_count": cancellation_count,
+            "mcp_usage": {
+                "servers": sorted(mcp_servers),
+                "invocation_count": sum(
+                    count
+                    for tool_name, count in Counter(
+                        invocation.tool_name for invocation in invocations
+                    ).items()
+                    if tool_name.startswith("mcp.")
+                ),
+            },
+            "artifacts": artifacts,
+            "artifact_count": artifact_count,
+            "artifacts_truncated": artifact_count > len(artifacts),
+            "audit_record_count": len(audits),
+            "audit_records_truncated": audit_records_truncated,
+            "output_bodies_persisted": False,
+            "security_constraints": [
+                "Tool arguments are represented by hashes or bounded summaries.",
+                "Raw stdout, stderr, and structured output bodies are not persisted.",
+                "Artifacts are metadata-only and require repository-contained reads.",
+                "MCP, filesystem, process, and Git calls use the same policy runtime.",
+            ],
+        }
 
     def providers(self) -> ProviderListResponse:
         values: list[ProviderSummary] = []

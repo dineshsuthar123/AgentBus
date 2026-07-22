@@ -351,6 +351,7 @@ def test_tool_invocation_and_audit_endpoints_expose_only_safe_replay_state(
         workspace=tmp_path,
         state_store=client.app.state.query_service.store,
     )
+    artifact_content = "control-artifact-private-content\n"
     try:
         call = runtime.prepare_model_call(
             tool_name="filesystem.read",
@@ -372,6 +373,32 @@ def test_tool_invocation_and_audit_endpoints_expose_only_safe_replay_state(
             provider_consented=True,
             invocation_id="control-safe-read",
         )
+        write_call = runtime.prepare_model_call(
+            tool_name="filesystem.write",
+            arguments={
+                "path": "generated.txt",
+                "content": artifact_content,
+            },
+            expected_capabilities=(
+                ToolCapabilityName.FILESYSTEM_WRITE,
+                ToolCapabilityName.FILESYSTEM_CREATE,
+            ),
+            run_id="run-1",
+            task_id="task-1",
+            caller_role="coder",
+            workspace_trusted=True,
+            provider_consented=True,
+            idempotency_key="control-safe-write",
+        )
+        runtime.invoke(
+            write_call,
+            run_id="run-1",
+            task_id="task-1",
+            caller_role="coder",
+            workspace_trusted=True,
+            provider_consented=True,
+            invocation_id="control-safe-write",
+        )
     finally:
         runtime.close()
 
@@ -384,6 +411,7 @@ def test_tool_invocation_and_audit_endpoints_expose_only_safe_replay_state(
         headers=_auth(),
     )
     audit = client.get("/api/v1/runs/run-1/tool-audit", headers=_auth())
+    report = client.get("/api/v1/runs/run-1/report", headers=_auth())
     terminal_cancel = client.post(
         f"/api/v1/runs/run-1/tool-invocations/{response.invocation.invocation_id}/cancel",
         headers=_auth(),
@@ -393,14 +421,25 @@ def test_tool_invocation_and_audit_endpoints_expose_only_safe_replay_state(
         headers=_auth(),
     )
 
-    serialized = listed.text + detail.text + audit.text
+    serialized = listed.text + detail.text + audit.text + report.text
     assert listed.status_code == 200
     assert listed.json()["invocations"][0]["status"] == "succeeded"
     assert detail.status_code == 200
     assert detail.json()["result"]["structured_output"]["persisted_summary"] is True
     assert audit.status_code == 200
     assert audit.json()["records"][0]["record"]["outcome"] == "succeeded"
+    tool_report = report.json()["report"]["tool_runtime"]
+    assert tool_report["invocation_count"] == 2
+    assert tool_report["status_counts"] == {"succeeded": 2}
+    assert tool_report["artifact_count"] == 1
+    assert tool_report["audit_record_count"] == 2
+    assert tool_report["output_bodies_persisted"] is False
+    assert tool_report["policy_decisions"]["outcomes"] == {
+        "allow": 1,
+        "allow_with_constraints": 1,
+    }
     assert content.strip() not in serialized
+    assert artifact_content.strip() not in serialized
     assert terminal_cancel.status_code == 409
     assert unknown.status_code == 404
 
@@ -465,6 +504,7 @@ def test_tool_approval_is_listed_decided_idempotently_and_cancellable(
         headers=_auth(),
         json={"revision": 1},
     )
+    report = client.get("/api/v1/runs/run-1/report", headers=_auth())
 
     item = listed.json()["approvals"][0]
     assert listed.status_code == 200
@@ -480,6 +520,9 @@ def test_tool_approval_is_listed_decided_idempotently_and_cancellable(
     assert repeated.json()["idempotent"] is True
     assert conflicting.status_code == 409
     assert target.exists()
+    tool_report = report.json()["report"]["tool_runtime"]
+    assert tool_report["status_counts"] == {"awaiting_approval": 1}
+    assert tool_report["approvals"]["states"] == {"approved": 1}
 
 
 def test_mcp_diagnostics_check_only_preconfigured_server_and_hide_command(
