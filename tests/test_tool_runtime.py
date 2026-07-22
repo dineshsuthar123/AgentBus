@@ -9,10 +9,15 @@ from pydantic import ValidationError
 from agentbus.execution.cancellation import CancellationRequested
 from agentbus.execution.models import RunRecord, TaskSpec
 from agentbus.execution.state_store import StateStore
+from agentbus.mcp import McpServerConfig, mcp_server_capabilities
+from agentbus.policy import ToolApprovalDisposition, decide_tool_approval
 from agentbus.sandbox.platform import ExecutableCatalog
 from agentbus.tools.capabilities import derive_required_capabilities
 from agentbus.tools.protocol import StructuredToolCall, ToolInvocationStatus
 from agentbus.tools.runtime import build_managed_tool_runtime
+
+
+MCP_FIXTURE = Path(__file__).parent / "fixtures" / "mcp" / "fake_server.py"
 
 
 def test_structured_tool_call_rejects_malformed_and_capability_free_input() -> None:
@@ -164,7 +169,88 @@ def test_runtime_rejects_invocation_context_outside_managed_roots(
     assert (tmp_path / "escape.py").exists() is False
 
 
+def test_runtime_owns_imported_mcp_policy_and_process_lifecycle(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    alias = "fake-mcp-runtime"
+    runtime = build_managed_tool_runtime(
+        workspace=tmp_path,
+        state_store=store,
+        executable_catalog=ExecutableCatalog(
+            {
+                "python": sys.executable,
+                alias: (
+                    sys.executable,
+                    "-u",
+                    str(MCP_FIXTURE),
+                    "--mode",
+                    "normal",
+                ),
+            }
+        ),
+        source_environment={"AZURE_OPENAI_API_KEY": "must-not-leak"},
+    )
+    config = McpServerConfig(
+        server_id="fixture",
+        transport="stdio",
+        executable_alias=alias,
+        capability_map={
+            name: mcp_server_capabilities("fixture")
+            for name in ("echo", "write_note")
+        },
+    )
+
+    descriptors = runtime.import_mcp_server(config, run_id="run-1")
+    descriptor = runtime.registry.descriptor("mcp.fixture.echo")
+    call = StructuredToolCall(
+        tool_name=descriptor.name,
+        arguments={"message": "runtime hello"},
+        expected_capabilities=descriptor.capabilities,
+    )
+    pending = runtime.invoke(
+        call,
+        run_id="run-1",
+        task_id="task-1",
+        caller_role="coder",
+        workspace_trusted=True,
+        provider_consented=True,
+        invocation_id="runtime-mcp-1",
+    )
+    grant = decide_tool_approval(
+        pending.approval_request,
+        pending.invocation,
+        disposition=ToolApprovalDisposition.APPROVED,
+        reason="Approve configured offline MCP fixture",
+    )
+    completed = runtime.dispatch(pending.invocation, approval=grant)
+    imported_transport = runtime._mcp_sessions["fixture"].client.transport
+
+    assert len(descriptors) == 2
+    assert pending.awaiting_approval is True
+    assert completed.result.status == ToolInvocationStatus.SUCCEEDED
+    assert completed.result.structured_output["structured_content"] == {
+        "echo": "runtime hello"
+    }
+    assert imported_transport.is_running is True
+
+    runtime.close()
+    assert imported_transport.is_running is False
+    with pytest.raises(RuntimeError, match="closed"):
+        runtime.dispatch(pending.invocation)
+
+
 def _runtime(root: Path):
+    store = _store(root)
+    runtime = build_managed_tool_runtime(
+        workspace=root,
+        state_store=store,
+        executable_catalog=ExecutableCatalog({"python": sys.executable}),
+    )
+    return runtime, store
+
+
+def _store(root: Path) -> StateStore:
     store = StateStore(root / "state.db")
     store.create_run_with_tasks(
         RunRecord(
@@ -183,12 +269,7 @@ def _runtime(root: Path):
             )
         ],
     )
-    runtime = build_managed_tool_runtime(
-        workspace=root,
-        state_store=store,
-        executable_catalog=ExecutableCatalog({"python": sys.executable}),
-    )
-    return runtime, store
+    return store
 
 
 def _call(runtime, root: Path, tool_name: str, arguments: dict):

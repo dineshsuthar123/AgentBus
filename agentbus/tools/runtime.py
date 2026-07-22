@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import threading
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from agentbus.execution.cancellation_registry import CancellationRegistry
 from agentbus.execution.state_store import StateStore
+from agentbus.mcp import McpImportSession, McpServerConfig
+from agentbus.mcp import import_mcp_server as import_configured_mcp_server
 from agentbus.policy import ToolApprovalGrant, ToolPolicyEngine
 from agentbus.sandbox.platform import ExecutableCatalog
 from agentbus.tools.adapters import builtin_tool_registry
@@ -13,6 +17,7 @@ from agentbus.tools.budget import ToolBudgetLedger
 from agentbus.tools.dispatcher import ToolDispatcher, ToolDispatchResponse
 from agentbus.tools.protocol import (
     StructuredToolCall,
+    ToolDescriptor,
     ToolInvocation,
     ToolInvocationContext,
     ToolResourceBudget,
@@ -31,11 +36,17 @@ class ManagedToolRuntime:
         owned_worktree: bool = False,
         policy_engine: ToolPolicyEngine | None = None,
         budget_ledger: ToolBudgetLedger | None = None,
+        source_environment: Mapping[str, str] | None = None,
     ) -> None:
         self.workspace = _canonical_directory(workspace, "workspace")
         self.worktree = _canonical_directory(worktree, "worktree")
         self.state_store = state_store
         self.cancellations = cancellation_registry
+        self.executable_catalog = executable_catalog
+        self.source_environment = source_environment
+        self._lifecycle_lock = threading.RLock()
+        self._mcp_sessions: dict[str, McpImportSession] = {}
+        self._closed = False
         dispatcher_holder: dict[str, ToolDispatcher] = {}
 
         def record_output(invocation, chunk) -> None:
@@ -69,6 +80,7 @@ class ManagedToolRuntime:
         policy_context: dict[str, Any] | None = None,
         invocation_id: str | None = None,
     ) -> ToolInvocation:
+        self._require_open()
         descriptor = self.registry.descriptor(call.tool_name)
         budget = resource_budget or ToolResourceBudget()
         cancellation = self.cancellations.get(run_id).snapshot()
@@ -131,6 +143,7 @@ class ManagedToolRuntime:
         *,
         approval: ToolApprovalGrant | None = None,
     ) -> ToolDispatchResponse:
+        self._require_open()
         try:
             workspace = _canonical_directory(
                 invocation.context.workspace_identity,
@@ -155,8 +168,54 @@ class ManagedToolRuntime:
         )
 
     def recover_run(self, run_id: str):
+        self._require_open()
         self.cancellations.recover(run_id)
         return self.dispatcher.recover_run(run_id)
+
+    def import_mcp_server(
+        self,
+        config: McpServerConfig,
+        *,
+        run_id: str | None = None,
+    ) -> tuple[ToolDescriptor, ...]:
+        with self._lifecycle_lock:
+            self._require_open()
+            if config.server_id in self._mcp_sessions:
+                raise ValueError(
+                    f"MCP server is already imported: {config.server_id}."
+                )
+            cancellation = self.cancellations.get(run_id) if run_id else None
+            session = import_configured_mcp_server(
+                self.registry,
+                config,
+                worktree=self.worktree,
+                executable_catalog=self.executable_catalog,
+                source_environment=self.source_environment,
+                cancellation=cancellation,
+            )
+            self._mcp_sessions[config.server_id] = session
+            return session.descriptors
+
+    def close(self) -> None:
+        with self._lifecycle_lock:
+            if self._closed:
+                return
+            self._closed = True
+            sessions = tuple(reversed(tuple(self._mcp_sessions.values())))
+            self._mcp_sessions.clear()
+        for session in sessions:
+            session.close()
+
+    def __enter__(self) -> "ManagedToolRuntime":
+        self._require_open()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.close()
+
+    def _require_open(self) -> None:
+        if self._closed:
+            raise RuntimeError("Managed tool runtime is closed.")
 
 
 def build_managed_tool_runtime(
@@ -169,6 +228,7 @@ def build_managed_tool_runtime(
     owned_worktree: bool = False,
     policy_engine: ToolPolicyEngine | None = None,
     budget_ledger: ToolBudgetLedger | None = None,
+    source_environment: Mapping[str, str] | None = None,
 ) -> ManagedToolRuntime:
     return ManagedToolRuntime(
         workspace=workspace,
@@ -181,6 +241,7 @@ def build_managed_tool_runtime(
         owned_worktree=owned_worktree,
         policy_engine=policy_engine,
         budget_ledger=budget_ledger,
+        source_environment=source_environment,
     )
 
 
