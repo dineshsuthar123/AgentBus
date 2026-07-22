@@ -4,7 +4,7 @@ import pytest
 
 from agentbus.agents.planner import PlannerOutput
 from agentbus.agents.reviewer import ReviewerOutput
-from agentbus.config import AgentBusConfig
+from agentbus.config import AgentBusConfig, SUPPORTED_DETERMINISTIC_PROFILES
 from agentbus.control.models import RunCreateRequest
 from agentbus.models.deterministic import DeterministicProvider
 from agentbus.models.errors import ModelServiceUnavailableError
@@ -48,7 +48,8 @@ def test_deterministic_provider_routes_all_roles_through_structured_schemas():
 
     assert plan.provider == "deterministic"
     assert plan.json_value()["steps"][0]["id"] == "step-1"
-    assert coder.json_value()["action"] == "write_file"
+    assert coder.json_value()["action"] == "tool_call"
+    assert coder.json_value()["tool_call"]["tool_name"] == "filesystem.write"
     assert review.json_value()["approved"] is True
     assert "Deterministic summarizer summary" in summary.text_value()
 
@@ -73,9 +74,15 @@ def test_deterministic_coder_sequence_is_scoped_and_repeatable():
     )
 
     assert first.request_id == "det-coder-0001"
-    assert first.json_value()["path"] == "agentbus_result.py"
-    assert second.json_value()["path"] == "test_agentbus_result.py"
-    assert other_task.json_value()["path"] == "agentbus_secondary.py"
+    assert first.json_value()["tool_call"]["arguments"]["path"] == (
+        "agentbus_result.py"
+    )
+    assert second.json_value()["tool_call"]["arguments"]["path"] == (
+        "test_agentbus_result.py"
+    )
+    assert other_task.json_value()["tool_call"]["arguments"]["path"] == (
+        "agentbus_secondary.py"
+    )
     assert first.usage.total_tokens == (
         first.usage.input_tokens + first.usage.output_tokens
     )
@@ -116,3 +123,26 @@ def test_control_request_allows_offline_provider_without_live_consent(tmp_path):
     assert request.live_provider_consent is False
     assert request.deterministic.profile == "cancellation-two-task"
     assert request.deterministic.latency_roles == ["coder"]
+
+
+@pytest.mark.parametrize("profile", SUPPORTED_DETERMINISTIC_PROFILES[2:])
+def test_deterministic_tool_profiles_declare_structured_capabilities(profile):
+    router = ModelRouter(deterministic_config(deterministic_profile=profile))
+
+    plan = router.generate_json(
+        ModelRole.PLANNER,
+        "Plan the deterministic managed-tool profile.",
+        schema=PlannerOutput,
+    ).json_value()
+    action = router.generate_json(
+        ModelRole.CODER,
+        "Return the first deterministic managed-tool action.",
+        schema=AgentAction,
+        metadata={"run_id": "run-profile", "task_id": "step-1"},
+    ).json_value()
+
+    declared = set(plan["steps"][0]["required_capabilities"])
+    requested = set(action["tool_call"]["expected_capabilities"])
+    assert plan["steps"][0]["id"] == "step-1"
+    assert requested
+    assert requested <= declared

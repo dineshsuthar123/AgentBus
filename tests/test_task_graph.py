@@ -113,3 +113,19 @@ def test_graph_serialization_round_trip():
     restored = TaskGraph.from_dict(graph.to_dict())
 
     assert restored.to_dict() == graph.to_dict()
+
+
+def test_planner_capability_requirements_persist_in_task_metadata():
+    planned = step("write", dependencies=[])
+    planned["required_capabilities"] = [
+        "filesystem.write",
+        "filesystem.create",
+    ]
+
+    graph = TaskGraph.from_planner_output(planner_output([planned]))
+    restored = TaskGraph.from_dict(graph.to_dict())
+
+    assert restored.tasks[0].metadata["required_capabilities"] == [
+        "filesystem.write",
+        "filesystem.create",
+    ]

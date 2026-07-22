@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import sys
@@ -15,7 +16,11 @@ from agentbus.security.redaction import safe_child_environment
 
 _TERMINAL_STATUSES = {"succeeded", "failed", "cancelled"}
 _SUCCESS_EVENT = "integration_commit_published"
+_COMMIT_EVENT = "commit_created"
 _CANCELLATION_EVENT = "cancellation_cleanup_completed"
+_DELETE_TARGET = "deterministic deletion target\n"
+_DELETE_TARGET_SHA256 = hashlib.sha256(_DELETE_TARGET.encode("utf-8")).hexdigest()
+_MCP_ECHO_MARKER = "deterministic MCP hello"
 
 
 def main() -> int:
@@ -24,11 +29,27 @@ def main() -> int:
         workspace = _initialize_repository(root / "repo")
         state_path = root / "state.db"
         registry = root / "daemons.json"
+        mcp_fixture = (
+            Path(__file__).resolve().parents[2]
+            / "tests"
+            / "fixtures"
+            / "mcp"
+            / "fake_server.py"
+        )
+        assert mcp_fixture.is_file()
+        mcp_lifecycle_dir = root / "mcp-lifecycle"
+        mcp_lifecycle_dir.mkdir()
+        mcp_environment_marker = "acceptance-mcp-private-marker"
+        traversal_marker = "acceptance-outside-secret-marker"
+        (root / "outside.txt").write_text(traversal_marker, encoding="utf-8")
         process = _launch_daemon(
             workspace=workspace,
             state_path=state_path,
             runs_dir=root / "runs",
             registry=registry,
+            mcp_fixture=mcp_fixture,
+            mcp_lifecycle_dir=mcp_lifecycle_dir,
+            mcp_environment_marker=mcp_environment_marker,
         )
         token = ""
         observed_payloads: list[Any] = []
@@ -46,6 +67,31 @@ def main() -> int:
                 json={"workspace": str(workspace), "require_git": True},
             ).json()
             assert validated["valid"] is True
+            print("acceptance: daemon ready", flush=True)
+
+            tool_run = _submit_run(
+                base,
+                headers,
+                workspace,
+                task="Exercise the deterministic managed-tool lifecycle.",
+                profile="tool-control-acceptance",
+                latency_seconds=0,
+                latency_roles=[],
+                parallel=False,
+            )
+            tool_summary = _wait_for_terminal_run(base, headers, tool_run)
+            assert tool_summary["status"] == "succeeded"
+            tool_events = _replay_events(
+                base,
+                headers,
+                tool_run,
+                until_event=_COMMIT_EVENT,
+            )
+            observed_payloads.extend(tool_events)
+            observed_payloads.extend(
+                _assert_tool_lifecycle(base, headers, workspace, tool_run, tool_events)
+            )
+            print("acceptance: tool lifecycle passed", flush=True)
 
             successful_run = _submit_run(
                 base,
@@ -76,6 +122,260 @@ def main() -> int:
                 successful_run,
                 success_events,
             )
+            print("acceptance: durable calculator passed", flush=True)
+
+            approval_run = _submit_run(
+                base,
+                headers,
+                workspace,
+                task="Delete the deterministic target only after exact approval.",
+                profile="tool-delete-approval",
+                latency_seconds=0,
+                latency_roles=[],
+                parallel=False,
+                commit_changes=False,
+            )
+            approval = _wait_for_pending_tool_approval(
+                base,
+                headers,
+                approval_run,
+            )
+            observed_payloads.append(approval)
+            observed_payloads.append(
+                _assert_capability_escalation_rejected(
+                    base,
+                    headers,
+                    approval_run,
+                    approval,
+                )
+            )
+            approved = _request(
+                "POST",
+                (
+                    f"{base}/api/v1/runs/{approval_run}/approvals/"
+                    f"{approval['approval_id']}/approve"
+                ),
+                headers=headers,
+                json={
+                    "revision": approval["revision"],
+                    "reason": "Offline acceptance exact deletion approval.",
+                },
+            ).json()
+            observed_payloads.append(approved)
+            assert approved["approval"]["state"] == "approved"
+            resumed = _request(
+                "POST",
+                f"{base}/api/v1/runs/{approval_run}/resume",
+                headers=headers,
+            ).json()
+            assert resumed["resumed"] is True
+            approval_summary = _wait_for_terminal_run(base, headers, approval_run)
+            assert approval_summary["status"] == "succeeded"
+            approval_events = _replay_events(
+                base,
+                headers,
+                approval_run,
+                until_event="durable_run_succeeded",
+            )
+            observed_payloads.extend(approval_events)
+            observed_payloads.extend(
+                _assert_approved_deletion(
+                    base,
+                    headers,
+                    workspace,
+                    approval_run,
+                    approval,
+                    approval_events,
+                )
+            )
+            print("acceptance: exact tool approval passed", flush=True)
+
+            traversal_run = _submit_run(
+                base,
+                headers,
+                workspace,
+                task="Attempt a traversal read and preserve the policy denial.",
+                profile="tool-deny-outside-read",
+                latency_seconds=0,
+                latency_roles=[],
+                parallel=False,
+                commit_changes=False,
+            )
+            traversal_summary = _wait_for_terminal_run(
+                base,
+                headers,
+                traversal_run,
+            )
+            assert traversal_summary["status"] == "succeeded"
+            traversal_events = _replay_events(
+                base,
+                headers,
+                traversal_run,
+                until_event="durable_run_succeeded",
+            )
+            observed_payloads.extend(traversal_events)
+            observed_payloads.extend(
+                _assert_traversal_denied(base, headers, traversal_run)
+            )
+            print("acceptance: traversal denial passed", flush=True)
+
+            timeout_run = _submit_run(
+                base,
+                headers,
+                workspace,
+                task="Bound a slow managed process with its tool timeout.",
+                profile="tool-process-timeout",
+                latency_seconds=0,
+                latency_roles=[],
+                parallel=False,
+                commit_changes=False,
+            )
+            timeout_summary = _wait_for_terminal_run(base, headers, timeout_run)
+            assert timeout_summary["status"] == "succeeded"
+            timeout_events = _replay_events(
+                base,
+                headers,
+                timeout_run,
+                until_event="durable_run_succeeded",
+            )
+            observed_payloads.extend(timeout_events)
+            observed_payloads.extend(
+                _assert_timed_out_process(base, headers, timeout_run)
+            )
+            print("acceptance: process timeout passed", flush=True)
+
+            process_cancel_run = _submit_run(
+                base,
+                headers,
+                workspace,
+                task="Cancel a running managed process and clean up its process tree.",
+                profile="tool-process-cancel",
+                latency_seconds=0,
+                latency_roles=[],
+                parallel=False,
+                commit_changes=False,
+            )
+            running_invocation = _wait_for_running_tool_invocation(
+                base,
+                headers,
+                process_cancel_run,
+                tool_name="process.execute",
+            )
+            observed_payloads.append(running_invocation)
+            process_cancel_response = _request(
+                "POST",
+                (
+                    f"{base}/api/v1/runs/{process_cancel_run}/tool-invocations/"
+                    f"{running_invocation['invocation_id']}/cancel"
+                ),
+                headers=headers,
+                json={"reason": "Offline acceptance managed process cancellation"},
+            ).json()
+            observed_payloads.append(process_cancel_response)
+            assert process_cancel_response["invocation_status"] == "running"
+            assert process_cancel_response["run_cancellation_requested"] is True
+            assert process_cancel_response["cancellation"]["requested"] is True
+            process_cancel_summary = _wait_for_terminal_run(
+                base,
+                headers,
+                process_cancel_run,
+            )
+            assert process_cancel_summary["status"] == "cancelled"
+            process_cancel_events = _replay_events(
+                base,
+                headers,
+                process_cancel_run,
+                until_event=_CANCELLATION_EVENT,
+            )
+            observed_payloads.extend(process_cancel_events)
+            observed_payloads.extend(
+                _assert_cancelled_process(
+                    base,
+                    headers,
+                    process_cancel_run,
+                    running_invocation["invocation_id"],
+                    process_cancel_events,
+                )
+            )
+            print("acceptance: process cancellation passed", flush=True)
+
+            mcp_servers = _request(
+                "GET",
+                f"{base}/api/v1/mcp/servers",
+                headers=headers,
+            ).json()
+            mcp_check = _request(
+                "POST",
+                f"{base}/api/v1/mcp/servers/fixture/check",
+                headers=headers,
+            ).json()
+            observed_payloads.extend([mcp_servers, mcp_check])
+            _assert_mcp_diagnostics(mcp_servers, mcp_check)
+            before_mcp_run = _wait_for_mcp_cleanup(mcp_lifecycle_dir)
+            observed_payloads.append(before_mcp_run)
+
+            mcp_run = _submit_run(
+                base,
+                headers,
+                workspace,
+                task="Invoke the configured local MCP echo tool through normal policy.",
+                profile="tool-local-mcp",
+                latency_seconds=0,
+                latency_roles=[],
+                parallel=False,
+                commit_changes=False,
+            )
+            mcp_approval = _wait_for_pending_tool_approval(
+                base,
+                headers,
+                mcp_run,
+            )
+            observed_payloads.append(mcp_approval)
+            _assert_mcp_approval(mcp_approval)
+            mcp_approved = _request(
+                "POST",
+                (
+                    f"{base}/api/v1/runs/{mcp_run}/approvals/"
+                    f"{mcp_approval['approval_id']}/approve"
+                ),
+                headers=headers,
+                json={
+                    "revision": mcp_approval["revision"],
+                    "reason": "Offline acceptance local MCP approval.",
+                },
+            ).json()
+            observed_payloads.append(mcp_approved)
+            assert mcp_approved["approval"]["state"] == "approved"
+            mcp_resumed = _request(
+                "POST",
+                f"{base}/api/v1/runs/{mcp_run}/resume",
+                headers=headers,
+            ).json()
+            assert mcp_resumed["resumed"] is True
+            mcp_summary = _wait_for_terminal_run(base, headers, mcp_run)
+            assert mcp_summary["status"] == "succeeded"
+            mcp_events = _replay_events(
+                base,
+                headers,
+                mcp_run,
+                until_event="durable_run_succeeded",
+            )
+            observed_payloads.extend(mcp_events)
+            observed_payloads.extend(
+                _assert_mcp_invocation(
+                    base,
+                    headers,
+                    mcp_run,
+                    mcp_approval,
+                    mcp_events,
+                )
+            )
+            after_mcp_run = _wait_for_mcp_cleanup(
+                mcp_lifecycle_dir,
+                minimum_sessions=before_mcp_run["started_sessions"] + 2,
+            )
+            observed_payloads.append(after_mcp_run)
+            print("acceptance: local MCP invocation passed", flush=True)
 
             cancellation_marker = "acceptance-private-prompt-marker"
             cancelled_run = _submit_run(
@@ -124,10 +424,18 @@ def main() -> int:
                 cancelled_run,
                 cancel_events,
             )
+            print("acceptance: provider cancellation passed", flush=True)
+
+            mcp_cleanup = _wait_for_mcp_cleanup(mcp_lifecycle_dir)
+            observed_payloads.append(mcp_cleanup)
 
             serialized = json.dumps(observed_payloads, sort_keys=True)
             assert token not in serialized
             assert cancellation_marker not in serialized
+            assert traversal_marker not in serialized
+            assert mcp_environment_marker not in serialized
+            assert str(mcp_fixture) not in serialized
+            assert _MCP_ECHO_MARKER not in serialized
             assert token not in registry.read_text(encoding="utf-8")
             assert process.wait(timeout=30) == 0
             assert process.stderr is not None
@@ -152,7 +460,20 @@ def _initialize_repository(workspace: Path) -> Path:
         "# Offline acceptance workspace\n",
         encoding="utf-8",
     )
-    _git(workspace, "add", "README.md")
+    (workspace / "test_acceptance_tool.py").write_text(
+        "from acceptance_tool import add\n\n\n"
+        "def test_add():\n"
+        "    assert add(2, 3) == 5\n",
+        encoding="utf-8",
+    )
+    (workspace / "delete_me.txt").write_bytes(_DELETE_TARGET.encode("utf-8"))
+    _git(
+        workspace,
+        "add",
+        "README.md",
+        "test_acceptance_tool.py",
+        "delete_me.txt",
+    )
     _git(workspace, "commit", "-m", "initial")
     return workspace.resolve()
 
@@ -163,16 +484,28 @@ def _launch_daemon(
     state_path: Path,
     runs_dir: Path,
     registry: Path,
+    mcp_fixture: Path,
+    mcp_lifecycle_dir: Path,
+    mcp_environment_marker: str,
 ) -> subprocess.Popen[str]:
     code = (
         "from agentbus.config import AgentBusConfig;"
         "from agentbus.control.server import serve;"
-        "import sys;"
+        "from agentbus.mcp import McpServerConfig,mcp_server_capabilities;"
+        "import os,sys;"
+        "m=McpServerConfig(server_id='fixture',transport='stdio',"
+        "executable_alias='python',arguments=('-u',sys.argv[5],'--mode',"
+        "'normal','--lifecycle-dir',sys.argv[6]),"
+        "environment={'CI':os.environ['AGENTBUS_ACCEPTANCE_MCP_MARKER']},"
+        "capability_map={'echo':mcp_server_capabilities('fixture'),"
+        "'write_note':mcp_server_capabilities('fixture')});"
         "c=AgentBusConfig(workspace_dir=sys.argv[1],state_db=sys.argv[2],"
-        "runs_dir=sys.argv[3]);"
+        "runs_dir=sys.argv[3],mcp_server_configs=(m,));"
         "raise SystemExit(serve(config=c,port=0,json_ready=True,"
         "idle_timeout=3.0,registry_path=sys.argv[4],log_level='error'))"
     )
+    environment = safe_child_environment()
+    environment["AGENTBUS_ACCEPTANCE_MCP_MARKER"] = mcp_environment_marker
     return subprocess.Popen(
         [
             sys.executable,
@@ -182,12 +515,14 @@ def _launch_daemon(
             str(state_path),
             str(runs_dir),
             str(registry),
+            str(mcp_fixture),
+            str(mcp_lifecycle_dir),
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         shell=False,
-        env=safe_child_environment(),
+        env=environment,
     )
 
 
@@ -209,6 +544,8 @@ def _submit_run(
     profile: str,
     latency_seconds: float,
     latency_roles: list[str],
+    parallel: bool = True,
+    commit_changes: bool = True,
 ) -> str:
     response = _request(
         "POST",
@@ -220,9 +557,9 @@ def _submit_run(
             "provider": "deterministic",
             "workflow": "multi",
             "durable": True,
-            "parallel": True,
+            "parallel": parallel,
             "max_workers": 1,
-            "commit_changes": True,
+            "commit_changes": commit_changes,
             "keep_worktrees": True,
             "retry_limit": 1,
             "deterministic": {
@@ -262,6 +599,87 @@ def _wait_for_terminal_run(
     raise TimeoutError(f"Run {run_id} did not reach a terminal state.")
 
 
+def _wait_for_pending_tool_approval(
+    base: str,
+    headers: dict[str, str],
+    run_id: str,
+    *,
+    timeout_seconds: float = 30,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        response = requests.get(
+            f"{base}/api/v1/runs/{run_id}",
+            headers=headers,
+            timeout=15,
+        )
+        if response.status_code == 404:
+            time.sleep(0.05)
+            continue
+        response.raise_for_status()
+        summary = response.json()
+        if summary["status"] in _TERMINAL_STATUSES:
+            raise AssertionError(
+                f"Run {run_id} terminated before requesting tool approval."
+            )
+        approvals = _request(
+            "GET",
+            f"{base}/api/v1/runs/{run_id}/approvals",
+            headers=headers,
+        ).json()["approvals"]
+        pending = [
+            item
+            for item in approvals
+            if item["approval_kind"] == "tool" and item["state"] == "pending"
+        ]
+        if summary["status"] == "waiting_for_approval" and pending:
+            assert len(pending) == 1
+            return pending[0]
+        time.sleep(0.05)
+    raise TimeoutError(f"Run {run_id} did not request tool approval.")
+
+
+def _wait_for_running_tool_invocation(
+    base: str,
+    headers: dict[str, str],
+    run_id: str,
+    *,
+    tool_name: str,
+    timeout_seconds: float = 30,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        response = requests.get(
+            f"{base}/api/v1/runs/{run_id}",
+            headers=headers,
+            timeout=15,
+        )
+        if response.status_code == 404:
+            time.sleep(0.05)
+            continue
+        response.raise_for_status()
+        summary = response.json()
+        if summary["status"] in _TERMINAL_STATUSES:
+            raise AssertionError(
+                f"Run {run_id} terminated before {tool_name} started."
+            )
+        invocations = _request(
+            "GET",
+            f"{base}/api/v1/runs/{run_id}/tool-invocations",
+            headers=headers,
+        ).json()["invocations"]
+        running = [
+            item
+            for item in invocations
+            if item["tool_name"] == tool_name and item["status"] == "running"
+        ]
+        if running:
+            assert len(running) == 1
+            return running[0]
+        time.sleep(0.05)
+    raise TimeoutError(f"Run {run_id} did not start {tool_name}.")
+
+
 def _wait_for_provider_operation(
     state_path: Path,
     run_id: str,
@@ -292,8 +710,10 @@ def _replay_events(
     run_id: str,
     *,
     until_event: str,
+    timeout_seconds: float = 30,
 ) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
+    deadline = time.monotonic() + timeout_seconds
     with requests.get(
         f"{base}/api/v1/runs/{run_id}/events",
         headers=headers,
@@ -303,6 +723,10 @@ def _replay_events(
     ) as response:
         response.raise_for_status()
         for line in response.iter_lines(decode_unicode=True, chunk_size=1):
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"Event replay for {run_id} did not include {until_event}."
+                )
             if not line or not line.startswith("data: "):
                 continue
             event = json.loads(line[6:])
@@ -440,6 +864,494 @@ def _assert_cancelled_run(
     assert report["status"] == "cancelled"
     assert report["cancellation"]["provider_cancellation_acknowledged"] is True
     assert report["report"]["current_leases"] == []
+
+
+def _assert_tool_lifecycle(
+    base: str,
+    headers: dict[str, str],
+    workspace: Path,
+    run_id: str,
+    events: list[dict[str, Any]],
+) -> list[Any]:
+    listed = _request(
+        "GET",
+        f"{base}/api/v1/runs/{run_id}/tool-invocations",
+        headers=headers,
+    ).json()
+    invocations = listed["invocations"]
+    tool_names = [item["tool_name"] for item in invocations]
+    assert tool_names[:3] == [
+        "filesystem.read",
+        "filesystem.write",
+        "test.execute",
+    ]
+    assert all(item["status"] == "succeeded" for item in invocations)
+    assert all(
+        item["policy_decision"]["outcome"]
+        in {"allow", "allow_with_constraints"}
+        for item in invocations
+    )
+
+    details = [
+        _request(
+            "GET",
+            (
+                f"{base}/api/v1/runs/{run_id}/tool-invocations/"
+                f"{item['invocation_id']}"
+            ),
+            headers=headers,
+        ).json()
+        for item in invocations
+    ]
+    write = next(item for item in details if item["tool_name"] == "filesystem.write")
+    pytest_call = next(
+        item
+        for item in details
+        if item["tool_name"] == "test.execute"
+        and item["caller_role"] == "coder"
+    )
+    assert write["result"]["status"] == "succeeded"
+    assert any(
+        artifact["relative_path"] == "acceptance_tool.py"
+        for artifact in write["result"]["artifacts"]
+    )
+    assert pytest_call["result"]["exit_code"] == 0
+    assert pytest_call["result"]["structured_output"]["persisted_summary"] is True
+    assert (
+        pytest_call["result"]["safe_diagnostic_metadata"][
+            "structured_output_key_count"
+        ]
+        > 0
+    )
+
+    audit = _request(
+        "GET",
+        f"{base}/api/v1/runs/{run_id}/tool-audit",
+        headers=headers,
+    ).json()
+    assert len(audit["records"]) == len(invocations)
+    assert all(
+        item["record"]["outcome"] == "succeeded" for item in audit["records"]
+    )
+    event_types = {event["event_type"] for event in events}
+    assert {
+        "tool_invocation_requested",
+        "tool_policy_allowed",
+        "tool_invocation_started",
+        "tool_succeeded",
+    } <= event_types
+
+    report = _request(
+        "GET",
+        f"{base}/api/v1/runs/{run_id}/report",
+        headers=headers,
+    ).json()
+    runtime = report["report"]["tool_runtime"]
+    assert runtime["status_counts"] == {"succeeded": len(invocations)}
+    assert runtime["audit_record_count"] == len(invocations)
+    assert runtime["artifacts"][0]["relative_path"] == "acceptance_tool.py"
+    after = _request(
+        "GET",
+        f"{base}/api/v1/runs/{run_id}/changes/acceptance_tool.py",
+        headers=headers,
+        params={"revision": "after"},
+    ).json()
+    assert "return left + right" in after["content"]
+    assert (workspace / "acceptance_tool.py").is_file()
+    return [listed, *details, audit, report, after]
+
+
+def _assert_capability_escalation_rejected(
+    base: str,
+    headers: dict[str, str],
+    run_id: str,
+    approval: dict[str, Any],
+) -> dict[str, Any]:
+    assert approval["approval_kind"] == "tool"
+    assert approval["tool_name"] == "filesystem.delete"
+    assert approval["affected_paths"] == ["delete_me.txt"]
+    assert [item["name"] for item in approval["capabilities"]] == [
+        "filesystem.delete"
+    ]
+    assert approval["resource_budget"]["invocations_per_task"] > 0
+    response = requests.post(
+        f"{base}/api/v1/policy/evaluate",
+        headers=headers,
+        json={
+            "run_id": run_id,
+            "task_id": approval["task_id"],
+            "tool_name": "filesystem.delete",
+            "arguments": {
+                "path": "delete_me.txt",
+                "expected_sha256": _DELETE_TARGET_SHA256,
+            },
+            "expected_capabilities": ["filesystem.read"],
+            "caller_role": "coder",
+            "workspace_trusted": True,
+            "provider_consented": True,
+        },
+        timeout=15,
+    )
+    assert response.status_code == 403
+    payload = response.json()
+    assert payload["error"]["code"] == "forbidden"
+    assert "do not match runtime derivation" in payload["error"]["message"]
+    return payload
+
+
+def _assert_approved_deletion(
+    base: str,
+    headers: dict[str, str],
+    workspace: Path,
+    run_id: str,
+    approval: dict[str, Any],
+    events: list[dict[str, Any]],
+) -> list[Any]:
+    listed = _request(
+        "GET",
+        f"{base}/api/v1/runs/{run_id}/tool-invocations",
+        headers=headers,
+    ).json()
+    deletion = next(
+        item
+        for item in listed["invocations"]
+        if item["tool_name"] == "filesystem.delete"
+    )
+    assert deletion["status"] == "succeeded"
+    assert deletion["approval_id"] == approval["approval_id"]
+    assert deletion["policy_decision"]["outcome"] == "allow_with_constraints"
+    detail = _request(
+        "GET",
+        (
+            f"{base}/api/v1/runs/{run_id}/tool-invocations/"
+            f"{deletion['invocation_id']}"
+        ),
+        headers=headers,
+    ).json()
+    assert detail["result"]["status"] == "succeeded"
+    assert detail["result"]["approval_id"] == approval["approval_id"]
+    assert not (workspace / "delete_me.txt").exists()
+
+    audit = _request(
+        "GET",
+        f"{base}/api/v1/runs/{run_id}/tool-audit",
+        headers=headers,
+    ).json()
+    deletion_audit = next(
+        item["record"]
+        for item in audit["records"]
+        if item["record"]["invocation_id"] == deletion["invocation_id"]
+    )
+    assert deletion_audit["outcome"] == "succeeded"
+    assert deletion_audit["approval_id"] == approval["approval_id"]
+    event_types = {event["event_type"] for event in events}
+    assert {
+        "tool_approval_required",
+        "tool_approval_approved",
+        "tool_succeeded",
+    } <= event_types
+    report = _request(
+        "GET",
+        f"{base}/api/v1/runs/{run_id}/report",
+        headers=headers,
+    ).json()
+    assert report["report"]["tool_runtime"]["approvals"]["states"] == {
+        "approved": 1
+    }
+    return [listed, detail, audit, report]
+
+
+def _assert_traversal_denied(
+    base: str,
+    headers: dict[str, str],
+    run_id: str,
+) -> list[Any]:
+    listed = _request(
+        "GET",
+        f"{base}/api/v1/runs/{run_id}/tool-invocations",
+        headers=headers,
+    ).json()
+    denied = next(
+        item
+        for item in listed["invocations"]
+        if item["tool_name"] == "filesystem.read"
+    )
+    assert denied["status"] == "denied"
+    assert denied["policy_decision"]["outcome"] == "deny"
+    assert denied["policy_decision"]["rule_id"] == "deny.unsafe_path_syntax"
+    detail = _request(
+        "GET",
+        (
+            f"{base}/api/v1/runs/{run_id}/tool-invocations/"
+            f"{denied['invocation_id']}"
+        ),
+        headers=headers,
+    ).json()
+    assert detail["result"] is None
+    audit = _request(
+        "GET",
+        f"{base}/api/v1/runs/{run_id}/tool-audit",
+        headers=headers,
+    ).json()
+    denied_audit = next(
+        item["record"]
+        for item in audit["records"]
+        if item["record"]["invocation_id"] == denied["invocation_id"]
+    )
+    assert denied_audit["outcome"] == "denied"
+    report = _request(
+        "GET",
+        f"{base}/api/v1/runs/{run_id}/report",
+        headers=headers,
+    ).json()
+    runtime = report["report"]["tool_runtime"]
+    assert runtime["status_counts"]["denied"] == 1
+    assert runtime["denied_operations"] == [
+        {
+            "invocation_id": denied["invocation_id"],
+            "tool_name": "filesystem.read",
+            "rule_id": "deny.unsafe_path_syntax",
+            "error_category": "policy_denied",
+        }
+    ]
+    return [listed, detail, audit, report]
+
+
+def _assert_timed_out_process(
+    base: str,
+    headers: dict[str, str],
+    run_id: str,
+) -> list[Any]:
+    listed = _request(
+        "GET",
+        f"{base}/api/v1/runs/{run_id}/tool-invocations",
+        headers=headers,
+    ).json()
+    invocation = next(
+        item
+        for item in listed["invocations"]
+        if item["tool_name"] == "process.execute"
+    )
+    assert invocation["status"] == "timed_out"
+    detail = _request(
+        "GET",
+        (
+            f"{base}/api/v1/runs/{run_id}/tool-invocations/"
+            f"{invocation['invocation_id']}"
+        ),
+        headers=headers,
+    ).json()
+    result = detail["result"]
+    assert result["status"] == "timed_out"
+    assert result["timed_out"] is True
+    assert result["error"]["code"] == "wall_clock_timeout"
+    wall_clock_limit = result["resource_usage"]["limits"]["wall_clock_seconds"]
+    assert wall_clock_limit["enforced"] is True
+    report = _request(
+        "GET",
+        f"{base}/api/v1/runs/{run_id}/report",
+        headers=headers,
+    ).json()
+    runtime = report["report"]["tool_runtime"]
+    assert runtime["status_counts"]["timed_out"] == 1
+    assert runtime["timeout_count"] == 1
+    return [listed, detail, report]
+
+
+def _assert_cancelled_process(
+    base: str,
+    headers: dict[str, str],
+    run_id: str,
+    invocation_id: str,
+    events: list[dict[str, Any]],
+) -> list[Any]:
+    detail = _request(
+        "GET",
+        f"{base}/api/v1/runs/{run_id}/tool-invocations/{invocation_id}",
+        headers=headers,
+    ).json()
+    assert detail["status"] == "cancelled"
+    result = detail["result"]
+    assert result["status"] == "cancelled"
+    cancellation = result["cancellation"]
+    assert cancellation["requested"] is True
+    assert cancellation["signal_sent"] is True
+    assert cancellation["acknowledged"] is True
+    assert cancellation["process_terminated"] is True
+    assert cancellation["cleanup_completed"] is True
+
+    audit = _request(
+        "GET",
+        f"{base}/api/v1/runs/{run_id}/tool-audit",
+        headers=headers,
+    ).json()
+    record = next(
+        item["record"]
+        for item in audit["records"]
+        if item["record"]["invocation_id"] == invocation_id
+    )
+    assert record["outcome"] == "cancelled"
+    event_types = [event["event_type"] for event in events]
+    assert {
+        "tool_cancel_requested",
+        "tool_cancel_acknowledged",
+        "tool_cancelled",
+        "tool_cleanup_completed",
+    } <= set(event_types)
+    assert event_types.index("tool_cancel_acknowledged") < event_types.index(
+        "tool_cancelled"
+    )
+    assert event_types.index("tool_cancelled") < event_types.index(
+        "tool_cleanup_completed"
+    )
+
+    report = _request(
+        "GET",
+        f"{base}/api/v1/runs/{run_id}/report",
+        headers=headers,
+    ).json()
+    runtime = report["report"]["tool_runtime"]
+    assert report["status"] == "cancelled"
+    assert report["report"]["current_leases"] == []
+    assert runtime["status_counts"]["cancelled"] == 1
+    assert runtime["cancellation_count"] == 1
+    return [detail, audit, report]
+
+
+def _assert_mcp_diagnostics(
+    listed: dict[str, Any],
+    checked: dict[str, Any],
+) -> None:
+    assert listed["total"] == 1
+    server = listed["servers"][0]
+    assert server["server_id"] == "fixture"
+    assert server["transport"] == "stdio"
+    assert [
+        item["namespaced_name"] for item in server["configured_tools"]
+    ] == ["mcp.fixture.echo", "mcp.fixture.write_note"]
+    assert "arguments" not in server
+    assert "environment" not in server
+    assert checked["ready"] is True, checked["message"]
+    assert checked["protocol_version"] == "2025-11-25"
+    assert checked["advertised_tools"] == [
+        "mcp.fixture.echo",
+        "mcp.fixture.write_note",
+    ]
+    assert checked["cleanup_completed"] is True
+
+
+def _assert_mcp_approval(approval: dict[str, Any]) -> None:
+    assert approval["approval_kind"] == "tool"
+    assert approval["tool_name"] == "mcp.fixture.echo"
+    assert approval["affected_paths"] == []
+    capabilities = approval["capabilities"]
+    assert [item["name"] for item in capabilities] == [
+        "mcp.connect",
+        "mcp.invoke",
+    ]
+    assert all(
+        item["scope"]["mcp_servers"] == ["fixture"] for item in capabilities
+    )
+
+
+def _assert_mcp_invocation(
+    base: str,
+    headers: dict[str, str],
+    run_id: str,
+    approval: dict[str, Any],
+    events: list[dict[str, Any]],
+) -> list[Any]:
+    listed = _request(
+        "GET",
+        f"{base}/api/v1/runs/{run_id}/tool-invocations",
+        headers=headers,
+    ).json()
+    invocation = next(
+        item
+        for item in listed["invocations"]
+        if item["tool_name"] == "mcp.fixture.echo"
+    )
+    assert invocation["status"] == "succeeded"
+    assert invocation["approval_id"] == approval["approval_id"]
+    assert invocation["policy_decision"]["outcome"] == "allow_with_constraints"
+    detail = _request(
+        "GET",
+        (
+            f"{base}/api/v1/runs/{run_id}/tool-invocations/"
+            f"{invocation['invocation_id']}"
+        ),
+        headers=headers,
+    ).json()
+    result = detail["result"]
+    assert result["status"] == "succeeded"
+    assert result["approval_id"] == approval["approval_id"]
+    assert result["structured_output"]["persisted_summary"] is True
+    assert result["safe_diagnostic_metadata"]["structured_output_key_count"] > 0
+    assert _MCP_ECHO_MARKER not in json.dumps(detail, sort_keys=True)
+
+    audit = _request(
+        "GET",
+        f"{base}/api/v1/runs/{run_id}/tool-audit",
+        headers=headers,
+    ).json()
+    record = next(
+        item["record"]
+        for item in audit["records"]
+        if item["record"]["invocation_id"] == invocation["invocation_id"]
+    )
+    assert record["outcome"] == "succeeded"
+    assert record["approval_id"] == approval["approval_id"]
+    event_types = {event["event_type"] for event in events}
+    assert {
+        "tool_approval_required",
+        "tool_approval_approved",
+        "tool_policy_allowed",
+        "tool_invocation_started",
+        "tool_succeeded",
+    } <= event_types
+
+    report = _request(
+        "GET",
+        f"{base}/api/v1/runs/{run_id}/report",
+        headers=headers,
+    ).json()
+    runtime = report["report"]["tool_runtime"]
+    assert runtime["mcp_usage"] == {
+        "servers": ["fixture"],
+        "invocation_count": 1,
+    }
+    assert runtime["approvals"]["states"] == {"approved": 1}
+    return [listed, detail, audit, report]
+
+
+def _wait_for_mcp_cleanup(
+    lifecycle_dir: Path,
+    *,
+    minimum_sessions: int = 1,
+    timeout_seconds: float = 30,
+) -> dict[str, int]:
+    deadline = time.monotonic() + timeout_seconds
+    started: set[str] = set()
+    stopped: set[str] = set()
+    while time.monotonic() < deadline:
+        started = {
+            path.name.removesuffix(".started")
+            for path in lifecycle_dir.glob("*.started")
+        }
+        stopped = {
+            path.name.removesuffix(".stopped")
+            for path in lifecycle_dir.glob("*.stopped")
+        }
+        if len(started) >= minimum_sessions and started == stopped:
+            return {
+                "started_sessions": len(started),
+                "stopped_sessions": len(stopped),
+            }
+        time.sleep(0.05)
+    raise TimeoutError(
+        "Configured MCP processes did not complete cleanup "
+        f"(started={len(started)}, stopped={len(stopped)})."
+    )
 
 
 def _request(method: str, url: str, **kwargs):

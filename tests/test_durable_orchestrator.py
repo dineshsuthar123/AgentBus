@@ -11,6 +11,7 @@ from agentbus.execution.models import FailureCategory
 from agentbus.execution.state_store import StateStore, StateStoreError
 from agentbus.models.errors import ModelAuthenticationError
 from agentbus.runtime.orchestrator import MultiAgentOrchestrator
+from agentbus.tools.protocol import ToolResourceBudget
 
 
 PLAN = {
@@ -177,6 +178,7 @@ class AmbiguousPRClient:
 
 
 def config(tmp_path):
+    (tmp_path / "workspace").mkdir(exist_ok=True)
     return AgentBusConfig(
         workspace_dir=str(tmp_path / "workspace"),
         runs_dir=str(tmp_path / "runs"),
@@ -215,11 +217,30 @@ def test_durable_mode_persists_validated_planner_graph_before_execution(tmp_path
     assert all(task.status == TaskStatus.PENDING for task in snapshot.tasks)
     assert coder.calls == []
     assert "Repo Context Pack" in planner.context_pack
+    assert snapshot.run.metadata["tool_runtime"]["resource_budget"] == (
+        runner.config.tool_resource_budget.model_dump(mode="json")
+    )
 
     report = runner.run_durable(run_id)
 
     assert report.status == RunStatus.SUCCEEDED
     assert [call["task_id"] for call in coder.calls] == ["step-1", "step-2"]
+
+
+def test_durable_run_persists_custom_tool_budget_for_resume(tmp_path):
+    budget = ToolResourceBudget(
+        invocations_per_task=2,
+        invocations_per_run=3,
+    )
+    settings = config(tmp_path).with_overrides(tool_resource_budget=budget)
+    runner, store = orchestrator(tmp_path, config=settings)
+
+    run_id = runner.create_durable_run("Create calculator")
+
+    persisted = store.get_run(run_id)
+    assert persisted.metadata["tool_runtime"]["resource_budget"] == (
+        budget.model_dump(mode="json")
+    )
 
 
 def test_durable_verifier_failure_prevents_commit(tmp_path):
@@ -286,8 +307,14 @@ def test_task_reviews_are_scoped_and_final_review_runs_last(tmp_path):
             return super().execute(user_task, plan, reviewer_feedback)
 
     class TimelineVerifier(FakeVerifier):
-        def verify(self):
+        def verify(self, **kwargs):
             timeline.append("verify")
+            if kwargs.get("invocation_key") == "final-run":
+                assert kwargs["run_id"]
+                assert kwargs["task_id"] == "step-2"
+                assert kwargs["tool_runtime"].workspace == (
+                    tmp_path / "workspace"
+                ).resolve()
             return super().verify()
 
     class TimelineReviewer(FakeReviewer):
@@ -416,7 +443,12 @@ def test_successful_durable_run_allows_opt_in_commit_and_pr(tmp_path):
     assert git_repository.created_branches == ["agentbus/calculator"]
     assert git_repository.commits == ["feat: create calculator"]
     assert git_repository.pushes == ["agentbus/calculator"]
-    assert store.get_run(run_id).commit_identifier == "abc1234"
+    persisted = store.get_run(run_id)
+    assert persisted.commit_identifier == "abc1234"
+    assert persisted.metadata["repository_revisions"] == {
+        "base_commit": "before1",
+        "result_commit": "abc1234",
+    }
 
 
 def test_ambiguous_pr_outcome_is_not_retried_automatically(tmp_path):

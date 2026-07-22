@@ -379,6 +379,7 @@ def _daemon_command(arguments: list[str]) -> int:
         DaemonRegistry,
         process_matches,
         terminate_registered_daemon,
+        wait_for_registered_daemon_exit,
     )
 
     registry = DaemonRegistry(args.registry_path)
@@ -420,6 +421,7 @@ def _daemon_command(arguments: list[str]) -> int:
             daemon_id = active[0].daemon_id
         try:
             terminate_registered_daemon(registry, daemon_id)
+            wait_for_registered_daemon_exit(registry, daemon_id)
         except (OSError, RuntimeError) as exc:
             print(f"Daemon stop refused: {exc}", file=sys.stderr)
             return 2

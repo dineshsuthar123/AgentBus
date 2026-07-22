@@ -41,6 +41,7 @@ from agentbus.repo.test_detection import TestCommandDetector
 from agentbus.runtime.verifier import Verifier
 from agentbus.runtime.durable_workflow import MultiAgentTaskExecutor
 from agentbus.tools.git_tools import GitTools
+from agentbus.tools.runtime import build_managed_tool_runtime
 from agentbus.worktrees.manager import GitWorktreeManager
 from agentbus.worktrees.errors import WorktreeError
 from agentbus.worktrees.models import WorktreePurpose
@@ -330,7 +331,7 @@ class MultiAgentOrchestrator:
         git_branch = None if parallel_enabled else self._prepare_git_workflow(user_task)
         initial_head = None
         if self._git_workflow_requested() and self.git_repository.is_git_repo():
-            initial_head = self.git_repository.head_commit()
+            initial_head = base_commit or self.git_repository.head_commit(short=False)
 
         context_pack = self._build_context_pack(user_task)
         cancellation.checkpoint("orchestrator", stage="before-planner")
@@ -351,6 +352,11 @@ class MultiAgentOrchestrator:
                 "initial_head": initial_head,
             },
             "model_routing": self.config.safe_model_summary(),
+            "tool_runtime": {
+                "resource_budget": self.config.tool_resource_budget.model_dump(
+                    mode="json"
+                ),
+            },
             "planner_model_result": _last_model_result(self.planner),
             "workspace_repository": {
                 "workspace": str(self.workspace),
@@ -358,6 +364,7 @@ class MultiAgentOrchestrator:
             },
             "final_review": {"required": True, "status": "pending"},
             "workspace_baseline": workspace_baseline,
+            "repository_revisions": {"base_commit": initial_head},
             "parallel_execution": {
                 "enabled": parallel_enabled,
                 "max_workers": self.config.max_workers,
@@ -371,7 +378,7 @@ class MultiAgentOrchestrator:
                 "integration_order": [],
             },
         }
-        engine = self._durable_engine(run_id)
+        engine = self._durable_engine(run_id, executor=False)
         engine.create_run(
             user_task,
             plan,
@@ -414,12 +421,12 @@ class MultiAgentOrchestrator:
                     )
                     report = self._finalize_parallel_git(run_id)
                 return report
-            engine = self._durable_engine(run_id)
-            report = (
-                engine.resume(run_id)
-                if resume
-                else engine.run_until_blocked(run_id)
-            )
+            with self._durable_engine(run_id) as engine:
+                report = (
+                    engine.resume(run_id)
+                    if resume
+                    else engine.run_until_blocked(run_id)
+                )
             if report.status == RunStatus.WAITING_FOR_REVIEW:
                 cancellation.checkpoint(
                     "orchestrator",
@@ -462,6 +469,13 @@ class MultiAgentOrchestrator:
                 git_repository=self.git_repository,
                 workspace=str(self.workspace),
                 cancellation=cancellation,
+                tool_runtime=build_managed_tool_runtime(
+                    workspace=self.workspace,
+                    state_store=self.state_store,
+                    cancellation_registry=self._cancellation_registry_for_use(),
+                    mcp_server_configs=self.config.mcp_server_configs,
+                    mcp_run_id=run_id,
+                ),
             )
         return DurableExecutionEngine(
             self.state_store,
@@ -506,6 +520,7 @@ class MultiAgentOrchestrator:
                 executor_factory=lambda workspace: self._parallel_task_executor(
                     workspace,
                     cancellation,
+                    run_id,
                 ),
                 heartbeat_seconds=float(
                     parallel.get(
@@ -531,6 +546,7 @@ class MultiAgentOrchestrator:
         self,
         workspace: Path,
         cancellation: CancellationToken | None = None,
+        run_id: str | None = None,
     ):
         if self.parallel_executor_factory is not None:
             return self.parallel_executor_factory(workspace)
@@ -559,6 +575,15 @@ class MultiAgentOrchestrator:
             git_repository=repository,
             workspace=str(workspace),
             cancellation=cancellation,
+            tool_runtime=build_managed_tool_runtime(
+                workspace=self.workspace,
+                worktree=workspace,
+                state_store=self.state_store,
+                cancellation_registry=self._cancellation_registry_for_use(),
+                owned_worktree=True,
+                mcp_server_configs=self.config.mcp_server_configs,
+                mcp_run_id=run_id,
+            ),
         )
 
     def _run_final_review(self, run_id: str) -> ExecutionReport:
@@ -596,7 +621,7 @@ class MultiAgentOrchestrator:
                 )
                 return self.get_durable_report(run_id)
 
-        verifier_result = self._verify_final()
+        verifier_result = self._verify_final(run_id)
         cancellation.checkpoint(
             "final-review",
             stage="after-final-verification",
@@ -766,11 +791,28 @@ class MultiAgentOrchestrator:
             {"integration_worktree": str(integration_path)},
         )
         verify = verifier.verify
-        verifier_result = (
-            verify(require_command=True)
-            if "require_command" in inspect.signature(verify).parameters
-            else verify()
-        )
+        with build_managed_tool_runtime(
+            workspace=self.workspace,
+            worktree=integration_path,
+            state_store=self.state_store,
+            cancellation_registry=self._cancellation_registry_for_use(),
+            owned_worktree=True,
+            mcp_server_configs=self.config.mcp_server_configs,
+            mcp_run_id=run_id,
+        ) as tool_runtime:
+            tool_runtime.recover_run(run_id)
+            verifier_result = self._call_with_supported_arguments(
+                verify,
+                {
+                    "require_command": True,
+                    "tool_runtime": tool_runtime,
+                    "run_id": run_id,
+                    "task_id": self._final_tool_task_id(run_id),
+                    "invocation_key": "final-integration",
+                    "workspace_trusted": True,
+                    "provider_consented": True,
+                },
+            )
         cancellation.checkpoint(
             "final-review",
             stage="after-integration-verification",
@@ -1006,11 +1048,53 @@ class MultiAgentOrchestrator:
             )
         return self.get_durable_report(run_id)
 
-    def _verify_final(self) -> dict[str, Any]:
+    def _verify_final(self, run_id: str) -> dict[str, Any]:
         verify = self.verifier.verify
-        if "require_command" in inspect.signature(verify).parameters:
-            return verify(require_command=True)
-        return verify()
+        with build_managed_tool_runtime(
+            workspace=self.workspace,
+            state_store=self.state_store,
+            cancellation_registry=self._cancellation_registry_for_use(),
+            mcp_server_configs=self.config.mcp_server_configs,
+            mcp_run_id=run_id,
+        ) as tool_runtime:
+            tool_runtime.recover_run(run_id)
+            return self._call_with_supported_arguments(
+                verify,
+                {
+                    "require_command": True,
+                    "tool_runtime": tool_runtime,
+                    "run_id": run_id,
+                    "task_id": self._final_tool_task_id(run_id),
+                    "invocation_key": "final-run",
+                    "workspace_trusted": True,
+                    "provider_consented": True,
+                },
+            )
+
+    def _final_tool_task_id(self, run_id: str) -> str:
+        tasks = self.state_store.list_tasks(run_id)
+        if not tasks:
+            raise StateStoreError(
+                "Final verification requires at least one persisted task."
+            )
+        return tasks[-1].task_id
+
+    @staticmethod
+    def _call_with_supported_arguments(callable_object, arguments):
+        parameters = inspect.signature(callable_object).parameters.values()
+        if any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters
+        ):
+            return callable_object(**arguments)
+        supported = {parameter.name for parameter in parameters}
+        return callable_object(
+            **{
+                name: value
+                for name, value in arguments.items()
+                if name in supported
+            }
+        )
 
     def _validate_workspace_repository(self):
         validate = getattr(self.git_repository, "validate_workspace", None)
@@ -1073,7 +1157,7 @@ class MultiAgentOrchestrator:
                     )
                     return self.get_durable_report(run_id)
             else:
-                current_head = self.git_repository.head_commit()
+                current_head = self.git_repository.head_commit(short=False)
                 initial_head = git_options.get("initial_head")
                 if (
                     initial_head
@@ -1095,9 +1179,20 @@ class MultiAgentOrchestrator:
                     )
                     return self.get_durable_report(run_id)
 
+            result_commit = self.git_repository.head_commit(short=False)
+            revision_metadata = None
+            initial_head = git_options.get("initial_head")
+            if isinstance(initial_head, str) and initial_head:
+                revision_metadata = {
+                    "repository_revisions": {
+                        "base_commit": initial_head,
+                        "result_commit": result_commit,
+                    }
+                }
             self.state_store.update_run_details(
                 run_id,
                 commit_identifier=commit_identifier,
+                metadata_updates=revision_metadata,
                 event_type="commit_created",
                 clear_finalization_error=True,
             )

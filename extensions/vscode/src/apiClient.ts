@@ -9,6 +9,8 @@ import type {
   ErrorResponse,
   FileContentResponse,
   InfoResponse,
+  McpServerCheckResponse,
+  McpServerListResponse,
   ProviderListResponse,
   ResumeResponse,
   RunAcceptedResponse,
@@ -18,6 +20,13 @@ import type {
   RunSummary,
   SchedulerResponse,
   TaskListResponse,
+  ToolAuditListResponse,
+  ToolDescriptorDetail,
+  ToolInvocationCancelResponse,
+  ToolInvocationDetail,
+  ToolInvocationListResponse,
+  ToolListResponse,
+  ToolPolicyResponse,
   UsageResponse,
   WorkspaceValidationRequest,
   WorkspaceValidationResponse,
@@ -77,6 +86,29 @@ export class AgentBusClient {
     return this.request("GET", `/api/v1/doctor${query}`);
   }
 
+  public tools(): Promise<ToolListResponse> {
+    return this.request("GET", "/api/v1/tools");
+  }
+
+  public tool(toolName: string): Promise<ToolDescriptorDetail> {
+    return this.request("GET", `/api/v1/tools/${safeSegment(toolName)}`);
+  }
+
+  public toolPolicy(): Promise<ToolPolicyResponse> {
+    return this.request("GET", "/api/v1/policy");
+  }
+
+  public mcpServers(): Promise<McpServerListResponse> {
+    return this.request("GET", "/api/v1/mcp/servers");
+  }
+
+  public checkMcpServer(serverId: string): Promise<McpServerCheckResponse> {
+    return this.request(
+      "POST",
+      `/api/v1/mcp/servers/${safeSegment(serverId)}/check`
+    );
+  }
+
   public createRun(body: RunCreateRequest): Promise<RunAcceptedResponse> {
     return this.request("POST", "/api/v1/runs", body);
   }
@@ -121,6 +153,60 @@ export class AgentBusClient {
 
   public usage(runId: string): Promise<UsageResponse> {
     return this.request("GET", `/api/v1/runs/${safeSegment(runId)}/usage`);
+  }
+
+  public toolInvocations(
+    runId: string,
+    after = 0,
+    limit = 500
+  ): Promise<ToolInvocationListResponse> {
+    validatePage(after, limit);
+    return this.request(
+      "GET",
+      `/api/v1/runs/${safeSegment(
+        runId
+      )}/tool-invocations?after=${after}&limit=${limit}`
+    );
+  }
+
+  public toolInvocation(
+    runId: string,
+    invocationId: string
+  ): Promise<ToolInvocationDetail> {
+    return this.request(
+      "GET",
+      `/api/v1/runs/${safeSegment(
+        runId
+      )}/tool-invocations/${safeSegment(invocationId)}`
+    );
+  }
+
+  public cancelToolInvocation(
+    runId: string,
+    invocationId: string,
+    reason?: string
+  ): Promise<ToolInvocationCancelResponse> {
+    return this.request(
+      "POST",
+      `/api/v1/runs/${safeSegment(
+        runId
+      )}/tool-invocations/${safeSegment(invocationId)}/cancel`,
+      reason ? { reason } : undefined
+    );
+  }
+
+  public toolAudit(
+    runId: string,
+    after = 0,
+    limit = 500
+  ): Promise<ToolAuditListResponse> {
+    validatePage(after, limit);
+    return this.request(
+      "GET",
+      `/api/v1/runs/${safeSegment(
+        runId
+      )}/tool-audit?after=${after}&limit=${limit}`
+    );
   }
 
   public report(runId: string): Promise<RunReportResponse> {
@@ -249,4 +335,16 @@ function safeSegment(value: string): string {
     throw new Error("Unsafe AgentBus protocol path segment.");
   }
   return encodeURIComponent(value);
+}
+
+function validatePage(after: number, limit: number): void {
+  if (
+    !Number.isSafeInteger(after) ||
+    after < 0 ||
+    !Number.isSafeInteger(limit) ||
+    limit < 1 ||
+    limit > 500
+  ) {
+    throw new Error("AgentBus pagination is outside the bounded range.");
+  }
 }

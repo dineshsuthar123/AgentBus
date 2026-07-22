@@ -5,10 +5,14 @@ import os
 import tomllib
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
 
 from agentbus.config import AgentBusConfig
 from agentbus.security.redaction import is_sensitive_key, safe_endpoint_host
+
+if TYPE_CHECKING:
+    from agentbus.mcp.models import McpServerConfig
+    from agentbus.tools.protocol import ToolResourceBudget
 
 
 ENVIRONMENT_FIELDS: dict[str, str] = {
@@ -95,6 +99,17 @@ class ResolvedConfiguration:
             value = values[name]
             if is_sensitive_key(name):
                 value = "[configured]" if value else "[not configured]"
+            elif name == "mcp_server_configs":
+                value = [
+                    {
+                        "server_id": server.server_id,
+                        "transport": server.transport.value,
+                        "configured_tools": sorted(server.capability_map),
+                    }
+                    for server in self.config.mcp_server_configs
+                ]
+            elif name == "tool_resource_budget":
+                value = self.config.tool_resource_budget.model_dump(mode="json")
             elif name in {"azure_openai_endpoint", "ollama_url"}:
                 value = safe_endpoint_host(value)
             output[name] = {"value": value, "source": self.sources[name]}
@@ -136,6 +151,12 @@ def resolve_configuration(
         values[name] = value
         sources[name] = "cli"
 
+    values["mcp_server_configs"] = _coerce_mcp_server_configs(
+        values["mcp_server_configs"]
+    )
+    values["tool_resource_budget"] = _coerce_tool_resource_budget(
+        values["tool_resource_budget"]
+    )
     config = AgentBusConfig(**values)
     return ResolvedConfiguration(config=config, sources=sources, config_file=loaded_path)
 
@@ -198,3 +219,57 @@ def _parse_environment_value(variable: str, field_name: str, raw: str) -> Any:
         except ValueError as exc:
             raise ValueError(f"{variable} must be numeric, got {value!r}") from exc
     return value.lower() if field_name in _LOWERCASE_FIELDS else value
+
+
+def _coerce_mcp_server_configs(value: Any) -> tuple[McpServerConfig, ...]:
+    from agentbus.mcp.models import McpServerConfig
+
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("mcp_server_configs must be a list of server objects")
+    servers: list[McpServerConfig] = []
+    for index, raw in enumerate(value):
+        if isinstance(raw, McpServerConfig):
+            servers.append(raw)
+            continue
+        if not isinstance(raw, dict):
+            raise ValueError(
+                f"MCP server configuration {index} must be an object"
+            )
+        try:
+            servers.append(McpServerConfig.model_validate(raw))
+        except ValueError as exc:
+            locations = sorted(
+                {
+                    ".".join(str(part) for part in error.get("loc", ()))
+                    for error in getattr(exc, "errors", lambda: [])()
+                }
+            )
+            location = ", ".join(item for item in locations if item)
+            suffix = f" ({location})" if location else ""
+            raise ValueError(
+                f"Invalid MCP server configuration {index}{suffix}"
+            ) from None
+    return tuple(servers)
+
+
+def _coerce_tool_resource_budget(value: Any) -> ToolResourceBudget:
+    from agentbus.tools.protocol import ToolResourceBudget
+
+    if isinstance(value, ToolResourceBudget):
+        return value
+    if not isinstance(value, dict):
+        raise ValueError("tool_resource_budget must be an object")
+    try:
+        return ToolResourceBudget.model_validate(value)
+    except ValueError as exc:
+        locations = sorted(
+            {
+                ".".join(str(part) for part in error.get("loc", ()))
+                for error in getattr(exc, "errors", lambda: [])()
+            }
+        )
+        location = ", ".join(item for item in locations if item)
+        suffix = f" ({location})" if location else ""
+        raise ValueError(
+            f"Invalid tool resource budget configuration{suffix}"
+        ) from None

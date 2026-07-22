@@ -1,6 +1,8 @@
 from agentbus.agents.coder import CoderAgent
 from agentbus.agents.planner import PlannerAgent
 from agentbus.agents.reviewer import ReviewerAgent
+from agentbus.config import AgentBusConfig
+from agentbus.tools.protocol import ToolResourceBudget
 
 
 class FakeModel:
@@ -23,6 +25,10 @@ def test_planner_agent_parses_valid_model_output():
                     "title": "Add module",
                     "description": "Create calculator.py",
                     "risk": "low",
+                    "required_capabilities": [
+                        "filesystem.write",
+                        "filesystem.create",
+                    ],
                 }
             ],
             "test_strategy": "Run pytest",
@@ -35,6 +41,10 @@ def test_planner_agent_parses_valid_model_output():
 
     assert plan["goal"] == "Create calculator functions"
     assert plan["steps"][0]["risk"] == "low"
+    assert plan["steps"][0]["required_capabilities"] == [
+        "filesystem.write",
+        "filesystem.create",
+    ]
     assert "dependencies" not in plan["steps"][0]
     assert "done_criteria" not in plan["steps"][0]
     assert "create calculator" in model.prompts[0]
@@ -84,3 +94,55 @@ def test_coder_preserves_legacy_loop_factory_that_only_accepts_config():
     assert result == "legacy loop complete"
     assert seen["config"] is coder.config
     assert "Complete task" in seen["task"]
+
+
+def test_coder_propagates_managed_runtime_identity_to_modern_loop():
+    seen = {}
+    runtime = object()
+    budget = ToolResourceBudget(
+        invocations_per_task=2,
+        invocations_per_run=3,
+    )
+
+    class ManagedLoop:
+        def __init__(
+            self,
+            config,
+            model,
+            cancellation,
+            tool_runtime,
+            run_id,
+            task_id,
+            workspace_trusted,
+            provider_consented,
+            resource_budget,
+            policy_context,
+        ):
+            seen.update(locals())
+
+        def run(self, task):
+            return "managed loop complete"
+
+    coder = CoderAgent(
+        config=AgentBusConfig(tool_resource_budget=budget),
+        model=FakeModel({}),
+        loop_factory=ManagedLoop,
+    )
+
+    result = coder.execute(
+        "Complete task",
+        {"goal": "Complete", "steps": []},
+        tool_runtime=runtime,
+        run_id="run-1",
+        task_id="task-1",
+        workspace_trusted=True,
+        provider_consented=True,
+        policy_context={"attempt_number": 1},
+    )
+
+    assert result == "managed loop complete"
+    assert seen["tool_runtime"] is runtime
+    assert seen["run_id"] == "run-1"
+    assert seen["task_id"] == "task-1"
+    assert seen["resource_budget"] is budget
+    assert seen["policy_context"] == {"attempt_number": 1}

@@ -44,7 +44,7 @@ def make_task(task_id="step-1", maximum_attempts=2):
 def test_schema_initializes_and_enables_foreign_keys(tmp_path):
     store = StateStore(tmp_path / "state.db")
 
-    assert store.schema_version == 3
+    assert store.schema_version == 4
     with store._connection() as connection:
         assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
 

@@ -68,3 +68,78 @@ test("API client rejects remote and credentialed daemon URLs", () => {
     /loopback/
   );
 });
+
+test("tool and MCP client routes are encoded bounded and command-free", async () => {
+  const requests: Array<{
+    url: string;
+    method: string;
+    body: BodyInit | null | undefined;
+    contentType: string | null;
+  }> = [];
+  const client = new AgentBusClient(
+    "http://127.0.0.1:43123",
+    token,
+    async (input, init) => {
+      requests.push({
+        url: String(input),
+        method: init?.method ?? "GET",
+        body: init?.body,
+        contentType: new Headers(init?.headers).get("Content-Type")
+      });
+      return Response.json({});
+    }
+  );
+
+  await client.tools();
+  await client.tool("filesystem.read");
+  await client.toolInvocations("run one", 7, 25);
+  await client.toolInvocation("run one", "invoke:1");
+  await client.cancelToolInvocation("run one", "invoke:1", "stop safely");
+  await client.toolAudit("run one", 9, 10);
+  await client.toolPolicy();
+  await client.mcpServers();
+  await client.checkMcpServer("local tools");
+
+  const requestAt = (index: number) => {
+    const request = requests[index];
+    assert.ok(request);
+    return request;
+  };
+  const invocationList = requestAt(2);
+  const invocationDetail = requestAt(3);
+  const invocationCancel = requestAt(4);
+  const auditList = requestAt(5);
+  const mcpCheck = requestAt(8);
+  assert.equal(
+    invocationList.url.endsWith(
+      "/api/v1/runs/run%20one/tool-invocations?after=7&limit=25"
+    ),
+    true
+  );
+  assert.equal(
+    invocationDetail.url.endsWith(
+      "/api/v1/runs/run%20one/tool-invocations/invoke%3A1"
+    ),
+    true
+  );
+  assert.deepEqual(JSON.parse(String(invocationCancel.body)), {
+    reason: "stop safely"
+  });
+  assert.equal(
+    auditList.url.endsWith(
+      "/api/v1/runs/run%20one/tool-audit?after=9&limit=10"
+    ),
+    true
+  );
+  assert.equal(
+    mcpCheck.url.endsWith(
+      "/api/v1/mcp/servers/local%20tools/check"
+    ),
+    true
+  );
+  assert.equal(mcpCheck.method, "POST");
+  assert.equal(mcpCheck.body, undefined);
+  assert.equal(mcpCheck.contentType, null);
+  assert.throws(() => client.toolInvocations("run", -1, 10), /bounded/);
+  assert.throws(() => client.toolAudit("run", 0, 501), /bounded/);
+});

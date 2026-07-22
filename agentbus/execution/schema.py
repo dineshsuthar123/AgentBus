@@ -1,4 +1,4 @@
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 SCHEMA_SQL = """
@@ -197,6 +197,76 @@ CREATE TABLE IF NOT EXISTS cancellations (
     FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS tool_invocations (
+    invocation_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    invocation_id TEXT NOT NULL UNIQUE,
+    invocation_revision INTEGER NOT NULL,
+    run_id TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    tool_name TEXT NOT NULL,
+    tool_version_json TEXT NOT NULL,
+    protocol_version TEXT NOT NULL,
+    caller_role TEXT NOT NULL,
+    workspace_identity TEXT NOT NULL,
+    worktree_identity TEXT NOT NULL,
+    capabilities_json TEXT NOT NULL,
+    capability_fingerprint TEXT NOT NULL,
+    arguments_sha256 TEXT NOT NULL,
+    invocation_sha256 TEXT NOT NULL,
+    operation_sha256 TEXT NOT NULL,
+    idempotency_key_sha256 TEXT,
+    status TEXT NOT NULL,
+    resource_budget_json TEXT NOT NULL,
+    anticipated_usage_json TEXT NOT NULL,
+    resource_usage_json TEXT NOT NULL,
+    process_slot INTEGER NOT NULL,
+    policy_decision_json TEXT,
+    approval_id TEXT,
+    safe_result_json TEXT,
+    cancellation_json TEXT NOT NULL,
+    error_category TEXT,
+    error_message TEXT,
+    requested_at TEXT NOT NULL,
+    started_at TEXT,
+    completed_at TEXT,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (run_id, task_id) REFERENCES tasks(run_id, task_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS tool_approvals (
+    approval_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    approval_id TEXT NOT NULL UNIQUE,
+    invocation_id TEXT NOT NULL,
+    invocation_revision INTEGER NOT NULL,
+    run_id TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    request_json TEXT NOT NULL,
+    request_sha256 TEXT NOT NULL,
+    binding_sha256 TEXT,
+    disposition TEXT,
+    reason TEXT,
+    created_at TEXT NOT NULL,
+    decided_at TEXT,
+    UNIQUE (invocation_id, invocation_revision),
+    FOREIGN KEY (invocation_id) REFERENCES tool_invocations(invocation_id) ON DELETE CASCADE,
+    FOREIGN KEY (run_id, task_id) REFERENCES tasks(run_id, task_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS tool_audit_records (
+    audit_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    audit_id TEXT NOT NULL UNIQUE,
+    invocation_id TEXT NOT NULL,
+    invocation_revision INTEGER NOT NULL,
+    run_id TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    record_sha256 TEXT NOT NULL,
+    record_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (invocation_id, invocation_revision),
+    FOREIGN KEY (invocation_id) REFERENCES tool_invocations(invocation_id) ON DELETE CASCADE,
+    FOREIGN KEY (run_id, task_id) REFERENCES tasks(run_id, task_id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_worktrees_run ON worktrees(run_id, purpose, task_id);
 CREATE INDEX IF NOT EXISTS idx_leases_task ON worker_leases(run_id, task_id, fencing_token);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_lease_per_task
@@ -204,6 +274,31 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_lease_per_task
 CREATE INDEX IF NOT EXISTS idx_integration_run ON integration_attempts(run_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_cancellations_requested
     ON cancellations(requested, updated_at);
+CREATE INDEX IF NOT EXISTS idx_tool_invocations_run
+    ON tool_invocations(run_id, invocation_sequence);
+CREATE INDEX IF NOT EXISTS idx_tool_invocations_task
+    ON tool_invocations(run_id, task_id, invocation_sequence);
+CREATE INDEX IF NOT EXISTS idx_tool_invocations_status
+    ON tool_invocations(run_id, status, invocation_sequence);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tool_invocations_idempotency
+    ON tool_invocations(run_id, task_id, idempotency_key_sha256)
+    WHERE idempotency_key_sha256 IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_tool_approvals_run
+    ON tool_approvals(run_id, approval_sequence);
+CREATE INDEX IF NOT EXISTS idx_tool_audit_run
+    ON tool_audit_records(run_id, audit_sequence);
+
+CREATE TRIGGER IF NOT EXISTS tool_audit_records_no_update
+BEFORE UPDATE ON tool_audit_records
+BEGIN
+    SELECT RAISE(ABORT, 'tool audit records are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS tool_audit_records_no_delete
+BEFORE DELETE ON tool_audit_records
+BEGIN
+    SELECT RAISE(ABORT, 'tool audit records are immutable');
+END;
 """
 
 
@@ -276,5 +371,97 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
             FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE
         )""",
         "CREATE INDEX idx_cancellations_requested ON cancellations(requested, updated_at)",
+    ),
+    3: (
+        """CREATE TABLE tool_invocations (
+            invocation_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+            invocation_id TEXT NOT NULL UNIQUE,
+            invocation_revision INTEGER NOT NULL,
+            run_id TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            tool_name TEXT NOT NULL,
+            tool_version_json TEXT NOT NULL,
+            protocol_version TEXT NOT NULL,
+            caller_role TEXT NOT NULL,
+            workspace_identity TEXT NOT NULL,
+            worktree_identity TEXT NOT NULL,
+            capabilities_json TEXT NOT NULL,
+            capability_fingerprint TEXT NOT NULL,
+            arguments_sha256 TEXT NOT NULL,
+            invocation_sha256 TEXT NOT NULL,
+            operation_sha256 TEXT NOT NULL,
+            idempotency_key_sha256 TEXT,
+            status TEXT NOT NULL,
+            resource_budget_json TEXT NOT NULL,
+            anticipated_usage_json TEXT NOT NULL,
+            resource_usage_json TEXT NOT NULL,
+            process_slot INTEGER NOT NULL,
+            policy_decision_json TEXT,
+            approval_id TEXT,
+            safe_result_json TEXT,
+            cancellation_json TEXT NOT NULL,
+            error_category TEXT,
+            error_message TEXT,
+            requested_at TEXT NOT NULL,
+            started_at TEXT,
+            completed_at TEXT,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (run_id, task_id)
+                REFERENCES tasks(run_id, task_id) ON DELETE CASCADE
+        )""",
+        """CREATE TABLE tool_approvals (
+            approval_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+            approval_id TEXT NOT NULL UNIQUE,
+            invocation_id TEXT NOT NULL,
+            invocation_revision INTEGER NOT NULL,
+            run_id TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            request_json TEXT NOT NULL,
+            request_sha256 TEXT NOT NULL,
+            binding_sha256 TEXT,
+            disposition TEXT,
+            reason TEXT,
+            created_at TEXT NOT NULL,
+            decided_at TEXT,
+            UNIQUE (invocation_id, invocation_revision),
+            FOREIGN KEY (invocation_id)
+                REFERENCES tool_invocations(invocation_id) ON DELETE CASCADE,
+            FOREIGN KEY (run_id, task_id)
+                REFERENCES tasks(run_id, task_id) ON DELETE CASCADE
+        )""",
+        """CREATE TABLE tool_audit_records (
+            audit_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+            audit_id TEXT NOT NULL UNIQUE,
+            invocation_id TEXT NOT NULL,
+            invocation_revision INTEGER NOT NULL,
+            run_id TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            record_sha256 TEXT NOT NULL,
+            record_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE (invocation_id, invocation_revision),
+            FOREIGN KEY (invocation_id)
+                REFERENCES tool_invocations(invocation_id) ON DELETE CASCADE,
+            FOREIGN KEY (run_id, task_id)
+                REFERENCES tasks(run_id, task_id) ON DELETE CASCADE
+        )""",
+        "CREATE INDEX idx_tool_invocations_run ON tool_invocations(run_id, invocation_sequence)",
+        "CREATE INDEX idx_tool_invocations_task ON tool_invocations(run_id, task_id, invocation_sequence)",
+        "CREATE INDEX idx_tool_invocations_status ON tool_invocations(run_id, status, invocation_sequence)",
+        """CREATE UNIQUE INDEX idx_tool_invocations_idempotency
+            ON tool_invocations(run_id, task_id, idempotency_key_sha256)
+            WHERE idempotency_key_sha256 IS NOT NULL""",
+        "CREATE INDEX idx_tool_approvals_run ON tool_approvals(run_id, approval_sequence)",
+        "CREATE INDEX idx_tool_audit_run ON tool_audit_records(run_id, audit_sequence)",
+        """CREATE TRIGGER tool_audit_records_no_update
+            BEFORE UPDATE ON tool_audit_records
+            BEGIN
+                SELECT RAISE(ABORT, 'tool audit records are immutable');
+            END""",
+        """CREATE TRIGGER tool_audit_records_no_delete
+            BEFORE DELETE ON tool_audit_records
+            BEGIN
+                SELECT RAISE(ABORT, 'tool audit records are immutable');
+            END""",
     ),
 }

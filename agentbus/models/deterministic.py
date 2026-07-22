@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import threading
 import time
 from collections.abc import Callable
@@ -23,6 +25,48 @@ from agentbus.models.errors import (
     ModelTimeoutError,
 )
 from agentbus.models.types import ModelResult, ModelRole, ModelUsage
+
+
+_DELETE_PROFILE_CONTENT = "deterministic deletion target\n"
+_DELETE_PROFILE_SHA256 = hashlib.sha256(
+    _DELETE_PROFILE_CONTENT.encode("utf-8")
+).hexdigest()
+_RUNTIME_STEP_PATTERN = re.compile(r"--- Step (\d+) ---")
+_PROFILE_REQUIREMENTS: dict[str, list[str]] = {
+    "tool-safe-read": ["filesystem.read"],
+    "tool-atomic-write": ["filesystem.write", "filesystem.create"],
+    "tool-source-patch": ["filesystem.write"],
+    "tool-pytest": ["test.execute", "process.execute"],
+    "tool-git-diff": ["git.read"],
+    "tool-git-commit": [
+        "filesystem.write",
+        "filesystem.create",
+        "git.write",
+        "git.commit",
+    ],
+    "tool-delete-approval": ["filesystem.delete"],
+    "tool-deny-outside-read": ["filesystem.read"],
+    "tool-deny-credential-read": ["filesystem.read"],
+    "tool-process-timeout": ["process.execute"],
+    "tool-process-cancel": ["process.execute"],
+    "tool-excessive-output": ["process.execute"],
+    "tool-budget-exhaustion": ["filesystem.read"],
+    "tool-local-mcp": ["mcp.connect", "mcp.invoke"],
+    "tool-loop-limit": ["filesystem.read"],
+    "tool-control-acceptance": [
+        "filesystem.read",
+        "filesystem.write",
+        "filesystem.create",
+        "test.execute",
+        "process.execute",
+    ],
+}
+_PROFILE_OUTPUTS: dict[str, list[str]] = {
+    "tool-atomic-write": ["profile_result.txt"],
+    "tool-source-patch": ["module.py"],
+    "tool-git-commit": ["profile_commit.py"],
+    "tool-control-acceptance": ["acceptance_tool.py"],
+}
 
 
 class DeterministicProvider:
@@ -141,7 +185,12 @@ class DeterministicProvider:
                     cancellation=cancellation,
                 )
                 if json_requested:
-                    value = self._json_value(scope_call, metadata, schema)
+                    value = self._json_value(
+                        scope_call,
+                        metadata,
+                        schema,
+                        prompt=prompt,
+                    )
                     value = self._validate(value, schema, call_number)
                 else:
                     value = self._text_value(scope_call)
@@ -230,6 +279,8 @@ class DeterministicProvider:
         scope_call: int,
         metadata: dict[str, Any],
         schema: type[BaseModel] | dict[str, Any] | None,
+        *,
+        prompt: str,
     ) -> dict[str, Any]:
         if (
             isinstance(schema, type)
@@ -248,9 +299,41 @@ class DeterministicProvider:
             }
         if self.role == ModelRole.SUMMARIZER:
             return {"summary": self._text_value(scope_call)}
-        return self._coder_action(scope_call, str(metadata.get("task_id") or "step-1"))
+        return self._coder_action(
+            scope_call,
+            str(metadata.get("task_id") or "step-1"),
+            prompt=prompt,
+        )
 
     def _plan(self) -> dict[str, Any]:
+        if self.profile in _PROFILE_REQUIREMENTS:
+            outputs = _PROFILE_OUTPUTS.get(self.profile, [])
+            return {
+                "goal": f"Exercise deterministic profile {self.profile}.",
+                "steps": [
+                    {
+                        "id": "step-1",
+                        "title": f"Execute {self.profile}",
+                        "description": (
+                            "Exercise one production managed-tool scenario through "
+                            "the deterministic provider."
+                        ),
+                        "risk": "low",
+                        "dependencies": [],
+                        "assigned_role": "coder",
+                        "maximum_attempts": 2,
+                        "expected_outputs": outputs,
+                        "done_criteria": [
+                            "The managed-tool outcome is persisted and auditable."
+                        ],
+                        "required_capabilities": _PROFILE_REQUIREMENTS[self.profile],
+                    }
+                ],
+                "test_strategy": "Inspect the persisted deterministic tool result.",
+                "done_criteria": [
+                    "Policy, dispatch, cancellation, and audit paths remain active."
+                ],
+            }
         steps = [
             {
                 "id": "step-1",
@@ -270,6 +353,13 @@ class DeterministicProvider:
                     "The calculator adds two integers.",
                     "The deterministic test passes.",
                 ],
+                "required_capabilities": [
+                    "filesystem.write",
+                    "filesystem.create",
+                    "test.execute",
+                    "process.execute",
+                    "git.read",
+                ],
             }
         ]
         if self.profile == "cancellation-two-task":
@@ -286,6 +376,10 @@ class DeterministicProvider:
                     "maximum_attempts": 1,
                     "expected_outputs": ["agentbus_secondary.py"],
                     "done_criteria": ["The secondary artifact is present."],
+                    "required_capabilities": [
+                        "filesystem.write",
+                        "filesystem.create",
+                    ],
                 }
             )
         return {
@@ -298,14 +392,40 @@ class DeterministicProvider:
             ],
         }
 
-    @staticmethod
-    def _coder_action(scope_call: int, task_id: str) -> dict[str, Any]:
+    def _coder_action(
+        self,
+        scope_call: int,
+        task_id: str,
+        *,
+        prompt: str,
+    ) -> dict[str, Any]:
+        action_position = _runtime_action_position(prompt, scope_call)
+        if self.profile in _PROFILE_REQUIREMENTS:
+            if self.profile == "tool-loop-limit":
+                return _tool_action(
+                    "repository.scan",
+                    {},
+                    ["filesystem.read"],
+                    f"{task_id}:bounded-loop-{action_position}",
+                )
+            actions = self._profile_actions(task_id)
+            return actions[min(action_position, len(actions)) - 1]
         if task_id == "step-2":
             actions = [
                 {
-                    "action": "write_file",
-                    "path": "agentbus_secondary.py",
-                    "content": 'MESSAGE = "scheduled"\n',
+                    "action": "tool_call",
+                    "tool_call": {
+                        "tool_name": "filesystem.write",
+                        "arguments": {
+                            "path": "agentbus_secondary.py",
+                            "content": 'MESSAGE = "scheduled"\n',
+                        },
+                        "expected_capabilities": [
+                            "filesystem.write",
+                            "filesystem.create",
+                        ],
+                        "idempotency_key": f"{task_id}:write-secondary",
+                    },
                 },
                 {
                     "action": "finish",
@@ -315,28 +435,67 @@ class DeterministicProvider:
         else:
             actions = [
                 {
-                    "action": "write_file",
-                    "path": "agentbus_result.py",
-                    "content": (
-                        '"""Deterministic AgentBus acceptance artifact."""\n\n'
-                        "def add(left: int, right: int) -> int:\n"
-                        "    return left + right\n"
-                    ),
+                    "action": "tool_call",
+                    "tool_call": {
+                        "tool_name": "filesystem.write",
+                        "arguments": {
+                            "path": "agentbus_result.py",
+                            "content": (
+                                '"""Deterministic AgentBus acceptance artifact."""\n\n'
+                                "def add(left: int, right: int) -> int:\n"
+                                "    return left + right\n"
+                            ),
+                        },
+                        "expected_capabilities": [
+                            "filesystem.write",
+                            "filesystem.create",
+                        ],
+                        "idempotency_key": f"{task_id}:write-result",
+                    },
                 },
                 {
-                    "action": "write_file",
-                    "path": "test_agentbus_result.py",
-                    "content": (
-                        "from agentbus_result import add\n\n\n"
-                        "def test_add() -> None:\n"
-                        "    assert add(2, 3) == 5\n"
-                    ),
+                    "action": "tool_call",
+                    "tool_call": {
+                        "tool_name": "filesystem.write",
+                        "arguments": {
+                            "path": "test_agentbus_result.py",
+                            "content": (
+                                "from agentbus_result import add\n\n\n"
+                                "def test_add() -> None:\n"
+                                "    assert add(2, 3) == 5\n"
+                            ),
+                        },
+                        "expected_capabilities": [
+                            "filesystem.write",
+                            "filesystem.create",
+                        ],
+                        "idempotency_key": f"{task_id}:write-test",
+                    },
                 },
                 {
-                    "action": "run_command",
-                    "command": ["python", "-m", "pytest", "-q"],
+                    "action": "tool_call",
+                    "tool_call": {
+                        "tool_name": "test.execute",
+                        "arguments": {
+                            "executable": "python",
+                            "arguments": ["-m", "pytest", "-q"],
+                        },
+                        "expected_capabilities": [
+                            "test.execute",
+                            "process.execute",
+                        ],
+                        "idempotency_key": f"{task_id}:pytest",
+                    },
                 },
-                {"action": "git_diff"},
+                {
+                    "action": "tool_call",
+                    "tool_call": {
+                        "tool_name": "git.diff",
+                        "arguments": {},
+                        "expected_capabilities": ["git.read"],
+                        "idempotency_key": f"{task_id}:git-diff",
+                    },
+                },
                 {
                     "action": "finish",
                     "summary": (
@@ -344,7 +503,215 @@ class DeterministicProvider:
                     ),
                 },
             ]
-        return actions[min(scope_call, len(actions)) - 1]
+        return actions[min(action_position, len(actions)) - 1]
+
+    def _profile_actions(self, task_id: str) -> list[dict[str, Any]]:
+        finish = {
+            "action": "finish",
+            "summary": f"Completed deterministic profile {self.profile}.",
+        }
+        calls: dict[str, list[dict[str, Any]]] = {
+            "tool-safe-read": [
+                _tool_action(
+                    "filesystem.read",
+                    {"path": "README.md"},
+                    ["filesystem.read"],
+                    f"{task_id}:safe-read",
+                )
+            ],
+            "tool-atomic-write": [
+                _tool_action(
+                    "filesystem.write",
+                    {
+                        "path": "profile_result.txt",
+                        "content": "deterministic atomic write\n",
+                    },
+                    ["filesystem.write", "filesystem.create"],
+                    f"{task_id}:atomic-write",
+                )
+            ],
+            "tool-source-patch": [
+                _tool_action(
+                    "filesystem.patch",
+                    {
+                        "path": "module.py",
+                        "expected": "VALUE = 1",
+                        "replacement": "VALUE = 2",
+                        "expected_occurrences": 1,
+                    },
+                    ["filesystem.write"],
+                    f"{task_id}:source-patch",
+                )
+            ],
+            "tool-pytest": [
+                _tool_action(
+                    "test.execute",
+                    {
+                        "executable": "python",
+                        "arguments": ["-m", "pytest", "-q"],
+                    },
+                    ["test.execute", "process.execute"],
+                    f"{task_id}:pytest",
+                )
+            ],
+            "tool-git-diff": [
+                _tool_action(
+                    "git.diff",
+                    {},
+                    ["git.read"],
+                    f"{task_id}:git-diff",
+                )
+            ],
+            "tool-git-commit": [
+                _tool_action(
+                    "filesystem.write",
+                    {
+                        "path": "profile_commit.py",
+                        "content": "PROFILE_COMMIT = True\n",
+                    },
+                    ["filesystem.write", "filesystem.create"],
+                    f"{task_id}:commit-write",
+                ),
+                _tool_action(
+                    "git.commit",
+                    {
+                        "paths": ["profile_commit.py"],
+                        "message": "test: deterministic managed commit",
+                    },
+                    ["git.write", "git.commit"],
+                    f"{task_id}:git-commit",
+                ),
+            ],
+            "tool-delete-approval": [
+                _tool_action(
+                    "filesystem.delete",
+                    {
+                        "path": "delete_me.txt",
+                        "expected_sha256": _DELETE_PROFILE_SHA256,
+                    },
+                    ["filesystem.delete"],
+                    f"{task_id}:delete",
+                )
+            ],
+            "tool-deny-outside-read": [
+                _tool_action(
+                    "filesystem.read",
+                    {"path": "../outside.txt"},
+                    ["filesystem.read"],
+                    f"{task_id}:outside-read",
+                )
+            ],
+            "tool-deny-credential-read": [
+                _tool_action(
+                    "filesystem.read",
+                    {"path": ".env"},
+                    ["filesystem.read"],
+                    f"{task_id}:credential-read",
+                )
+            ],
+            "tool-process-timeout": [
+                _tool_action(
+                    "process.execute",
+                    {
+                        "executable": "python",
+                        "arguments": ["-c", "import time; time.sleep(2)"],
+                    },
+                    ["process.execute"],
+                    f"{task_id}:process-timeout",
+                    timeout_seconds=0.05,
+                )
+            ],
+            "tool-process-cancel": [
+                _tool_action(
+                    "process.execute",
+                    {
+                        "executable": "python",
+                        "arguments": [
+                            "-c",
+                            (
+                                "import time; "
+                                "print('agentbus-process-ready', flush=True); "
+                                "time.sleep(30)"
+                            ),
+                        ],
+                    },
+                    ["process.execute"],
+                    f"{task_id}:process-cancel",
+                    timeout_seconds=60.0,
+                )
+            ],
+            "tool-excessive-output": [
+                _tool_action(
+                    "process.execute",
+                    {
+                        "executable": "python",
+                        "arguments": [
+                            "-c",
+                            "import sys; sys.stdout.write('x' * 200000)",
+                        ],
+                    },
+                    ["process.execute"],
+                    f"{task_id}:excessive-output",
+                )
+            ],
+            "tool-budget-exhaustion": [
+                _tool_action(
+                    "filesystem.read",
+                    {"path": "README.md"},
+                    ["filesystem.read"],
+                    f"{task_id}:budget-read-1",
+                ),
+                _tool_action(
+                    "filesystem.read",
+                    {"path": "README.md"},
+                    ["filesystem.read"],
+                    f"{task_id}:budget-read-2",
+                ),
+            ],
+            "tool-local-mcp": [
+                _tool_action(
+                    "mcp.fixture.echo",
+                    {"message": "deterministic MCP hello"},
+                    ["mcp.connect", "mcp.invoke"],
+                    f"{task_id}:mcp-echo",
+                )
+            ],
+            "tool-control-acceptance": [
+                _tool_action(
+                    "filesystem.read",
+                    {"path": "README.md"},
+                    ["filesystem.read"],
+                    f"{task_id}:acceptance-read",
+                ),
+                _tool_action(
+                    "filesystem.write",
+                    {
+                        "path": "acceptance_tool.py",
+                        "content": (
+                            "def add(left: int, right: int) -> int:\n"
+                            "    return left + right\n"
+                        ),
+                    },
+                    ["filesystem.write", "filesystem.create"],
+                    f"{task_id}:acceptance-write",
+                ),
+                _tool_action(
+                    "test.execute",
+                    {
+                        "executable": "python",
+                        "arguments": [
+                            "-m",
+                            "pytest",
+                            "-q",
+                            "test_acceptance_tool.py",
+                        ],
+                    },
+                    ["test.execute", "process.execute"],
+                    f"{task_id}:acceptance-pytest",
+                ),
+            ],
+        }
+        return [*calls[self.profile], finish]
 
     def _text_value(self, scope_call: int) -> str:
         return (
@@ -425,3 +792,29 @@ class DeterministicProvider:
 
     def _request_id(self, call_number: int) -> str:
         return f"det-{self.role.value}-{call_number:04d}"
+
+
+def _runtime_action_position(prompt: str, fallback: int) -> int:
+    if "Previous observations:" not in prompt or "Return the next JSON action." not in prompt:
+        return fallback
+    matches = _RUNTIME_STEP_PATTERN.findall(prompt)
+    return (int(matches[-1]) + 1) if matches else 1
+
+
+def _tool_action(
+    tool_name: str,
+    arguments: dict[str, Any],
+    capabilities: list[str],
+    idempotency_key: str,
+    *,
+    timeout_seconds: float | None = None,
+) -> dict[str, Any]:
+    tool_call: dict[str, Any] = {
+        "tool_name": tool_name,
+        "arguments": arguments,
+        "expected_capabilities": capabilities,
+        "idempotency_key": idempotency_key,
+    }
+    if timeout_seconds is not None:
+        tool_call["timeout_seconds"] = timeout_seconds
+    return {"action": "tool_call", "tool_call": tool_call}

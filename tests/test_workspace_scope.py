@@ -10,11 +10,29 @@ from agentbus.agents.coder import CoderAgent
 from agentbus.config import AgentBusConfig
 from agentbus.execution.models import RunRecord, TaskExecutionContext, TaskSpec
 from agentbus.execution.state_store import StateStore
-from agentbus.git.repository import GitRepository, WorkspaceRepositoryMismatch
+from agentbus.git.repository import (
+    GitRepository,
+    GitRepositoryError,
+    WorkspaceRepositoryMismatch,
+)
+from agentbus.runtime import loop as loop_module
 from agentbus.runtime.durable_workflow import MultiAgentTaskExecutor
 from agentbus.runtime.loop import AgentLoop
 from agentbus.runtime.orchestrator import MultiAgentOrchestrator
 from agentbus.tools.git_tools import GitTools
+
+
+def _capture_agent_loop_runtimes(monkeypatch):
+    runtimes = []
+    build_runtime = loop_module.build_managed_tool_runtime
+
+    def capture_runtime(**kwargs):
+        runtime = build_runtime(**kwargs)
+        runtimes.append(runtime)
+        return runtime
+
+    monkeypatch.setattr(loop_module, "build_managed_tool_runtime", capture_runtime)
+    return runtimes
 
 
 def init_repository(path: Path) -> Path:
@@ -107,6 +125,29 @@ def test_git_diff_and_changed_files_are_scoped_to_workspace(tmp_path):
     assert changed == ["calculator.py"]
     assert "calculator.py" in diff
     assert "unrelated-parent.txt" not in diff
+
+
+def test_git_diffs_and_commits_exclude_protected_workspace_files(tmp_path):
+    workspace = init_repository(tmp_path / "target")
+    (workspace / "module.py").write_text("value = 1\n", encoding="utf-8")
+    (workspace / ".env").write_text(
+        "API_KEY=must-not-reach-review\n",
+        encoding="utf-8",
+    )
+
+    repository = GitRepository(str(workspace))
+    changes = repository.change_set()
+    diff = repository.full_diff()
+
+    assert changes.protected_files == [".env"]
+    assert ".env" in changes.changed_files
+    assert ".env" in changes.review_excluded_files
+    assert ".env" not in changes.review_files
+    assert ".env" not in changes.commit_files
+    assert "must-not-reach-review" not in diff
+    assert "module.py" in diff
+    with pytest.raises(GitRepositoryError, match="Protected"):
+        repository.full_diff(paths=[".env"])
 
 
 def test_path_scoped_commit_does_not_include_unrelated_staged_changes(
@@ -217,7 +258,10 @@ def test_unrelated_parent_files_never_reach_task_reviewer(tmp_path):
     assert "unrelated-parent.txt" not in reviewer.task_input["task_diff"]
 
 
-def test_explicit_absolute_workspace_propagates_to_runtime_components(tmp_path):
+def test_explicit_absolute_workspace_propagates_to_runtime_components(
+    tmp_path,
+    monkeypatch,
+):
     workspace = init_repository(tmp_path / "target")
     settings = AgentBusConfig(
         workspace_dir=str(workspace),
@@ -242,7 +286,8 @@ def test_explicit_absolute_workspace_propagates_to_runtime_components(tmp_path):
             }
 
     class Model:
-        pass
+        def generate_json(self, prompt, **kwargs):
+            return {"action": "finish", "summary": "workspace checked"}
 
     coder = CoderAgent(config=settings, model=Model())
     store = StateStore(settings.state_database_path)
@@ -252,7 +297,9 @@ def test_explicit_absolute_workspace_propagates_to_runtime_components(tmp_path):
         coder=coder,
         state_store=store,
     )
+    loop_runtimes = _capture_agent_loop_runtimes(monkeypatch)
     loop = AgentLoop(config=settings, model=Model())
+    loop.run("Initialize managed tools")
     run_id = runner.create_durable_run("Check workspace propagation")
     executor = runner._durable_engine(run_id).task_executor
 
@@ -267,15 +314,22 @@ def test_explicit_absolute_workspace_propagates_to_runtime_components(tmp_path):
     assert runner.git_repository.workspace == workspace
     assert runner.pr_client.workspace == workspace
     assert coder.config.workspace_path == workspace
-    assert loop.fs.workspace == workspace
-    assert loop.cmd.workspace == workspace
-    assert loop.git.workspace == workspace
+    assert loop.tool_runtime is None
+    assert len(loop_runtimes) == 1
+    assert loop_runtimes[0].workspace == workspace
+    assert loop_runtimes[0].worktree == workspace
     assert executor.git_repository.workspace == workspace
     assert executor.workspace == workspace
+    assert executor.tool_runtime is not None
+    assert executor.tool_runtime.workspace == workspace
+    assert executor.tool_runtime.worktree == workspace
     assert store.get_run(run_id).workspace == str(workspace)
 
 
-def test_parallel_worker_runtime_propagates_isolated_absolute_workspace(tmp_path):
+def test_parallel_worker_runtime_propagates_isolated_absolute_workspace(
+    tmp_path,
+    monkeypatch,
+):
     source = init_repository(tmp_path / "source")
     worker_workspace = (tmp_path / "worktrees" / "task-A").resolve()
     worker_workspace.mkdir(parents=True)
@@ -289,7 +343,14 @@ def test_parallel_worker_runtime_propagates_isolated_absolute_workspace(tmp_path
     runner = MultiAgentOrchestrator(config=settings)
 
     executor = runner._parallel_task_executor(worker_workspace)
-    loop = AgentLoop(config=executor.coder.config, model=object())
+
+    class Model:
+        def generate_json(self, prompt, **kwargs):
+            return {"action": "finish", "summary": "workspace checked"}
+
+    loop_runtimes = _capture_agent_loop_runtimes(monkeypatch)
+    loop = AgentLoop(config=executor.coder.config, model=Model())
+    loop.run("Initialize managed tools")
 
     assert executor.workspace == worker_workspace
     assert executor.git_repository.workspace == worker_workspace
@@ -299,7 +360,11 @@ def test_parallel_worker_runtime_propagates_isolated_absolute_workspace(tmp_path
     assert executor.verifier.workspace == worker_workspace
     assert executor.verifier.command_tools.workspace == worker_workspace
     assert executor.verifier.test_detector.workspace == worker_workspace
+    assert executor.tool_runtime is not None
+    assert executor.tool_runtime.workspace == source
+    assert executor.tool_runtime.worktree == worker_workspace
     assert Path(loop.workspace) == worker_workspace
-    assert loop.fs.workspace == worker_workspace
-    assert loop.cmd.workspace == worker_workspace
-    assert loop.git.workspace == worker_workspace
+    assert loop.tool_runtime is None
+    assert len(loop_runtimes) == 1
+    assert loop_runtimes[0].workspace == worker_workspace
+    assert loop_runtimes[0].worktree == worker_workspace

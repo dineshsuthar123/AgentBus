@@ -9,6 +9,7 @@ from agentbus.control.models import (
     ErrorBody,
     ErrorResponse,
     RunCreateRequest,
+    ToolPolicyEvaluationRequest,
     WorkflowMode,
 )
 
@@ -63,6 +64,45 @@ def test_run_request_rejects_unknown_transport_fields() -> None:
             task="Task",
             workspace="C:/workspace",
             api_key="must-not-cross-the-control-protocol",
+        )
+
+
+def test_run_request_accepts_a_validated_tool_resource_budget() -> None:
+    request = RunCreateRequest(
+        task="Run one bounded tool.",
+        workspace="C:/workspace",
+        provider="deterministic",
+        deterministic={"profile": "tool-budget-exhaustion"},
+        tool_budget={
+            "invocations_per_task": 1,
+            "invocations_per_run": 1,
+            "stdout_bytes": 1024,
+            "stderr_bytes": 1024,
+            "combined_output_bytes": 2048,
+        },
+    )
+
+    assert request.tool_budget.invocations_per_task == 1
+    assert request.tool_budget.invocations_per_run == 1
+    assert request.tool_budget.combined_output_bytes == 2048
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"value": float("nan")},
+        {"value": "x" * 65_536},
+    ],
+)
+def test_tool_policy_diagnostics_reject_unbounded_or_nonfinite_arguments(
+    arguments: dict[str, object],
+) -> None:
+    with pytest.raises(ValidationError, match="finite JSON|at most 65536 bytes"):
+        ToolPolicyEvaluationRequest(
+            run_id="run-1",
+            task_id="task-1",
+            tool_name="filesystem.read",
+            arguments=arguments,
         )
 
 

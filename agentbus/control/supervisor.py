@@ -42,8 +42,10 @@ from agentbus.execution.state_store import RunNotFoundError, StateStore
 from agentbus.git.repository import GitRepository, GitRepositoryError
 from agentbus.memory.run_log import RunLogger
 from agentbus.models.errors import ModelCancellationError
-from agentbus.runtime.loop import AgentLoop
+from agentbus.runtime.loop import AgentLoop, ManagedToolApprovalRequired
 from agentbus.runtime.orchestrator import MultiAgentOrchestrator
+from agentbus.tools.protocol import ToolResourceBudget
+from agentbus.tools.runtime import build_managed_tool_runtime
 
 
 class RunBackend(Protocol):
@@ -100,13 +102,55 @@ class AgentBusRunBackend:
     def resume(self, run_id: str) -> None:
         run = self.store.get_run(run_id)
         self.cancellations.recover(run_id)
+        config = self._config_for_persisted_run(run)
+        MultiAgentOrchestrator(
+            config=config,
+            state_store=self.store,
+            logger=RunLogger(log_dir=config.runs_dir, run_id=run_id),
+            cancellation_registry=self.cancellations,
+        ).resume_durable(run_id)
+
+    def _config_for_persisted_run(self, run: RunRecord) -> AgentBusConfig:
         parallel = run.metadata.get("parallel_execution", {})
         routing = run.metadata.get("model_routing", {})
-        config = self.base_config.with_overrides(
+        deterministic = (
+            routing.get("deterministic", {}) if isinstance(routing, dict) else {}
+        )
+        if not isinstance(deterministic, dict):
+            deterministic = {}
+        return self.base_config.with_overrides(
             workspace_dir=run.workspace,
             provider_name=(
                 routing.get("provider")
                 if isinstance(routing, dict) and routing.get("provider")
+                else None
+            ),
+            fallback_provider_name=(
+                routing.get("fallback_provider")
+                if isinstance(routing, dict) and routing.get("fallback_provider")
+                else None
+            ),
+            enable_provider_fallback=(
+                bool(routing.get("fallback_enabled"))
+                if isinstance(routing, dict) and "fallback_enabled" in routing
+                else None
+            ),
+            deterministic_profile=deterministic.get("profile"),
+            deterministic_latency_seconds=deterministic.get("latency_seconds"),
+            deterministic_latency_roles=(
+                tuple(deterministic["latency_roles"])
+                if isinstance(deterministic.get("latency_roles"), list)
+                else None
+            ),
+            deterministic_failure_kind=deterministic.get("failure_kind"),
+            deterministic_failure_calls=(
+                tuple(deterministic["failure_calls"])
+                if isinstance(deterministic.get("failure_calls"), list)
+                else None
+            ),
+            deterministic_failure_roles=(
+                tuple(deterministic["failure_roles"])
+                if isinstance(deterministic.get("failure_roles"), list)
                 else None
             ),
             parallel_execution=bool(
@@ -122,13 +166,8 @@ class AgentBusRunBackend:
                 if isinstance(parallel, dict)
                 else True
             ),
+            tool_resource_budget=self._persisted_tool_budget(run.metadata),
         )
-        MultiAgentOrchestrator(
-            config=config,
-            state_store=self.store,
-            logger=RunLogger(log_dir=config.runs_dir, run_id=run_id),
-            cancellation_registry=self.cancellations,
-        ).resume_durable(run_id)
 
     def cancel(self, run_id: str, reason: str | None = None) -> RunStatus:
         try:
@@ -180,10 +219,20 @@ class AgentBusRunBackend:
             deterministic_failure_kind=request.deterministic.failure_kind,
             deterministic_failure_calls=tuple(request.deterministic.failure_calls),
             deterministic_failure_roles=tuple(request.deterministic.failure_roles),
+            tool_resource_budget=request.tool_budget,
             parallel_execution=request.parallel,
             max_workers=request.max_workers,
             keep_worktrees=request.keep_worktrees,
         )
+
+    def _persisted_tool_budget(self, metadata: dict) -> ToolResourceBudget:
+        tool_runtime = metadata.get("tool_runtime", {})
+        if not isinstance(tool_runtime, dict):
+            return self.base_config.tool_resource_budget
+        resource_budget = tool_runtime.get("resource_budget")
+        if not isinstance(resource_budget, dict):
+            return self.base_config.tool_resource_budget
+        return ToolResourceBudget.model_validate(resource_budget)
 
     def _orchestrator(
         self,
@@ -227,6 +276,11 @@ class AgentBusRunBackend:
                     exclude={"metadata"},
                 ),
                 "model_routing": config.safe_model_summary(),
+                "tool_runtime": {
+                    "resource_budget": config.tool_resource_budget.model_dump(
+                        mode="json"
+                    ),
+                },
             },
         )
         self.store.create_run_with_tasks(run, [task])
@@ -248,10 +302,22 @@ class AgentBusRunBackend:
         attempt = self.store.create_attempt(run_id, task.task_id)
         try:
             if request.workflow == "single":
-                summary = AgentLoop(
-                    config=config,
-                    cancellation=cancellation,
-                ).run(request.task)
+                with build_managed_tool_runtime(
+                    workspace=config.workspace_path,
+                    state_store=self.store,
+                    cancellation_registry=self.cancellations,
+                    mcp_server_configs=config.mcp_server_configs,
+                    mcp_run_id=run_id,
+                ) as tool_runtime:
+                    summary = AgentLoop(
+                        config=config,
+                        cancellation=cancellation,
+                        tool_runtime=tool_runtime,
+                        state_store=self.store,
+                        cancellation_registry=self.cancellations,
+                        run_id=run_id,
+                        task_id=task.task_id,
+                    ).run(request.task)
                 approved = True
                 verifier_status = None
                 reviewer_status = None
@@ -292,6 +358,39 @@ class AgentBusRunBackend:
                 RunStatus.SUCCEEDED if approved else RunStatus.FAILED,
                 failure_reason=None if approved else summary,
                 event_type="run_succeeded" if approved else "run_failed",
+            )
+        except ManagedToolApprovalRequired as exc:
+            self.store.complete_attempt(
+                attempt.attempt_id,
+                AttemptStatus.INTERRUPTED,
+                error_category=FailureCategory.POLICY_VIOLATION,
+                error_message=str(exc),
+                observation_summary=str(exc),
+                metadata={
+                    "_agentbus": {
+                        "tool_approval_pending": {
+                            "approval_id": exc.approval_id,
+                            "invocation_id": exc.invocation_id,
+                            "tool_name": exc.tool_name,
+                        }
+                    }
+                },
+                event_type="task_attempt_awaiting_tool_approval",
+            )
+            self.store.update_task_status(
+                run_id,
+                task.task_id,
+                TaskStatus.WAITING_FOR_APPROVAL,
+                event_type="task_awaiting_tool_approval",
+                event_payload={
+                    "approval_id": exc.approval_id,
+                    "invocation_id": exc.invocation_id,
+                },
+            )
+            self.store.update_run_status(
+                run_id,
+                RunStatus.WAITING_FOR_APPROVAL,
+                event_type="run_awaiting_tool_approval",
             )
         except (CancellationRequested, ModelCancellationError):
             changed_files = self._changed_files(config.workspace_path)

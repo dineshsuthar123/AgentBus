@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import time
 from contextlib import asynccontextmanager
@@ -10,7 +11,7 @@ from typing import Any
 try:
     from fastapi import FastAPI, Query, Request
     from fastapi.exceptions import RequestValidationError
-    from fastapi.responses import JSONResponse, StreamingResponse
+    from fastapi.responses import JSONResponse, Response, StreamingResponse
 except ImportError as exc:  # pragma: no cover - exercised by the CLI dependency test
     raise RuntimeError(
         'The control plane requires optional dependencies. Install "agentbus[ide]".'
@@ -43,6 +44,8 @@ from agentbus.control.models import (
     FileContentResponse,
     HealthResponse,
     InfoResponse,
+    McpServerCheckResponse,
+    McpServerListResponse,
     ProviderCheckRequest,
     ProviderListResponse,
     ProviderSummary,
@@ -55,6 +58,16 @@ from agentbus.control.models import (
     RunSummary,
     SchedulerResponse,
     TaskListResponse,
+    ToolAuditListResponse,
+    ToolDescriptorDetail,
+    ToolInvocationCancelRequest,
+    ToolInvocationCancelResponse,
+    ToolInvocationDetail,
+    ToolInvocationListResponse,
+    ToolListResponse,
+    ToolPolicyEvaluationRequest,
+    ToolPolicyEvaluationResponse,
+    ToolPolicyResponse,
     UsageResponse,
     WorkspaceValidationRequest,
     WorkspaceValidationResponse,
@@ -65,7 +78,9 @@ from agentbus.control.supervisor import BackgroundRunSupervisor
 from agentbus.execution.models import ApprovalOutcome
 from agentbus.execution.state_store import StateStoreError
 from agentbus.git.repository import GitRepositoryError
+from agentbus.mcp.server import AgentBusMcpServer
 from agentbus.security.redaction import sanitize_json
+from agentbus.tools.descriptors import builtin_descriptors
 
 MAX_REQUEST_BYTES = 1_000_000
 
@@ -89,6 +104,14 @@ def create_app(
 ):
     authenticator = BearerAuthenticator(token)
     event_reader = ControlEventReader(query_service.store)
+    mcp_server = AgentBusMcpServer(
+        query_service,
+        supervisor,
+        descriptor_provider=lambda: builtin_descriptors(
+            workspace=query_service.config.workspace_dir,
+            process_executables=("git", "pytest", "python"),
+        ),
+    )
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -115,6 +138,7 @@ def create_app(
     app.state.control_context = context
     app.state.query_service = query_service
     app.state.supervisor = supervisor
+    app.state.mcp_server = mcp_server
     app.state.last_activity = time.monotonic()
 
     @app.middleware("http")
@@ -217,8 +241,45 @@ def create_app(
                 "sse-replay",
                 "approvals",
                 "repository-diffs",
+                "tool-runtime",
+                "tool-policy",
+                "tool-audit",
+                "tool-cancellation",
+                "mcp",
+                "mcp-diagnostics",
             ],
         )
+
+    @app.post("/mcp")
+    async def mcp(request: Request):
+        content_type = request.headers.get("content-type", "").split(";", 1)[0]
+        if content_type.lower() != "application/json":
+            return _error_json(
+                JSONResponse,
+                code="invalid_content_type",
+                message="MCP requests require application/json.",
+                status_code=415,
+            )
+        try:
+            payload = json.loads(
+                await request.body(),
+                parse_constant=lambda _value: _reject_nonfinite_json(),
+            )
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+            response = {
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {"code": -32700, "message": "Parse error"},
+            }
+            return JSONResponse(content=response)
+        response = mcp_server.handle(
+            payload,
+            protocol_version=request.headers.get("MCP-Protocol-Version"),
+            require_protocol_header=True,
+        )
+        if response is None:
+            return Response(status_code=202)
+        return JSONResponse(content=response)
 
     @app.post(
         f"{API_PREFIX}/workspaces/validate",
@@ -245,6 +306,44 @@ def create_app(
     @app.get(f"{API_PREFIX}/doctor", response_model=DoctorResponse)
     async def doctor(workspace: str | None = None) -> DoctorResponse:
         return query_service.doctor(workspace)
+
+    @app.get(f"{API_PREFIX}/tools", response_model=ToolListResponse)
+    async def tools() -> ToolListResponse:
+        return query_service.tools()
+
+    @app.get(
+        f"{API_PREFIX}/tools/{{tool_name}}",
+        response_model=ToolDescriptorDetail,
+    )
+    async def tool(tool_name: str) -> ToolDescriptorDetail:
+        return query_service.tool(tool_name)
+
+    @app.get(f"{API_PREFIX}/policy", response_model=ToolPolicyResponse)
+    async def tool_policy() -> ToolPolicyResponse:
+        return query_service.tool_policy()
+
+    @app.post(
+        f"{API_PREFIX}/policy/evaluate",
+        response_model=ToolPolicyEvaluationResponse,
+    )
+    async def evaluate_tool_policy(
+        request: ToolPolicyEvaluationRequest,
+    ) -> ToolPolicyEvaluationResponse:
+        return query_service.evaluate_tool_policy(request)
+
+    @app.get(
+        f"{API_PREFIX}/mcp/servers",
+        response_model=McpServerListResponse,
+    )
+    def mcp_servers() -> McpServerListResponse:
+        return query_service.mcp_servers()
+
+    @app.post(
+        f"{API_PREFIX}/mcp/servers/{{server_id}}/check",
+        response_model=McpServerCheckResponse,
+    )
+    def check_mcp_server(server_id: str) -> McpServerCheckResponse:
+        return query_service.check_mcp_server(server_id)
 
     @app.post(f"{API_PREFIX}/runs", response_model=RunAcceptedResponse, status_code=202)
     async def create_run(request: RunCreateRequest) -> RunAcceptedResponse:
@@ -290,6 +389,72 @@ def create_app(
     @app.get(f"{API_PREFIX}/runs/{{run_id}}/usage", response_model=UsageResponse)
     async def usage(run_id: str) -> UsageResponse:
         return query_service.usage(run_id)
+
+    @app.get(
+        f"{API_PREFIX}/runs/{{run_id}}/tool-invocations",
+        response_model=ToolInvocationListResponse,
+    )
+    async def tool_invocations(
+        run_id: str,
+        after: int = Query(default=0, ge=0),
+        limit: int = Query(default=100, ge=1, le=500),
+    ) -> ToolInvocationListResponse:
+        return query_service.tool_invocations(
+            run_id,
+            after_sequence=after,
+            limit=limit,
+        )
+
+    @app.get(
+        f"{API_PREFIX}/runs/{{run_id}}/tool-invocations/{{invocation_id}}",
+        response_model=ToolInvocationDetail,
+    )
+    async def tool_invocation(
+        run_id: str,
+        invocation_id: str,
+    ) -> ToolInvocationDetail:
+        return query_service.tool_invocation(run_id, invocation_id)
+
+    @app.post(
+        f"{API_PREFIX}/runs/{{run_id}}/tool-invocations/{{invocation_id}}/cancel",
+        response_model=ToolInvocationCancelResponse,
+    )
+    async def cancel_tool_invocation(
+        run_id: str,
+        invocation_id: str,
+        request: ToolInvocationCancelRequest | None = None,
+    ) -> ToolInvocationCancelResponse:
+        invocation = query_service.cancellable_tool_invocation(
+            run_id,
+            invocation_id,
+        )
+        reason = request.reason if request else None
+        cancelled = supervisor.cancel(
+            run_id,
+            reason or f"Cancel tool invocation {invocation_id}.",
+        )
+        return ToolInvocationCancelResponse(
+            run_id=run_id,
+            invocation_id=invocation_id,
+            invocation_status=invocation.status.value,
+            run_cancellation_requested=cancelled.cancellation_requested,
+            cancellation=cancelled.cancellation,
+        )
+
+    @app.get(
+        f"{API_PREFIX}/runs/{{run_id}}/tool-audit",
+        response_model=ToolAuditListResponse,
+    )
+    async def tool_audit(
+        run_id: str,
+        after: int = Query(default=0, ge=0),
+        limit: int = Query(default=100, ge=1, le=500),
+    ) -> ToolAuditListResponse:
+        return query_service.tool_audit(
+            run_id,
+            after_sequence=after,
+            limit=limit,
+        )
 
     @app.get(
         f"{API_PREFIX}/runs/{{run_id}}/report",
@@ -447,3 +612,7 @@ def _error_json(
         status_code=status_code,
         content=payload.model_dump(mode="json"),
     )
+
+
+def _reject_nonfinite_json() -> None:
+    raise ValueError("Non-finite JSON values are not supported.")

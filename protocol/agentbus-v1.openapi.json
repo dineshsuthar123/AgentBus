@@ -82,6 +82,29 @@
             "title": "Approval Id",
             "type": "string"
           },
+          "approval_kind": {
+            "default": "task",
+            "enum": [
+              "task",
+              "tool"
+            ],
+            "title": "Approval Kind",
+            "type": "string"
+          },
+          "arguments_summary": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Arguments Summary",
+            "type": "array"
+          },
+          "capabilities": {
+            "items": {
+              "$ref": "#/components/schemas/ToolCapability"
+            },
+            "title": "Capabilities",
+            "type": "array"
+          },
           "command": {
             "anyOf": [
               {
@@ -101,6 +124,58 @@
             "title": "Created At",
             "type": "string"
           },
+          "executable": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Executable"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "network_destination": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Network Destination"
+          },
+          "policy_rule": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Policy Rule"
+          },
+          "proposed_constraints": {
+            "items": {
+              "$ref": "#/components/schemas/ToolCapability"
+            },
+            "title": "Proposed Constraints",
+            "type": "array"
+          },
           "reason": {
             "anyOf": [
               {
@@ -115,6 +190,16 @@
           "requested_action": {
             "title": "Requested Action",
             "type": "string"
+          },
+          "resource_budget": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ToolResourceBudget"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "revision": {
             "default": 1,
@@ -137,6 +222,38 @@
           "task_id": {
             "title": "Task Id",
             "type": "string"
+          },
+          "tool_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool Name"
+          },
+          "tool_version": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ToolVersion"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "working_directory": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Working Directory"
           }
         },
         "required": [
@@ -423,6 +540,90 @@
         "title": "CancellationLifecycle",
         "type": "object"
       },
+      "CapabilityScope": {
+        "additionalProperties": false,
+        "properties": {
+          "affected_paths": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Affected Paths",
+            "type": "array"
+          },
+          "environment_keys": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Environment Keys",
+            "type": "array"
+          },
+          "executables": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Executables",
+            "type": "array"
+          },
+          "git_operations": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Git Operations",
+            "type": "array"
+          },
+          "mcp_servers": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Mcp Servers",
+            "type": "array"
+          },
+          "network_allowed": {
+            "default": false,
+            "title": "Network Allowed",
+            "type": "boolean"
+          },
+          "network_destinations": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Network Destinations",
+            "type": "array"
+          },
+          "patterns": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Patterns",
+            "type": "array"
+          },
+          "roots": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Roots",
+            "type": "array"
+          },
+          "working_directories": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Working Directories",
+            "type": "array"
+          }
+        },
+        "title": "CapabilityScope",
+        "type": "object"
+      },
       "ChangeListResponse": {
         "additionalProperties": false,
         "properties": {
@@ -600,7 +801,23 @@
             "default": "python-calculator",
             "enum": [
               "python-calculator",
-              "cancellation-two-task"
+              "cancellation-two-task",
+              "tool-safe-read",
+              "tool-atomic-write",
+              "tool-source-patch",
+              "tool-pytest",
+              "tool-git-diff",
+              "tool-git-commit",
+              "tool-delete-approval",
+              "tool-deny-outside-read",
+              "tool-deny-credential-read",
+              "tool-process-timeout",
+              "tool-process-cancel",
+              "tool-excessive-output",
+              "tool-budget-exhaustion",
+              "tool-local-mcp",
+              "tool-loop-limit",
+              "tool-control-acceptance"
             ],
             "title": "Profile",
             "type": "string"
@@ -829,6 +1046,251 @@
           "state_database"
         ],
         "title": "InfoResponse",
+        "type": "object"
+      },
+      "McpConfiguredToolSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "capabilities": {
+            "items": {
+              "$ref": "#/components/schemas/ToolCapability"
+            },
+            "maxItems": 64,
+            "title": "Capabilities",
+            "type": "array"
+          },
+          "name": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "namespaced_name": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Namespaced Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "namespaced_name",
+          "capabilities"
+        ],
+        "title": "McpConfiguredToolSummary",
+        "type": "object"
+      },
+      "McpServerCheckResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "advertised_tools": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 256,
+            "title": "Advertised Tools",
+            "type": "array"
+          },
+          "capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 64,
+            "title": "Capabilities",
+            "type": "array"
+          },
+          "checked_at": {
+            "format": "date-time",
+            "title": "Checked At",
+            "type": "string"
+          },
+          "cleanup_completed": {
+            "title": "Cleanup Completed",
+            "type": "boolean"
+          },
+          "diagnostic_timeout_seconds": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 10.0,
+            "title": "Diagnostic Timeout Seconds",
+            "type": "number"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "protocol_version": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Protocol Version"
+          },
+          "ready": {
+            "title": "Ready",
+            "type": "boolean"
+          },
+          "server": {
+            "$ref": "#/components/schemas/McpServerSummary"
+          },
+          "server_name": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Server Name"
+          },
+          "server_version": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Server Version"
+          },
+          "tool_count": {
+            "default": 0,
+            "maximum": 256.0,
+            "minimum": 0.0,
+            "title": "Tool Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "server",
+          "ready",
+          "checked_at",
+          "diagnostic_timeout_seconds",
+          "cleanup_completed"
+        ],
+        "title": "McpServerCheckResponse",
+        "type": "object"
+      },
+      "McpServerListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "servers": {
+            "items": {
+              "$ref": "#/components/schemas/McpServerSummary"
+            },
+            "maxItems": 64,
+            "title": "Servers",
+            "type": "array"
+          },
+          "total": {
+            "maximum": 64.0,
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "servers",
+          "total"
+        ],
+        "title": "McpServerListResponse",
+        "type": "object"
+      },
+      "McpServerSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "configured_tools": {
+            "items": {
+              "$ref": "#/components/schemas/McpConfiguredToolSummary"
+            },
+            "maxItems": 256,
+            "title": "Configured Tools",
+            "type": "array"
+          },
+          "endpoint_host": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Endpoint Host"
+          },
+          "executable_alias": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Executable Alias"
+          },
+          "request_timeout_seconds": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 600.0,
+            "title": "Request Timeout Seconds",
+            "type": "number"
+          },
+          "server_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Server Id",
+            "type": "string"
+          },
+          "startup_timeout_seconds": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 60.0,
+            "title": "Startup Timeout Seconds",
+            "type": "number"
+          },
+          "supported_protocol_versions": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 8,
+            "title": "Supported Protocol Versions",
+            "type": "array"
+          },
+          "transport": {
+            "enum": [
+              "stdio",
+              "loopback_http"
+            ],
+            "title": "Transport",
+            "type": "string"
+          }
+        },
+        "required": [
+          "server_id",
+          "transport",
+          "configured_tools",
+          "supported_protocol_versions",
+          "startup_timeout_seconds",
+          "request_timeout_seconds"
+        ],
+        "title": "McpServerSummary",
         "type": "object"
       },
       "ProviderCheckRequest": {
@@ -1159,6 +1621,9 @@
             "minLength": 1,
             "title": "Task",
             "type": "string"
+          },
+          "tool_budget": {
+            "$ref": "#/components/schemas/ToolResourceBudget"
           },
           "workflow": {
             "$ref": "#/components/schemas/WorkflowMode",
@@ -1583,6 +2048,1725 @@
           "updated_at"
         ],
         "title": "TaskSummary",
+        "type": "object"
+      },
+      "ToolArtifact": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Artifact Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ToolArtifactKind"
+          },
+          "media_type": {
+            "default": "application/octet-stream",
+            "maxLength": 255,
+            "title": "Media Type",
+            "type": "string"
+          },
+          "relative_path": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Relative Path"
+          },
+          "safe_metadata": {
+            "additionalProperties": true,
+            "title": "Safe Metadata",
+            "type": "object"
+          },
+          "sha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Sha256",
+            "type": "string"
+          },
+          "size_bytes": {
+            "minimum": 0.0,
+            "title": "Size Bytes",
+            "type": "integer"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "artifact_id",
+          "kind",
+          "size_bytes",
+          "sha256"
+        ],
+        "title": "ToolArtifact",
+        "type": "object"
+      },
+      "ToolArtifactKind": {
+        "enum": [
+          "file",
+          "diff",
+          "report",
+          "test_result",
+          "process_output",
+          "metadata"
+        ],
+        "title": "ToolArtifactKind",
+        "type": "string"
+      },
+      "ToolAuditEntryResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "audit_sequence": {
+            "minimum": 1.0,
+            "title": "Audit Sequence",
+            "type": "integer"
+          },
+          "record": {
+            "$ref": "#/components/schemas/ToolAuditRecord"
+          }
+        },
+        "required": [
+          "audit_sequence",
+          "record"
+        ],
+        "title": "ToolAuditEntryResponse",
+        "type": "object"
+      },
+      "ToolAuditListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "after_sequence": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "After Sequence",
+            "type": "integer"
+          },
+          "next_sequence": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Next Sequence",
+            "type": "integer"
+          },
+          "records": {
+            "items": {
+              "$ref": "#/components/schemas/ToolAuditEntryResponse"
+            },
+            "title": "Records",
+            "type": "array"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "run_id",
+          "records"
+        ],
+        "title": "ToolAuditListResponse",
+        "type": "object"
+      },
+      "ToolAuditRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "affected_resource_hashes": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Affected Resource Hashes",
+            "type": "object"
+          },
+          "approval_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approval Id"
+          },
+          "arguments_sha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Arguments Sha256",
+            "type": "string"
+          },
+          "artifacts": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ToolArtifact"
+            },
+            "title": "Artifacts",
+            "type": "array"
+          },
+          "audit_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Audit Id",
+            "type": "string"
+          },
+          "caller_role": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Caller Role",
+            "type": "string"
+          },
+          "cancellation": {
+            "$ref": "#/components/schemas/ToolCancellationSnapshot"
+          },
+          "capabilities": {
+            "items": {
+              "$ref": "#/components/schemas/ToolCapability"
+            },
+            "title": "Capabilities",
+            "type": "array"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "error_category": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ToolErrorCategory"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "invocation_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Invocation Id",
+            "type": "string"
+          },
+          "invocation_revision": {
+            "minimum": 1.0,
+            "title": "Invocation Revision",
+            "type": "integer"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/ToolInvocationStatus"
+          },
+          "policy_decision": {
+            "$ref": "#/components/schemas/ToolPolicyDecision"
+          },
+          "protocol_version": {
+            "default": "1.0",
+            "title": "Protocol Version",
+            "type": "string"
+          },
+          "resource_usage": {
+            "$ref": "#/components/schemas/ToolResourceUsage"
+          },
+          "run_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Run Id",
+            "type": "string"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "task_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Task Id",
+            "type": "string"
+          },
+          "timed_out": {
+            "default": false,
+            "title": "Timed Out",
+            "type": "boolean"
+          },
+          "tool_name": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Tool Name",
+            "type": "string"
+          },
+          "tool_version": {
+            "$ref": "#/components/schemas/ToolVersion"
+          }
+        },
+        "required": [
+          "audit_id",
+          "invocation_id",
+          "invocation_revision",
+          "run_id",
+          "task_id",
+          "tool_name",
+          "tool_version",
+          "caller_role",
+          "capabilities",
+          "policy_decision",
+          "arguments_sha256",
+          "outcome"
+        ],
+        "title": "ToolAuditRecord",
+        "type": "object"
+      },
+      "ToolCancellationSnapshot": {
+        "additionalProperties": false,
+        "properties": {
+          "acknowledged": {
+            "default": false,
+            "title": "Acknowledged",
+            "type": "boolean"
+          },
+          "cleanup_completed": {
+            "default": false,
+            "title": "Cleanup Completed",
+            "type": "boolean"
+          },
+          "operation_completed_after_request": {
+            "default": false,
+            "title": "Operation Completed After Request",
+            "type": "boolean"
+          },
+          "process_terminated": {
+            "default": false,
+            "title": "Process Terminated",
+            "type": "boolean"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 1024,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "requested": {
+            "default": false,
+            "title": "Requested",
+            "type": "boolean"
+          },
+          "requested_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested At"
+          },
+          "revision": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "signal_sent": {
+            "default": false,
+            "title": "Signal Sent",
+            "type": "boolean"
+          }
+        },
+        "title": "ToolCancellationSnapshot",
+        "type": "object"
+      },
+      "ToolCapability": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "$ref": "#/components/schemas/ToolCapabilityName"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/CapabilityScope"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ToolCapability",
+        "type": "object"
+      },
+      "ToolCapabilityName": {
+        "enum": [
+          "filesystem.read",
+          "filesystem.write",
+          "filesystem.create",
+          "filesystem.delete",
+          "filesystem.rename",
+          "process.execute",
+          "process.network",
+          "git.read",
+          "git.write",
+          "git.commit",
+          "git.branch",
+          "git.worktree",
+          "test.execute",
+          "package.install",
+          "environment.read_safe",
+          "mcp.connect",
+          "mcp.invoke"
+        ],
+        "title": "ToolCapabilityName",
+        "type": "string"
+      },
+      "ToolDescriptorDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "argument_schema": {
+            "additionalProperties": true,
+            "title": "Argument Schema",
+            "type": "object"
+          },
+          "capabilities": {
+            "items": {
+              "$ref": "#/components/schemas/ToolCapability"
+            },
+            "title": "Capabilities",
+            "type": "array"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "idempotent": {
+            "title": "Idempotent",
+            "type": "boolean"
+          },
+          "maximum_timeout_seconds": {
+            "exclusiveMinimum": 0.0,
+            "title": "Maximum Timeout Seconds",
+            "type": "number"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "output_schema": {
+            "additionalProperties": true,
+            "title": "Output Schema",
+            "type": "object"
+          },
+          "protocol_version": {
+            "title": "Protocol Version",
+            "type": "string"
+          },
+          "safety": {
+            "title": "Safety",
+            "type": "string"
+          },
+          "supports_cancellation": {
+            "title": "Supports Cancellation",
+            "type": "boolean"
+          },
+          "version": {
+            "$ref": "#/components/schemas/ToolVersion"
+          }
+        },
+        "required": [
+          "name",
+          "version",
+          "protocol_version",
+          "description",
+          "capabilities",
+          "safety",
+          "idempotent",
+          "supports_cancellation",
+          "maximum_timeout_seconds",
+          "argument_schema",
+          "output_schema"
+        ],
+        "title": "ToolDescriptorDetail",
+        "type": "object"
+      },
+      "ToolDescriptorSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "capabilities": {
+            "items": {
+              "$ref": "#/components/schemas/ToolCapability"
+            },
+            "title": "Capabilities",
+            "type": "array"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "idempotent": {
+            "title": "Idempotent",
+            "type": "boolean"
+          },
+          "maximum_timeout_seconds": {
+            "exclusiveMinimum": 0.0,
+            "title": "Maximum Timeout Seconds",
+            "type": "number"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "protocol_version": {
+            "title": "Protocol Version",
+            "type": "string"
+          },
+          "safety": {
+            "title": "Safety",
+            "type": "string"
+          },
+          "supports_cancellation": {
+            "title": "Supports Cancellation",
+            "type": "boolean"
+          },
+          "version": {
+            "$ref": "#/components/schemas/ToolVersion"
+          }
+        },
+        "required": [
+          "name",
+          "version",
+          "protocol_version",
+          "description",
+          "capabilities",
+          "safety",
+          "idempotent",
+          "supports_cancellation",
+          "maximum_timeout_seconds"
+        ],
+        "title": "ToolDescriptorSummary",
+        "type": "object"
+      },
+      "ToolError": {
+        "additionalProperties": false,
+        "properties": {
+          "category": {
+            "$ref": "#/components/schemas/ToolErrorCategory"
+          },
+          "code": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Message",
+            "type": "string"
+          },
+          "retryable": {
+            "default": false,
+            "title": "Retryable",
+            "type": "boolean"
+          },
+          "safe_metadata": {
+            "additionalProperties": true,
+            "title": "Safe Metadata",
+            "type": "object"
+          }
+        },
+        "required": [
+          "category",
+          "code",
+          "message"
+        ],
+        "title": "ToolError",
+        "type": "object"
+      },
+      "ToolErrorCategory": {
+        "enum": [
+          "validation",
+          "policy_denied",
+          "approval_required",
+          "approval_invalid",
+          "cancelled",
+          "timed_out",
+          "resource_exhausted",
+          "filesystem",
+          "process",
+          "git",
+          "mcp",
+          "protocol",
+          "internal"
+        ],
+        "title": "ToolErrorCategory",
+        "type": "string"
+      },
+      "ToolInvocationCancelRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "title": "ToolInvocationCancelRequest",
+        "type": "object"
+      },
+      "ToolInvocationCancelResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "cancellation": {
+            "$ref": "#/components/schemas/CancellationLifecycle"
+          },
+          "invocation_id": {
+            "title": "Invocation Id",
+            "type": "string"
+          },
+          "invocation_status": {
+            "title": "Invocation Status",
+            "type": "string"
+          },
+          "run_cancellation_requested": {
+            "title": "Run Cancellation Requested",
+            "type": "boolean"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "invocation_id",
+          "invocation_status",
+          "run_cancellation_requested"
+        ],
+        "title": "ToolInvocationCancelResponse",
+        "type": "object"
+      },
+      "ToolInvocationDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "approval_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approval Id"
+          },
+          "arguments_sha256": {
+            "title": "Arguments Sha256",
+            "type": "string"
+          },
+          "caller_role": {
+            "title": "Caller Role",
+            "type": "string"
+          },
+          "cancellation": {
+            "$ref": "#/components/schemas/ToolCancellationSnapshot"
+          },
+          "capabilities": {
+            "items": {
+              "$ref": "#/components/schemas/ToolCapability"
+            },
+            "title": "Capabilities",
+            "type": "array"
+          },
+          "capability_fingerprint": {
+            "title": "Capability Fingerprint",
+            "type": "string"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "error_category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Category"
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message"
+          },
+          "idempotency_key_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotency Key Sha256"
+          },
+          "invocation_id": {
+            "title": "Invocation Id",
+            "type": "string"
+          },
+          "invocation_revision": {
+            "minimum": 1.0,
+            "title": "Invocation Revision",
+            "type": "integer"
+          },
+          "invocation_sequence": {
+            "minimum": 1.0,
+            "title": "Invocation Sequence",
+            "type": "integer"
+          },
+          "policy_decision": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ToolPolicyDecision"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "process_slot": {
+            "default": false,
+            "title": "Process Slot",
+            "type": "boolean"
+          },
+          "protocol_version": {
+            "title": "Protocol Version",
+            "type": "string"
+          },
+          "requested_at": {
+            "format": "date-time",
+            "title": "Requested At",
+            "type": "string"
+          },
+          "resource_budget": {
+            "$ref": "#/components/schemas/ToolResourceBudget"
+          },
+          "resource_usage": {
+            "$ref": "#/components/schemas/ToolResourceUsage"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ToolResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          },
+          "tool_name": {
+            "title": "Tool Name",
+            "type": "string"
+          },
+          "tool_version": {
+            "$ref": "#/components/schemas/ToolVersion"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "workspace": {
+            "title": "Workspace",
+            "type": "string"
+          },
+          "worktree": {
+            "title": "Worktree",
+            "type": "string"
+          }
+        },
+        "required": [
+          "invocation_sequence",
+          "invocation_id",
+          "invocation_revision",
+          "run_id",
+          "task_id",
+          "tool_name",
+          "tool_version",
+          "protocol_version",
+          "caller_role",
+          "status",
+          "capabilities",
+          "resource_budget",
+          "resource_usage",
+          "cancellation",
+          "requested_at",
+          "updated_at",
+          "workspace",
+          "worktree",
+          "arguments_sha256",
+          "capability_fingerprint"
+        ],
+        "title": "ToolInvocationDetail",
+        "type": "object"
+      },
+      "ToolInvocationListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "after_sequence": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "After Sequence",
+            "type": "integer"
+          },
+          "invocations": {
+            "items": {
+              "$ref": "#/components/schemas/ToolInvocationSummary"
+            },
+            "title": "Invocations",
+            "type": "array"
+          },
+          "next_sequence": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Next Sequence",
+            "type": "integer"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "run_id",
+          "invocations"
+        ],
+        "title": "ToolInvocationListResponse",
+        "type": "object"
+      },
+      "ToolInvocationStatus": {
+        "enum": [
+          "requested",
+          "awaiting_approval",
+          "running",
+          "succeeded",
+          "failed",
+          "denied",
+          "cancelled",
+          "timed_out"
+        ],
+        "title": "ToolInvocationStatus",
+        "type": "string"
+      },
+      "ToolInvocationSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "approval_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approval Id"
+          },
+          "caller_role": {
+            "title": "Caller Role",
+            "type": "string"
+          },
+          "cancellation": {
+            "$ref": "#/components/schemas/ToolCancellationSnapshot"
+          },
+          "capabilities": {
+            "items": {
+              "$ref": "#/components/schemas/ToolCapability"
+            },
+            "title": "Capabilities",
+            "type": "array"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "error_category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Category"
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message"
+          },
+          "invocation_id": {
+            "title": "Invocation Id",
+            "type": "string"
+          },
+          "invocation_revision": {
+            "minimum": 1.0,
+            "title": "Invocation Revision",
+            "type": "integer"
+          },
+          "invocation_sequence": {
+            "minimum": 1.0,
+            "title": "Invocation Sequence",
+            "type": "integer"
+          },
+          "policy_decision": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ToolPolicyDecision"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "protocol_version": {
+            "title": "Protocol Version",
+            "type": "string"
+          },
+          "requested_at": {
+            "format": "date-time",
+            "title": "Requested At",
+            "type": "string"
+          },
+          "resource_budget": {
+            "$ref": "#/components/schemas/ToolResourceBudget"
+          },
+          "resource_usage": {
+            "$ref": "#/components/schemas/ToolResourceUsage"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          },
+          "tool_name": {
+            "title": "Tool Name",
+            "type": "string"
+          },
+          "tool_version": {
+            "$ref": "#/components/schemas/ToolVersion"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "invocation_sequence",
+          "invocation_id",
+          "invocation_revision",
+          "run_id",
+          "task_id",
+          "tool_name",
+          "tool_version",
+          "protocol_version",
+          "caller_role",
+          "status",
+          "capabilities",
+          "resource_budget",
+          "resource_usage",
+          "cancellation",
+          "requested_at",
+          "updated_at"
+        ],
+        "title": "ToolInvocationSummary",
+        "type": "object"
+      },
+      "ToolLimitUsage": {
+        "additionalProperties": false,
+        "properties": {
+          "diagnostic": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Diagnostic"
+          },
+          "enforced": {
+            "title": "Enforced",
+            "type": "boolean"
+          },
+          "observed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed"
+          },
+          "requested": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested"
+          },
+          "supported": {
+            "title": "Supported",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "supported",
+          "enforced"
+        ],
+        "title": "ToolLimitUsage",
+        "type": "object"
+      },
+      "ToolListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "tools": {
+            "items": {
+              "$ref": "#/components/schemas/ToolDescriptorSummary"
+            },
+            "title": "Tools",
+            "type": "array"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "tools",
+          "total"
+        ],
+        "title": "ToolListResponse",
+        "type": "object"
+      },
+      "ToolPolicyDecision": {
+        "additionalProperties": false,
+        "properties": {
+          "arguments_sha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Arguments Sha256",
+            "type": "string"
+          },
+          "capability_fingerprint": {
+            "maxLength": 64,
+            "minLength": 64,
+            "title": "Capability Fingerprint",
+            "type": "string"
+          },
+          "constraints": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ToolCapability"
+            },
+            "title": "Constraints",
+            "type": "array"
+          },
+          "evaluated_at": {
+            "format": "date-time",
+            "title": "Evaluated At",
+            "type": "string"
+          },
+          "invocation_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Invocation Id",
+            "type": "string"
+          },
+          "invocation_revision": {
+            "minimum": 1.0,
+            "title": "Invocation Revision",
+            "type": "integer"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/ToolPolicyOutcome"
+          },
+          "reason": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "rule_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Rule Id",
+            "type": "string"
+          },
+          "safe_metadata": {
+            "additionalProperties": true,
+            "title": "Safe Metadata",
+            "type": "object"
+          }
+        },
+        "required": [
+          "outcome",
+          "rule_id",
+          "reason",
+          "invocation_id",
+          "invocation_revision",
+          "capability_fingerprint",
+          "arguments_sha256"
+        ],
+        "title": "ToolPolicyDecision",
+        "type": "object"
+      },
+      "ToolPolicyEvaluationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "arguments": {
+            "additionalProperties": true,
+            "title": "Arguments",
+            "type": "object"
+          },
+          "caller_role": {
+            "default": "coder",
+            "enum": [
+              "planner",
+              "coder",
+              "verifier",
+              "reviewer"
+            ],
+            "title": "Caller Role",
+            "type": "string"
+          },
+          "expected_capabilities": {
+            "items": {
+              "$ref": "#/components/schemas/ToolCapabilityName"
+            },
+            "maxItems": 64,
+            "title": "Expected Capabilities",
+            "type": "array"
+          },
+          "invocation_revision": {
+            "default": 1,
+            "minimum": 1.0,
+            "title": "Invocation Revision",
+            "type": "integer"
+          },
+          "provider_consented": {
+            "default": false,
+            "title": "Provider Consented",
+            "type": "boolean"
+          },
+          "resource_budget": {
+            "$ref": "#/components/schemas/ToolResourceBudget"
+          },
+          "run_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Run Id",
+            "type": "string"
+          },
+          "task_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Task Id",
+            "type": "string"
+          },
+          "timeout_seconds": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 86400.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timeout Seconds"
+          },
+          "tool_name": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Tool Name",
+            "type": "string"
+          },
+          "workspace_trusted": {
+            "default": false,
+            "title": "Workspace Trusted",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "run_id",
+          "task_id",
+          "tool_name"
+        ],
+        "title": "ToolPolicyEvaluationRequest",
+        "type": "object"
+      },
+      "ToolPolicyEvaluationResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "decision": {
+            "$ref": "#/components/schemas/ToolPolicyDecision"
+          },
+          "diagnostic_only": {
+            "const": true,
+            "default": true,
+            "title": "Diagnostic Only",
+            "type": "boolean"
+          },
+          "persisted": {
+            "const": false,
+            "default": false,
+            "title": "Persisted",
+            "type": "boolean"
+          },
+          "required_capabilities": {
+            "items": {
+              "$ref": "#/components/schemas/ToolCapability"
+            },
+            "title": "Required Capabilities",
+            "type": "array"
+          }
+        },
+        "required": [
+          "decision",
+          "required_capabilities"
+        ],
+        "title": "ToolPolicyEvaluationResponse",
+        "type": "object"
+      },
+      "ToolPolicyOutcome": {
+        "enum": [
+          "allow",
+          "deny",
+          "require_approval",
+          "allow_with_constraints"
+        ],
+        "title": "ToolPolicyOutcome",
+        "type": "string"
+      },
+      "ToolPolicyResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "configuration": {
+            "additionalProperties": true,
+            "title": "Configuration",
+            "type": "object"
+          },
+          "outcomes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Outcomes",
+            "type": "array"
+          },
+          "policy_id": {
+            "const": "agentbus-default-v1",
+            "default": "agentbus-default-v1",
+            "title": "Policy Id",
+            "type": "string"
+          },
+          "rules": {
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "title": "Rules",
+            "type": "array"
+          }
+        },
+        "required": [
+          "outcomes",
+          "configuration",
+          "rules"
+        ],
+        "title": "ToolPolicyResponse",
+        "type": "object"
+      },
+      "ToolResourceBudget": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_bytes": {
+            "default": 5242880,
+            "maximum": 268435456.0,
+            "minimum": 0.0,
+            "title": "Artifact Bytes",
+            "type": "integer"
+          },
+          "child_processes": {
+            "default": 8,
+            "maximum": 256.0,
+            "minimum": 0.0,
+            "title": "Child Processes",
+            "type": "integer"
+          },
+          "combined_output_bytes": {
+            "default": 131072,
+            "maximum": 33554432.0,
+            "minimum": 0.0,
+            "title": "Combined Output Bytes",
+            "type": "integer"
+          },
+          "concurrent_processes": {
+            "default": 2,
+            "maximum": 64.0,
+            "minimum": 1.0,
+            "title": "Concurrent Processes",
+            "type": "integer"
+          },
+          "cpu_seconds": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 86400.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpu Seconds"
+          },
+          "file_mutations": {
+            "default": 100,
+            "maximum": 100000.0,
+            "minimum": 0.0,
+            "title": "File Mutations",
+            "type": "integer"
+          },
+          "invocations_per_run": {
+            "default": 512,
+            "maximum": 100000.0,
+            "minimum": 1.0,
+            "title": "Invocations Per Run",
+            "type": "integer"
+          },
+          "invocations_per_task": {
+            "default": 64,
+            "maximum": 10000.0,
+            "minimum": 1.0,
+            "title": "Invocations Per Task",
+            "type": "integer"
+          },
+          "maximum_file_bytes": {
+            "default": 2097152,
+            "maximum": 268435456.0,
+            "minimum": 0.0,
+            "title": "Maximum File Bytes",
+            "type": "integer"
+          },
+          "memory_bytes": {
+            "anyOf": [
+              {
+                "minimum": 1048576.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memory Bytes"
+          },
+          "stderr_bytes": {
+            "default": 65536,
+            "maximum": 16777216.0,
+            "minimum": 0.0,
+            "title": "Stderr Bytes",
+            "type": "integer"
+          },
+          "stdout_bytes": {
+            "default": 65536,
+            "maximum": 16777216.0,
+            "minimum": 0.0,
+            "title": "Stdout Bytes",
+            "type": "integer"
+          },
+          "total_written_bytes": {
+            "default": 10485760,
+            "maximum": 1073741824.0,
+            "minimum": 0.0,
+            "title": "Total Written Bytes",
+            "type": "integer"
+          },
+          "wall_clock_seconds": {
+            "default": 90.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 86400.0,
+            "title": "Wall Clock Seconds",
+            "type": "number"
+          }
+        },
+        "title": "ToolResourceBudget",
+        "type": "object"
+      },
+      "ToolResourceUsage": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_bytes": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Artifact Bytes",
+            "type": "integer"
+          },
+          "child_processes": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Child Processes",
+            "type": "integer"
+          },
+          "cpu_seconds": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpu Seconds"
+          },
+          "file_mutations": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "File Mutations",
+            "type": "integer"
+          },
+          "limits": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ToolLimitUsage"
+            },
+            "title": "Limits",
+            "type": "object"
+          },
+          "memory_bytes": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memory Bytes"
+          },
+          "stderr_bytes": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Stderr Bytes",
+            "type": "integer"
+          },
+          "stdout_bytes": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Stdout Bytes",
+            "type": "integer"
+          },
+          "wall_clock_seconds": {
+            "default": 0.0,
+            "minimum": 0.0,
+            "title": "Wall Clock Seconds",
+            "type": "number"
+          },
+          "written_bytes": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Written Bytes",
+            "type": "integer"
+          }
+        },
+        "title": "ToolResourceUsage",
+        "type": "object"
+      },
+      "ToolResult": {
+        "additionalProperties": false,
+        "properties": {
+          "approval_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approval Id"
+          },
+          "artifacts": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ToolArtifact"
+            },
+            "title": "Artifacts",
+            "type": "array"
+          },
+          "cancellation": {
+            "$ref": "#/components/schemas/ToolCancellationSnapshot"
+          },
+          "duration_seconds": {
+            "default": 0.0,
+            "minimum": 0.0,
+            "title": "Duration Seconds",
+            "type": "number"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ToolError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "exit_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Code"
+          },
+          "invocation_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Invocation Id",
+            "type": "string"
+          },
+          "invocation_revision": {
+            "minimum": 1.0,
+            "title": "Invocation Revision",
+            "type": "integer"
+          },
+          "policy_decision": {
+            "$ref": "#/components/schemas/ToolPolicyDecision"
+          },
+          "resource_usage": {
+            "$ref": "#/components/schemas/ToolResourceUsage"
+          },
+          "safe_diagnostic_metadata": {
+            "additionalProperties": true,
+            "title": "Safe Diagnostic Metadata",
+            "type": "object"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ToolInvocationStatus"
+          },
+          "stderr": {
+            "default": "",
+            "maxLength": 65536,
+            "title": "Stderr",
+            "type": "string"
+          },
+          "stderr_truncated": {
+            "default": false,
+            "title": "Stderr Truncated",
+            "type": "boolean"
+          },
+          "stdout": {
+            "default": "",
+            "maxLength": 65536,
+            "title": "Stdout",
+            "type": "string"
+          },
+          "stdout_truncated": {
+            "default": false,
+            "title": "Stdout Truncated",
+            "type": "boolean"
+          },
+          "structured_output": {
+            "additionalProperties": true,
+            "title": "Structured Output",
+            "type": "object"
+          },
+          "timed_out": {
+            "default": false,
+            "title": "Timed Out",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "invocation_id",
+          "invocation_revision",
+          "status",
+          "policy_decision"
+        ],
+        "title": "ToolResult",
+        "type": "object"
+      },
+      "ToolVersion": {
+        "additionalProperties": false,
+        "properties": {
+          "major": {
+            "maximum": 65535.0,
+            "minimum": 0.0,
+            "title": "Major",
+            "type": "integer"
+          },
+          "minor": {
+            "default": 0,
+            "maximum": 65535.0,
+            "minimum": 0.0,
+            "title": "Minor",
+            "type": "integer"
+          },
+          "patch": {
+            "default": 0,
+            "maximum": 65535.0,
+            "minimum": 0.0,
+            "title": "Patch",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "major"
+        ],
+        "title": "ToolVersion",
         "type": "object"
       },
       "UsageResponse": {
@@ -2092,6 +4276,379 @@
           }
         },
         "summary": "Info"
+      }
+    },
+    "/api/v1/mcp/servers": {
+      "get": {
+        "operationId": "mcp_servers_api_v1_mcp_servers_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpServerListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          }
+        },
+        "summary": "Mcp Servers"
+      }
+    },
+    "/api/v1/mcp/servers/{server_id}/check": {
+      "post": {
+        "operationId": "check_mcp_server_api_v1_mcp_servers__server_id__check_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "server_id",
+            "required": true,
+            "schema": {
+              "title": "Server Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpServerCheckResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          }
+        },
+        "summary": "Check Mcp Server"
+      }
+    },
+    "/api/v1/policy": {
+      "get": {
+        "operationId": "tool_policy_api_v1_policy_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolPolicyResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          }
+        },
+        "summary": "Tool Policy"
+      }
+    },
+    "/api/v1/policy/evaluate": {
+      "post": {
+        "operationId": "evaluate_tool_policy_api_v1_policy_evaluate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolPolicyEvaluationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolPolicyEvaluationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          }
+        },
+        "summary": "Evaluate Tool Policy"
       }
     },
     "/api/v1/providers": {
@@ -3866,6 +6423,483 @@
         "summary": "Tasks"
       }
     },
+    "/api/v1/runs/{run_id}/tool-audit": {
+      "get": {
+        "operationId": "tool_audit_api_v1_runs__run_id__tool_audit_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "After",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolAuditListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          }
+        },
+        "summary": "Tool Audit"
+      }
+    },
+    "/api/v1/runs/{run_id}/tool-invocations": {
+      "get": {
+        "operationId": "tool_invocations_api_v1_runs__run_id__tool_invocations_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "After",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolInvocationListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          }
+        },
+        "summary": "Tool Invocations"
+      }
+    },
+    "/api/v1/runs/{run_id}/tool-invocations/{invocation_id}": {
+      "get": {
+        "operationId": "tool_invocation_api_v1_runs__run_id__tool_invocations__invocation_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "invocation_id",
+            "required": true,
+            "schema": {
+              "title": "Invocation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolInvocationDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          }
+        },
+        "summary": "Tool Invocation"
+      }
+    },
+    "/api/v1/runs/{run_id}/tool-invocations/{invocation_id}/cancel": {
+      "post": {
+        "operationId": "cancel_tool_invocation_api_v1_runs__run_id__tool_invocations__invocation_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "invocation_id",
+            "required": true,
+            "schema": {
+              "title": "Invocation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ToolInvocationCancelRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Request"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolInvocationCancelResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          }
+        },
+        "summary": "Cancel Tool Invocation"
+      }
+    },
     "/api/v1/runs/{run_id}/usage": {
       "get": {
         "operationId": "usage_api_v1_runs__run_id__usage_get",
@@ -4064,6 +7098,193 @@
         "summary": "Worktrees"
       }
     },
+    "/api/v1/tools": {
+      "get": {
+        "operationId": "tools_api_v1_tools_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          }
+        },
+        "summary": "Tools"
+      }
+    },
+    "/api/v1/tools/{tool_name}": {
+      "get": {
+        "operationId": "tool_api_v1_tools__tool_name__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tool_name",
+            "required": true,
+            "schema": {
+              "title": "Tool Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolDescriptorDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          }
+        },
+        "summary": "Tool"
+      }
+    },
     "/api/v1/workspaces/validate": {
       "post": {
         "operationId": "validate_workspace_api_v1_workspaces_validate_post",
@@ -4249,6 +7470,92 @@
         },
         "security": [],
         "summary": "Health"
+      }
+    },
+    "/mcp": {
+      "post": {
+        "operationId": "mcp_mcp_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          }
+        },
+        "summary": "Mcp"
       }
     }
   },

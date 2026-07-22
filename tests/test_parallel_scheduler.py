@@ -113,6 +113,7 @@ def test_independent_tasks_overlap_and_dependency_waits_for_integration(tmp_path
     barrier = threading.Barrier(2)
     lock = threading.Lock()
     calls = []
+    closed = []
     active = 0
     maximum_active = 0
 
@@ -150,6 +151,10 @@ def test_independent_tasks_overlap_and_dependency_waits_for_integration(tmp_path
                 verifier_status="passed",
             )
 
+        def close(self):
+            with lock:
+                closed.append(self.workspace)
+
     def worker_factory(worker_id):
         return LocalTaskWorker(
             worker_id=worker_id,
@@ -176,6 +181,7 @@ def test_independent_tasks_overlap_and_dependency_waits_for_integration(tmp_path
     assert calls.count("task-A") == calls.count("task-B") == calls.count("task-C") == 1
     assert calls.index("task-C") > calls.index("task-A")
     assert calls.index("task-C") > calls.index("task-B")
+    assert len(closed) == 3
     assert [item.task_id for item in store.list_integrations("parallel-run")] == [
         "task-A",
         "task-B",
@@ -212,9 +218,23 @@ def test_independent_tasks_overlap_and_dependency_waits_for_integration(tmp_path
         def __init__(self):
             self.calls = 0
 
-        def verify(self, require_command=False):
+        def verify(
+            self,
+            require_command=False,
+            *,
+            tool_runtime=None,
+            run_id=None,
+            task_id=None,
+            invocation_key=None,
+            **kwargs,
+        ):
             self.calls += 1
             assert require_command is True
+            assert tool_runtime.workspace == source
+            assert tool_runtime.worktree == Path(integrated)
+            assert run_id == "parallel-run"
+            assert task_id == "task-C"
+            assert invocation_key == "final-integration"
             assert all(
                 (Path(integrated) / name).is_file()
                 for name in ("module_a.py", "module_b.py", "integration_test.py")
@@ -694,3 +714,65 @@ def test_failed_parallel_run_reports_retained_file_side_effects(tmp_path):
     task_worktree = Path(report.task_worktrees["task-A"])
     assert (task_worktree / "broken.py").read_text(encoding="utf-8") == "BROKEN = True\n"
     assert git(source, "status", "--porcelain") == ""
+
+
+def test_interrupted_worker_stops_after_persisted_attempt_limit(tmp_path):
+    source, base = setup_repository(tmp_path / "repo")
+    store = StateStore(tmp_path / "state.db")
+    DurableExecutionEngine(store).create_run(
+        "Bound unexpected worker interruption",
+        {**PLAN, "steps": [PLAN["steps"][0]]},
+        model="fake",
+        workspace=str(source),
+        run_id="interrupted-run",
+        metadata={
+            "parallel_execution": {
+                "enabled": True,
+                "max_workers": 1,
+                "base_commit": base,
+                "worktree_root": str(tmp_path / "worktrees"),
+            }
+        },
+    )
+    manager = GitWorktreeManager(source, tmp_path / "worktrees", store)
+    leases = LeaseService(store)
+    executions = 0
+
+    class InterruptingExecutor:
+        def execute(self, context):
+            nonlocal executions
+            executions += 1
+            raise RuntimeError("simulated unexpected worker interruption")
+
+    scheduler = ParallelExecutionScheduler(
+        store=store,
+        worktree_manager=manager,
+        lease_service=leases,
+        integration=IntegrationCoordinator(store, manager),
+        worker_factory=lambda worker_id: LocalTaskWorker(
+            worker_id=worker_id,
+            store=store,
+            lease_service=leases,
+            worktree_manager=manager,
+            executor_factory=lambda path: InterruptingExecutor(),
+            heartbeat_seconds=5,
+        ),
+        max_workers=1,
+    )
+
+    report = scheduler.run("interrupted-run")
+
+    task = store.get_task("interrupted-run", "task-A")
+    attempts = store.list_attempts("interrupted-run", "task-A")
+    assert report.status == RunStatus.FAILED
+    assert task.status == TaskStatus.FAILED
+    assert task.current_attempt_count == task.spec.maximum_attempts == 2
+    assert executions == 2
+    assert [attempt.status.value for attempt in attempts] == [
+        "interrupted",
+        "interrupted",
+    ]
+    assert all(
+        lease.status.value != "active"
+        for lease in leases.list_leases("interrupted-run")
+    )

@@ -14,6 +14,7 @@ export interface RegistryDocument {
 export interface LaunchSettings {
   executablePath?: string;
   pythonPath?: string;
+  configPath?: string;
   registryPath?: string;
   logLevel?: "error" | "warning" | "info";
 }
@@ -91,6 +92,9 @@ export function buildLaunchSpec(settings: LaunchSettings): LaunchSpec {
     : join(homedir(), ".agentbus", "daemons.json");
   const common = [
     "serve",
+    ...(settings.configPath
+      ? ["--config", resolve(settings.configPath)]
+      : []),
     "--host",
     "127.0.0.1",
     "--port",

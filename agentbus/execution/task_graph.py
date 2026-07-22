@@ -79,6 +79,9 @@ class TaskGraph:
                     metadata={
                         **dict(raw_step.get("metadata", {})),
                         "planner_index": index,
+                        "required_capabilities": list(
+                            raw_step.get("required_capabilities") or []
+                        ),
                     },
                 )
             except (TypeError, ValueError) as exc:

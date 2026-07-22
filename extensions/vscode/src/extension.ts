@@ -7,19 +7,28 @@ import {
   ReportDocumentProvider
 } from "./documents";
 import { RunStore } from "./runStore";
+import { ToolArtifactDocumentProvider } from "./artifactDocuments";
+import { McpServerDocumentProvider } from "./mcpDocuments";
+import {
+  ToolInvocationDocumentProvider,
+  ToolPolicyDocumentProvider
+} from "./toolDocuments";
 import type { EventEnvelope, RunSummary } from "./generated/protocol";
 import {
   ApprovalsProvider,
+  McpServersProvider,
   ProvidersProvider,
   RunsProvider,
   Selection,
   TasksProvider,
+  ToolInvocationsProvider,
   WorktreesProvider
 } from "./views";
 
 export interface AgentBusExtensionApi {
   client(): Promise<AgentBusClient>;
   daemonId(): string | undefined;
+  eventStreamConnected(): boolean;
   events(): readonly EventEnvelope[];
   runs(): RunSummary[];
 }
@@ -41,7 +50,9 @@ export function activate(context: vscode.ExtensionContext): AgentBusExtensionApi
   const tasks = new TasksProvider(client, selection);
   const approvals = new ApprovalsProvider(client, selection);
   const worktrees = new WorktreesProvider(client, selection);
+  const tools = new ToolInvocationsProvider(client, selection);
   const providers = new ProvidersProvider(client);
+  const mcpServers = new McpServersProvider(client);
   context.subscriptions.push(
     output,
     status,
@@ -50,7 +61,9 @@ export function activate(context: vscode.ExtensionContext): AgentBusExtensionApi
     vscode.window.registerTreeDataProvider("agentbus.tasks", tasks),
     vscode.window.registerTreeDataProvider("agentbus.approvals", approvals),
     vscode.window.registerTreeDataProvider("agentbus.worktrees", worktrees),
+    vscode.window.registerTreeDataProvider("agentbus.tools", tools),
     vscode.window.registerTreeDataProvider("agentbus.providers", providers),
+    vscode.window.registerTreeDataProvider("agentbus.mcp", mcpServers),
     vscode.workspace.registerTextDocumentContentProvider(
       "agentbus-before",
       new ChangeDocumentProvider(client)
@@ -62,13 +75,29 @@ export function activate(context: vscode.ExtensionContext): AgentBusExtensionApi
     vscode.workspace.registerTextDocumentContentProvider(
       "agentbus-report",
       new ReportDocumentProvider(client)
+    ),
+    vscode.workspace.registerTextDocumentContentProvider(
+      "agentbus-tool",
+      new ToolInvocationDocumentProvider(client)
+    ),
+    vscode.workspace.registerTextDocumentContentProvider(
+      "agentbus-policy",
+      new ToolPolicyDocumentProvider(client)
+    ),
+    vscode.workspace.registerTextDocumentContentProvider(
+      "agentbus-artifact",
+      new ToolArtifactDocumentProvider(client)
+    ),
+    vscode.workspace.registerTextDocumentContentProvider(
+      "agentbus-mcp",
+      new McpServerDocumentProvider(client)
     )
   );
   const controller = new CommandController(
     daemon,
     store,
     selection,
-    [runs, tasks, approvals, worktrees, providers],
+    [runs, tasks, approvals, worktrees, tools, providers, mcpServers],
     output,
     status
   );
@@ -77,6 +106,7 @@ export function activate(context: vscode.ExtensionContext): AgentBusExtensionApi
   return {
     client,
     daemonId: () => daemon.current()?.entry.daemon_id,
+    eventStreamConnected: () => controller.eventStreamConnected(),
     events: () => store.events(),
     runs: () => store.runs()
   };

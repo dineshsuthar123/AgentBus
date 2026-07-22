@@ -47,6 +47,7 @@ TASK_TRANSITIONS: dict[TaskStatus, set[TaskStatus]] = {
         TaskStatus.CANCELLED,
     },
     TaskStatus.RUNNING: {
+        TaskStatus.WAITING_FOR_APPROVAL,
         TaskStatus.SUCCEEDED,
         TaskStatus.INTEGRATION_PENDING,
         TaskStatus.RETRYABLE,

@@ -23,6 +23,7 @@ def test_valid_transitions_are_accepted():
     validate_run_transition(RunStatus.PENDING, RunStatus.RUNNING)
     validate_task_transition(TaskStatus.PENDING, TaskStatus.READY)
     validate_task_transition(TaskStatus.RUNNING, TaskStatus.SUCCEEDED)
+    validate_task_transition(TaskStatus.RUNNING, TaskStatus.WAITING_FOR_APPROVAL)
     validate_attempt_transition(AttemptStatus.RUNNING, AttemptStatus.INTERRUPTED)
 
 

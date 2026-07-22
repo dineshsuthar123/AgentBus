@@ -198,6 +198,24 @@ Cancellation lifecycle fields are optional protocol v1 extensions with safe
 defaults. Run, scheduler, report, and cancel responses share the same model.
 Persisted cancellation events are monotonic and replayable; payloads contain no
 prompts, bearer tokens, API keys, environment dumps, or raw provider objects.
+
+Managed tool protocol types are also additive control v1 extensions. Generated
+schemas cover tool descriptors, exact capabilities, policy decisions, resource
+budgets and usage, scoped approvals, invocation results, cancellation,
+artifacts, immutable audit entries, MCP server diagnostics, and the defaulted
+run-report `tool_runtime` summary. The embedded managed-tool protocol is
+`agentbus.tool` version `1.0`.
+
+The control API supports bounded tool registry and policy inspection,
+diagnostic-only policy evaluation, paginated run invocation and audit reads,
+run-scoped tool cancellation, and configured local MCP diagnostics. It does not
+expose arbitrary command execution, raw environment values, subprocess handles,
+or model-controlled MCP server configuration.
+
+Authenticated `POST /mcp` is a constrained MCP JSON-RPC endpoint and therefore
+is documented separately from the REST OpenAPI paths. It shares the same local
+daemon authentication and response sanitization. See
+`../docs/mcp-integration.md`.
 """
 
 

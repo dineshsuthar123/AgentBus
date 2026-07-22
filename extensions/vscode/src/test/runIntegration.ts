@@ -1,5 +1,13 @@
 import { spawnSync } from "node:child_process";
-import { access, cp, mkdir, rm, writeFile } from "node:fs/promises";
+import {
+  access,
+  cp,
+  mkdir,
+  readdir,
+  readFile,
+  rm,
+  writeFile
+} from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { runTests } from "@vscode/test-electron";
 
@@ -15,15 +23,47 @@ async function main(): Promise<void> {
   const userDataPath = join(stagingRoot, "agentbus-vscode-user");
   const extensionsPath = join(stagingRoot, "agentbus-vscode-extensions");
   const registryPath = join(stagingRoot, "agentbus-vscode-daemons.json");
+  const configPath = join(stagingRoot, "agentbus-vscode-config.json");
+  const statePath = join(stagingRoot, "agentbus-vscode-state.db");
+  const runsPath = join(stagingRoot, "agentbus-vscode-runs");
+  const worktreesPath = join(stagingRoot, "agentbus-vscode-worktrees");
+  const mcpLifecyclePath = join(stagingRoot, "agentbus-vscode-mcp-lifecycle");
+  const mcpFixturePath = resolve(
+    repositoryRoot,
+    "tests",
+    "fixtures",
+    "mcp",
+    "fake_server.py"
+  );
+  const mcpPrivateMarker = "vscode-e2e-private-mcp-marker";
   const pythonPath = await findPython(repositoryRoot);
+  await access(mcpFixturePath);
   await mkdir(stagingRoot, { recursive: true });
   await cleanup([
     extensionDevelopmentPath,
     workspacePath,
     userDataPath,
     extensionsPath,
-    registryPath
+    registryPath,
+    configPath,
+    statePath,
+    `${statePath}-shm`,
+    `${statePath}-wal`,
+    runsPath,
+    worktreesPath,
+    mcpLifecyclePath
   ]);
+  await mkdir(mcpLifecyclePath, { recursive: true });
+  await writeDaemonConfig({
+    configPath,
+    workspacePath,
+    statePath,
+    runsPath,
+    worktreesPath,
+    mcpFixturePath,
+    mcpLifecyclePath,
+    mcpPrivateMarker
+  });
   await cp(source, extensionDevelopmentPath, {
     recursive: true,
     filter: (path) =>
@@ -34,6 +74,7 @@ async function main(): Promise<void> {
   await initializeRepository(workspacePath);
   const electronRunAsNode = process.env.ELECTRON_RUN_AS_NODE;
   const removedSecrets = removeProviderSecrets();
+  let integrationCompleted = false;
   delete process.env.ELECTRON_RUN_AS_NODE;
   try {
     await runTests({
@@ -48,6 +89,8 @@ async function main(): Promise<void> {
       ),
       extensionTestsEnv: {
         AGENTBUS_E2E_PYTHON: pythonPath,
+        AGENTBUS_E2E_CONFIG: configPath,
+        AGENTBUS_E2E_MCP_MARKER: mcpPrivateMarker,
         AGENTBUS_E2E_REGISTRY: registryPath,
         AGENTBUS_E2E_WORKSPACE: workspacePath
       },
@@ -58,19 +101,42 @@ async function main(): Promise<void> {
         "--disable-workspace-trust"
       ]
     });
+    integrationCompleted = true;
   } finally {
-    stopDaemon(pythonPath, registryPath);
-    if (electronRunAsNode !== undefined) {
-      process.env.ELECTRON_RUN_AS_NODE = electronRunAsNode;
+    let runtimeCleanupVerified = false;
+    try {
+      await stopDaemons(pythonPath, registryPath);
+      await verifyCleanup(
+        registryPath,
+        mcpLifecyclePath,
+        integrationCompleted
+      );
+      runtimeCleanupVerified = true;
+    } finally {
+      if (electronRunAsNode !== undefined) {
+        process.env.ELECTRON_RUN_AS_NODE = electronRunAsNode;
+      }
+      restoreEnvironment(removedSecrets);
+      const cleanupPaths = [
+        extensionDevelopmentPath,
+        userDataPath,
+        extensionsPath
+      ];
+      if (runtimeCleanupVerified) {
+        cleanupPaths.push(
+          workspacePath,
+          registryPath,
+          configPath,
+          statePath,
+          `${statePath}-shm`,
+          `${statePath}-wal`,
+          runsPath,
+          worktreesPath,
+          mcpLifecyclePath
+        );
+      }
+      await cleanup(cleanupPaths);
     }
-    restoreEnvironment(removedSecrets);
-    await cleanup([
-      extensionDevelopmentPath,
-      workspacePath,
-      userDataPath,
-      extensionsPath,
-      registryPath
-    ]);
   }
 }
 
@@ -84,8 +150,78 @@ async function initializeRepository(workspacePath: string): Promise<void> {
     "# AgentBus VS Code integration workspace\n",
     "utf8"
   );
-  git(workspacePath, "add", "README.md");
+  await writeFile(
+    join(workspacePath, "test_acceptance_tool.py"),
+    "from acceptance_tool import add\n\n\ndef test_add():\n    assert add(2, 3) == 5\n",
+    "utf8"
+  );
+  await writeFile(
+    join(workspacePath, "delete_me.txt"),
+    "deterministic deletion target\n",
+    "utf8"
+  );
+  git(
+    workspacePath,
+    "add",
+    "README.md",
+    "test_acceptance_tool.py",
+    "delete_me.txt"
+  );
   git(workspacePath, "commit", "-m", "initial");
+}
+
+interface DaemonConfigPaths {
+  configPath: string;
+  workspacePath: string;
+  statePath: string;
+  runsPath: string;
+  worktreesPath: string;
+  mcpFixturePath: string;
+  mcpLifecyclePath: string;
+  mcpPrivateMarker: string;
+}
+
+async function writeDaemonConfig(paths: DaemonConfigPaths): Promise<void> {
+  const mcpCapabilities = ["mcp.connect", "mcp.invoke"].map((name) => ({
+    name,
+    scope: { mcp_servers: ["fixture"] }
+  }));
+  await writeFile(
+    paths.configPath,
+    JSON.stringify(
+      {
+        agentbus: {
+          workspace_dir: paths.workspacePath,
+          state_db: paths.statePath,
+          runs_dir: paths.runsPath,
+          worktree_root: paths.worktreesPath,
+          mcp_server_configs: [
+            {
+              server_id: "fixture",
+              transport: "stdio",
+              executable_alias: "python",
+              arguments: [
+                "-u",
+                paths.mcpFixturePath,
+                "--mode",
+                "normal",
+                "--lifecycle-dir",
+                paths.mcpLifecyclePath
+              ],
+              environment: { CI: paths.mcpPrivateMarker },
+              capability_map: {
+                echo: mcpCapabilities,
+                write_note: mcpCapabilities
+              }
+            }
+          ]
+        }
+      },
+      null,
+      2
+    ),
+    "utf8"
+  );
 }
 
 async function findPython(repositoryRoot: string): Promise<string> {
@@ -125,8 +261,40 @@ function git(workspacePath: string, ...arguments_: string[]): void {
   }
 }
 
-function stopDaemon(pythonPath: string, registryPath: string): void {
-  spawnSync(
+async function stopDaemons(
+  pythonPath: string,
+  registryPath: string
+): Promise<void> {
+  runDaemonCommand(pythonPath, registryPath, "cleanup-stale");
+  for (const daemonId of await registeredDaemonIds(registryPath)) {
+    const result = daemonCommand(pythonPath, registryPath, "stop", daemonId);
+    if (result.error || result.status !== 0) {
+      runDaemonCommand(pythonPath, registryPath, "cleanup-stale");
+      if ((await registeredDaemonIds(registryPath)).includes(daemonId)) {
+        throw new Error("VS Code Electron daemon stop was not confirmed.");
+      }
+    }
+  }
+  runDaemonCommand(pythonPath, registryPath, "cleanup-stale");
+}
+
+function runDaemonCommand(
+  pythonPath: string,
+  registryPath: string,
+  ...arguments_: string[]
+): void {
+  const result = daemonCommand(pythonPath, registryPath, ...arguments_);
+  if (result.error || result.status !== 0) {
+    throw new Error("VS Code Electron daemon cleanup command failed.");
+  }
+}
+
+function daemonCommand(
+  pythonPath: string,
+  registryPath: string,
+  ...arguments_: string[]
+) {
+  return spawnSync(
     pythonPath,
     [
       "-m",
@@ -134,13 +302,9 @@ function stopDaemon(pythonPath: string, registryPath: string): void {
       "daemon",
       "--registry-path",
       registryPath,
-      "stop"
+      ...arguments_
     ],
-    {
-      encoding: "utf8",
-      shell: false,
-      timeout: 15_000
-    }
+    { encoding: "utf8", shell: false, timeout: 15_000 }
   );
 }
 
@@ -168,6 +332,60 @@ function restoreEnvironment(values: Map<string, string>): void {
   for (const [name, value] of values) {
     process.env[name] = value;
   }
+}
+
+async function verifyCleanup(
+  registryPath: string,
+  mcpLifecyclePath: string,
+  requireMcpLifecycle: boolean
+): Promise<void> {
+  if ((await registeredDaemonIds(registryPath)).length !== 0) {
+    throw new Error("VS Code Electron test left a daemon registration behind.");
+  }
+  const names = await readdir(mcpLifecyclePath);
+  const started = new Set(
+    names
+      .filter((name) => name.endsWith(".started"))
+      .map((name) => name.slice(0, -".started".length))
+  );
+  const stopped = new Set(
+    names
+      .filter((name) => name.endsWith(".stopped"))
+      .map((name) => name.slice(0, -".stopped".length))
+  );
+  if (
+    (requireMcpLifecycle && started.size === 0) ||
+    started.size !== stopped.size ||
+    [...started].some((name) => !stopped.has(name))
+  ) {
+    throw new Error(
+      `VS Code Electron MCP cleanup mismatch: ${started.size} started, ${stopped.size} stopped.`
+    );
+  }
+}
+
+async function registeredDaemonIds(registryPath: string): Promise<string[]> {
+  let raw: string;
+  try {
+    raw = await readFile(registryPath, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+  const payload = JSON.parse(raw) as { daemons?: unknown };
+  if (!Array.isArray(payload.daemons)) {
+    throw new Error("VS Code Electron daemon registry is malformed.");
+  }
+  return payload.daemons.map((value) => {
+    const daemonId =
+      typeof value === "object" && value !== null && "daemon_id" in value
+        ? (value as { daemon_id?: unknown }).daemon_id
+        : undefined;
+    if (typeof daemonId !== "string" || !/^[0-9a-f]{32}$/.test(daemonId)) {
+      throw new Error("VS Code Electron daemon registry ID is invalid.");
+    }
+    return daemonId;
+  });
 }
 
 async function cleanup(paths: string[]): Promise<void> {

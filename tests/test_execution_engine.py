@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -293,6 +294,55 @@ def test_high_risk_task_waits_for_explicit_approval_then_resumes(tmp_path):
     assert approved.status == RunStatus.RUNNING
     assert report.status == RunStatus.SUCCEEDED
     assert executor.calls == [("step-1", 1)]
+
+
+def test_running_task_suspends_for_tool_approval_and_resumes_exact_attempt(
+    tmp_path,
+    monkeypatch,
+):
+    pending = TaskExecutionResult(
+        succeeded=False,
+        summary="Tool requires approval",
+        failure_category=FailureCategory.POLICY_VIOLATION,
+        error_message="Tool requires approval",
+        retryable=False,
+        metadata={
+            "_agentbus": {
+                "tool_approval_pending": {
+                    "approval_id": "tool-approval-1",
+                    "invocation_id": "tool-invocation-1",
+                    "tool_name": "filesystem.delete",
+                }
+            }
+        },
+    )
+    executor = ScriptedExecutor([pending, success()])
+    store = StateStore(tmp_path / "state.db")
+    engine = DurableExecutionEngine(store, executor)
+    create(engine, plan(count=1))
+
+    waiting = engine.run_until_blocked("run-1")
+
+    assert waiting.status == RunStatus.WAITING_FOR_APPROVAL
+    assert store.get_task("run-1", "step-1").status == (
+        TaskStatus.WAITING_FOR_APPROVAL
+    )
+    assert store.list_attempts("run-1", "step-1")[0].status == (
+        AttemptStatus.INTERRUPTED
+    )
+    monkeypatch.setattr(
+        store,
+        "get_tool_approval",
+        lambda run_id, approval_id: SimpleNamespace(disposition="approved"),
+    )
+
+    completed = engine.resume("run-1")
+
+    assert completed.status == RunStatus.SUCCEEDED
+    assert executor.calls == [("step-1", 1), ("step-1", 2)]
+    assert [
+        attempt.status for attempt in store.list_attempts("run-1", "step-1")
+    ] == [AttemptStatus.INTERRUPTED, AttemptStatus.SUCCEEDED]
 
 
 def test_rejection_marks_task_and_blocks_dependents(tmp_path):

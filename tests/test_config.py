@@ -1,6 +1,7 @@
 import pytest
 
 from agentbus.config import AgentBusConfig
+from agentbus.tools.protocol import ToolResourceBudget
 
 
 ENV_VARS = [
@@ -62,6 +63,23 @@ def test_default_config(monkeypatch):
     assert config.max_workers == 1
     assert config.keep_worktrees is True
     assert config.integration_strategy == "cherry-pick"
+    assert config.tool_resource_budget.invocations_per_task == 64
+
+
+def test_tool_resource_budget_survives_immutable_config_overrides():
+    budget = ToolResourceBudget(
+        invocations_per_task=2,
+        invocations_per_run=3,
+    )
+
+    config = AgentBusConfig().with_overrides(tool_resource_budget=budget)
+
+    assert config.tool_resource_budget is budget
+
+
+def test_direct_config_rejects_unvalidated_tool_resource_budget():
+    with pytest.raises(ValueError, match="must be validated"):
+        AgentBusConfig(tool_resource_budget={})
 
 
 def test_env_overrides(monkeypatch):
