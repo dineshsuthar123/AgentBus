@@ -38,6 +38,55 @@ jobs:
       - name: Check patch whitespace
         run: git diff --check
 
+  tool-runtime-security:
+    name: Tool runtime security / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install offline tool runtime dependencies
+        run: python -m pip install -e ".[dev,ide]"
+      - name: Verify tool protocol policy and filesystem boundaries
+        run: >-
+          python -m pytest
+          tests/test_tool_protocol.py
+          tests/test_tool_registry.py
+          tests/test_tool_policy.py
+          tests/test_policy_aware_git_tools.py
+          tests/test_filesystem_security.py
+          tests/test_filesystem_read_operations.py
+          tests/test_filesystem_mutations.py
+      - name: Verify sandbox limits and process-tree cleanup
+        run: >-
+          python -m pytest
+          tests/test_sandbox_process.py
+          tests/test_sandbox_platform.py
+          tests/test_sandbox_environment.py
+          tests/test_sandbox_limits.py
+          tests/test_sandbox_output.py
+      - name: Verify offline MCP trust boundaries and cleanup
+        run: >-
+          python -m pytest
+          tests/test_mcp_client.py
+          tests/test_mcp_config.py
+          tests/test_mcp_importer.py
+          tests/test_mcp_stdio_transport.py
+          tests/test_mcp_http_transport.py
+          tests/test_mcp_tools.py
+          tests/test_agentbus_mcp_server.py
+      - name: Run real offline tool-enabled control acceptance
+        run: python -m agentbus.control.acceptance
+      - name: Check patch whitespace
+        run: git diff --check
+
   vscode:
     name: VS Code extension
     runs-on: ubuntu-latest
@@ -61,15 +110,24 @@ jobs:
       - name: Verify generated protocol
         working-directory: extensions/vscode
         run: npm run protocol:check
-      - name: Compile lint and unit test
+      - name: Compile extension
         working-directory: extensions/vscode
-        run: npm run compile && npm run lint && npm test
-      - name: Run real VS Code lifecycle integration
+        run: npm run compile
+      - name: Lint extension
+        working-directory: extensions/vscode
+        run: npm run lint
+      - name: Run extension unit tests
+        working-directory: extensions/vscode
+        run: npm test
+      - name: Run real tool-enabled VS Code lifecycle integration
         working-directory: extensions/vscode
         run: xvfb-run -a npm run test:integration
-      - name: Package and audit VSIX
+      - name: Package VSIX without publishing
         working-directory: extensions/vscode
-        run: npm run package && npm run package:audit
+        run: npm run package
+      - name: Audit VSIX contents
+        working-directory: extensions/vscode
+        run: npm run package:audit
 
   package:
     name: Package smoke / ${{ matrix.os }}
