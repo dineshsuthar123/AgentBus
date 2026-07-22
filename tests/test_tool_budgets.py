@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -62,8 +63,12 @@ def test_duplicate_invocation_does_not_reset_or_increment_budget(tmp_path: Path)
 
     first = ledger.begin(current)
     duplicate = ledger.begin(current)
+    delayed_duplicate = ledger.begin(
+        current.model_copy(update={"requested_at": current.requested_at + timedelta(1)})
+    )
 
     assert duplicate.duplicate is True
+    assert delayed_duplicate.duplicate is True
     assert duplicate.sequence == first.sequence
     assert ledger.snapshot("run-1").invocation_count == 1
     with pytest.raises(ToolBudgetExceeded) as captured:

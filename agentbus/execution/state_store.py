@@ -37,6 +37,15 @@ from agentbus.execution.transitions import (
     validate_task_transition,
 )
 from agentbus.security.redaction import is_sensitive_key, redact_text
+from agentbus.tools.protocol import (
+    ToolInvocation,
+    ToolInvocationStatus,
+    ToolResourceUsage,
+)
+from agentbus.tools.records import (
+    ToolInvocationRecord,
+    invocation_record_values,
+)
 from agentbus.worktrees.models import (
     IntegrationRecord,
     MergeStatus,
@@ -60,6 +69,14 @@ class TaskNotFoundError(StateStoreError):
 
 
 class AttemptNotFoundError(StateStoreError):
+    pass
+
+
+class ToolInvocationNotFoundError(StateStoreError):
+    pass
+
+
+class ToolInvocationConflictError(StateStoreError):
     pass
 
 
@@ -925,6 +942,203 @@ class StateStore:
                 payload or {},
             )
 
+    def record_tool_invocation(
+        self,
+        invocation: ToolInvocation,
+        *,
+        anticipated_usage: ToolResourceUsage | None = None,
+        process_slot: bool = False,
+    ) -> ToolInvocationRecord:
+        anticipated = anticipated_usage or ToolResourceUsage()
+        values = invocation_record_values(
+            invocation,
+            anticipated_usage=anticipated,
+            process_slot=process_slot,
+            updated_at=utc_now(),
+        )
+        with self._write_transaction() as connection:
+            self._require_task_row(connection, invocation.run_id, invocation.task_id)
+            row = connection.execute(
+                "SELECT * FROM tool_invocations WHERE invocation_id = ?",
+                (invocation.invocation_id,),
+            ).fetchone()
+            if row is not None:
+                return self._require_matching_tool_invocation(
+                    row,
+                    invocation_sha256=str(values["invocation_sha256"]),
+                    operation_sha256=str(values["operation_sha256"]),
+                    anticipated_usage=anticipated,
+                    process_slot=process_slot,
+                )
+
+            idempotency_digest = values["idempotency_key_sha256"]
+            if idempotency_digest is not None:
+                row = connection.execute(
+                    """SELECT * FROM tool_invocations
+                    WHERE run_id = ? AND task_id = ?
+                        AND idempotency_key_sha256 = ?""",
+                    (invocation.run_id, invocation.task_id, idempotency_digest),
+                ).fetchone()
+                if row is not None:
+                    return self._require_matching_tool_invocation(
+                        row,
+                        invocation_sha256=None,
+                        operation_sha256=str(values["operation_sha256"]),
+                        anticipated_usage=anticipated,
+                        process_slot=process_slot,
+                    )
+
+            cursor = connection.execute(
+                """
+                INSERT INTO tool_invocations(
+                    invocation_id, invocation_revision, run_id, task_id,
+                    tool_name, tool_version_json, protocol_version, caller_role,
+                    workspace_identity, worktree_identity, capabilities_json,
+                    capability_fingerprint, arguments_sha256, invocation_sha256,
+                    operation_sha256, idempotency_key_sha256, status,
+                    resource_budget_json, anticipated_usage_json,
+                    resource_usage_json, process_slot, policy_decision_json,
+                    approval_id, safe_result_json, cancellation_json,
+                    error_category, error_message, requested_at, started_at,
+                    completed_at, updated_at
+                ) VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, NULL, NULL, NULL, ?, NULL, NULL, ?, NULL, NULL, ?
+                )
+                """,
+                (
+                    invocation.invocation_id,
+                    invocation.invocation_revision,
+                    invocation.run_id,
+                    invocation.task_id,
+                    invocation.tool_name,
+                    _dump_json(invocation.tool_version.model_dump(mode="json")),
+                    invocation.protocol_version,
+                    invocation.context.caller_role,
+                    invocation.context.workspace_identity,
+                    invocation.context.worktree_identity,
+                    _dump_json(
+                        [
+                            capability.model_dump(mode="json")
+                            for capability in invocation.requested_capabilities
+                        ]
+                    ),
+                    values["capability_fingerprint"],
+                    values["arguments_sha256"],
+                    values["invocation_sha256"],
+                    values["operation_sha256"],
+                    idempotency_digest,
+                    ToolInvocationStatus.REQUESTED.value,
+                    _dump_json(invocation.resource_budget.model_dump(mode="json")),
+                    _dump_json(anticipated.model_dump(mode="json")),
+                    _dump_json(values["resource_usage"].model_dump(mode="json")),
+                    int(process_slot),
+                    _dump_json(values["cancellation"].model_dump(mode="json")),
+                    _timestamp(invocation.requested_at),
+                    _timestamp(values["updated_at"]),
+                ),
+            )
+            self._insert_event(
+                connection,
+                invocation.run_id,
+                invocation.task_id,
+                "tool_invocation_requested",
+                {
+                    "invocation_id": invocation.invocation_id,
+                    "invocation_revision": invocation.invocation_revision,
+                    "invocation_sequence": int(cursor.lastrowid),
+                    "tool_name": invocation.tool_name,
+                    "tool_version": invocation.tool_version.model_dump(mode="json"),
+                    "capability_fingerprint": values["capability_fingerprint"],
+                },
+            )
+            row = connection.execute(
+                "SELECT * FROM tool_invocations WHERE invocation_sequence = ?",
+                (int(cursor.lastrowid),),
+            ).fetchone()
+        return self._tool_invocation_from_row(row)
+
+    def get_tool_invocation(
+        self,
+        run_id: str,
+        invocation_id: str,
+    ) -> ToolInvocationRecord:
+        _require_id(run_id, "run")
+        _require_id(invocation_id, "tool invocation")
+        with self._connection() as connection:
+            self._require_run_row(connection, run_id)
+            row = connection.execute(
+                """SELECT * FROM tool_invocations
+                WHERE run_id = ? AND invocation_id = ?""",
+                (run_id, invocation_id),
+            ).fetchone()
+        if row is None:
+            raise ToolInvocationNotFoundError(
+                f"Tool invocation '{invocation_id}' was not found in run '{run_id}'."
+            )
+        return self._tool_invocation_from_row(row)
+
+    def list_tool_invocations(
+        self,
+        run_id: str,
+        *,
+        task_id: str | None = None,
+        status: ToolInvocationStatus | None = None,
+        after_sequence: int = 0,
+        limit: int = 100,
+    ) -> list[ToolInvocationRecord]:
+        _require_id(run_id, "run")
+        if task_id is not None:
+            _require_id(task_id, "task")
+        if after_sequence < 0:
+            raise StateStoreError("Tool invocation cursor must not be negative.")
+        if limit < 1 or limit > 1000:
+            raise StateStoreError(
+                "Tool invocation page limit must be between 1 and 1000."
+            )
+        clauses = ["run_id = ?", "invocation_sequence > ?"]
+        parameters: list[object] = [run_id, after_sequence]
+        if task_id is not None:
+            clauses.append("task_id = ?")
+            parameters.append(task_id)
+        if status is not None:
+            clauses.append("status = ?")
+            parameters.append(status.value)
+        parameters.append(limit)
+        query = (
+            "SELECT * FROM tool_invocations WHERE "
+            + " AND ".join(clauses)
+            + " ORDER BY invocation_sequence LIMIT ?"
+        )
+        with self._connection() as connection:
+            self._require_run_row(connection, run_id)
+            rows = connection.execute(query, parameters).fetchall()
+        return [self._tool_invocation_from_row(row) for row in rows]
+
+    def _require_matching_tool_invocation(
+        self,
+        row: sqlite3.Row,
+        *,
+        invocation_sha256: str | None,
+        operation_sha256: str,
+        anticipated_usage: ToolResourceUsage,
+        process_slot: bool,
+    ) -> ToolInvocationRecord:
+        record = self._tool_invocation_from_row(row)
+        if (
+            (
+                invocation_sha256 is not None
+                and record.invocation_sha256 != invocation_sha256
+            )
+            or record.operation_sha256 != operation_sha256
+            or record.anticipated_usage != anticipated_usage
+            or record.process_slot != process_slot
+        ):
+            raise ToolInvocationConflictError(
+                "Tool invocation or idempotency identity was reused with different scope."
+            )
+        return record
+
     def persist_cancellation_state(
         self,
         run_id: str,
@@ -1634,6 +1848,60 @@ class StateStore:
             decision=ApprovalOutcome(row["decision"]),
             reason=row["reason"],
             created_at=_parse_timestamp(row["created_at"]),
+        )
+
+    @staticmethod
+    @_domain_decode("tool invocation record")
+    def _tool_invocation_from_row(row: sqlite3.Row) -> ToolInvocationRecord:
+        return ToolInvocationRecord(
+            invocation_sequence=row["invocation_sequence"],
+            invocation_id=row["invocation_id"],
+            invocation_revision=row["invocation_revision"],
+            run_id=row["run_id"],
+            task_id=row["task_id"],
+            tool_name=row["tool_name"],
+            tool_version=_load_json(row["tool_version_json"], "tool version"),
+            protocol_version=row["protocol_version"],
+            caller_role=row["caller_role"],
+            workspace_identity=row["workspace_identity"],
+            worktree_identity=row["worktree_identity"],
+            capabilities=_load_json(row["capabilities_json"], "tool capabilities"),
+            capability_fingerprint=row["capability_fingerprint"],
+            arguments_sha256=row["arguments_sha256"],
+            invocation_sha256=row["invocation_sha256"],
+            operation_sha256=row["operation_sha256"],
+            idempotency_key_sha256=row["idempotency_key_sha256"],
+            status=row["status"],
+            resource_budget=_load_json(
+                row["resource_budget_json"], "tool resource budget"
+            ),
+            anticipated_usage=_load_json(
+                row["anticipated_usage_json"], "anticipated tool usage"
+            ),
+            resource_usage=_load_json(
+                row["resource_usage_json"], "tool resource usage"
+            ),
+            process_slot=bool(row["process_slot"]),
+            policy_decision=(
+                _load_json(row["policy_decision_json"], "tool policy decision")
+                if row["policy_decision_json"] is not None
+                else None
+            ),
+            approval_id=row["approval_id"],
+            safe_result=(
+                _load_json(row["safe_result_json"], "safe tool result")
+                if row["safe_result_json"] is not None
+                else None
+            ),
+            cancellation=_load_json(
+                row["cancellation_json"], "tool cancellation snapshot"
+            ),
+            error_category=row["error_category"],
+            error_message=row["error_message"],
+            requested_at=_parse_timestamp(row["requested_at"]),
+            started_at=_parse_timestamp(row["started_at"]),
+            completed_at=_parse_timestamp(row["completed_at"]),
+            updated_at=_parse_timestamp(row["updated_at"]),
         )
 
     @staticmethod

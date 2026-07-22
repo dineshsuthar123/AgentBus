@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import threading
 from dataclasses import dataclass, field, replace
 
@@ -10,6 +9,7 @@ from agentbus.tools.protocol import (
     ToolResourceUsage,
     canonical_json,
 )
+from agentbus.tools.records import invocation_identity_sha256
 
 
 class ToolBudgetError(RuntimeError):
@@ -101,9 +101,7 @@ class ToolBudgetLedger:
     ) -> ToolBudgetReservation:
         anticipated = anticipated_usage or ToolResourceUsage()
         self._validate_usage(invocation.resource_budget, anticipated)
-        invocation_fingerprint = hashlib.sha256(
-            canonical_json(invocation.model_dump(mode="json")).encode("utf-8")
-        ).hexdigest()
+        invocation_fingerprint = invocation_identity_sha256(invocation)
         budget_json = canonical_json(invocation.resource_budget.model_dump(mode="json"))
         with self._lock:
             state = self._runs.get(invocation.run_id)
