@@ -32,6 +32,9 @@ def test_environment_excludes_provider_secrets_and_developer_profile(
     assert environment["SYSTEMROOT"] == "C:/Windows"
     assert environment["PATH"] == str((tmp_path / "bin").resolve())
     assert environment["HOME"] == str((tmp_path / "home").resolve())
+    assert environment["TEMP"] == str((tmp_path / "home").resolve())
+    assert environment["TMP"] == str((tmp_path / "home").resolve())
+    assert environment["TMPDIR"] == str((tmp_path / "home").resolve())
     assert "AZURE_OPENAI_API_KEY" not in environment
     assert "AGENTBUS_DAEMON_TOKEN" not in environment
     assert "PIP_INDEX_URL" not in environment

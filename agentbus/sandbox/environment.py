@@ -62,6 +62,9 @@ def sanitized_process_environment(
     home = Path(isolated_home).resolve() if isolated_home is not None else None
     if home is not None:
         environment["HOME"] = str(home)
+        environment["TEMP"] = str(home)
+        environment["TMP"] = str(home)
+        environment["TMPDIR"] = str(home)
         if os.name == "nt":
             environment["USERPROFILE"] = str(home)
 
