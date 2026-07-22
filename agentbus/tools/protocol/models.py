@@ -372,6 +372,9 @@ class ToolApprovalRequest(ToolProtocolModel):
     protocol_version: str = TOOL_PROTOCOL_VERSION
     requested_capabilities: tuple[ToolCapability, ...]
     capability_fingerprint: str = Field(min_length=64, max_length=64)
+    arguments_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    workspace_identity: str = Field(min_length=1, max_length=2_048)
+    worktree_identity: str = Field(min_length=1, max_length=2_048)
     affected_paths: tuple[str, ...] = ()
     executable: str | None = Field(default=None, max_length=1_024)
     arguments_summary: tuple[str, ...] = ()

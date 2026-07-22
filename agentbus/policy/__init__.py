@@ -1,3 +1,9 @@
+from agentbus.policy.approvals import (
+    approval_binding_sha256,
+    build_tool_approval_request,
+    decide_tool_approval,
+    validate_tool_approval,
+)
 from agentbus.policy.defaults import DEFAULT_TOOL_POLICY, ToolPolicyConfiguration
 from agentbus.policy.engine import ToolPolicyEngine
 from agentbus.policy.errors import (
@@ -23,4 +29,8 @@ __all__ = [
     "ToolPolicyConfigurationError",
     "ToolPolicyEngine",
     "ToolPolicyError",
+    "approval_binding_sha256",
+    "build_tool_approval_request",
+    "decide_tool_approval",
+    "validate_tool_approval",
 ]

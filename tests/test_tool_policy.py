@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
-from agentbus.policy import ToolPolicyEngine
+from agentbus.policy import (
+    ToolApprovalBindingError,
+    ToolApprovalDisposition,
+    ToolPolicyEngine,
+    build_tool_approval_request,
+    decide_tool_approval,
+    validate_tool_approval,
+)
 from agentbus.tools.descriptors import descriptor_map
 from agentbus.tools.protocol import (
     CapabilityScope,
@@ -136,6 +144,126 @@ def test_policy_denies_processes_in_untrusted_workspace(tmp_path: Path) -> None:
     decision = ToolPolicyEngine().evaluate(invocation, descriptor)
 
     assert decision.rule_id == "deny.untrusted_workspace_execution"
+
+
+def test_exact_approval_allows_original_delete_invocation(tmp_path: Path) -> None:
+    invocation, descriptor = _invocation(
+        tmp_path,
+        "filesystem.delete",
+        path="src/obsolete.py",
+    )
+    engine = ToolPolicyEngine()
+    required = engine.evaluate(invocation, descriptor)
+    request = build_tool_approval_request(
+        invocation,
+        descriptor,
+        required,
+        approval_id="approval-1",
+    )
+    grant = decide_tool_approval(
+        request,
+        invocation,
+        disposition=ToolApprovalDisposition.APPROVED,
+    )
+
+    decision = engine.evaluate(invocation, descriptor, approval=grant)
+
+    assert decision.outcome == ToolPolicyOutcome.ALLOW_WITH_CONSTRAINTS
+    assert decision.rule_id == "allow.approved_invocation"
+    assert decision.safe_metadata["approval_id"] == "approval-1"
+
+
+@pytest.mark.parametrize(
+    "update",
+    [
+        {"task_id": "step-2"},
+        {"invocation_revision": 2},
+        {"arguments": {"path": "src/different.py"}},
+    ],
+)
+def test_approval_cannot_be_reused_for_changed_invocation(
+    tmp_path: Path,
+    update: dict,
+) -> None:
+    invocation, descriptor = _invocation(
+        tmp_path,
+        "filesystem.delete",
+        path="src/obsolete.py",
+    )
+    engine = ToolPolicyEngine()
+    required = engine.evaluate(invocation, descriptor)
+    request = build_tool_approval_request(invocation, descriptor, required)
+    grant = decide_tool_approval(
+        request,
+        invocation,
+        disposition=ToolApprovalDisposition.APPROVED,
+    )
+    changed = invocation.model_copy(update=update)
+
+    decision = engine.evaluate(changed, descriptor, approval=grant)
+
+    assert decision.outcome == ToolPolicyOutcome.DENY
+    assert decision.rule_id == "deny.invalid_approval"
+
+
+def test_approval_rejects_capability_expansion_and_expiry(tmp_path: Path) -> None:
+    invocation, descriptor = _invocation(
+        tmp_path,
+        "filesystem.delete",
+        path="src/obsolete.py",
+    )
+    engine = ToolPolicyEngine()
+    required = engine.evaluate(invocation, descriptor)
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=1)
+    request = build_tool_approval_request(
+        invocation,
+        descriptor,
+        required,
+        expires_at=expires_at,
+    )
+    grant = decide_tool_approval(
+        request,
+        invocation,
+        disposition=ToolApprovalDisposition.APPROVED,
+    )
+    expanded = invocation.model_copy(
+        update={
+            "requested_capabilities": invocation.requested_capabilities
+            + (ToolCapability(name=ToolCapabilityName.PROCESS_NETWORK),)
+        }
+    )
+
+    with pytest.raises(ToolApprovalBindingError, match="capabilities changed"):
+        validate_tool_approval(grant, expanded, descriptor)
+    with pytest.raises(ToolApprovalBindingError, match="expired"):
+        validate_tool_approval(
+            grant,
+            invocation,
+            descriptor,
+            now=expires_at + timedelta(seconds=1),
+        )
+
+
+def test_rejected_approval_never_authorizes_invocation(tmp_path: Path) -> None:
+    invocation, descriptor = _invocation(
+        tmp_path,
+        "filesystem.delete",
+        path="src/obsolete.py",
+    )
+    engine = ToolPolicyEngine()
+    required = engine.evaluate(invocation, descriptor)
+    request = build_tool_approval_request(invocation, descriptor, required)
+    grant = decide_tool_approval(
+        request,
+        invocation,
+        disposition=ToolApprovalDisposition.REJECTED,
+        reason="Not needed.",
+    )
+
+    decision = engine.evaluate(invocation, descriptor, approval=grant)
+
+    assert decision.outcome == ToolPolicyOutcome.DENY
+    assert decision.rule_id == "deny.invalid_approval"
 
 
 def _invocation(
