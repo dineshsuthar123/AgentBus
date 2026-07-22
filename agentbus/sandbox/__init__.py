@@ -10,6 +10,11 @@ from agentbus.sandbox.errors import (
     SandboxValidationError,
     WorkingDirectoryValidationError,
 )
+from agentbus.sandbox.platform import (
+    ExecutableCatalog,
+    ExecutableIdentity,
+    validate_working_directory,
+)
 
 __all__ = [
     "EnvironmentValidationError",
@@ -18,6 +23,9 @@ __all__ = [
     "SandboxError",
     "SandboxValidationError",
     "WorkingDirectoryValidationError",
+    "ExecutableCatalog",
+    "ExecutableIdentity",
     "environment_diagnostics",
     "sanitized_process_environment",
+    "validate_working_directory",
 ]
