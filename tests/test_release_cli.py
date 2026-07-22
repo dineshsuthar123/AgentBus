@@ -14,6 +14,7 @@ from agentbus.configuration import resolve_configuration
 from agentbus.doctor import CheckStatus, run_doctor
 from agentbus.execution.schema import SCHEMA_VERSION
 from agentbus.execution.state_store import StateStore
+from agentbus.mcp import mcp_server_capabilities
 
 
 def _git_repository(path: Path) -> Path:
@@ -85,6 +86,83 @@ def test_config_file_unknown_values_are_rejected(tmp_path):
 
     with pytest.raises(ValueError, match="Unknown AgentBus config"):
         resolve_configuration(config_file=config_file, environ={})
+
+
+def test_config_file_loads_mcp_servers_without_exposing_private_values(
+    tmp_path: Path,
+) -> None:
+    private_argument = "private-mcp-command-argument"
+    private_environment = "private-mcp-environment-value"
+    capabilities = [
+        item.model_dump(mode="json")
+        for item in mcp_server_capabilities("fixture")
+    ]
+    config_file = tmp_path / "config.json"
+    config_file.write_text(
+        json.dumps(
+            {
+                "agentbus": {
+                    "mcp_server_configs": [
+                        {
+                            "server_id": "fixture",
+                            "transport": "stdio",
+                            "executable_alias": "python",
+                            "arguments": ["--marker", private_argument],
+                            "environment": {"CI": private_environment},
+                            "capability_map": {"echo": capabilities},
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    resolved = resolve_configuration(config_file=config_file, environ={})
+
+    server = resolved.config.mcp_server_configs[0]
+    assert server.server_id == "fixture"
+    assert server.arguments == ("--marker", private_argument)
+    safe = json.dumps(resolved.safe_values(), sort_keys=True)
+    assert private_argument not in safe
+    assert private_environment not in safe
+    assert resolved.safe_values()["mcp_server_configs"]["value"] == [
+        {
+            "server_id": "fixture",
+            "transport": "stdio",
+            "configured_tools": ["echo"],
+        }
+    ]
+
+
+def test_invalid_mcp_config_error_does_not_echo_secret_input(tmp_path: Path) -> None:
+    private_value = "mcp-secret-must-not-appear"
+    capabilities = [
+        item.model_dump(mode="json")
+        for item in mcp_server_capabilities("fixture")
+    ]
+    config_file = tmp_path / "config.json"
+    config_file.write_text(
+        json.dumps(
+            {
+                "mcp_server_configs": [
+                    {
+                        "server_id": "fixture",
+                        "transport": "stdio",
+                        "executable_alias": "python",
+                        "environment": {"AZURE_OPENAI_API_KEY": private_value},
+                        "capability_map": {"echo": capabilities},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Invalid MCP server configuration") as exc:
+        resolve_configuration(config_file=config_file, environ={})
+
+    assert private_value not in str(exc.value)
 
 
 def test_init_dry_run_creates_nothing_and_actual_init_is_safe(tmp_path):
