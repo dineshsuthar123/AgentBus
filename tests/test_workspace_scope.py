@@ -301,6 +301,9 @@ def test_explicit_absolute_workspace_propagates_to_runtime_components(tmp_path):
     assert loop.tool_runtime.worktree == workspace
     assert executor.git_repository.workspace == workspace
     assert executor.workspace == workspace
+    assert executor.tool_runtime is not None
+    assert executor.tool_runtime.workspace == workspace
+    assert executor.tool_runtime.worktree == workspace
     assert store.get_run(run_id).workspace == str(workspace)
 
 
@@ -333,6 +336,9 @@ def test_parallel_worker_runtime_propagates_isolated_absolute_workspace(tmp_path
     assert executor.verifier.workspace == worker_workspace
     assert executor.verifier.command_tools.workspace == worker_workspace
     assert executor.verifier.test_detector.workspace == worker_workspace
+    assert executor.tool_runtime is not None
+    assert executor.tool_runtime.workspace == source
+    assert executor.tool_runtime.worktree == worker_workspace
     assert Path(loop.workspace) == worker_workspace
     assert loop.tool_runtime is not None
     assert loop.tool_runtime.workspace == worker_workspace

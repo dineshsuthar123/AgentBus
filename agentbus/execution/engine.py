@@ -576,6 +576,44 @@ class DurableExecutionEngine:
         agentbus_metadata["retryable_override"] = result.retryable
         attempt_metadata["_agentbus"] = agentbus_metadata
 
+        pending_tool_approval = agentbus_metadata.get("tool_approval_pending")
+        if isinstance(pending_tool_approval, dict):
+            approval_id = str(pending_tool_approval.get("approval_id") or "")
+            invocation_id = str(
+                pending_tool_approval.get("invocation_id") or ""
+            )
+            if not approval_id or not invocation_id:
+                raise DurableExecutionError(
+                    "Tool approval suspension metadata is incomplete."
+                )
+            self.store.complete_attempt(
+                attempt.attempt_id,
+                AttemptStatus.INTERRUPTED,
+                error_category=FailureCategory.POLICY_VIOLATION,
+                error_message=result.error_message or result.summary,
+                observation_summary=result.summary,
+                metadata=attempt_metadata,
+                event_type="task_attempt_awaiting_tool_approval",
+            )
+            self.store.update_task_status(
+                run_id,
+                task_id,
+                TaskStatus.WAITING_FOR_APPROVAL,
+                event_type="task_awaiting_tool_approval",
+                event_payload={
+                    "approval_id": approval_id,
+                    "invocation_id": invocation_id,
+                },
+            )
+            self._log(
+                "task_awaiting_tool_approval",
+                run_id,
+                task_id=task_id,
+                attempt_number=attempt.attempt_number,
+                metadata={"approval_id": approval_id},
+            )
+            return
+
         if result.succeeded:
             self.store.complete_attempt(
                 attempt.attempt_id,
@@ -802,6 +840,48 @@ class DurableExecutionEngine:
         latest = {approval.task_id: approval for approval in snapshot.approvals}
         for task in snapshot.tasks:
             if task.status != TaskStatus.WAITING_FOR_APPROVAL:
+                continue
+            attempts = snapshot.attempts_for(task.task_id)
+            latest_attempt = attempts[-1] if attempts else None
+            pending_tool = None
+            if latest_attempt is not None:
+                internal = latest_attempt.metadata.get("_agentbus", {})
+                if isinstance(internal, dict):
+                    candidate = internal.get("tool_approval_pending")
+                    if isinstance(candidate, dict):
+                        pending_tool = candidate
+            if pending_tool is not None:
+                approval_id = str(pending_tool.get("approval_id") or "")
+                if not approval_id:
+                    raise DurableExecutionError(
+                        "Persisted tool approval suspension is incomplete."
+                    )
+                tool_approval = self.store.get_tool_approval(
+                    run_id,
+                    approval_id,
+                )
+                if tool_approval.disposition is None:
+                    continue
+                target = (
+                    TaskStatus.READY
+                    if tool_approval.disposition == "approved"
+                    else TaskStatus.REJECTED
+                )
+                self.store.update_task_status(
+                    run_id,
+                    task.task_id,
+                    target,
+                    event_type=(
+                        "approved_tool_task_recovered"
+                        if target == TaskStatus.READY
+                        else "rejected_tool_task_recovered"
+                    ),
+                    event_payload={
+                        "approval_id": approval_id,
+                        "invocation_id": pending_tool.get("invocation_id"),
+                    },
+                )
+                changed = True
                 continue
             approval = latest.get(task.task_id)
             if approval is None:

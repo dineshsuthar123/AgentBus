@@ -42,8 +42,9 @@ from agentbus.execution.state_store import RunNotFoundError, StateStore
 from agentbus.git.repository import GitRepository, GitRepositoryError
 from agentbus.memory.run_log import RunLogger
 from agentbus.models.errors import ModelCancellationError
-from agentbus.runtime.loop import AgentLoop
+from agentbus.runtime.loop import AgentLoop, ManagedToolApprovalRequired
 from agentbus.runtime.orchestrator import MultiAgentOrchestrator
+from agentbus.tools.runtime import build_managed_tool_runtime
 
 
 class RunBackend(Protocol):
@@ -251,6 +252,15 @@ class AgentBusRunBackend:
                 summary = AgentLoop(
                     config=config,
                     cancellation=cancellation,
+                    tool_runtime=build_managed_tool_runtime(
+                        workspace=config.workspace_path,
+                        state_store=self.store,
+                        cancellation_registry=self.cancellations,
+                    ),
+                    state_store=self.store,
+                    cancellation_registry=self.cancellations,
+                    run_id=run_id,
+                    task_id=task.task_id,
                 ).run(request.task)
                 approved = True
                 verifier_status = None
@@ -292,6 +302,39 @@ class AgentBusRunBackend:
                 RunStatus.SUCCEEDED if approved else RunStatus.FAILED,
                 failure_reason=None if approved else summary,
                 event_type="run_succeeded" if approved else "run_failed",
+            )
+        except ManagedToolApprovalRequired as exc:
+            self.store.complete_attempt(
+                attempt.attempt_id,
+                AttemptStatus.INTERRUPTED,
+                error_category=FailureCategory.POLICY_VIOLATION,
+                error_message=str(exc),
+                observation_summary=str(exc),
+                metadata={
+                    "_agentbus": {
+                        "tool_approval_pending": {
+                            "approval_id": exc.approval_id,
+                            "invocation_id": exc.invocation_id,
+                            "tool_name": exc.tool_name,
+                        }
+                    }
+                },
+                event_type="task_attempt_awaiting_tool_approval",
+            )
+            self.store.update_task_status(
+                run_id,
+                task.task_id,
+                TaskStatus.WAITING_FOR_APPROVAL,
+                event_type="task_awaiting_tool_approval",
+                event_payload={
+                    "approval_id": exc.approval_id,
+                    "invocation_id": exc.invocation_id,
+                },
+            )
+            self.store.update_run_status(
+                run_id,
+                RunStatus.WAITING_FOR_APPROVAL,
+                event_type="run_awaiting_tool_approval",
             )
         except (CancellationRequested, ModelCancellationError):
             changed_files = self._changed_files(config.workspace_path)

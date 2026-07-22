@@ -177,6 +177,7 @@ class AmbiguousPRClient:
 
 
 def config(tmp_path):
+    (tmp_path / "workspace").mkdir(exist_ok=True)
     return AgentBusConfig(
         workspace_dir=str(tmp_path / "workspace"),
         runs_dir=str(tmp_path / "runs"),

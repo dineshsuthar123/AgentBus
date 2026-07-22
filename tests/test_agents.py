@@ -84,3 +84,45 @@ def test_coder_preserves_legacy_loop_factory_that_only_accepts_config():
     assert result == "legacy loop complete"
     assert seen["config"] is coder.config
     assert "Complete task" in seen["task"]
+
+
+def test_coder_propagates_managed_runtime_identity_to_modern_loop():
+    seen = {}
+    runtime = object()
+
+    class ManagedLoop:
+        def __init__(
+            self,
+            config,
+            model,
+            cancellation,
+            tool_runtime,
+            run_id,
+            task_id,
+            workspace_trusted,
+            provider_consented,
+            policy_context,
+        ):
+            seen.update(locals())
+
+        def run(self, task):
+            return "managed loop complete"
+
+    coder = CoderAgent(model=FakeModel({}), loop_factory=ManagedLoop)
+
+    result = coder.execute(
+        "Complete task",
+        {"goal": "Complete", "steps": []},
+        tool_runtime=runtime,
+        run_id="run-1",
+        task_id="task-1",
+        workspace_trusted=True,
+        provider_consented=True,
+        policy_context={"attempt_number": 1},
+    )
+
+    assert result == "managed loop complete"
+    assert seen["tool_runtime"] is runtime
+    assert seen["run_id"] == "run-1"
+    assert seen["task_id"] == "task-1"
+    assert seen["policy_context"] == {"attempt_number": 1}

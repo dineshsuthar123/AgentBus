@@ -1,4 +1,5 @@
 from contextlib import nullcontext
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -6,6 +7,8 @@ from agentbus.config import AgentBusConfig
 from agentbus.execution.cancellation import CancellationToken
 from agentbus.repo.test_detection import TestCommandDetector
 from agentbus.tools.command import CommandTools
+from agentbus.tools.protocol import ToolCapabilityName, ToolInvocationStatus
+from agentbus.tools.runtime import ManagedToolRuntime
 
 
 class Verifier:
@@ -29,7 +32,17 @@ class Verifier:
         )
         self.cancellation = cancellation
 
-    def verify(self, *, require_command: bool = False) -> dict[str, Any]:
+    def verify(
+        self,
+        *,
+        require_command: bool = False,
+        tool_runtime: ManagedToolRuntime | None = None,
+        run_id: str | None = None,
+        task_id: str | None = None,
+        invocation_key: str = "verification",
+        workspace_trusted: bool = True,
+        provider_consented: bool = True,
+    ) -> dict[str, Any]:
         self._checkpoint("before-detection")
         detection = None
         command = self.command
@@ -75,6 +88,23 @@ class Verifier:
         environment_overrides = (
             {"PYTHONDONTWRITEBYTECODE": "1"} if python_verification else None
         )
+        if tool_runtime is not None:
+            if run_id is None or task_id is None:
+                raise ValueError(
+                    "Managed verification requires explicit run and task IDs."
+                )
+            return self._verify_managed(
+                execution_command,
+                detection=detection,
+                tool_runtime=tool_runtime,
+                run_id=run_id,
+                task_id=task_id,
+                invocation_key=invocation_key,
+                workspace_trusted=workspace_trusted,
+                provider_consented=provider_consented,
+                python_verification=python_verification,
+                pytest_cache_disabled=pytest_cache_disabled,
+            )
         operation = (
             self.cancellation.operation(
                 "verifier.command",
@@ -102,6 +132,87 @@ class Verifier:
             ),
             "artifact_suppression_active": python_verification,
             "pytest_cache_disabled": pytest_cache_disabled,
+        }
+
+    def _verify_managed(
+        self,
+        command: list[str],
+        *,
+        detection: dict[str, Any] | None,
+        tool_runtime: ManagedToolRuntime,
+        run_id: str,
+        task_id: str,
+        invocation_key: str,
+        workspace_trusted: bool,
+        provider_consented: bool,
+        python_verification: bool,
+        pytest_cache_disabled: bool,
+    ) -> dict[str, Any]:
+        arguments = {
+            "executable": command[0],
+            "arguments": command[1:],
+        }
+        idempotency_key = f"verifier:{invocation_key}"
+        call = tool_runtime.prepare_model_call(
+            tool_name="test.execute",
+            arguments=arguments,
+            expected_capabilities=(
+                ToolCapabilityName.TEST_EXECUTE,
+                ToolCapabilityName.PROCESS_EXECUTE,
+            ),
+            run_id=run_id,
+            task_id=task_id,
+            caller_role="verifier",
+            workspace_trusted=workspace_trusted,
+            provider_consented=provider_consented,
+            timeout_seconds=float(self.config.command_timeout_seconds),
+            idempotency_key=idempotency_key,
+        )
+        digest = hashlib.sha256(
+            f"{run_id}\0{task_id}\0{idempotency_key}".encode("utf-8")
+        ).hexdigest()[:40]
+        response = tool_runtime.invoke(
+            call,
+            run_id=run_id,
+            task_id=task_id,
+            caller_role="verifier",
+            workspace_trusted=workspace_trusted,
+            provider_consented=provider_consented,
+            invocation_id=f"tool-{digest}",
+        )
+        result = response.result
+        if response.awaiting_approval:
+            output = "Verification is awaiting exact tool approval."
+            exit_code = None
+            passed = False
+        elif result is None:
+            output = "Verification tool has not reached a terminal state."
+            exit_code = None
+            passed = False
+        else:
+            output = result.stdout
+            if result.stderr:
+                output = f"{output}\n{result.stderr}" if output else result.stderr
+            exit_code = result.exit_code
+            passed = (
+                result.status == ToolInvocationStatus.SUCCEEDED
+                and result.exit_code in {None, 0}
+                and bool(result.structured_output.get("passed", True))
+            )
+        self._checkpoint("after-command")
+        return {
+            "command": command,
+            "exit_code": exit_code,
+            "passed": passed,
+            "output": output,
+            "reason": (
+                detection.get("reason", "Explicit verifier command")
+                if detection
+                else "Explicit verifier command"
+            ),
+            "artifact_suppression_active": python_verification,
+            "pytest_cache_disabled": pytest_cache_disabled,
+            "tool_invocation_id": response.invocation.invocation_id,
         }
 
     def _checkpoint(self, stage: str) -> None:

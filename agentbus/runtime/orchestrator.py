@@ -41,6 +41,7 @@ from agentbus.repo.test_detection import TestCommandDetector
 from agentbus.runtime.verifier import Verifier
 from agentbus.runtime.durable_workflow import MultiAgentTaskExecutor
 from agentbus.tools.git_tools import GitTools
+from agentbus.tools.runtime import build_managed_tool_runtime
 from agentbus.worktrees.manager import GitWorktreeManager
 from agentbus.worktrees.errors import WorktreeError
 from agentbus.worktrees.models import WorktreePurpose
@@ -462,6 +463,11 @@ class MultiAgentOrchestrator:
                 git_repository=self.git_repository,
                 workspace=str(self.workspace),
                 cancellation=cancellation,
+                tool_runtime=build_managed_tool_runtime(
+                    workspace=self.workspace,
+                    state_store=self.state_store,
+                    cancellation_registry=self._cancellation_registry_for_use(),
+                ),
             )
         return DurableExecutionEngine(
             self.state_store,
@@ -559,6 +565,13 @@ class MultiAgentOrchestrator:
             git_repository=repository,
             workspace=str(workspace),
             cancellation=cancellation,
+            tool_runtime=build_managed_tool_runtime(
+                workspace=self.workspace,
+                worktree=workspace,
+                state_store=self.state_store,
+                cancellation_registry=self._cancellation_registry_for_use(),
+                owned_worktree=True,
+            ),
         )
 
     def _run_final_review(self, run_id: str) -> ExecutionReport:

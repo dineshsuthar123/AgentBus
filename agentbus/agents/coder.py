@@ -4,9 +4,13 @@ import json
 from agentbus.agents.base import BaseAgent
 from agentbus.config import AgentBusConfig
 from agentbus.execution.cancellation import CancellationToken
+from agentbus.execution.cancellation_registry import CancellationRegistry
+from agentbus.execution.state_store import StateStore
 from agentbus.models.router import ModelRouter
 from agentbus.models.types import ModelRole
 from agentbus.runtime.loop import AgentLoop
+from agentbus.tools.protocol import ToolResourceBudget
+from agentbus.tools.runtime import ManagedToolRuntime
 
 
 class CoderAgent(BaseAgent):
@@ -33,6 +37,15 @@ class CoderAgent(BaseAgent):
         plan: dict,
         reviewer_feedback: dict | None = None,
         cancellation: CancellationToken | None = None,
+        tool_runtime: ManagedToolRuntime | None = None,
+        state_store: StateStore | None = None,
+        cancellation_registry: CancellationRegistry | None = None,
+        run_id: str | None = None,
+        task_id: str | None = None,
+        workspace_trusted: bool = True,
+        provider_consented: bool = True,
+        resource_budget: ToolResourceBudget | None = None,
+        policy_context: dict | None = None,
     ) -> str:
         task = self._build_task(user_task, plan, reviewer_feedback)
         loop_arguments = {"config": self.config}
@@ -40,6 +53,20 @@ class CoderAgent(BaseAgent):
             loop_arguments["model"] = self.model
         if _accepts_keyword(self.loop_factory, "cancellation"):
             loop_arguments["cancellation"] = cancellation
+        optional_arguments = {
+            "tool_runtime": tool_runtime,
+            "state_store": state_store,
+            "cancellation_registry": cancellation_registry,
+            "run_id": run_id,
+            "task_id": task_id,
+            "workspace_trusted": workspace_trusted,
+            "provider_consented": provider_consented,
+            "resource_budget": resource_budget,
+            "policy_context": policy_context,
+        }
+        for name, value in optional_arguments.items():
+            if _accepts_keyword(self.loop_factory, name):
+                loop_arguments[name] = value
         loop = self.loop_factory(**loop_arguments)
         return loop.run(task)
 

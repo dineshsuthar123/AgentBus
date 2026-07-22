@@ -15,6 +15,8 @@ from agentbus.execution.models import (
 from agentbus.models.errors import ModelCancellationError
 from agentbus.models.router import model_request_context
 from agentbus.git.repository import RepositoryChangeSet
+from agentbus.runtime.loop import ManagedToolApprovalRequired
+from agentbus.tools.runtime import ManagedToolRuntime
 
 
 class MultiAgentTaskExecutor:
@@ -30,6 +32,7 @@ class MultiAgentTaskExecutor:
         git_repository,
         workspace: str | None = None,
         cancellation: CancellationToken | None = None,
+        tool_runtime: ManagedToolRuntime | None = None,
     ):
         self.coder = coder
         self.verifier = verifier
@@ -42,6 +45,8 @@ class MultiAgentTaskExecutor:
             raise ValueError("Durable task executor requires an explicit workspace.")
         self.workspace = Path(selected_workspace).expanduser().resolve()
         self.cancellation = cancellation
+        self.tool_runtime = tool_runtime
+        self._recovered_tool_runs: set[str] = set()
 
     def execute(self, context: TaskExecutionContext) -> TaskExecutionResult:
         _drain_model_results(self.coder)
@@ -53,6 +58,7 @@ class MultiAgentTaskExecutor:
         verifier_result: dict[str, Any] | None = None
         reviewer_result: dict[str, Any] | None = None
         try:
+            self._recover_tool_runtime(context.run.run_id)
             with model_request_context(
                 run_id=context.run.run_id,
                 task_id=context.task.task_id,
@@ -64,6 +70,15 @@ class MultiAgentTaskExecutor:
                     "plan": plan,
                     "reviewer_feedback": reviewer_feedback,
                     "cancellation": self.cancellation,
+                    "tool_runtime": self.tool_runtime,
+                    "run_id": context.run.run_id,
+                    "task_id": context.task.task_id,
+                    "workspace_trusted": True,
+                    "provider_consented": True,
+                    "policy_context": {
+                        "attempt_number": context.attempt_number,
+                        "assigned_role": context.task.assigned_role,
+                    },
                 }
                 coder_summary = self.coder.execute(
                     **_supported_arguments(
@@ -72,7 +87,21 @@ class MultiAgentTaskExecutor:
                     )
                 )
                 self._checkpoint("after-coder")
-                verifier_result = self.verifier.verify()
+                verifier_result = self.verifier.verify(
+                    **_supported_arguments(
+                        self.verifier.verify,
+                        {
+                            "tool_runtime": self.tool_runtime,
+                            "run_id": context.run.run_id,
+                            "task_id": context.task.task_id,
+                            "invocation_key": (
+                                f"attempt-{context.attempt_number}"
+                            ),
+                            "workspace_trusted": True,
+                            "provider_consented": True,
+                        },
+                    )
+                )
                 self._checkpoint("after-verifier")
                 changed_files = self._changed_since(before)
                 changes = self._change_set(changed_files)
@@ -87,6 +116,13 @@ class MultiAgentTaskExecutor:
                     verifier_result,
                 )
                 self._checkpoint("after-task-review")
+        except ManagedToolApprovalRequired as exc:
+            return self._approval_pending_result(
+                context,
+                before,
+                exc,
+                coder_summary=coder_summary,
+            )
         except (CancellationRequested, ModelCancellationError):
             return self._cancelled_result(
                 context,
@@ -185,6 +221,68 @@ class MultiAgentTaskExecutor:
             changed_files=changed_files,
             metadata=metadata,
         )
+
+    def _approval_pending_result(
+        self,
+        context: TaskExecutionContext,
+        before: dict[str, str],
+        approval: ManagedToolApprovalRequired,
+        *,
+        coder_summary: str,
+    ) -> TaskExecutionResult:
+        changed_files = self._changed_since(before)
+        changes = self._change_set(changed_files)
+        review_files = set(changes.review_files)
+        commit_files = set(changes.commit_files)
+        generated = set(changes.generated_files)
+        ignored = set(changes.ignored_files)
+        tracked_generated = set(changes.tracked_generated_files)
+        artifacts = [
+            ExecutionArtifact(
+                artifact_id=uuid.uuid4().hex,
+                run_id=context.run.run_id,
+                task_id=context.task.task_id,
+                artifact_type="workspace_file",
+                identifier=path,
+                metadata={
+                    "attempt_number": context.attempt_number,
+                    "generated": path in generated,
+                    "ignored": path in ignored,
+                    "tracked_generated": path in tracked_generated,
+                    "review_eligible": path in review_files,
+                    "commit_eligible": path in commit_files,
+                },
+            )
+            for path in changed_files
+        ]
+        pending = {
+            "approval_id": approval.approval_id,
+            "invocation_id": approval.invocation_id,
+            "tool_name": approval.tool_name,
+        }
+        return TaskExecutionResult(
+            succeeded=False,
+            summary=str(approval),
+            artifacts=artifacts,
+            failure_category=FailureCategory.POLICY_VIOLATION,
+            error_message=str(approval),
+            retryable=False,
+            verifier_status="awaiting_tool_approval",
+            changed_files=changed_files,
+            metadata={
+                "artifact_hygiene": changes.to_metadata(),
+                "coder_summary": coder_summary,
+                "tool_approval": pending,
+                "_agentbus": {"tool_approval_pending": pending},
+                "model_requests": _drain_model_results(self.coder),
+            },
+        )
+
+    def _recover_tool_runtime(self, run_id: str) -> None:
+        if self.tool_runtime is None or run_id in self._recovered_tool_runs:
+            return
+        self.tool_runtime.recover_run(run_id)
+        self._recovered_tool_runs.add(run_id)
 
     def _cancelled_result(
         self,
