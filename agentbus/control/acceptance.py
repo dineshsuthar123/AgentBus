@@ -15,6 +15,7 @@ from agentbus.security.redaction import safe_child_environment
 
 _TERMINAL_STATUSES = {"succeeded", "failed", "cancelled"}
 _SUCCESS_EVENT = "integration_commit_published"
+_COMMIT_EVENT = "commit_created"
 _CANCELLATION_EVENT = "cancellation_cleanup_completed"
 
 
@@ -46,6 +47,29 @@ def main() -> int:
                 json={"workspace": str(workspace), "require_git": True},
             ).json()
             assert validated["valid"] is True
+
+            tool_run = _submit_run(
+                base,
+                headers,
+                workspace,
+                task="Exercise the deterministic managed-tool lifecycle.",
+                profile="tool-control-acceptance",
+                latency_seconds=0,
+                latency_roles=[],
+                parallel=False,
+            )
+            tool_summary = _wait_for_terminal_run(base, headers, tool_run)
+            assert tool_summary["status"] == "succeeded"
+            tool_events = _replay_events(
+                base,
+                headers,
+                tool_run,
+                until_event=_COMMIT_EVENT,
+            )
+            observed_payloads.extend(tool_events)
+            observed_payloads.extend(
+                _assert_tool_lifecycle(base, headers, workspace, tool_run, tool_events)
+            )
 
             successful_run = _submit_run(
                 base,
@@ -152,7 +176,13 @@ def _initialize_repository(workspace: Path) -> Path:
         "# Offline acceptance workspace\n",
         encoding="utf-8",
     )
-    _git(workspace, "add", "README.md")
+    (workspace / "test_acceptance_tool.py").write_text(
+        "from acceptance_tool import add\n\n\n"
+        "def test_add():\n"
+        "    assert add(2, 3) == 5\n",
+        encoding="utf-8",
+    )
+    _git(workspace, "add", "README.md", "test_acceptance_tool.py")
     _git(workspace, "commit", "-m", "initial")
     return workspace.resolve()
 
@@ -209,6 +239,8 @@ def _submit_run(
     profile: str,
     latency_seconds: float,
     latency_roles: list[str],
+    parallel: bool = True,
+    commit_changes: bool = True,
 ) -> str:
     response = _request(
         "POST",
@@ -220,9 +252,9 @@ def _submit_run(
             "provider": "deterministic",
             "workflow": "multi",
             "durable": True,
-            "parallel": True,
+            "parallel": parallel,
             "max_workers": 1,
-            "commit_changes": True,
+            "commit_changes": commit_changes,
             "keep_worktrees": True,
             "retry_limit": 1,
             "deterministic": {
@@ -440,6 +472,101 @@ def _assert_cancelled_run(
     assert report["status"] == "cancelled"
     assert report["cancellation"]["provider_cancellation_acknowledged"] is True
     assert report["report"]["current_leases"] == []
+
+
+def _assert_tool_lifecycle(
+    base: str,
+    headers: dict[str, str],
+    workspace: Path,
+    run_id: str,
+    events: list[dict[str, Any]],
+) -> list[Any]:
+    listed = _request(
+        "GET",
+        f"{base}/api/v1/runs/{run_id}/tool-invocations",
+        headers=headers,
+    ).json()
+    invocations = listed["invocations"]
+    tool_names = [item["tool_name"] for item in invocations]
+    assert tool_names[:3] == [
+        "filesystem.read",
+        "filesystem.write",
+        "test.execute",
+    ]
+    assert all(item["status"] == "succeeded" for item in invocations)
+    assert all(
+        item["policy_decision"]["outcome"]
+        in {"allow", "allow_with_constraints"}
+        for item in invocations
+    )
+
+    details = [
+        _request(
+            "GET",
+            (
+                f"{base}/api/v1/runs/{run_id}/tool-invocations/"
+                f"{item['invocation_id']}"
+            ),
+            headers=headers,
+        ).json()
+        for item in invocations
+    ]
+    write = next(item for item in details if item["tool_name"] == "filesystem.write")
+    pytest_call = next(
+        item
+        for item in details
+        if item["tool_name"] == "test.execute"
+        and item["caller_role"] == "coder"
+    )
+    assert write["result"]["status"] == "succeeded"
+    assert any(
+        artifact["relative_path"] == "acceptance_tool.py"
+        for artifact in write["result"]["artifacts"]
+    )
+    assert pytest_call["result"]["exit_code"] == 0
+    assert pytest_call["result"]["structured_output"]["persisted_summary"] is True
+    assert (
+        pytest_call["result"]["safe_diagnostic_metadata"][
+            "structured_output_key_count"
+        ]
+        > 0
+    )
+
+    audit = _request(
+        "GET",
+        f"{base}/api/v1/runs/{run_id}/tool-audit",
+        headers=headers,
+    ).json()
+    assert len(audit["records"]) == len(invocations)
+    assert all(
+        item["record"]["outcome"] == "succeeded" for item in audit["records"]
+    )
+    event_types = {event["event_type"] for event in events}
+    assert {
+        "tool_invocation_requested",
+        "tool_policy_allowed",
+        "tool_invocation_started",
+        "tool_succeeded",
+    } <= event_types
+
+    report = _request(
+        "GET",
+        f"{base}/api/v1/runs/{run_id}/report",
+        headers=headers,
+    ).json()
+    runtime = report["report"]["tool_runtime"]
+    assert runtime["status_counts"] == {"succeeded": len(invocations)}
+    assert runtime["audit_record_count"] == len(invocations)
+    assert runtime["artifacts"][0]["relative_path"] == "acceptance_tool.py"
+    after = _request(
+        "GET",
+        f"{base}/api/v1/runs/{run_id}/changes/acceptance_tool.py",
+        headers=headers,
+        params={"revision": "after"},
+    ).json()
+    assert "return left + right" in after["content"]
+    assert (workspace / "acceptance_tool.py").is_file()
+    return [listed, *details, audit, report, after]
 
 
 def _request(method: str, url: str, **kwargs):
