@@ -62,6 +62,8 @@ def test_filesystem_adapters_create_read_and_patch_with_attribution(
     assert create.structured_output["invocation_id"] == "inv-create"
     assert create.resource_usage.file_mutations == 1
     assert create.artifacts[0].relative_path == "src/module.py"
+    assert create.artifacts[0].media_type == "text/plain; charset=utf-8"
+    assert create.artifacts[0].safe_metadata["encoding"] == "utf-8"
 
     read = registry.resolve("filesystem.read").execute(
         _invocation(

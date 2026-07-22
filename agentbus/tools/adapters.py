@@ -12,6 +12,7 @@ from agentbus.tools.descriptors import descriptor_map
 from agentbus.tools.filesystem import FileSystemTools
 from agentbus.tools.filesystem_operations import (
     FileListResult,
+    FileMutationOperation,
     FileMutationRecord,
     FileReadResult,
     FileStatResult,
@@ -607,13 +608,26 @@ def _file_mutation_output(result: FileMutationRecord) -> dict[str, Any]:
 def _mutation_artifact(result: FileMutationRecord) -> ToolArtifact | None:
     if result.after_sha256 is None:
         return None
+    is_text_mutation = result.operation in {
+        FileMutationOperation.CREATE,
+        FileMutationOperation.WRITE,
+        FileMutationOperation.PATCH,
+    }
     return ToolArtifact(
         artifact_id=f"{result.invocation_id}-file",
         kind=ToolArtifactKind.FILE,
         relative_path=result.relative_path,
+        media_type=(
+            "text/plain; charset=utf-8"
+            if is_text_mutation
+            else "application/octet-stream"
+        ),
         size_bytes=result.bytes_after,
         sha256=result.after_sha256,
-        safe_metadata={"operation": result.operation.value},
+        safe_metadata={
+            "operation": result.operation.value,
+            "encoding": "utf-8" if is_text_mutation else "unknown",
+        },
     )
 
 
