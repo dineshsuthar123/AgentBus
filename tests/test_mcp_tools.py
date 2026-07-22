@@ -40,6 +40,12 @@ def test_client_rejects_unmapped_remote_tool(tmp_path: Path) -> None:
         client.list_tools()
 
 
+def test_client_rejects_configured_tool_missing_from_server(tmp_path: Path) -> None:
+    client = _client(tmp_path, mapped_tools=("echo", "write_note", "ghost"))
+    with client, pytest.raises(McpProtocolError, match="not advertised"):
+        client.list_tools()
+
+
 @pytest.mark.parametrize(
     ("mode", "message"),
     [

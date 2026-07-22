@@ -31,6 +31,8 @@ def derive_required_capabilities(
 ) -> tuple[ToolCapability, ...]:
     """Derive least-scope capabilities from arguments, never model claims."""
     validate_tool_arguments(invocation.arguments, descriptor)
+    if invocation.tool_name.startswith("mcp."):
+        return descriptor.capabilities
     affected_paths = _affected_paths(invocation.arguments)
     executable = invocation.arguments.get("executable")
     working_directory = _working_directory(invocation)

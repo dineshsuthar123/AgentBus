@@ -5,6 +5,12 @@ from agentbus.mcp.client import (
     McpToolCallResult,
 )
 from agentbus.mcp.http_transport import McpHttpTransport
+from agentbus.mcp.importer import (
+    McpImportSession,
+    McpManagedTool,
+    build_mcp_client,
+    import_mcp_server,
+)
 from agentbus.mcp.models import (
     LATEST_MCP_PROTOCOL_VERSION,
     SUPPORTED_MCP_PROTOCOL_VERSIONS,
@@ -19,6 +25,8 @@ __all__ = [
     "LATEST_MCP_PROTOCOL_VERSION",
     "SUPPORTED_MCP_PROTOCOL_VERSIONS",
     "McpHttpTransport",
+    "McpImportSession",
+    "McpManagedTool",
     "McpClient",
     "McpConnectionInfo",
     "McpRemoteTool",
@@ -27,6 +35,8 @@ __all__ = [
     "McpTransport",
     "McpTransportKind",
     "McpToolCallResult",
+    "build_mcp_client",
+    "import_mcp_server",
     "mcp_server_capabilities",
     "namespace_mcp_tool",
 ]

@@ -161,6 +161,11 @@ class McpClient:
                     raise McpProtocolError("MCP server returned too many tools.")
             next_cursor = result.get("nextCursor")
             if next_cursor is None:
+                missing = sorted(set(self.config.capability_map) - set(tools))
+                if missing:
+                    raise McpProtocolError(
+                        "Configured MCP tools were not advertised by the server."
+                    )
                 self._tools = tools
                 return tuple(tools[name] for name in sorted(tools))
             if (

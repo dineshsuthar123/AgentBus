@@ -86,6 +86,14 @@ class DefaultPolicyEvaluator:
                 "deny.untrusted_workspace_execution",
                 "Workspace Trust is required for mutation and process execution.",
             )
+        if facts.capability_names & {
+            ToolCapabilityName.MCP_CONNECT,
+            ToolCapabilityName.MCP_INVOKE,
+        }:
+            return self._approval(
+                "approval.mcp_invoke",
+                "An explicitly configured MCP tool invocation requires exact scoped approval.",
+            )
         if len(facts.affected_paths) > self.configuration.automatic_path_limit:
             return self._approval(
                 "approval.large_path_set",

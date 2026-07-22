@@ -10,6 +10,7 @@ from agentbus.execution.cancellation import (
     CancellationState,
     CancellationToken,
 )
+from agentbus.mcp.errors import McpError
 from agentbus.execution.state_store import StateStore
 from agentbus.git.repository import GitRepositoryError
 from agentbus.policy import (
@@ -949,6 +950,8 @@ def _exception_category(
         return ToolErrorCategory.GIT, "git_error"
     if isinstance(exc, ProcessSupervisionError):
         return ToolErrorCategory.PROCESS, "process_error"
+    if isinstance(exc, McpError):
+        return ToolErrorCategory.MCP, "mcp_error"
     if isinstance(exc, ToolProtocolError):
         return ToolErrorCategory.PROTOCOL, "protocol_error"
     return ToolErrorCategory.INTERNAL, "internal_error"
