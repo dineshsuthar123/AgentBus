@@ -45,6 +45,7 @@ ide = [
   "fastapi>=0.115,<1",
   "uvicorn>=0.34,<1",
 ]
+mcp = ["httpx>=0.28,<1"]
 
 [project.scripts]
 agentbus = "agentbus.cli:main"
