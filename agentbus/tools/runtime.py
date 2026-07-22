@@ -137,6 +137,11 @@ class ManagedToolRuntime:
         descriptor = self.registry.descriptor(call.tool_name)
         budget = resource_budget or ToolResourceBudget()
         cancellation = self.cancellations.get(run_id).snapshot()
+        # Active-operation bookkeeping advances the token revision even when no
+        # cancellation exists; keep authorization identity stable until request.
+        authorization_cancellation_revision = (
+            cancellation.revision if cancellation.requested else 0
+        )
         timeout = call.timeout_seconds or min(
             descriptor.maximum_timeout_seconds,
             budget.wall_clock_seconds,
@@ -159,7 +164,7 @@ class ManagedToolRuntime:
             ),
             timeout_seconds=timeout,
             resource_budget=budget,
-            cancellation_revision=cancellation.revision,
+            cancellation_revision=authorization_cancellation_revision,
             invocation_revision=call.invocation_revision,
             idempotency_key=call.idempotency_key,
         )

@@ -4,7 +4,7 @@ import pytest
 
 from agentbus.agents.planner import PlannerOutput
 from agentbus.agents.reviewer import ReviewerOutput
-from agentbus.config import AgentBusConfig
+from agentbus.config import AgentBusConfig, SUPPORTED_DETERMINISTIC_PROFILES
 from agentbus.control.models import RunCreateRequest
 from agentbus.models.deterministic import DeterministicProvider
 from agentbus.models.errors import ModelServiceUnavailableError
@@ -123,3 +123,26 @@ def test_control_request_allows_offline_provider_without_live_consent(tmp_path):
     assert request.live_provider_consent is False
     assert request.deterministic.profile == "cancellation-two-task"
     assert request.deterministic.latency_roles == ["coder"]
+
+
+@pytest.mark.parametrize("profile", SUPPORTED_DETERMINISTIC_PROFILES[2:])
+def test_deterministic_tool_profiles_declare_structured_capabilities(profile):
+    router = ModelRouter(deterministic_config(deterministic_profile=profile))
+
+    plan = router.generate_json(
+        ModelRole.PLANNER,
+        "Plan the deterministic managed-tool profile.",
+        schema=PlannerOutput,
+    ).json_value()
+    action = router.generate_json(
+        ModelRole.CODER,
+        "Return the first deterministic managed-tool action.",
+        schema=AgentAction,
+        metadata={"run_id": "run-profile", "task_id": "step-1"},
+    ).json_value()
+
+    declared = set(plan["steps"][0]["required_capabilities"])
+    requested = set(action["tool_call"]["expected_capabilities"])
+    assert plan["steps"][0]["id"] == "step-1"
+    assert requested
+    assert requested <= declared

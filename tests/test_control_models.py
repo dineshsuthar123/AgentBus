@@ -66,6 +66,26 @@ def test_run_request_rejects_unknown_transport_fields() -> None:
         )
 
 
+def test_run_request_accepts_a_validated_tool_resource_budget() -> None:
+    request = RunCreateRequest(
+        task="Run one bounded tool.",
+        workspace="C:/workspace",
+        provider="deterministic",
+        deterministic={"profile": "tool-budget-exhaustion"},
+        tool_budget={
+            "invocations_per_task": 1,
+            "invocations_per_run": 1,
+            "stdout_bytes": 1024,
+            "stderr_bytes": 1024,
+            "combined_output_bytes": 2048,
+        },
+    )
+
+    assert request.tool_budget.invocations_per_task == 1
+    assert request.tool_budget.invocations_per_run == 1
+    assert request.tool_budget.combined_output_bytes == 2048
+
+
 def test_error_response_has_stable_safe_shape() -> None:
     response = ErrorResponse(
         error=ErrorBody(

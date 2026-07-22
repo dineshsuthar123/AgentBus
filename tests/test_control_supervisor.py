@@ -6,14 +6,16 @@ from pathlib import Path
 
 import pytest
 
+from agentbus.config import AgentBusConfig
 from agentbus.control.errors import (
     ControlPlaneConflictError,
     ControlPlaneUnavailableError,
 )
 from agentbus.control.models import RunCreateRequest
-from agentbus.control.supervisor import BackgroundRunSupervisor
+from agentbus.control.supervisor import AgentBusRunBackend, BackgroundRunSupervisor
 from agentbus.execution.cancellation import CancellationState
 from agentbus.execution.models import RunStatus, utc_now
+from agentbus.tools.protocol import ToolResourceBudget
 
 
 class BlockingBackend:
@@ -159,3 +161,31 @@ def test_shutdown_refuses_new_work(tmp_path: Path) -> None:
 
     with pytest.raises(ControlPlaneUnavailableError, match="shutting down"):
         supervisor.submit(_request(tmp_path))
+
+
+def test_run_backend_propagates_the_request_tool_budget(tmp_path: Path) -> None:
+    backend = AgentBusRunBackend(
+        AgentBusConfig(state_dir=str(tmp_path / "state"))
+    )
+    budget = ToolResourceBudget(
+        invocations_per_task=2,
+        invocations_per_run=3,
+    )
+    request = RunCreateRequest(
+        task="Execute a bounded deterministic profile.",
+        workspace=str(tmp_path / "workspace"),
+        provider="deterministic",
+        deterministic={"profile": "tool-budget-exhaustion"},
+        tool_budget=budget,
+    )
+
+    configured = backend._config_for(request)
+
+    assert configured.tool_resource_budget == budget
+    assert backend._persisted_tool_budget(
+        {
+            "tool_runtime": {
+                "resource_budget": budget.model_dump(mode="json"),
+            }
+        }
+    ) == budget

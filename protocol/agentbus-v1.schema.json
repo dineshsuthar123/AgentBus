@@ -693,7 +693,22 @@
           "default": "python-calculator",
           "enum": [
             "python-calculator",
-            "cancellation-two-task"
+            "cancellation-two-task",
+            "tool-safe-read",
+            "tool-atomic-write",
+            "tool-source-patch",
+            "tool-pytest",
+            "tool-git-diff",
+            "tool-git-commit",
+            "tool-delete-approval",
+            "tool-deny-outside-read",
+            "tool-deny-credential-read",
+            "tool-process-timeout",
+            "tool-process-cancel",
+            "tool-excessive-output",
+            "tool-budget-exhaustion",
+            "tool-local-mcp",
+            "tool-loop-limit"
           ],
           "title": "Profile",
           "type": "string"
@@ -1412,6 +1427,9 @@
           "title": "Task",
           "type": "string"
         },
+        "tool_budget": {
+          "$ref": "#/$defs/ToolResourceBudget"
+        },
         "workflow": {
           "$ref": "#/$defs/WorkflowMode",
           "default": "multi"
@@ -1846,6 +1864,124 @@
         "updated_at"
       ],
       "title": "TaskSummary",
+      "type": "object"
+    },
+    "ToolResourceBudget": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_bytes": {
+          "default": 5242880,
+          "maximum": 268435456,
+          "minimum": 0,
+          "title": "Artifact Bytes",
+          "type": "integer"
+        },
+        "child_processes": {
+          "default": 8,
+          "maximum": 256,
+          "minimum": 0,
+          "title": "Child Processes",
+          "type": "integer"
+        },
+        "combined_output_bytes": {
+          "default": 131072,
+          "maximum": 33554432,
+          "minimum": 0,
+          "title": "Combined Output Bytes",
+          "type": "integer"
+        },
+        "concurrent_processes": {
+          "default": 2,
+          "maximum": 64,
+          "minimum": 1,
+          "title": "Concurrent Processes",
+          "type": "integer"
+        },
+        "cpu_seconds": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 86400,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cpu Seconds"
+        },
+        "file_mutations": {
+          "default": 100,
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "File Mutations",
+          "type": "integer"
+        },
+        "invocations_per_run": {
+          "default": 512,
+          "maximum": 100000,
+          "minimum": 1,
+          "title": "Invocations Per Run",
+          "type": "integer"
+        },
+        "invocations_per_task": {
+          "default": 64,
+          "maximum": 10000,
+          "minimum": 1,
+          "title": "Invocations Per Task",
+          "type": "integer"
+        },
+        "maximum_file_bytes": {
+          "default": 2097152,
+          "maximum": 268435456,
+          "minimum": 0,
+          "title": "Maximum File Bytes",
+          "type": "integer"
+        },
+        "memory_bytes": {
+          "anyOf": [
+            {
+              "minimum": 1048576,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Memory Bytes"
+        },
+        "stderr_bytes": {
+          "default": 65536,
+          "maximum": 16777216,
+          "minimum": 0,
+          "title": "Stderr Bytes",
+          "type": "integer"
+        },
+        "stdout_bytes": {
+          "default": 65536,
+          "maximum": 16777216,
+          "minimum": 0,
+          "title": "Stdout Bytes",
+          "type": "integer"
+        },
+        "total_written_bytes": {
+          "default": 10485760,
+          "maximum": 1073741824,
+          "minimum": 0,
+          "title": "Total Written Bytes",
+          "type": "integer"
+        },
+        "wall_clock_seconds": {
+          "default": 90.0,
+          "exclusiveMinimum": 0,
+          "maximum": 86400,
+          "title": "Wall Clock Seconds",
+          "type": "number"
+        }
+      },
+      "title": "ToolResourceBudget",
       "type": "object"
     },
     "UsageResponse": {

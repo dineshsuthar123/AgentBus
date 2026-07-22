@@ -3,7 +3,7 @@ from agentbus.execution.cancellation_registry import CancellationRegistry
 from agentbus.execution.models import RunRecord, TaskSpec
 from agentbus.execution.state_store import StateStore
 from agentbus.runtime.verifier import Verifier
-from agentbus.tools.protocol import ToolInvocationStatus
+from agentbus.tools.protocol import ToolInvocationStatus, ToolResourceBudget
 from agentbus.tools.runtime import build_managed_tool_runtime
 
 
@@ -44,9 +44,14 @@ def test_verifier_uses_shared_managed_supervisor_and_audit(tmp_path):
         "def test_sample():\n    assert 2 + 2 == 4\n",
         encoding="utf-8",
     )
+    budget = ToolResourceBudget(
+        invocations_per_task=2,
+        invocations_per_run=3,
+    )
     config = AgentBusConfig(
         workspace_dir=str(workspace),
         state_dir=str(tmp_path / "state"),
+        tool_resource_budget=budget,
     )
     store = StateStore(config.state_database_path)
     store.create_run_with_tasks(
@@ -85,6 +90,7 @@ def test_verifier_uses_shared_managed_supervisor_and_audit(tmp_path):
     assert records[0].tool_name == "test.execute"
     assert records[0].caller_role == "verifier"
     assert records[0].status == ToolInvocationStatus.SUCCEEDED
+    assert records[0].resource_budget == budget
     assert store.list_tool_audits("run-1")[0].record.invocation_id == (
         records[0].invocation_id
     )

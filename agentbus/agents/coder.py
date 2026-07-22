@@ -61,7 +61,7 @@ class CoderAgent(BaseAgent):
             "task_id": task_id,
             "workspace_trusted": workspace_trusted,
             "provider_consented": provider_consented,
-            "resource_budget": resource_budget,
+            "resource_budget": resource_budget or self.config.tool_resource_budget,
             "policy_context": policy_context,
         }
         for name, value in optional_arguments.items():

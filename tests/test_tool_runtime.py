@@ -139,6 +139,37 @@ def test_runtime_uses_shared_persisted_cancellation_token(tmp_path: Path) -> Non
     assert (tmp_path / "blocked.py").exists() is False
 
 
+def test_runtime_uses_stable_authorization_revision_before_cancellation(
+    tmp_path: Path,
+) -> None:
+    runtime, _ = _runtime(tmp_path)
+    token = runtime.cancellations.get("run-1")
+    with token.operation(
+        "model-call",
+        source="test-runtime",
+        interruptible=True,
+    ):
+        pass
+    assert token.snapshot().revision > 0
+    call = _call(
+        runtime,
+        tmp_path,
+        "filesystem.create",
+        {"path": "stable.py", "content": "stable = True\n"},
+    )
+
+    invocation = runtime.invocation_from_call(
+        call,
+        run_id="run-1",
+        task_id="task-1",
+        caller_role="coder",
+        workspace_trusted=True,
+        provider_consented=True,
+    )
+
+    assert invocation.cancellation_revision == 0
+
+
 def test_runtime_rejects_invocation_context_outside_managed_roots(
     tmp_path: Path,
 ) -> None:

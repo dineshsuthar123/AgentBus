@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from agentbus.tools.protocol import ToolResourceBudget
+
 CONTROL_PROTOCOL_VERSION = "1.0"
 API_PREFIX = "/api/v1"
 
@@ -71,6 +73,21 @@ class DeterministicProviderOptions(ProtocolModel):
     profile: Literal[
         "python-calculator",
         "cancellation-two-task",
+        "tool-safe-read",
+        "tool-atomic-write",
+        "tool-source-patch",
+        "tool-pytest",
+        "tool-git-diff",
+        "tool-git-commit",
+        "tool-delete-approval",
+        "tool-deny-outside-read",
+        "tool-deny-credential-read",
+        "tool-process-timeout",
+        "tool-process-cancel",
+        "tool-excessive-output",
+        "tool-budget-exhaustion",
+        "tool-local-mcp",
+        "tool-loop-limit",
     ] = "python-calculator"
     latency_seconds: float = Field(default=0.0, ge=0, le=60)
     latency_roles: list[
@@ -109,6 +126,7 @@ class RunCreateRequest(ProtocolModel):
     deterministic: DeterministicProviderOptions = Field(
         default_factory=DeterministicProviderOptions
     )
+    tool_budget: ToolResourceBudget = Field(default_factory=ToolResourceBudget)
     fallback_enabled: bool = False
     live_provider_consent: bool = False
     create_pr: bool = False

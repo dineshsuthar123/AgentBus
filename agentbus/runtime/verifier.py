@@ -7,7 +7,11 @@ from agentbus.config import AgentBusConfig
 from agentbus.execution.cancellation import CancellationToken
 from agentbus.repo.test_detection import TestCommandDetector
 from agentbus.tools.command import CommandTools
-from agentbus.tools.protocol import ToolCapabilityName, ToolInvocationStatus
+from agentbus.tools.protocol import (
+    ToolCapabilityName,
+    ToolInvocationStatus,
+    ToolResourceBudget,
+)
 from agentbus.tools.runtime import ManagedToolRuntime
 
 
@@ -42,6 +46,7 @@ class Verifier:
         invocation_key: str = "verification",
         workspace_trusted: bool = True,
         provider_consented: bool = True,
+        resource_budget: ToolResourceBudget | None = None,
     ) -> dict[str, Any]:
         self._checkpoint("before-detection")
         detection = None
@@ -102,6 +107,9 @@ class Verifier:
                 invocation_key=invocation_key,
                 workspace_trusted=workspace_trusted,
                 provider_consented=provider_consented,
+                resource_budget=(
+                    resource_budget or self.config.tool_resource_budget
+                ),
                 python_verification=python_verification,
                 pytest_cache_disabled=pytest_cache_disabled,
             )
@@ -145,6 +153,7 @@ class Verifier:
         invocation_key: str,
         workspace_trusted: bool,
         provider_consented: bool,
+        resource_budget: ToolResourceBudget,
         python_verification: bool,
         pytest_cache_disabled: bool,
     ) -> dict[str, Any]:
@@ -167,6 +176,7 @@ class Verifier:
             provider_consented=provider_consented,
             timeout_seconds=float(self.config.command_timeout_seconds),
             idempotency_key=idempotency_key,
+            resource_budget=resource_budget,
         )
         digest = hashlib.sha256(
             f"{run_id}\0{task_id}\0{idempotency_key}".encode("utf-8")
@@ -178,6 +188,7 @@ class Verifier:
             caller_role="verifier",
             workspace_trusted=workspace_trusted,
             provider_consented=provider_consented,
+            resource_budget=resource_budget,
             invocation_id=f"tool-{digest}",
         )
         result = response.result

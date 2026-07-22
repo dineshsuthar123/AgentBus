@@ -352,6 +352,11 @@ class MultiAgentOrchestrator:
                 "initial_head": initial_head,
             },
             "model_routing": self.config.safe_model_summary(),
+            "tool_runtime": {
+                "resource_budget": self.config.tool_resource_budget.model_dump(
+                    mode="json"
+                ),
+            },
             "planner_model_result": _last_model_result(self.planner),
             "workspace_repository": {
                 "workspace": str(self.workspace),

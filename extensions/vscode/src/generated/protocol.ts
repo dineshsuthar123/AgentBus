@@ -105,7 +105,7 @@ export interface DaemonRegistryEntry {
 }
 
 export interface DeterministicProviderOptions {
-  "profile"?: "python-calculator" | "cancellation-two-task";
+  "profile"?: "python-calculator" | "cancellation-two-task" | "tool-safe-read" | "tool-atomic-write" | "tool-source-patch" | "tool-pytest" | "tool-git-diff" | "tool-git-commit" | "tool-delete-approval" | "tool-deny-outside-read" | "tool-deny-credential-read" | "tool-process-timeout" | "tool-process-cancel" | "tool-excessive-output" | "tool-budget-exhaustion" | "tool-local-mcp" | "tool-loop-limit";
   "latency_seconds"?: number;
   "latency_roles"?: Array<"planner" | "coder" | "reviewer" | "summarizer">;
   "failure_kind"?: "output_error" | "timeout" | "service_unavailable";
@@ -242,6 +242,7 @@ export interface RunCreateRequest {
   "max_workers"?: number;
   "role_models"?: RoleModelOverrides;
   "deterministic"?: DeterministicProviderOptions;
+  "tool_budget"?: ToolResourceBudget;
   "fallback_enabled"?: boolean;
   "live_provider_consent"?: boolean;
   "create_pr"?: boolean;
@@ -319,6 +320,23 @@ export interface TaskSummary {
   "reviewer_status"?: string | null;
   "created_at": string;
   "updated_at": string;
+}
+
+export interface ToolResourceBudget {
+  "wall_clock_seconds"?: number;
+  "stdout_bytes"?: number;
+  "stderr_bytes"?: number;
+  "combined_output_bytes"?: number;
+  "artifact_bytes"?: number;
+  "child_processes"?: number;
+  "concurrent_processes"?: number;
+  "invocations_per_task"?: number;
+  "invocations_per_run"?: number;
+  "file_mutations"?: number;
+  "total_written_bytes"?: number;
+  "maximum_file_bytes"?: number;
+  "memory_bytes"?: number | null;
+  "cpu_seconds"?: number | null;
 }
 
 export interface UsageResponse {

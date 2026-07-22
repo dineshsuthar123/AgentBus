@@ -1,6 +1,8 @@
 from agentbus.agents.coder import CoderAgent
 from agentbus.agents.planner import PlannerAgent
 from agentbus.agents.reviewer import ReviewerAgent
+from agentbus.config import AgentBusConfig
+from agentbus.tools.protocol import ToolResourceBudget
 
 
 class FakeModel:
@@ -97,6 +99,10 @@ def test_coder_preserves_legacy_loop_factory_that_only_accepts_config():
 def test_coder_propagates_managed_runtime_identity_to_modern_loop():
     seen = {}
     runtime = object()
+    budget = ToolResourceBudget(
+        invocations_per_task=2,
+        invocations_per_run=3,
+    )
 
     class ManagedLoop:
         def __init__(
@@ -109,6 +115,7 @@ def test_coder_propagates_managed_runtime_identity_to_modern_loop():
             task_id,
             workspace_trusted,
             provider_consented,
+            resource_budget,
             policy_context,
         ):
             seen.update(locals())
@@ -116,7 +123,11 @@ def test_coder_propagates_managed_runtime_identity_to_modern_loop():
         def run(self, task):
             return "managed loop complete"
 
-    coder = CoderAgent(model=FakeModel({}), loop_factory=ManagedLoop)
+    coder = CoderAgent(
+        config=AgentBusConfig(tool_resource_budget=budget),
+        model=FakeModel({}),
+        loop_factory=ManagedLoop,
+    )
 
     result = coder.execute(
         "Complete task",
@@ -133,4 +144,5 @@ def test_coder_propagates_managed_runtime_identity_to_modern_loop():
     assert seen["tool_runtime"] is runtime
     assert seen["run_id"] == "run-1"
     assert seen["task_id"] == "task-1"
+    assert seen["resource_budget"] is budget
     assert seen["policy_context"] == {"attempt_number": 1}

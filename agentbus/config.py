@@ -4,9 +4,19 @@ import math
 import os
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from agentbus.security.redaction import safe_endpoint_host
+
+if TYPE_CHECKING:
+    from agentbus.tools.protocol import ToolResourceBudget
+
+
+def _default_tool_resource_budget() -> ToolResourceBudget:
+    # Tool package initialization eventually imports config through model routing.
+    from agentbus.tools.protocol import ToolResourceBudget
+
+    return ToolResourceBudget()
 
 
 SUPPORTED_PROVIDERS = ("ollama", "azure", "deterministic")
@@ -14,6 +24,21 @@ SUPPORTED_AZURE_API_MODES = ("responses", "chat_completions")
 SUPPORTED_DETERMINISTIC_PROFILES = (
     "python-calculator",
     "cancellation-two-task",
+    "tool-safe-read",
+    "tool-atomic-write",
+    "tool-source-patch",
+    "tool-pytest",
+    "tool-git-diff",
+    "tool-git-commit",
+    "tool-delete-approval",
+    "tool-deny-outside-read",
+    "tool-deny-credential-read",
+    "tool-process-timeout",
+    "tool-process-cancel",
+    "tool-excessive-output",
+    "tool-budget-exhaustion",
+    "tool-local-mcp",
+    "tool-loop-limit",
 )
 SUPPORTED_DETERMINISTIC_FAILURES = (
     "output_error",
@@ -33,6 +58,9 @@ class AgentBusConfig:
     state_db: str = "state.db"
     max_steps: int = 12
     command_timeout_seconds: int = 90
+    tool_resource_budget: ToolResourceBudget = field(
+        default_factory=_default_tool_resource_budget
+    )
     max_history_chars: int = 25_000
     parallel_execution: bool = False
     max_workers: int = 1
@@ -230,6 +258,7 @@ class AgentBusConfig:
         deterministic_failure_kind: str | None = None,
         deterministic_failure_calls: tuple[int, ...] | None = None,
         deterministic_failure_roles: tuple[str, ...] | None = None,
+        tool_resource_budget: ToolResourceBudget | None = None,
         model_timeout_seconds: float | None = None,
         parallel_execution: bool | None = None,
         max_workers: int | None = None,
@@ -283,6 +312,8 @@ class AgentBusConfig:
             updates["deterministic_failure_roles"] = tuple(
                 role.lower() for role in deterministic_failure_roles
             )
+        if tool_resource_budget is not None:
+            updates["tool_resource_budget"] = tool_resource_budget
         if model_timeout_seconds is not None:
             updates["model_timeout_seconds"] = model_timeout_seconds
         if parallel_execution is not None:

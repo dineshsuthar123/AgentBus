@@ -11,6 +11,7 @@ from agentbus.execution.models import FailureCategory
 from agentbus.execution.state_store import StateStore, StateStoreError
 from agentbus.models.errors import ModelAuthenticationError
 from agentbus.runtime.orchestrator import MultiAgentOrchestrator
+from agentbus.tools.protocol import ToolResourceBudget
 
 
 PLAN = {
@@ -216,11 +217,30 @@ def test_durable_mode_persists_validated_planner_graph_before_execution(tmp_path
     assert all(task.status == TaskStatus.PENDING for task in snapshot.tasks)
     assert coder.calls == []
     assert "Repo Context Pack" in planner.context_pack
+    assert snapshot.run.metadata["tool_runtime"]["resource_budget"] == (
+        runner.config.tool_resource_budget.model_dump(mode="json")
+    )
 
     report = runner.run_durable(run_id)
 
     assert report.status == RunStatus.SUCCEEDED
     assert [call["task_id"] for call in coder.calls] == ["step-1", "step-2"]
+
+
+def test_durable_run_persists_custom_tool_budget_for_resume(tmp_path):
+    budget = ToolResourceBudget(
+        invocations_per_task=2,
+        invocations_per_run=3,
+    )
+    settings = config(tmp_path).with_overrides(tool_resource_budget=budget)
+    runner, store = orchestrator(tmp_path, config=settings)
+
+    run_id = runner.create_durable_run("Create calculator")
+
+    persisted = store.get_run(run_id)
+    assert persisted.metadata["tool_runtime"]["resource_budget"] == (
+        budget.model_dump(mode="json")
+    )
 
 
 def test_durable_verifier_failure_prevents_commit(tmp_path):

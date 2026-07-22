@@ -44,6 +44,7 @@ from agentbus.memory.run_log import RunLogger
 from agentbus.models.errors import ModelCancellationError
 from agentbus.runtime.loop import AgentLoop, ManagedToolApprovalRequired
 from agentbus.runtime.orchestrator import MultiAgentOrchestrator
+from agentbus.tools.protocol import ToolResourceBudget
 from agentbus.tools.runtime import build_managed_tool_runtime
 
 
@@ -123,6 +124,7 @@ class AgentBusRunBackend:
                 if isinstance(parallel, dict)
                 else True
             ),
+            tool_resource_budget=self._persisted_tool_budget(run.metadata),
         )
         MultiAgentOrchestrator(
             config=config,
@@ -181,10 +183,20 @@ class AgentBusRunBackend:
             deterministic_failure_kind=request.deterministic.failure_kind,
             deterministic_failure_calls=tuple(request.deterministic.failure_calls),
             deterministic_failure_roles=tuple(request.deterministic.failure_roles),
+            tool_resource_budget=request.tool_budget,
             parallel_execution=request.parallel,
             max_workers=request.max_workers,
             keep_worktrees=request.keep_worktrees,
         )
+
+    def _persisted_tool_budget(self, metadata: dict) -> ToolResourceBudget:
+        tool_runtime = metadata.get("tool_runtime", {})
+        if not isinstance(tool_runtime, dict):
+            return self.base_config.tool_resource_budget
+        resource_budget = tool_runtime.get("resource_budget")
+        if not isinstance(resource_budget, dict):
+            return self.base_config.tool_resource_budget
+        return ToolResourceBudget.model_validate(resource_budget)
 
     def _orchestrator(
         self,
@@ -228,6 +240,11 @@ class AgentBusRunBackend:
                     exclude={"metadata"},
                 ),
                 "model_routing": config.safe_model_summary(),
+                "tool_runtime": {
+                    "resource_budget": config.tool_resource_budget.model_dump(
+                        mode="json"
+                    ),
+                },
             },
         )
         self.store.create_run_with_tasks(run, [task])
