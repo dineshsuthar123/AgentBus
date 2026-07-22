@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import time
 from contextlib import asynccontextmanager
@@ -10,7 +11,7 @@ from typing import Any
 try:
     from fastapi import FastAPI, Query, Request
     from fastapi.exceptions import RequestValidationError
-    from fastapi.responses import JSONResponse, StreamingResponse
+    from fastapi.responses import JSONResponse, Response, StreamingResponse
 except ImportError as exc:  # pragma: no cover - exercised by the CLI dependency test
     raise RuntimeError(
         'The control plane requires optional dependencies. Install "agentbus[ide]".'
@@ -65,7 +66,9 @@ from agentbus.control.supervisor import BackgroundRunSupervisor
 from agentbus.execution.models import ApprovalOutcome
 from agentbus.execution.state_store import StateStoreError
 from agentbus.git.repository import GitRepositoryError
+from agentbus.mcp.server import AgentBusMcpServer
 from agentbus.security.redaction import sanitize_json
+from agentbus.tools.descriptors import builtin_descriptors
 
 MAX_REQUEST_BYTES = 1_000_000
 
@@ -89,6 +92,14 @@ def create_app(
 ):
     authenticator = BearerAuthenticator(token)
     event_reader = ControlEventReader(query_service.store)
+    mcp_server = AgentBusMcpServer(
+        query_service,
+        supervisor,
+        descriptor_provider=lambda: builtin_descriptors(
+            workspace=query_service.config.workspace_dir,
+            process_executables=("git", "pytest", "python"),
+        ),
+    )
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -115,6 +126,7 @@ def create_app(
     app.state.control_context = context
     app.state.query_service = query_service
     app.state.supervisor = supervisor
+    app.state.mcp_server = mcp_server
     app.state.last_activity = time.monotonic()
 
     @app.middleware("http")
@@ -217,8 +229,40 @@ def create_app(
                 "sse-replay",
                 "approvals",
                 "repository-diffs",
+                "mcp",
             ],
         )
+
+    @app.post("/mcp")
+    async def mcp(request: Request):
+        content_type = request.headers.get("content-type", "").split(";", 1)[0]
+        if content_type.lower() != "application/json":
+            return _error_json(
+                JSONResponse,
+                code="invalid_content_type",
+                message="MCP requests require application/json.",
+                status_code=415,
+            )
+        try:
+            payload = json.loads(
+                await request.body(),
+                parse_constant=lambda _value: _reject_nonfinite_json(),
+            )
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+            response = {
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {"code": -32700, "message": "Parse error"},
+            }
+            return JSONResponse(content=response)
+        response = mcp_server.handle(
+            payload,
+            protocol_version=request.headers.get("MCP-Protocol-Version"),
+            require_protocol_header=True,
+        )
+        if response is None:
+            return Response(status_code=202)
+        return JSONResponse(content=response)
 
     @app.post(
         f"{API_PREFIX}/workspaces/validate",
@@ -447,3 +491,7 @@ def _error_json(
         status_code=status_code,
         content=payload.model_dump(mode="json"),
     )
+
+
+def _reject_nonfinite_json() -> None:
+    raise ValueError("Non-finite JSON values are not supported.")
