@@ -1,4 +1,6 @@
+import os
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -37,12 +39,23 @@ class FakeCompleted:
 def test_git_repository_uses_safe_command_construction(monkeypatch, tmp_path):
     commands = []
 
-    def fake_run(command, cwd, capture_output, text, timeout, shell):
+    monkeypatch.setenv("AGENTBUS_API_KEY", "must-not-reach-git")
+    monkeypatch.setenv("GIT_DIR", str(tmp_path / "attacker-controlled"))
+
+    def fake_run(command, cwd, capture_output, text, timeout, shell, env):
         commands.append(command)
         assert cwd == tmp_path
         assert capture_output is True
         assert text is True
         assert shell is False
+        assert Path(command[0]).is_absolute()
+        assert "--no-pager" in command
+        assert "--literal-pathspecs" in command
+        assert f"core.hooksPath={os.devnull}" in command
+        assert "--show-toplevel" in command
+        assert "AGENTBUS_API_KEY" not in env
+        assert "GIT_DIR" not in env
+        assert env["GIT_TERMINAL_PROMPT"] == "0"
         return FakeCompleted(stdout=f"{tmp_path}\n")
 
     monkeypatch.setattr("agentbus.git.repository.subprocess.run", fake_run)
@@ -50,7 +63,27 @@ def test_git_repository_uses_safe_command_construction(monkeypatch, tmp_path):
     repo = GitRepository(str(tmp_path))
 
     assert repo.is_git_repo() is True
-    assert commands == [["git", "rev-parse", "--show-toplevel"]]
+    assert len(commands) == 1
+
+
+def test_git_repository_bounds_and_redacts_process_diagnostics(monkeypatch, tmp_path):
+    def oversized_run(*args, **kwargs):
+        return FakeCompleted(stdout="x" * 101)
+
+    monkeypatch.setattr("agentbus.git.repository.subprocess.run", oversized_run)
+    repository = GitRepository(str(tmp_path), maximum_command_output_chars=100)
+
+    with pytest.raises(RuntimeError, match="bounded output"):
+        repository._run_unvalidated(["git", "status"])
+
+    def failed_run(*args, **kwargs):
+        return FakeCompleted(stderr="API_KEY=must-not-leak", returncode=1)
+
+    monkeypatch.setattr("agentbus.git.repository.subprocess.run", failed_run)
+    with pytest.raises(RuntimeError) as captured:
+        repository._run_unvalidated(["git", "status"])
+    assert "must-not-leak" not in str(captured.value)
+    assert "[REDACTED]" in str(captured.value)
 
 
 def test_git_repository_parses_changed_files(monkeypatch, tmp_path):

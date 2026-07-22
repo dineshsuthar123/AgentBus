@@ -12,6 +12,18 @@ from agentbus.repo.artifact_policy import (
     ArtifactPolicyError,
     GeneratedArtifactPolicy,
 )
+from agentbus.sandbox.platform import ExecutableCatalog
+from agentbus.security.redaction import redact_text, safe_child_environment
+
+
+_GIT_IDENTITY_ENVIRONMENT = frozenset(
+    {
+        "GIT_AUTHOR_EMAIL",
+        "GIT_AUTHOR_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "GIT_COMMITTER_NAME",
+    }
+)
 
 
 class GitRepositoryError(RuntimeError):
@@ -60,10 +72,18 @@ class GitRepository:
         workspace: str = "workspace",
         timeout_seconds: int = 60,
         artifact_policy: GeneratedArtifactPolicy | None = None,
+        executable_catalog: ExecutableCatalog | None = None,
+        maximum_command_output_chars: int = 4_194_304,
     ):
+        if maximum_command_output_chars < 1:
+            raise ValueError("maximum_command_output_chars must be positive")
         self.workspace = Path(workspace).expanduser().resolve()
         self.timeout_seconds = timeout_seconds
         self.artifact_policy = artifact_policy or GeneratedArtifactPolicy()
+        self.executable_catalog = executable_catalog or ExecutableCatalog.standard(
+            ("git",)
+        )
+        self.maximum_command_output_chars = maximum_command_output_chars
         self._validated_top_level: Path | None = None
 
     def discover_top_level(self) -> Path:
@@ -139,9 +159,20 @@ class GitRepository:
         status = self._run(
             ["git", "status", "--short", "--untracked-files=all", "--", "."]
         )
-        diff_stat = self._run(["git", "diff", "--stat", "--", "."])
+        diff_stat = self._run(
+            ["git", "diff", "--stat", "--no-ext-diff", "--no-textconv", "--", "."]
+        )
         staged_stat = self._run(
-            ["git", "diff", "--cached", "--stat", "--", "."]
+            [
+                "git",
+                "diff",
+                "--cached",
+                "--stat",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--",
+                ".",
+            ]
         )
         summary = "\n".join(part for part in [status, staged_stat, diff_stat] if part)
         return summary or "No changes."
@@ -157,9 +188,28 @@ class GitRepository:
             return "No diff."
         pathspec = selected or ["."]
         staged = self._run(
-            ["git", "diff", "--cached", "--no-color", "--", *pathspec]
+            [
+                "git",
+                "diff",
+                "--cached",
+                "--no-color",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--",
+                *pathspec,
+            ]
         )
-        unstaged = self._run(["git", "diff", "--no-color", "--", *pathspec])
+        unstaged = self._run(
+            [
+                "git",
+                "diff",
+                "--no-color",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--",
+                *pathspec,
+            ]
+        )
         parts = [part for part in [staged, unstaged] if part]
 
         changed = set(selected or self.changed_files())
@@ -216,7 +266,16 @@ class GitRepository:
         if not review_files:
             return "No diff."
         diff = self._run(
-            ["git", "diff", "--no-color", f"{base_commit}..{head}", "--", *review_files]
+            [
+                "git",
+                "diff",
+                "--no-color",
+                "--no-ext-diff",
+                "--no-textconv",
+                f"{base_commit}..{head}",
+                "--",
+                *review_files,
+            ]
         )
         if len(diff) > max_chars:
             return diff[:max_chars] + "\n\n[diff truncated]"
@@ -316,25 +375,11 @@ class GitRepository:
             )
         pathspec = selected
         self._run(["git", "add", "--all", "--", *pathspec])
-        self.validate_workspace()
-        try:
-            staged = subprocess.run(
-                ["git", "diff", "--cached", "--quiet", "--", *pathspec],
-                cwd=self.workspace,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout_seconds,
-                shell=False,
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            raise GitRepositoryError(f"Unable to inspect staged changes: {exc}") from exc
-
-        if staged.returncode == 0:
+        staged_output = self._run(
+            ["git", "diff", "--cached", "--name-only", "-z", "--", *pathspec]
+        )
+        if not any(path for path in staged_output.split("\0") if path):
             raise GitRepositoryError("No staged changes to commit.")
-        if staged.returncode != 1:
-            raise GitRepositoryError(
-                f"Unable to inspect staged changes: {staged.stderr.strip()}"
-            )
 
         commit_command = ["git", "commit", "-m", message, "--only", "--", *pathspec]
         self._run(commit_command)
@@ -357,24 +402,52 @@ class GitRepository:
         return self._run_unvalidated(command)
 
     def _run_unvalidated(self, command: list[str]) -> str:
+        if not command or command[0] != "git" or len(command) < 2:
+            raise GitRepositoryError("Only explicit Git argument arrays are supported.")
+        operation = command[1]
+        identity = self.executable_catalog.resolve("git")
+        safe_command = identity.command(
+            [
+                "--no-pager",
+                "--literal-pathspecs",
+                "-c",
+                f"core.hooksPath={os.devnull}",
+                "-c",
+                "core.fsmonitor=false",
+                "-c",
+                "commit.gpgSign=false",
+                *command[1:],
+            ]
+        )
         try:
             result = subprocess.run(
-                command,
+                safe_command,
                 cwd=self.workspace,
                 capture_output=True,
                 text=True,
                 timeout=self.timeout_seconds,
                 shell=False,
+                env=_git_environment(),
             )
-        except (OSError, subprocess.TimeoutExpired) as exc:
+        except subprocess.TimeoutExpired as exc:
             raise GitRepositoryError(
-                f"Git command could not run ({' '.join(command)}): {exc}"
+                f"Git operation '{operation}' timed out after the configured limit."
+            ) from exc
+        except OSError as exc:
+            raise GitRepositoryError(
+                f"Git operation '{operation}' could not run: "
+                f"{redact_text(type(exc).__name__, max_chars=128)}"
             ) from exc
 
         if result.returncode != 0:
             error = result.stderr.strip() or result.stdout.strip()
             raise GitRepositoryError(
-                f"Git command failed ({' '.join(command)}): {error}"
+                f"Git operation '{operation}' failed: "
+                f"{redact_text(error, max_chars=2_048)}"
+            )
+        if len(result.stdout) > self.maximum_command_output_chars:
+            raise GitRepositoryError(
+                f"Git operation '{operation}' exceeded the bounded output limit."
             )
         return result.stdout.rstrip("\r\n")
 
@@ -477,3 +550,22 @@ class GitRepository:
             raise GitRepositoryError("Branch name has an invalid ending.")
         if not re.fullmatch(r"[A-Za-z0-9._/-]+", branch_name):
             raise GitRepositoryError("Branch name contains unsafe characters.")
+
+
+def _git_environment() -> dict[str, str]:
+    environment = safe_child_environment()
+    for name in tuple(environment):
+        if (
+            name.upper().startswith("GIT_")
+            and name.upper() not in _GIT_IDENTITY_ENVIRONMENT
+        ):
+            environment.pop(name, None)
+    environment.update(
+        {
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_PAGER": "",
+            "GIT_TERMINAL_PROMPT": "0",
+        }
+    )
+    return environment
