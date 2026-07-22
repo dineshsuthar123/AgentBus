@@ -112,7 +112,19 @@ def test_changes_and_diff_are_scoped_to_selected_repository(tmp_path: Path) -> N
     assert "after" in diff.diff
 
 
-@pytest.mark.parametrize("path", ["../outside.txt", "/absolute.txt", "C:/outside.txt"])
+@pytest.mark.parametrize(
+    "path",
+    [
+        "../outside.txt",
+        "/absolute.txt",
+        "C:/outside.txt",
+        "nested/file.txt:stream",
+        "nested/./file.txt",
+        "nested/file.txt.",
+        "CON",
+        "nested/AUX.txt",
+    ],
+)
 def test_file_api_rejects_traversal_and_absolute_paths(
     tmp_path: Path,
     path: str,
@@ -124,7 +136,19 @@ def test_file_api_rejects_traversal_and_absolute_paths(
         service.repository.file_content(run, path, revision="after")
 
 
-@pytest.mark.parametrize("name", [".env", "private.pem", ".agentbus/state.db"])
+@pytest.mark.parametrize(
+    "name",
+    [
+        ".env",
+        "private.pem",
+        ".agentbus/state.db",
+        ".aws/credentials",
+        ".azure/accessTokens.json",
+        ".ssh/config",
+        "nested/application_default_credentials.json",
+        "secrets.json",
+    ],
+)
 def test_file_api_rejects_secret_and_control_metadata(
     tmp_path: Path,
     name: str,

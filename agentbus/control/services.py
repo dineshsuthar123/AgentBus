@@ -97,6 +97,10 @@ from agentbus.security.redaction import (
 )
 from agentbus.tools.capabilities import derive_required_capabilities
 from agentbus.tools.descriptors import descriptor_map
+from agentbus.tools.filesystem_security import (
+    FileSystemSecurityError,
+    normalize_relative_tool_path,
+)
 from agentbus.tools.protocol import (
     ToolCapabilityEscalationError,
     ToolDescriptor,
@@ -118,13 +122,24 @@ _SECRET_NAMES = {
     ".env",
     ".npmrc",
     ".pypirc",
+    "application_default_credentials.json",
     "credentials",
     "credentials.json",
     "id_rsa",
     "id_ed25519",
+    "secrets.json",
 }
 _SECRET_SUFFIXES = {".key", ".pem", ".p12", ".pfx", ".jks", ".keystore"}
-_FORBIDDEN_PARTS = {".git", ".agentbus"}
+_FORBIDDEN_PARTS = {
+    ".agentbus",
+    ".aws",
+    ".azure",
+    ".codex",
+    ".docker",
+    ".git",
+    ".kube",
+    ".ssh",
+}
 _COMMIT_SHA = re.compile(r"^[0-9a-fA-F]{40,64}$")
 _CONTROL_PROCESS_EXECUTABLES = ("git", "pytest", "python")
 _MCP_DIAGNOSTIC_TIMEOUT_SECONDS = 10.0
@@ -432,17 +447,19 @@ class RepositoryReviewService:
 
     @staticmethod
     def _safe_relative(root: Path, value: str) -> str:
-        normalized = value.replace("\\", "/")
+        try:
+            normalized = normalize_relative_tool_path(value)
+        except FileSystemSecurityError as exc:
+            raise ControlPlaneForbiddenError(
+                "The requested path is not safe."
+            ) from exc
         relative = PurePosixPath(normalized)
-        if (
-            not normalized
-            or relative.is_absolute()
-            or ".." in relative.parts
-            or "." == normalized
-            or ":" in relative.parts[0]
-        ):
-            raise ControlPlaneForbiddenError("The requested path is not safe.")
-        candidate = (root / Path(*relative.parts)).resolve()
+        try:
+            candidate = (root / Path(*relative.parts)).resolve()
+        except (OSError, RuntimeError) as exc:
+            raise ControlPlaneForbiddenError(
+                "The requested path cannot be resolved safely."
+            ) from exc
         try:
             candidate.relative_to(root)
         except ValueError as exc:
