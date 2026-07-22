@@ -41,6 +41,18 @@ export function canCancelTool(status: string): boolean {
   return toolGroup(status) === "active" || status === "awaiting_approval";
 }
 
+export function toolCancellationDetail(
+  invocation: ToolInvocationSummary
+): string {
+  const runId = singleLine(invocation.run_id);
+  const toolName = singleLine(invocation.tool_name);
+  return [
+    `Tool cancellation is run-scoped in AgentBus.`,
+    `Cancelling ${toolName} requests cancellation for owning run ${runId}.`,
+    `Scheduling will stop and other active managed work in that run may also be terminated.`
+  ].join(" ");
+}
+
 export function toolVersion(invocation: ToolInvocationSummary): string {
   const version = invocation.tool_version;
   return `${version.major}.${version.minor ?? 0}.${version.patch ?? 0}`;
@@ -214,4 +226,8 @@ function formatSeconds(value: number): string {
   if (value < 0.001) return "<1ms";
   if (value < 1) return `${Math.round(value * 1000)}ms`;
   return `${value.toFixed(value < 10 ? 2 : 1)}s`;
+}
+
+function singleLine(value: string): string {
+  return value.replace(/[\r\n\0]/g, " ").slice(0, 300);
 }

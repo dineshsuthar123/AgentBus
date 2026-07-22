@@ -68,6 +68,10 @@
         "title": "AgentBus: Show Tool Invocation"
       },
       {
+        "command": "agentbus.cancelToolInvocation",
+        "title": "AgentBus: Cancel Tool Invocation"
+      },
+      {
         "command": "agentbus.showToolPolicy",
         "title": "AgentBus: Show Tool Policy"
       },
@@ -178,6 +182,11 @@
           "command": "agentbus.showToolInvocation",
           "when": "viewItem == agentbusToolCancellable || viewItem == agentbusToolTerminal",
           "group": "inline"
+        },
+        {
+          "command": "agentbus.cancelToolInvocation",
+          "when": "viewItem == agentbusToolCancellable",
+          "group": "inline@2"
         }
       ]
     },

@@ -23,6 +23,10 @@ import {
   cancellationEventMessage,
   cancellationStatus
 } from "./cancellation";
+import {
+  canCancelTool,
+  toolCancellationDetail
+} from "./toolPresentation";
 
 export interface Refreshers {
   refresh(): void;
@@ -65,6 +69,9 @@ export class CommandController implements vscode.Disposable {
     command("agentbus.openChanges", () => this.openChanges());
     command("agentbus.showToolInvocation", (item) =>
       this.showToolInvocation(item)
+    );
+    command("agentbus.cancelToolInvocation", (item) =>
+      this.cancelToolInvocation(item)
     );
     command("agentbus.showToolPolicy", () => this.showToolPolicy());
     command("agentbus.refreshToolRegistry", () => this.refreshToolRegistry());
@@ -336,6 +343,73 @@ export class CommandController implements vscode.Disposable {
       toolInvocationUri(invocation.run_id, invocation.invocation_id)
     );
     await vscode.window.showTextDocument(document, { preview: true });
+  }
+
+  private async cancelToolInvocation(raw?: unknown): Promise<void> {
+    const item = raw as AgentBusItem | undefined;
+    let invocation = item?.value as ToolInvocationSummary | undefined;
+    if (!invocation) {
+      const run = await this.chooseRun();
+      if (!run) return;
+      const response = await (await this.client()).toolInvocations(run.run_id);
+      invocation = (await vscode.window.showQuickPick(
+        response.invocations
+          .filter((value) => canCancelTool(value.status))
+          .map((value) => ({
+            label: value.tool_name,
+            description: `${value.status} | ${value.task_id}`,
+            value
+          }))
+      ))?.value;
+    }
+    if (!invocation) return;
+    const run = this.store.run(invocation.run_id);
+    if (
+      !canCancelTool(invocation.status) ||
+      run?.cancellation?.requested ||
+      this.cancellationsInFlight.has(invocation.run_id)
+    ) {
+      void vscode.window.showInformationMessage(
+        "The owning run is already cancelling or this tool is terminal."
+      );
+      return;
+    }
+    const confirmed = await vscode.window.showWarningMessage(
+      `Cancel ${invocation.tool_name}?`,
+      { modal: true, detail: toolCancellationDetail(invocation) },
+      "Cancel Owning Run"
+    );
+    if (confirmed !== "Cancel Owning Run") return;
+
+    this.cancellationsInFlight.add(invocation.run_id);
+    this.output.appendLine(
+      `[${invocation.run_id}] Cancelling through tool ${invocation.invocation_id}...`
+    );
+    this.status.text = "$(sync~spin) AgentBus cancelling";
+    try {
+      const response = await (await this.client()).cancelToolInvocation(
+        invocation.run_id,
+        invocation.invocation_id,
+        `Cancelled tool ${invocation.invocation_id} by local IDE user`
+      );
+      if (run) {
+        this.store.updateCancellation(
+          invocation.run_id,
+          run.status,
+          response.cancellation
+        );
+      }
+      for (const detail of cancellationDetails(
+        response.cancellation,
+        run?.status
+      )) {
+        this.output.appendLine(`[${invocation.run_id}] ${detail}`);
+      }
+      this.refreshViews();
+      await this.refresh();
+    } finally {
+      this.cancellationsInFlight.delete(invocation.run_id);
+    }
   }
 
   private async showToolPolicy(): Promise<void> {

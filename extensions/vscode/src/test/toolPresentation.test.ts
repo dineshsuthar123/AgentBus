@@ -10,6 +10,7 @@ import {
   formatToolPolicy,
   isSafeControlId,
   toolDuration,
+  toolCancellationDetail,
   toolGroup,
   toolResourceSummary,
   toolVersion
@@ -80,6 +81,14 @@ test("tool presentation reports capabilities duration resources and version", ()
   assert.equal(canCancelTool("running"), true);
   assert.equal(canCancelTool("awaiting_approval"), true);
   assert.equal(canCancelTool("succeeded"), false);
+});
+
+test("tool cancellation warning discloses owning-run scope", () => {
+  const detail = toolCancellationDetail(invocation("running"));
+
+  assert.match(detail, /run-scoped/);
+  assert.match(detail, /owning run run-1/);
+  assert.match(detail, /other active managed work/);
 });
 
 test("tool tooltip values escape Markdown control characters", () => {
