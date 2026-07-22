@@ -313,7 +313,11 @@ class GitRepository:
         diff = "\n".join(part for part in parts if part)
         if not diff:
             return "No diff."
-        return _truncate_with_marker(diff, max_chars, "diff truncated")
+        return _truncate_with_marker(
+            _redact_git_output(diff),
+            max_chars,
+            "diff truncated",
+        )
 
     def raw_diff(
         self,
@@ -381,7 +385,7 @@ class GitRepository:
             ]
         )
         return _truncate_with_marker(
-            diff or "No diff.",
+            _redact_git_output(diff or "No diff."),
             max_chars,
             "diff truncated",
         )
@@ -640,7 +644,8 @@ class GitRepository:
             with path.open("rb") as handle:
                 data = handle.read(30_001)
         except OSError as exc:
-            return f"diff unavailable for {relative}: {exc}"
+            diagnostic = redact_text(str(exc), max_chars=2_048) or "unavailable"
+            return f"diff unavailable for {relative}: {diagnostic}"
         truncated = len(data) > 30_000
         data = data[:30_000]
         if b"\0" in data:
@@ -745,10 +750,11 @@ class GitRepository:
             raise ValueError(
                 "max_chars must be positive and within the command output limit"
             )
-        if len(output) <= max_chars:
-            return output
+        safe_output = _redact_git_output(output)
+        if len(safe_output) <= max_chars:
+            return safe_output
         return _truncate_with_marker(
-            output,
+            safe_output,
             max_chars,
             f"{operation} output truncated",
         )
@@ -790,3 +796,7 @@ def _truncate_with_marker(value: str, maximum: int, marker: str) -> str:
     if len(suffix) >= maximum:
         return suffix[:maximum]
     return value[: maximum - len(suffix)] + suffix
+
+
+def _redact_git_output(value: str) -> str:
+    return redact_text(value, max_chars=max(len(value) * 4, 1)) or ""

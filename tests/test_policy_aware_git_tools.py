@@ -48,16 +48,35 @@ def test_read_only_git_tools_are_bounded_redacted_and_repository_scoped(
         encoding="utf-8",
     )
     tools = GitTools(str(workspace), max_diff_chars=2_000)
+    repository_diff = GitRepository(str(workspace)).review_diff()
 
     assert "module.py" in tools.status()
     diff = tools.diff()
     assert "module.py" in diff
     assert "must-not-reach-tool-output" not in diff
     assert "[REDACTED]" in diff
+    assert "must-not-reach-tool-output" not in repository_diff
+    assert "[REDACTED]" in repository_diff
     assert "chore: baseline" in tools.log(maximum_entries=1)
     assert "README.md" in tools.show("HEAD")
     assert run_git(workspace, "branch", "--show-current") in tools.branches()
     assert len(tools.diff(max_chars=40)) <= 40
+
+
+def test_committed_diff_redacts_secret_shaped_source_content(tmp_path: Path) -> None:
+    workspace = initialized_repository(tmp_path / "repository")
+    base_commit = run_git(workspace, "rev-parse", "HEAD")
+    (workspace / "module.py").write_text(
+        "TOKEN=must-not-reach-reviewer\nvalue = 1\n",
+        encoding="utf-8",
+    )
+    run_git(workspace, "add", "module.py")
+    run_git(workspace, "commit", "-q", "-m", "feat: add module")
+
+    diff = GitRepository(str(workspace)).commit_diff(base_commit)
+
+    assert "must-not-reach-reviewer" not in diff
+    assert "TOKEN=[REDACTED]" in diff
 
 
 def test_show_omits_protected_files_from_historical_commit(tmp_path: Path) -> None:
