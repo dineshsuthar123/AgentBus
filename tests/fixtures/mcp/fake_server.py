@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import atexit
 import argparse
 import json
 import os
 import sys
 import time
+import uuid
+from pathlib import Path
 
 
 def main() -> int:
@@ -25,7 +28,9 @@ def main() -> int:
         ),
         default="normal",
     )
+    parser.add_argument("--lifecycle-dir")
     args = parser.parse_args()
+    _track_lifecycle(args.lifecycle_dir)
     if args.mode == "oversized":
         sys.stdout.write("x" * 4_096 + "\n")
         sys.stdout.flush()
@@ -144,6 +149,20 @@ def main() -> int:
         )
         sys.stdout.flush()
     return 0
+
+
+def _track_lifecycle(directory_value: str | None) -> None:
+    if directory_value is None:
+        return
+    directory = Path(directory_value).resolve(strict=True)
+    token = f"{os.getpid()}-{uuid.uuid4().hex}"
+    pid = f"{os.getpid()}\n"
+    (directory / f"{token}.started").write_text(pid, encoding="utf-8")
+    atexit.register(
+        (directory / f"{token}.stopped").write_text,
+        pid,
+        encoding="utf-8",
+    )
 
 
 if __name__ == "__main__":
