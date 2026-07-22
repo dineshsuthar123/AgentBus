@@ -1,6 +1,8 @@
 import * as vscode from "vscode";
 import type { AgentBusClient } from "./apiClient";
 import { formatApprovalConfirmation } from "./approvalPresentation";
+import { toolArtifactUri } from "./artifactDocuments";
+import { validateToolArtifact } from "./artifactPresentation";
 import type { DaemonManager } from "./daemonManager";
 import { changeUri, reportUri } from "./documents";
 import { toolInvocationUri, toolPolicyUri } from "./toolDocuments";
@@ -72,6 +74,9 @@ export class CommandController implements vscode.Disposable {
     );
     command("agentbus.cancelToolInvocation", (item) =>
       this.cancelToolInvocation(item)
+    );
+    command("agentbus.openToolArtifact", (item) =>
+      this.openToolArtifact(item)
     );
     command("agentbus.showToolPolicy", () => this.showToolPolicy());
     command("agentbus.refreshToolRegistry", () => this.refreshToolRegistry());
@@ -410,6 +415,58 @@ export class CommandController implements vscode.Disposable {
     } finally {
       this.cancellationsInFlight.delete(invocation.run_id);
     }
+  }
+
+  private async openToolArtifact(raw?: unknown): Promise<void> {
+    const item = raw as AgentBusItem | undefined;
+    let invocation = item?.value as ToolInvocationSummary | undefined;
+    if (!invocation) {
+      const run = await this.chooseRun();
+      if (!run) return;
+      const response = await (await this.client()).toolInvocations(run.run_id);
+      invocation = (await vscode.window.showQuickPick(
+        response.invocations.map((value) => ({
+          label: value.tool_name,
+          description: `${value.status} | ${value.task_id}`,
+          value
+        }))
+      ))?.value;
+    }
+    if (!invocation) return;
+    const detail = await (await this.client()).toolInvocation(
+      invocation.run_id,
+      invocation.invocation_id
+    );
+    const openable = (detail.result?.artifacts ?? []).flatMap((artifact) => {
+      try {
+        return [validateToolArtifact(artifact)];
+      } catch {
+        return [];
+      }
+    });
+    if (openable.length === 0) {
+      void vscode.window.showInformationMessage(
+        "This invocation has no safe UTF-8 repository file artifacts."
+      );
+      return;
+    }
+    const picked = await vscode.window.showQuickPick(
+      openable.map((value) => ({
+        label: value.path,
+        description: `${value.mediaType} | ${value.artifact.size_bytes} bytes`,
+        value
+      })),
+      { title: "Open Tool Artifact" }
+    );
+    if (!picked) return;
+    const document = await vscode.workspace.openTextDocument(
+      toolArtifactUri(
+        invocation.run_id,
+        invocation.invocation_id,
+        picked.value.artifact.artifact_id
+      )
+    );
+    await vscode.window.showTextDocument(document, { preview: true });
   }
 
   private async showToolPolicy(): Promise<void> {

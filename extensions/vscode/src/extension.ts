@@ -7,6 +7,7 @@ import {
   ReportDocumentProvider
 } from "./documents";
 import { RunStore } from "./runStore";
+import { ToolArtifactDocumentProvider } from "./artifactDocuments";
 import {
   ToolInvocationDocumentProvider,
   ToolPolicyDocumentProvider
@@ -77,6 +78,10 @@ export function activate(context: vscode.ExtensionContext): AgentBusExtensionApi
     vscode.workspace.registerTextDocumentContentProvider(
       "agentbus-policy",
       new ToolPolicyDocumentProvider(client)
+    ),
+    vscode.workspace.registerTextDocumentContentProvider(
+      "agentbus-artifact",
+      new ToolArtifactDocumentProvider(client)
     )
   );
   const controller = new CommandController(

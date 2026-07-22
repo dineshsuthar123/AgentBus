@@ -72,6 +72,10 @@
         "title": "AgentBus: Cancel Tool Invocation"
       },
       {
+        "command": "agentbus.openToolArtifact",
+        "title": "AgentBus: Open Tool Artifact"
+      },
+      {
         "command": "agentbus.showToolPolicy",
         "title": "AgentBus: Show Tool Policy"
       },
@@ -187,6 +191,11 @@
           "command": "agentbus.cancelToolInvocation",
           "when": "viewItem == agentbusToolCancellable",
           "group": "inline@2"
+        },
+        {
+          "command": "agentbus.openToolArtifact",
+          "when": "viewItem == agentbusToolCancellable || viewItem == agentbusToolTerminal",
+          "group": "navigation"
         }
       ]
     },

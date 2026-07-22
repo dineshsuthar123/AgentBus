@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import type { AgentBusClient } from "./apiClient";
 import { AgentBusApiError } from "./apiClient";
 import type { RunReportResponse } from "./generated/protocol";
-import { isSafeRepositoryPath } from "./workspace";
+import { isSafeRepositoryPath } from "./repositoryPath";
 import { cancellationDetails } from "./cancellation";
 
 export type ClientProvider = () => Promise<AgentBusClient>;

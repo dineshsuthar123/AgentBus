@@ -1,6 +1,8 @@
 import { realpath } from "node:fs/promises";
 import * as vscode from "vscode";
 
+export { isSafeRepositoryPath } from "./repositoryPath";
+
 export async function selectWorkspace(
   requireTrust: boolean
 ): Promise<vscode.WorkspaceFolder | undefined> {
@@ -51,14 +53,4 @@ export async function canonicalWorkspacePath(
     );
   }
   return canonical;
-}
-
-export function isSafeRepositoryPath(value: string): boolean {
-  const normalized = value.replaceAll("\\", "/");
-  return Boolean(
-    normalized &&
-      !normalized.startsWith("/") &&
-      !/^[A-Za-z]:/.test(normalized) &&
-      !normalized.split("/").some((part) => part === ".." || part === "")
-  );
 }
