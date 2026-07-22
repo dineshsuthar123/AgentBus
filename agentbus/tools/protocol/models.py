@@ -350,6 +350,7 @@ class ToolPolicyDecision(ToolProtocolModel):
     invocation_id: str = Field(min_length=1, max_length=128)
     invocation_revision: int = Field(ge=1)
     capability_fingerprint: str = Field(min_length=64, max_length=64)
+    arguments_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     constraints: tuple[ToolCapability, ...] = ()
     evaluated_at: datetime = Field(default_factory=utc_now)
     safe_metadata: dict[str, Any] = Field(default_factory=dict)

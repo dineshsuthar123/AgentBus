@@ -11,6 +11,7 @@ from agentbus.tools.protocol import (
     ToolPolicyDecision,
     ToolPolicyOutcome,
     capability_fingerprint,
+    sha256_json,
     validate_invocation_against_descriptor,
 )
 
@@ -42,6 +43,7 @@ class ToolPolicyEngine:
             capability_fingerprint=capability_fingerprint(
                 invocation.requested_capabilities
             ),
+            arguments_sha256=sha256_json(invocation.arguments),
             constraints=match.constraints,
             safe_metadata=match.safe_metadata,
         )
@@ -60,6 +62,7 @@ class ToolPolicyEngine:
                 invocation_id=invocation.invocation_id,
                 invocation_revision=invocation.invocation_revision,
                 capability_fingerprint=decision.capability_fingerprint,
+                arguments_sha256=decision.arguments_sha256,
                 safe_metadata={"approval_id": approval.approval_id},
             )
         return ToolPolicyDecision(
@@ -72,6 +75,7 @@ class ToolPolicyEngine:
             invocation_id=invocation.invocation_id,
             invocation_revision=invocation.invocation_revision,
             capability_fingerprint=decision.capability_fingerprint,
+            arguments_sha256=decision.arguments_sha256,
             constraints=invocation.requested_capabilities,
             safe_metadata={
                 "approval_id": approval.approval_id,

@@ -21,6 +21,7 @@ from agentbus.tools.protocol import (
     ToolInvocation,
     ToolInvocationContext,
     ToolPolicyOutcome,
+    sha256_json,
 )
 
 
@@ -32,6 +33,21 @@ def test_policy_allows_bounded_read_inside_worktree(tmp_path: Path) -> None:
     assert decision.outcome == ToolPolicyOutcome.ALLOW
     assert decision.rule_id == "allow.read_only"
     assert decision.safe_metadata == {}
+    assert decision.arguments_sha256 == sha256_json(invocation.arguments)
+
+
+def test_policy_decision_fingerprint_changes_with_arguments(tmp_path: Path) -> None:
+    original, descriptor = _invocation(
+        tmp_path,
+        "filesystem.read",
+        path="src/app.py",
+    )
+    changed = original.model_copy(update={"arguments": {"path": "src/other.py"}})
+
+    original_decision = ToolPolicyEngine().evaluate(original, descriptor)
+    changed_decision = ToolPolicyEngine().evaluate(changed, descriptor)
+
+    assert original_decision.arguments_sha256 != changed_decision.arguments_sha256
 
 
 def test_policy_denies_traversal_and_protected_files(tmp_path: Path) -> None:
