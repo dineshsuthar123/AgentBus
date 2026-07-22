@@ -161,6 +161,42 @@ def test_deterministic_profiles_execute_through_managed_runtime(
         assert records[0].safe_result.structured_output["persisted_summary"] is True
 
 
+def test_control_acceptance_profile_executes_real_multi_tool_lifecycle(
+    tmp_path: Path,
+) -> None:
+    harness = _harness(tmp_path, "tool-control-acceptance")
+    runtime = harness.runtime()
+    try:
+        summary = harness.loop(runtime).run(
+            "Read, write, and verify through managed tools."
+        )
+    finally:
+        runtime.close()
+
+    records = harness.store.list_tool_invocations("run-1")
+    audits = harness.store.list_tool_audits("run-1")
+    assert summary == "Completed deterministic profile tool-control-acceptance."
+    assert [record.tool_name for record in records] == [
+        "filesystem.read",
+        "filesystem.write",
+        "test.execute",
+    ]
+    assert all(
+        record.status == ToolInvocationStatus.SUCCEEDED for record in records
+    )
+    assert len(audits) == 3
+    assert all(
+        audit.record.outcome == ToolInvocationStatus.SUCCEEDED for audit in audits
+    )
+    assert (harness.workspace / "acceptance_tool.py").read_text(
+        encoding="utf-8"
+    ) == (
+        "def add(left: int, right: int) -> int:\n"
+        "    return left + right\n"
+    )
+    assert records[-1].safe_result.exit_code == 0
+
+
 @pytest.mark.parametrize(
     ("profile", "target", "rule_id"),
     [
@@ -420,6 +456,13 @@ def _harness(
         "from module import VALUE\n\n\ndef test_value():\n    assert VALUE in {1, 2}\n",
         encoding="utf-8",
     )
+    if profile == "tool-control-acceptance":
+        (workspace / "test_acceptance_tool.py").write_text(
+            "from acceptance_tool import add\n\n\n"
+            "def test_add():\n"
+            "    assert add(2, 3) == 5\n",
+            encoding="utf-8",
+        )
     (workspace / "delete_me.txt").write_bytes(DELETE_TARGET.encode("utf-8"))
     _initialize_repository(workspace)
 

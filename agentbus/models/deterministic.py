@@ -53,11 +53,19 @@ _PROFILE_REQUIREMENTS: dict[str, list[str]] = {
     "tool-budget-exhaustion": ["filesystem.read"],
     "tool-local-mcp": ["mcp.connect", "mcp.invoke"],
     "tool-loop-limit": ["filesystem.read"],
+    "tool-control-acceptance": [
+        "filesystem.read",
+        "filesystem.write",
+        "filesystem.create",
+        "test.execute",
+        "process.execute",
+    ],
 }
 _PROFILE_OUTPUTS: dict[str, list[str]] = {
     "tool-atomic-write": ["profile_result.txt"],
     "tool-source-patch": ["module.py"],
     "tool-git-commit": ["profile_commit.py"],
+    "tool-control-acceptance": ["acceptance_tool.py"],
 }
 
 
@@ -660,6 +668,40 @@ class DeterministicProvider:
                     ["mcp.connect", "mcp.invoke"],
                     f"{task_id}:mcp-echo",
                 )
+            ],
+            "tool-control-acceptance": [
+                _tool_action(
+                    "filesystem.read",
+                    {"path": "README.md"},
+                    ["filesystem.read"],
+                    f"{task_id}:acceptance-read",
+                ),
+                _tool_action(
+                    "filesystem.write",
+                    {
+                        "path": "acceptance_tool.py",
+                        "content": (
+                            "def add(left: int, right: int) -> int:\n"
+                            "    return left + right\n"
+                        ),
+                    },
+                    ["filesystem.write", "filesystem.create"],
+                    f"{task_id}:acceptance-write",
+                ),
+                _tool_action(
+                    "test.execute",
+                    {
+                        "executable": "python",
+                        "arguments": [
+                            "-m",
+                            "pytest",
+                            "-q",
+                            "test_acceptance_tool.py",
+                        ],
+                    },
+                    ["test.execute", "process.execute"],
+                    f"{task_id}:acceptance-pytest",
+                ),
             ],
         }
         return [*calls[self.profile], finish]

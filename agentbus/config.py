@@ -40,6 +40,7 @@ SUPPORTED_DETERMINISTIC_PROFILES = (
     "tool-budget-exhaustion",
     "tool-local-mcp",
     "tool-loop-limit",
+    "tool-control-acceptance",
 )
 SUPPORTED_DETERMINISTIC_FAILURES = (
     "output_error",

@@ -99,6 +99,7 @@ class DeterministicProviderOptions(ProtocolModel):
         "tool-budget-exhaustion",
         "tool-local-mcp",
         "tool-loop-limit",
+        "tool-control-acceptance",
     ] = "python-calculator"
     latency_seconds: float = Field(default=0.0, ge=0, le=60)
     latency_roles: list[

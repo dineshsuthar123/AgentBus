@@ -816,7 +816,8 @@
               "tool-excessive-output",
               "tool-budget-exhaustion",
               "tool-local-mcp",
-              "tool-loop-limit"
+              "tool-loop-limit",
+              "tool-control-acceptance"
             ],
             "title": "Profile",
             "type": "string"

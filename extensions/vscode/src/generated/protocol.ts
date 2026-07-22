@@ -130,7 +130,7 @@ export interface DaemonRegistryEntry {
 }
 
 export interface DeterministicProviderOptions {
-  "profile"?: "python-calculator" | "cancellation-two-task" | "tool-safe-read" | "tool-atomic-write" | "tool-source-patch" | "tool-pytest" | "tool-git-diff" | "tool-git-commit" | "tool-delete-approval" | "tool-deny-outside-read" | "tool-deny-credential-read" | "tool-process-timeout" | "tool-process-cancel" | "tool-excessive-output" | "tool-budget-exhaustion" | "tool-local-mcp" | "tool-loop-limit";
+  "profile"?: "python-calculator" | "cancellation-two-task" | "tool-safe-read" | "tool-atomic-write" | "tool-source-patch" | "tool-pytest" | "tool-git-diff" | "tool-git-commit" | "tool-delete-approval" | "tool-deny-outside-read" | "tool-deny-credential-read" | "tool-process-timeout" | "tool-process-cancel" | "tool-excessive-output" | "tool-budget-exhaustion" | "tool-local-mcp" | "tool-loop-limit" | "tool-control-acceptance";
   "latency_seconds"?: number;
   "latency_roles"?: Array<"planner" | "coder" | "reviewer" | "summarizer">;
   "failure_kind"?: "output_error" | "timeout" | "service_unavailable";
