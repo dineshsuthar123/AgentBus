@@ -331,7 +331,7 @@ class MultiAgentOrchestrator:
         git_branch = None if parallel_enabled else self._prepare_git_workflow(user_task)
         initial_head = None
         if self._git_workflow_requested() and self.git_repository.is_git_repo():
-            initial_head = self.git_repository.head_commit()
+            initial_head = base_commit or self.git_repository.head_commit(short=False)
 
         context_pack = self._build_context_pack(user_task)
         cancellation.checkpoint("orchestrator", stage="before-planner")
@@ -364,6 +364,7 @@ class MultiAgentOrchestrator:
             },
             "final_review": {"required": True, "status": "pending"},
             "workspace_baseline": workspace_baseline,
+            "repository_revisions": {"base_commit": initial_head},
             "parallel_execution": {
                 "enabled": parallel_enabled,
                 "max_workers": self.config.max_workers,
@@ -1156,7 +1157,7 @@ class MultiAgentOrchestrator:
                     )
                     return self.get_durable_report(run_id)
             else:
-                current_head = self.git_repository.head_commit()
+                current_head = self.git_repository.head_commit(short=False)
                 initial_head = git_options.get("initial_head")
                 if (
                     initial_head
@@ -1178,9 +1179,20 @@ class MultiAgentOrchestrator:
                     )
                     return self.get_durable_report(run_id)
 
+            result_commit = self.git_repository.head_commit(short=False)
+            revision_metadata = None
+            initial_head = git_options.get("initial_head")
+            if isinstance(initial_head, str) and initial_head:
+                revision_metadata = {
+                    "repository_revisions": {
+                        "base_commit": initial_head,
+                        "result_commit": result_commit,
+                    }
+                }
             self.state_store.update_run_details(
                 run_id,
                 commit_identifier=commit_identifier,
+                metadata_updates=revision_metadata,
                 event_type="commit_created",
                 clear_finalization_error=True,
             )

@@ -312,7 +312,7 @@ class RepositoryReviewService:
 
     def list_changes(self, run: RunRecord) -> ChangeListResponse:
         repository = self.workspace_service.require_repository(run.workspace)
-        revisions = _integration_revisions(run)
+        revisions = _review_revisions(run)
         if revisions is not None:
             base_commit, integration_commit = revisions
             changes = repository.changed_files_between(
@@ -381,7 +381,7 @@ class RepositoryReviewService:
         paths = [self._safe_relative(repository.workspace, path)] if path else None
         if path:
             self._ensure_public_file(paths[0])
-        revisions = _integration_revisions(run)
+        revisions = _review_revisions(run)
         if revisions is None:
             diff = repository.full_diff(max_chars=limit, paths=paths)
         else:
@@ -409,18 +409,42 @@ class RepositoryReviewService:
         repository = self.workspace_service.require_repository(run.workspace)
         relative = self._safe_relative(repository.workspace, path)
         self._ensure_public_file(relative)
-        revisions = _integration_revisions(run)
+        revisions = _review_revisions(run)
+        changed_paths = set(
+            repository.changed_files_between(*revisions)
+            if revisions is not None
+            else repository.changed_files()
+        )
+        missing_as_empty = relative in changed_paths
         if revision == "after":
             data = (
-                self._read_after(repository.workspace, relative)
+                self._read_after(
+                    repository.workspace,
+                    relative,
+                    missing_as_empty=missing_as_empty,
+                )
                 if revisions is None
-                else self._read_revision(repository, revisions[1], relative)
+                else self._read_revision(
+                    repository,
+                    revisions[1],
+                    relative,
+                    missing_as_empty=missing_as_empty,
+                )
             )
         elif revision == "before":
             data = (
-                self._read_before(repository, relative)
+                self._read_before(
+                    repository,
+                    relative,
+                    missing_as_empty=missing_as_empty,
+                )
                 if revisions is None
-                else self._read_revision(repository, revisions[0], relative)
+                else self._read_revision(
+                    repository,
+                    revisions[0],
+                    relative,
+                    missing_as_empty=missing_as_empty,
+                )
             )
         else:
             raise ControlPlaneForbiddenError("Unsupported file revision.")
@@ -484,9 +508,16 @@ class RepositoryReviewService:
             )
 
     @staticmethod
-    def _read_after(root: Path, relative: str) -> bytes:
+    def _read_after(
+        root: Path,
+        relative: str,
+        *,
+        missing_as_empty: bool = False,
+    ) -> bytes:
         path = root / Path(*PurePosixPath(relative).parts)
         if not path.is_file():
+            if missing_as_empty and not path.exists():
+                return b""
             raise ControlPlaneNotFoundError("The requested file was not found.")
         if path.stat().st_size > MAX_FILE_BYTES:
             raise ControlPlaneForbiddenError(
@@ -495,11 +526,17 @@ class RepositoryReviewService:
         return path.read_bytes()
 
     @staticmethod
-    def _read_before(repository: GitRepository, relative: str) -> bytes:
+    def _read_before(
+        repository: GitRepository,
+        relative: str,
+        *,
+        missing_as_empty: bool = False,
+    ) -> bytes:
         return RepositoryReviewService._read_revision(
             repository,
             "HEAD",
             relative,
+            missing_as_empty=missing_as_empty,
         )
 
     @staticmethod
@@ -507,6 +544,8 @@ class RepositoryReviewService:
         repository: GitRepository,
         revision: str,
         relative: str,
+        *,
+        missing_as_empty: bool = False,
     ) -> bytes:
         repository.validate_workspace()
         try:
@@ -522,6 +561,8 @@ class RepositoryReviewService:
                 "The previous file revision is unavailable."
             ) from exc
         if result.returncode != 0:
+            if missing_as_empty:
+                return b""
             raise ControlPlaneNotFoundError(
                 "The previous file revision is unavailable."
             )
@@ -1452,7 +1493,22 @@ def _task_attribution(run: RunRecord, path: str) -> str | None:
     return None
 
 
-def _integration_revisions(run: RunRecord) -> tuple[str, str] | None:
+def _review_revisions(run: RunRecord) -> tuple[str, str] | None:
+    repository = run.metadata.get("repository_revisions", {})
+    if isinstance(repository, dict) and repository.get("result_commit"):
+        base_commit = repository.get("base_commit")
+        result_commit = repository.get("result_commit")
+        if not (
+            isinstance(base_commit, str)
+            and isinstance(result_commit, str)
+            and _COMMIT_SHA.fullmatch(base_commit)
+            and _COMMIT_SHA.fullmatch(result_commit)
+        ):
+            raise ControlPlaneConflictError(
+                "Persisted repository revision metadata is invalid."
+            )
+        return base_commit, result_commit
+
     parallel = run.metadata.get("parallel_execution", {})
     if not isinstance(parallel, dict):
         return None

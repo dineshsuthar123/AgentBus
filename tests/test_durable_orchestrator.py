@@ -443,7 +443,12 @@ def test_successful_durable_run_allows_opt_in_commit_and_pr(tmp_path):
     assert git_repository.created_branches == ["agentbus/calculator"]
     assert git_repository.commits == ["feat: create calculator"]
     assert git_repository.pushes == ["agentbus/calculator"]
-    assert store.get_run(run_id).commit_identifier == "abc1234"
+    persisted = store.get_run(run_id)
+    assert persisted.commit_identifier == "abc1234"
+    assert persisted.metadata["repository_revisions"] == {
+        "base_commit": "before1",
+        "result_commit": "abc1234",
+    }
 
 
 def test_ambiguous_pr_outcome_is_not_retried_automatically(tmp_path):

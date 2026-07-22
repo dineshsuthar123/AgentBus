@@ -7,7 +7,10 @@ from pathlib import Path
 import pytest
 
 from agentbus.config import AgentBusConfig
-from agentbus.control.errors import ControlPlaneForbiddenError
+from agentbus.control.errors import (
+    ControlPlaneForbiddenError,
+    ControlPlaneNotFoundError,
+)
 from agentbus.control.models import WorkspaceValidationRequest
 from agentbus.control.services import ControlQueryService, WorkspaceService
 from agentbus.execution.cancellation import (
@@ -184,6 +187,31 @@ def test_before_and_after_content_are_repository_contained(tmp_path: Path) -> No
     assert after.content.splitlines() == ["after"]
 
 
+def test_added_and_deleted_worktree_files_have_empty_diff_sides(
+    tmp_path: Path,
+) -> None:
+    workspace = _repository(tmp_path / "repo")
+    (workspace / "tracked.txt").unlink()
+    (workspace / "created.py").write_text("VALUE = 42\n", encoding="utf-8")
+    service, run = _service(tmp_path, workspace)
+
+    created_before = service.repository.file_content(
+        run,
+        "created.py",
+        revision="before",
+    )
+    deleted_after = service.repository.file_content(
+        run,
+        "tracked.txt",
+        revision="after",
+    )
+
+    assert created_before.content == ""
+    assert deleted_after.content == ""
+    with pytest.raises(ControlPlaneNotFoundError):
+        service.repository.file_content(run, "absent.txt", revision="before")
+
+
 def test_query_responses_expose_persisted_cancellation_lifecycle(
     tmp_path: Path,
 ) -> None:
@@ -293,3 +321,57 @@ def test_review_api_reads_parallel_integration_commit_without_checkout(
     assert "VALUE = 42" in diff.diff
     assert before.content == "before\n"
     assert after.content == "VALUE = 42\n"
+
+
+def test_review_api_uses_persisted_nonparallel_commit_revisions(
+    tmp_path: Path,
+) -> None:
+    workspace = _repository(tmp_path / "repo")
+    base_commit = _git_output(workspace, "rev-parse", "HEAD")
+    (workspace / "tracked.txt").write_text("result\n", encoding="utf-8")
+    (workspace / "created.py").write_text("VALUE = 42\n", encoding="utf-8")
+    _git(workspace, "add", "tracked.txt", "created.py")
+    _git(workspace, "commit", "-m", "result")
+    result_commit = _git_output(workspace, "rev-parse", "HEAD")
+    (workspace / "later.txt").write_text("later\n", encoding="utf-8")
+    _git(workspace, "add", "later.txt")
+    _git(workspace, "commit", "-m", "later unrelated commit")
+    service, run = _service(tmp_path, workspace)
+    service.store.update_run_details(
+        run.run_id,
+        metadata_updates={
+            "repository_revisions": {
+                "base_commit": base_commit,
+                "result_commit": result_commit,
+            }
+        },
+    )
+    persisted = service.get_run(run.run_id)
+
+    changes = service.repository.list_changes(persisted)
+    diff = service.repository.diff(persisted)
+    tracked_before = service.repository.file_content(
+        persisted,
+        "tracked.txt",
+        revision="before",
+    )
+    tracked_after = service.repository.file_content(
+        persisted,
+        "tracked.txt",
+        revision="after",
+    )
+    created_before = service.repository.file_content(
+        persisted,
+        "created.py",
+        revision="before",
+    )
+
+    assert {item.path for item in changes.changes} == {
+        "created.py",
+        "tracked.txt",
+    }
+    assert "VALUE = 42" in diff.diff
+    assert "later.txt" not in diff.diff
+    assert tracked_before.content == "before\n"
+    assert tracked_after.content == "result\n"
+    assert created_before.content == ""
