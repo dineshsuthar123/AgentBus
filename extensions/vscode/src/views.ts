@@ -5,6 +5,7 @@ import type {
   ProviderSummary,
   RunSummary,
   TaskSummary,
+  ToolInvocationSummary,
   WorktreeSummary
 } from "./generated/protocol";
 import type { RunStore } from "./runStore";
@@ -13,6 +14,17 @@ import {
   cancellationDetails,
   cancellationStatus
 } from "./cancellation";
+import {
+  TOOL_GROUPS,
+  canCancelTool,
+  capabilityNames,
+  escapeMarkdown,
+  toolDuration,
+  toolGroup,
+  toolResourceSummary,
+  toolVersion,
+  type ToolGroupKey
+} from "./toolPresentation";
 
 export interface RunSelection {
   get(): string | undefined;
@@ -153,6 +165,94 @@ export class WorktreesProvider extends RefreshableProvider {
   }
 }
 
+interface ToolGroupValue {
+  kind: "tool-group";
+  key: ToolGroupKey;
+}
+
+export class ToolInvocationsProvider extends RefreshableProvider {
+  private cachedRunId: string | undefined;
+  private cachedInvocations: ToolInvocationSummary[] | undefined;
+  private cachedApprovalStates = new Map<string, string>();
+  private cachedTruncated = false;
+
+  public constructor(
+    private readonly client: () => Promise<AgentBusClient>,
+    private readonly selection: RunSelection
+  ) {
+    super();
+  }
+
+  public override refresh(): void {
+    this.cachedRunId = undefined;
+    this.cachedInvocations = undefined;
+    this.cachedApprovalStates.clear();
+    this.cachedTruncated = false;
+    super.refresh();
+  }
+
+  public async getChildren(element?: AgentBusItem): Promise<AgentBusItem[]> {
+    const runId = this.selection.get();
+    if (!runId) {
+      return [messageItem("Select a run to inspect managed tool calls.")];
+    }
+    const invocations = await this.load(runId);
+    if (element) {
+      const group = element.value as ToolGroupValue;
+      if (group?.kind !== "tool-group") return [];
+      return invocations
+        .filter((invocation) => toolGroup(invocation.status) === group.key)
+        .map((invocation) =>
+          toolInvocationItem(
+            invocation,
+            invocation.approval_id
+              ? this.cachedApprovalStates.get(invocation.approval_id)
+              : undefined
+          )
+        );
+    }
+    const groups = TOOL_GROUPS.map(({ key, label }) => {
+      const count = invocations.filter(
+        (invocation) => toolGroup(invocation.status) === key
+      ).length;
+      const item = new AgentBusItem(
+        `${label} (${count})`,
+        key === "active" || key === "awaiting_approval"
+          ? vscode.TreeItemCollapsibleState.Expanded
+          : vscode.TreeItemCollapsibleState.Collapsed,
+        { kind: "tool-group", key } satisfies ToolGroupValue
+      );
+      item.contextValue = "agentbusToolGroup";
+      item.iconPath = new vscode.ThemeIcon(iconForStatus(key));
+      return item;
+    });
+    if (this.cachedTruncated) {
+      groups.push(messageItem("Showing the first 500 managed tool calls."));
+    }
+    return groups;
+  }
+
+  private async load(runId: string): Promise<ToolInvocationSummary[]> {
+    if (this.cachedRunId !== runId || !this.cachedInvocations) {
+      const client = await this.client();
+      const [response, approvals] = await Promise.all([
+        client.toolInvocations(runId),
+        client.approvals(runId)
+      ]);
+      this.cachedRunId = runId;
+      this.cachedInvocations = response.invocations;
+      this.cachedTruncated = response.truncated ?? false;
+      this.cachedApprovalStates = new Map(
+        approvals.approvals.map((approval) => [
+          approval.approval_id,
+          approval.state
+        ])
+      );
+    }
+    return this.cachedInvocations;
+  }
+}
+
 export class ProvidersProvider extends RefreshableProvider {
   public constructor(private readonly client: () => Promise<AgentBusClient>) {
     super();
@@ -237,6 +337,43 @@ function approvalItem(approval: ApprovalSummary): AgentBusItem {
   return item;
 }
 
+function toolInvocationItem(
+  invocation: ToolInvocationSummary,
+  approvalState?: string
+): AgentBusItem {
+  const item = new AgentBusItem(
+    invocation.tool_name,
+    vscode.TreeItemCollapsibleState.None,
+    invocation
+  );
+  item.description = `${invocation.status} | ${invocation.task_id}`;
+  const decision = invocation.policy_decision;
+  const cancellation = invocation.cancellation;
+  item.tooltip = new vscode.MarkdownString(
+    [
+      `**${escapeMarkdown(invocation.tool_name)}** v${toolVersion(invocation)}`,
+      "",
+      `Status: \`${escapeMarkdown(invocation.status)}\``,
+      `Task: \`${escapeMarkdown(invocation.task_id)}\``,
+      `Caller: \`${escapeMarkdown(invocation.caller_role)}\``,
+      `Capabilities: ${escapeMarkdown(capabilityNames(invocation.capabilities))}`,
+      `Policy: ${escapeMarkdown(decision?.outcome ?? "not evaluated")}`,
+      `Rule: \`${escapeMarkdown(decision?.rule_id ?? "n/a")}\``,
+      `Policy reason: ${escapeMarkdown(decision?.reason ?? "n/a")}`,
+      `Approval: \`${escapeMarkdown(invocation.approval_id ?? "none")}\` (${escapeMarkdown(approvalState ?? (invocation.approval_id ? "unknown" : "not required"))})`,
+      `Duration: ${toolDuration(invocation)}`,
+      `Resources: ${escapeMarkdown(toolResourceSummary(invocation))}`,
+      `Timeout: ${invocation.status === "timed_out" ? "yes" : "no"}`,
+      `Cancellation: ${cancellation.requested ? "requested" : "not requested"}`
+    ].join("\n\n")
+  );
+  item.iconPath = new vscode.ThemeIcon(iconForStatus(invocation.status));
+  item.contextValue = canCancelTool(invocation.status)
+    ? "agentbusToolCancellable"
+    : "agentbusToolTerminal";
+  return item;
+}
+
 function worktreeItem(worktree: WorktreeSummary): AgentBusItem {
   const item = new AgentBusItem(
     worktree.task_id ?? "Integration",
@@ -300,6 +437,12 @@ function iconForStatus(status: string): string {
   }
   if (status === "cancelled") {
     return "circle-slash";
+  }
+  if (status === "denied") {
+    return "lock";
+  }
+  if (status === "timed_out") {
+    return "watch";
   }
   if (status.includes("approval")) {
     return "shield";

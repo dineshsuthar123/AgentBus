@@ -26,6 +26,7 @@
   "main": "./out/extension.js",
   "activationEvents": [
     "onView:agentbus.runs",
+    "onView:agentbus.tools",
     "onCommand:agentbus.startTask"
   ],
   "contributes": {
@@ -117,6 +118,10 @@
         {
           "id": "agentbus.approvals",
           "name": "Approvals"
+        },
+        {
+          "id": "agentbus.tools",
+          "name": "Tool Invocations"
         },
         {
           "id": "agentbus.worktrees",

@@ -14,6 +14,7 @@ import {
   RunsProvider,
   Selection,
   TasksProvider,
+  ToolInvocationsProvider,
   WorktreesProvider
 } from "./views";
 
@@ -41,6 +42,7 @@ export function activate(context: vscode.ExtensionContext): AgentBusExtensionApi
   const tasks = new TasksProvider(client, selection);
   const approvals = new ApprovalsProvider(client, selection);
   const worktrees = new WorktreesProvider(client, selection);
+  const tools = new ToolInvocationsProvider(client, selection);
   const providers = new ProvidersProvider(client);
   context.subscriptions.push(
     output,
@@ -50,6 +52,7 @@ export function activate(context: vscode.ExtensionContext): AgentBusExtensionApi
     vscode.window.registerTreeDataProvider("agentbus.tasks", tasks),
     vscode.window.registerTreeDataProvider("agentbus.approvals", approvals),
     vscode.window.registerTreeDataProvider("agentbus.worktrees", worktrees),
+    vscode.window.registerTreeDataProvider("agentbus.tools", tools),
     vscode.window.registerTreeDataProvider("agentbus.providers", providers),
     vscode.workspace.registerTextDocumentContentProvider(
       "agentbus-before",
@@ -68,7 +71,7 @@ export function activate(context: vscode.ExtensionContext): AgentBusExtensionApi
     daemon,
     store,
     selection,
-    [runs, tasks, approvals, worktrees, providers],
+    [runs, tasks, approvals, worktrees, tools, providers],
     output,
     status
   );
