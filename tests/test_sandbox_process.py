@@ -206,6 +206,88 @@ def test_supervisor_cleans_descendants_after_parent_exits(tmp_path: Path) -> Non
     assert _pid_is_running(child_pid) is False
 
 
+def test_cancellation_terminates_spawned_descendants(tmp_path: Path) -> None:
+    supervisor = _supervisor(tmp_path)
+    cancellation = CancellationToken()
+    child_reported = threading.Event()
+    child_pids: list[int] = []
+    results = []
+    child_code = "import time; time.sleep(60)"
+    parent_code = (
+        "import subprocess, sys, time; "
+        f"child = subprocess.Popen([sys.executable, '-c', {child_code!r}]); "
+        "print(child.pid, flush=True); time.sleep(60)"
+    )
+
+    def observe_output(chunk: ToolOutputChunk) -> None:
+        text = chunk.text.strip()
+        if text.isdigit():
+            child_pids.append(int(text))
+            child_reported.set()
+
+    thread = threading.Thread(
+        target=lambda: results.append(
+            supervisor.run(
+                "python",
+                ("-c", parent_code),
+                cancellation=cancellation,
+                output_callback=observe_output,
+            )
+        )
+    )
+    thread.start()
+    try:
+        assert child_reported.wait(timeout=3)
+        cancellation.request("cancel process tree")
+        thread.join(timeout=5)
+    finally:
+        if thread.is_alive():
+            cancellation.request("test cleanup")
+            thread.join(timeout=5)
+
+    assert thread.is_alive() is False
+    assert results[0].cancelled is True
+    assert len(child_pids) == 1
+    deadline = time.monotonic() + 3
+    while _pid_is_running(child_pids[0]) and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert _pid_is_running(child_pids[0]) is False
+
+
+def test_child_process_budget_is_enforced_or_reported_unsupported(
+    tmp_path: Path,
+) -> None:
+    child_code = "import time; time.sleep(60)"
+    parent_code = (
+        "import subprocess, sys; "
+        "\ntry:\n"
+        f" child = subprocess.Popen([sys.executable, '-c', {child_code!r}])\n"
+        " print('started', child.pid, flush=True)\n"
+        "except OSError:\n"
+        " print('blocked', flush=True)"
+    )
+    budget = ToolResourceBudget(child_processes=0)
+
+    result = _supervisor(tmp_path).run(
+        "python",
+        ("-c", parent_code),
+        resource_budget=budget,
+    )
+    child_limit = result.resource_usage.limits["child_processes"]
+
+    if result.process_tree is not None and result.process_tree.job_assigned:
+        assert result.stdout.strip() == "blocked" or (
+            result.exit_code not in {None, 0}
+            and "quota" in result.stderr.lower()
+        )
+        assert child_limit.supported is True
+        assert child_limit.enforced is True
+    else:
+        assert result.stdout.startswith("started ")
+        assert child_limit.supported is False
+        assert child_limit.enforced is False
+
+
 def test_supervisor_rejects_invalid_argument_shapes(tmp_path: Path) -> None:
     supervisor = _supervisor(tmp_path)
 
