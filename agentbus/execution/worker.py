@@ -150,7 +150,16 @@ class LocalTaskWorker:
                 ],
             )
             self._checkpoint("before-task-executor")
-            result = executor.execute(context) if hasattr(executor, "execute") else executor(context)
+            try:
+                result = (
+                    executor.execute(context)
+                    if hasattr(executor, "execute")
+                    else executor(context)
+                )
+            finally:
+                close = getattr(executor, "close", None)
+                if close is not None:
+                    close()
             if not isinstance(result, TaskExecutionResult):
                 result = TaskExecutionResult.model_validate(result)
             for artifact in result.artifacts:

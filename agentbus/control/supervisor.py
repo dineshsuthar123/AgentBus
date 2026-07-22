@@ -266,19 +266,22 @@ class AgentBusRunBackend:
         attempt = self.store.create_attempt(run_id, task.task_id)
         try:
             if request.workflow == "single":
-                summary = AgentLoop(
-                    config=config,
-                    cancellation=cancellation,
-                    tool_runtime=build_managed_tool_runtime(
-                        workspace=config.workspace_path,
-                        state_store=self.store,
-                        cancellation_registry=self.cancellations,
-                    ),
+                with build_managed_tool_runtime(
+                    workspace=config.workspace_path,
                     state_store=self.store,
                     cancellation_registry=self.cancellations,
-                    run_id=run_id,
-                    task_id=task.task_id,
-                ).run(request.task)
+                    mcp_server_configs=config.mcp_server_configs,
+                    mcp_run_id=run_id,
+                ) as tool_runtime:
+                    summary = AgentLoop(
+                        config=config,
+                        cancellation=cancellation,
+                        tool_runtime=tool_runtime,
+                        state_store=self.store,
+                        cancellation_registry=self.cancellations,
+                        run_id=run_id,
+                        task_id=task.task_id,
+                    ).run(request.task)
                 approved = True
                 verifier_status = None
                 reviewer_status = None

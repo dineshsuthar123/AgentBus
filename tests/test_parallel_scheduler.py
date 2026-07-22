@@ -113,6 +113,7 @@ def test_independent_tasks_overlap_and_dependency_waits_for_integration(tmp_path
     barrier = threading.Barrier(2)
     lock = threading.Lock()
     calls = []
+    closed = []
     active = 0
     maximum_active = 0
 
@@ -150,6 +151,10 @@ def test_independent_tasks_overlap_and_dependency_waits_for_integration(tmp_path
                 verifier_status="passed",
             )
 
+        def close(self):
+            with lock:
+                closed.append(self.workspace)
+
     def worker_factory(worker_id):
         return LocalTaskWorker(
             worker_id=worker_id,
@@ -176,6 +181,7 @@ def test_independent_tasks_overlap_and_dependency_waits_for_integration(tmp_path
     assert calls.count("task-A") == calls.count("task-B") == calls.count("task-C") == 1
     assert calls.index("task-C") > calls.index("task-A")
     assert calls.index("task-C") > calls.index("task-B")
+    assert len(closed) == 3
     assert [item.task_id for item in store.list_integrations("parallel-run")] == [
         "task-A",
         "task-B",

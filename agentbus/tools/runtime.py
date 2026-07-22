@@ -261,8 +261,15 @@ class ManagedToolRuntime:
             self._closed = True
             sessions = tuple(reversed(tuple(self._mcp_sessions.values())))
             self._mcp_sessions.clear()
+        first_error: Exception | None = None
         for session in sessions:
-            session.close()
+            try:
+                session.close()
+            except Exception as exc:
+                if first_error is None:
+                    first_error = exc
+        if first_error is not None:
+            raise first_error
 
     def __enter__(self) -> "ManagedToolRuntime":
         self._require_open()
@@ -287,20 +294,38 @@ def build_managed_tool_runtime(
     policy_engine: ToolPolicyEngine | None = None,
     budget_ledger: ToolBudgetLedger | None = None,
     source_environment: Mapping[str, str] | None = None,
+    mcp_server_configs: tuple[McpServerConfig, ...] = (),
+    mcp_run_id: str | None = None,
 ) -> ManagedToolRuntime:
-    return ManagedToolRuntime(
+    catalog = executable_catalog
+    if catalog is None:
+        aliases = ["python", "pytest", "git"]
+        aliases.extend(
+            server.executable_alias
+            for server in mcp_server_configs
+            if server.executable_alias is not None
+        )
+        catalog = ExecutableCatalog.standard(tuple(dict.fromkeys(aliases)))
+    runtime = ManagedToolRuntime(
         workspace=workspace,
         worktree=workspace if worktree is None else worktree,
         state_store=state_store,
         cancellation_registry=(
             cancellation_registry or CancellationRegistry(state_store)
         ),
-        executable_catalog=executable_catalog or ExecutableCatalog.standard(),
+        executable_catalog=catalog,
         owned_worktree=owned_worktree,
         policy_engine=policy_engine,
         budget_ledger=budget_ledger,
         source_environment=source_environment,
     )
+    try:
+        for server in mcp_server_configs:
+            runtime.import_mcp_server(server, run_id=mcp_run_id)
+    except BaseException:
+        runtime.close()
+        raise
+    return runtime
 
 
 def _canonical_directory(value: str | Path, label: str) -> Path:

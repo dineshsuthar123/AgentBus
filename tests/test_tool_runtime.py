@@ -205,6 +205,15 @@ def test_runtime_owns_imported_mcp_policy_and_process_lifecycle(
 ) -> None:
     store = _store(tmp_path)
     alias = "fake-mcp-runtime"
+    config = McpServerConfig(
+        server_id="fixture",
+        transport="stdio",
+        executable_alias=alias,
+        capability_map={
+            name: mcp_server_capabilities("fixture")
+            for name in ("echo", "write_note")
+        },
+    )
     runtime = build_managed_tool_runtime(
         workspace=tmp_path,
         state_store=store,
@@ -221,18 +230,10 @@ def test_runtime_owns_imported_mcp_policy_and_process_lifecycle(
             }
         ),
         source_environment={"AZURE_OPENAI_API_KEY": "must-not-leak"},
-    )
-    config = McpServerConfig(
-        server_id="fixture",
-        transport="stdio",
-        executable_alias=alias,
-        capability_map={
-            name: mcp_server_capabilities("fixture")
-            for name in ("echo", "write_note")
-        },
+        mcp_server_configs=(config,),
+        mcp_run_id="run-1",
     )
 
-    descriptors = runtime.import_mcp_server(config, run_id="run-1")
     descriptor = runtime.registry.descriptor("mcp.fixture.echo")
     call = StructuredToolCall(
         tool_name=descriptor.name,
@@ -257,7 +258,7 @@ def test_runtime_owns_imported_mcp_policy_and_process_lifecycle(
     completed = runtime.dispatch(pending.invocation, approval=grant)
     imported_transport = runtime._mcp_sessions["fixture"].client.transport
 
-    assert len(descriptors) == 2
+    assert len(runtime._mcp_sessions) == 1
     assert pending.awaiting_approval is True
     assert completed.result.status == ToolInvocationStatus.SUCCEEDED
     assert completed.result.structured_output["structured_content"] == {

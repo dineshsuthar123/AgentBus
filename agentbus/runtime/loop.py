@@ -93,9 +93,20 @@ class AgentLoop:
         self.resource_budget = resource_budget
         self.policy_context = dict(policy_context or {})
         self._owns_state_records = False
+        self._owns_tool_runtime = False
 
     def run(self, user_task: str, max_steps: int | None = None) -> str:
         self._ensure_tool_runtime(user_task)
+        try:
+            return self._run_steps(user_task, max_steps=max_steps)
+        finally:
+            if self._owns_tool_runtime and self.tool_runtime is not None:
+                runtime = self.tool_runtime
+                self.tool_runtime = None
+                self._owns_tool_runtime = False
+                runtime.close()
+
+    def _run_steps(self, user_task: str, max_steps: int | None = None) -> str:
         history = ""
         max_steps = max_steps or self.config.max_steps
 
@@ -371,7 +382,10 @@ Return the next JSON action.
             workspace=self.workspace,
             state_store=store,
             cancellation_registry=registry,
+            mcp_server_configs=self.config.mcp_server_configs,
+            mcp_run_id=run_id,
         )
+        self._owns_tool_runtime = True
 
     def _tool_catalog_json(self) -> str:
         if self.tool_runtime is None:

@@ -68,6 +68,17 @@ class DurableExecutionEngine:
         self._explicit_cancellation = cancellation
         self._explicit_cancellation_run_id: str | None = None
 
+    def close(self) -> None:
+        close = getattr(self.task_executor, "close", None)
+        if close is not None:
+            close()
+
+    def __enter__(self) -> "DurableExecutionEngine":
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.close()
+
     def create_run(
         self,
         original_task: str,

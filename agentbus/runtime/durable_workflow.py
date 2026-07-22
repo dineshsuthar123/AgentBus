@@ -48,6 +48,10 @@ class MultiAgentTaskExecutor:
         self.tool_runtime = tool_runtime
         self._recovered_tool_runs: set[str] = set()
 
+    def close(self) -> None:
+        if self.tool_runtime is not None:
+            self.tool_runtime.close()
+
     def execute(self, context: TaskExecutionContext) -> TaskExecutionResult:
         _drain_model_results(self.coder)
         _drain_model_results(self.reviewer)

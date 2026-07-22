@@ -139,6 +139,7 @@ def test_loop_routes_structured_model_call_through_policy_and_audit(tmp_path):
     loop = AgentLoop(config=config, model=WritingModel())
 
     assert loop.run("create result") == "managed write complete"
+    assert loop.tool_runtime is None
     assert (workspace / "result.py").read_text(encoding="utf-8") == "VALUE = 3\n"
 
     store = StateStore(config.state_database_path)

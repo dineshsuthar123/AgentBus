@@ -377,7 +377,7 @@ class MultiAgentOrchestrator:
                 "integration_order": [],
             },
         }
-        engine = self._durable_engine(run_id)
+        engine = self._durable_engine(run_id, executor=False)
         engine.create_run(
             user_task,
             plan,
@@ -420,12 +420,12 @@ class MultiAgentOrchestrator:
                     )
                     report = self._finalize_parallel_git(run_id)
                 return report
-            engine = self._durable_engine(run_id)
-            report = (
-                engine.resume(run_id)
-                if resume
-                else engine.run_until_blocked(run_id)
-            )
+            with self._durable_engine(run_id) as engine:
+                report = (
+                    engine.resume(run_id)
+                    if resume
+                    else engine.run_until_blocked(run_id)
+                )
             if report.status == RunStatus.WAITING_FOR_REVIEW:
                 cancellation.checkpoint(
                     "orchestrator",
@@ -472,6 +472,8 @@ class MultiAgentOrchestrator:
                     workspace=self.workspace,
                     state_store=self.state_store,
                     cancellation_registry=self._cancellation_registry_for_use(),
+                    mcp_server_configs=self.config.mcp_server_configs,
+                    mcp_run_id=run_id,
                 ),
             )
         return DurableExecutionEngine(
@@ -517,6 +519,7 @@ class MultiAgentOrchestrator:
                 executor_factory=lambda workspace: self._parallel_task_executor(
                     workspace,
                     cancellation,
+                    run_id,
                 ),
                 heartbeat_seconds=float(
                     parallel.get(
@@ -542,6 +545,7 @@ class MultiAgentOrchestrator:
         self,
         workspace: Path,
         cancellation: CancellationToken | None = None,
+        run_id: str | None = None,
     ):
         if self.parallel_executor_factory is not None:
             return self.parallel_executor_factory(workspace)
@@ -576,6 +580,8 @@ class MultiAgentOrchestrator:
                 state_store=self.state_store,
                 cancellation_registry=self._cancellation_registry_for_use(),
                 owned_worktree=True,
+                mcp_server_configs=self.config.mcp_server_configs,
+                mcp_run_id=run_id,
             ),
         )
 
@@ -790,6 +796,8 @@ class MultiAgentOrchestrator:
             state_store=self.state_store,
             cancellation_registry=self._cancellation_registry_for_use(),
             owned_worktree=True,
+            mcp_server_configs=self.config.mcp_server_configs,
+            mcp_run_id=run_id,
         ) as tool_runtime:
             tool_runtime.recover_run(run_id)
             verifier_result = self._call_with_supported_arguments(
@@ -1045,6 +1053,8 @@ class MultiAgentOrchestrator:
             workspace=self.workspace,
             state_store=self.state_store,
             cancellation_registry=self._cancellation_registry_for_use(),
+            mcp_server_configs=self.config.mcp_server_configs,
+            mcp_run_id=run_id,
         ) as tool_runtime:
             tool_runtime.recover_run(run_id)
             return self._call_with_supported_arguments(
