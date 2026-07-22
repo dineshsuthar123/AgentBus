@@ -73,6 +73,7 @@ class ResolvedFileSystemPath:
     lexical_path: Path
     exists: bool
     final_component_is_link: bool
+    link_components: tuple[str, ...]
     classification: FileSystemPathClassification
 
 
@@ -104,6 +105,7 @@ class ContainedPathResolver:
         *,
         allow_protected: bool = False,
         reject_final_link: bool = False,
+        reject_any_link: bool = False,
     ) -> ResolvedFileSystemPath:
         self.validate_root_identity()
         normalized = normalize_relative_tool_path(path)
@@ -115,6 +117,7 @@ class ContainedPathResolver:
 
         lexical = self.root.joinpath(*PurePosixPath(normalized).parts)
         final_is_link = False
+        link_components: list[str] = []
         current = self.root
         parts = PurePosixPath(normalized).parts
         for index, part in enumerate(parts):
@@ -125,6 +128,12 @@ class ContainedPathResolver:
             if index == len(parts) - 1:
                 final_is_link = is_link
             if is_link:
+                relative_link = PurePosixPath(*parts[: index + 1]).as_posix()
+                link_components.append(relative_link)
+                if reject_any_link:
+                    raise FileSystemContainmentError(
+                        "Mutating through symlinks or junctions is not supported."
+                    )
                 linked_target = _resolve_existing(current)
                 _require_contained(linked_target, self.root)
 
@@ -142,6 +151,7 @@ class ContainedPathResolver:
             lexical_path=lexical,
             exists=os.path.lexists(lexical),
             final_component_is_link=final_is_link,
+            link_components=tuple(link_components),
             classification=classification,
         )
 
@@ -158,8 +168,9 @@ class ContainedPathResolver:
         if any(part in _PROTECTED_SEGMENTS for part in parts):
             segment = next(part for part in parts if part in _PROTECTED_SEGMENTS)
             protected_reason = f"Path is under protected directory '{segment}'."
-        elif name in protected_names:
-            protected_reason = f"Protected file access is denied: {name}."
+        elif any(part in protected_names for part in parts):
+            protected_name = next(part for part in parts if part in protected_names)
+            protected_reason = f"Protected file access is denied: {protected_name}."
         elif name.startswith(".env.") and name not in {
             ".env.example",
             ".env.sample",

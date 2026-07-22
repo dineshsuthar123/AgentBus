@@ -82,6 +82,16 @@ def test_resolver_rejects_secret_and_control_plane_paths(
         resolver.resolve(path)
 
 
+def test_resolver_rejects_protected_intermediate_component(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / ".env").mkdir()
+    (tmp_path / ".env" / "child.txt").write_text("secret", encoding="utf-8")
+
+    with pytest.raises(ProtectedFileSystemPath):
+        ContainedPathResolver(tmp_path).resolve(".env/child.txt")
+
+
 def test_resolver_rejects_symlink_escape(tmp_path: Path) -> None:
     root = tmp_path / "root"
     outside = tmp_path / "outside"
@@ -112,6 +122,22 @@ def test_resolver_allows_link_that_stays_inside_root(tmp_path: Path) -> None:
     resolved = ContainedPathResolver(tmp_path).resolve("linked/file.txt")
 
     assert resolved.path == (target / "file.txt").resolve()
+
+
+def test_resolver_can_reject_all_links_for_mutations(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    link = tmp_path / "linked"
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symlink creation unavailable: {exc}")
+
+    with pytest.raises(FileSystemContainmentError, match="symlinks or junctions"):
+        ContainedPathResolver(tmp_path).resolve(
+            "linked/file.txt",
+            reject_any_link=True,
+        )
 
 
 def test_resolver_detects_assigned_root_replacement(tmp_path: Path) -> None:
