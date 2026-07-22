@@ -6,6 +6,7 @@ from agentbus.tools.protocol.errors import (
 )
 from agentbus.tools.protocol.models import (
     CapabilityScope,
+    StructuredToolCall,
     ToolApprovalRequest,
     ToolArtifact,
     ToolArtifactKind,
@@ -62,6 +63,7 @@ from agentbus.tools.protocol.version import (
 __all__ = [
     "CapabilityScope",
     "SUPPORTED_TOOL_PROTOCOL_VERSIONS",
+    "StructuredToolCall",
     "TOOL_PROTOCOL_NAME",
     "TOOL_PROTOCOL_VERSION",
     "ToolApprovalRequest",

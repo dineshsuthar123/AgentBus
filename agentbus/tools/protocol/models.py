@@ -300,6 +300,47 @@ class ToolDescriptor(ToolProtocolModel):
         return value
 
 
+class StructuredToolCall(ToolProtocolModel):
+    tool_name: str = Field(min_length=1, max_length=128)
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    expected_capabilities: tuple[ToolCapability, ...]
+    timeout_seconds: float | None = Field(default=None, gt=0, le=86_400)
+    invocation_revision: int = Field(default=1, ge=1)
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=256)
+
+    @field_validator("tool_name")
+    @classmethod
+    def tool_name_is_valid(cls, value: str) -> str:
+        if not _NAME_PATTERN.fullmatch(value):
+            raise ValueError("tool name must be a lowercase dotted identifier")
+        return value
+
+    @field_validator("arguments")
+    @classmethod
+    def arguments_are_json(cls, value: dict[str, Any]) -> dict[str, Any]:
+        _require_json(
+            value,
+            "structured tool arguments",
+            maximum_bytes=MAX_INVOCATION_ARGUMENT_BYTES,
+        )
+        return value
+
+    @field_validator("expected_capabilities")
+    @classmethod
+    def capabilities_are_bounded(
+        cls,
+        capabilities: tuple[ToolCapability, ...],
+    ) -> tuple[ToolCapability, ...]:
+        if not capabilities:
+            raise ValueError("structured tool calls require expected capabilities")
+        if len(capabilities) > 64:
+            raise ValueError("structured tool calls support at most 64 capabilities")
+        fingerprints = [capability.model_dump_json() for capability in capabilities]
+        if len(fingerprints) != len(set(fingerprints)):
+            raise ValueError("structured tool call capabilities must be unique")
+        return capabilities
+
+
 class ToolInvocation(ToolProtocolModel):
     invocation_id: str = Field(min_length=1, max_length=128)
     run_id: str = Field(min_length=1, max_length=128)

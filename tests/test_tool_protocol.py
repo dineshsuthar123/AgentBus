@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from agentbus.tools.protocol import (
     CapabilityScope,
+    StructuredToolCall,
     ToolCapability,
     ToolCapabilityName,
     ToolDescriptor,
@@ -292,6 +293,13 @@ def test_structured_protocol_payloads_are_byte_bounded() -> None:
             status=ToolInvocationStatus.SUCCEEDED,
             policy_decision=decision,
             safe_diagnostic_metadata={"summary": "x" * 65_537},
+        )
+
+    with pytest.raises(ValidationError, match="structured tool arguments"):
+        StructuredToolCall(
+            tool_name="filesystem.write",
+            arguments={"content": "x" * 1_048_577},
+            expected_capabilities=(_capability(),),
         )
 
 
