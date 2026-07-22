@@ -48,7 +48,9 @@ from agentbus.security.redaction import is_sensitive_key, redact_text
 from agentbus.tools.protocol import (
     ToolApprovalRequest,
     ToolAuditRecord,
+    ToolCancellationSnapshot,
     ToolDescriptor,
+    ToolError,
     ToolErrorCategory,
     ToolInvocation,
     ToolInvocationStatus,
@@ -1593,6 +1595,116 @@ class StateStore:
                 (run_id, after_sequence, limit),
             ).fetchall()
         return [self._tool_audit_from_row(row) for row in rows]
+
+    def reconcile_running_tool_invocations(
+        self,
+        run_id: str,
+        *,
+        reconciled_at: datetime | None = None,
+    ) -> list[ToolInvocationRecord]:
+        _require_id(run_id, "run")
+        cancellation = self.get_cancellation_state(run_id)
+        running = self.list_tool_invocations(
+            run_id,
+            status=ToolInvocationStatus.RUNNING,
+            limit=1000,
+        )
+        now = reconciled_at or utc_now()
+        reconciled: list[ToolInvocationRecord] = []
+        for record in running:
+            if record.policy_decision is None or record.started_at is None:
+                raise StateStoreError(
+                    "Running tool state is missing policy or start metadata."
+                )
+            if now < record.started_at:
+                raise StateStoreError(
+                    "Tool reconciliation time cannot precede its start time."
+                )
+            was_cancelled = cancellation.requested
+            status = (
+                ToolInvocationStatus.CANCELLED
+                if was_cancelled
+                else ToolInvocationStatus.FAILED
+            )
+            category = (
+                ToolErrorCategory.CANCELLED
+                if was_cancelled
+                else (
+                    ToolErrorCategory.PROCESS
+                    if record.process_slot
+                    else ToolErrorCategory.INTERNAL
+                )
+            )
+            if was_cancelled:
+                raw_message = (
+                    cancellation.reason
+                    or "Tool cancelled before restart reconciliation."
+                )
+            else:
+                raw_message = (
+                    "Tool execution was interrupted by a runtime restart."
+                )
+            message = redact_text(
+                raw_message,
+                max_chars=2_000,
+            )
+            result = ToolResult(
+                invocation_id=record.invocation_id,
+                invocation_revision=record.invocation_revision,
+                status=status,
+                error=ToolError(
+                    category=category,
+                    code=(
+                        "restart_cancelled"
+                        if was_cancelled
+                        else "restart_interrupted"
+                    ),
+                    message=message or "Tool execution was interrupted.",
+                    retryable=False,
+                    safe_metadata={"restart_reconciled": True},
+                ),
+                duration_seconds=max(
+                    0.0,
+                    (now - record.started_at).total_seconds(),
+                ),
+                cancellation=ToolCancellationSnapshot(
+                    requested=was_cancelled,
+                    revision=cancellation.revision,
+                    requested_at=cancellation.requested_at,
+                    signal_sent=False,
+                    acknowledged=False,
+                    process_terminated=False,
+                    operation_completed_after_request=False,
+                    cleanup_completed=False,
+                    reason=redact_text(cancellation.reason, max_chars=1_000),
+                ),
+                resource_usage=record.resource_usage,
+                policy_decision=record.policy_decision,
+                approval_id=record.approval_id,
+                safe_diagnostic_metadata={
+                    "restart_reconciled": True,
+                    "process_cleanup_confirmed": False,
+                },
+            )
+            completed = self.complete_tool_invocation(
+                run_id,
+                result,
+                completed_at=now,
+            )
+            self.record_event(
+                run_id,
+                "tool_restart_reconciled",
+                {
+                    "invocation_id": record.invocation_id,
+                    "invocation_revision": record.invocation_revision,
+                    "status": status.value,
+                    "process_cleanup_confirmed": False,
+                    "automatic_retry_allowed": False,
+                },
+                task_id=record.task_id,
+            )
+            reconciled.append(completed)
+        return reconciled
 
     def mark_tool_invocation_started(
         self,

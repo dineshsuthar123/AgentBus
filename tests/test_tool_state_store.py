@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from agentbus.execution.cancellation import CancellationToken
 from agentbus.execution.models import RunRecord, TaskSpec
 from agentbus.execution.state_store import (
     InvalidToolInvocationTransition,
@@ -20,6 +21,7 @@ from agentbus.policy import (
     build_tool_approval_request,
     decide_tool_approval,
 )
+from agentbus.tools.budget import ToolBudgetLedger
 from agentbus.tools.descriptors import descriptor_map
 from agentbus.tools.protocol import (
     CapabilityScope,
@@ -757,3 +759,72 @@ def test_policy_denial_produces_a_terminal_audit_without_starting(
     assert terminal.started_at is None
     assert entry.record.outcome == ToolInvocationStatus.DENIED
     assert entry.record.error_category == ToolErrorCategory.POLICY_DENIED
+
+
+def test_restart_reconciliation_fails_running_tool_without_retry(
+    tmp_path: Path,
+) -> None:
+    store = create_store(tmp_path)
+    current = invocation(tmp_path, "invocation-1", idempotency_key=None)
+    pending = invocation(tmp_path, "invocation-2", idempotency_key=None)
+    decision = policy_decision(current)
+    store.record_tool_invocation(current, process_slot=True)
+    store.record_tool_policy_decision("run-1", decision)
+    running = store.mark_tool_invocation_started("run-1", current.invocation_id)
+    store.record_tool_invocation(pending)
+    reconciled_at = running.started_at + timedelta(seconds=2)
+
+    reconciled = store.reconcile_running_tool_invocations(
+        "run-1",
+        reconciled_at=reconciled_at,
+    )
+
+    assert len(reconciled) == 1
+    failed = reconciled[0]
+    assert failed.status == ToolInvocationStatus.FAILED
+    assert failed.error_category == ToolErrorCategory.PROCESS
+    assert failed.safe_result is not None
+    assert failed.safe_result.error is not None
+    assert failed.safe_result.error.retryable is False
+    assert failed.cancellation.cleanup_completed is False
+    assert store.get_tool_invocation(
+        "run-1", pending.invocation_id
+    ).status == ToolInvocationStatus.REQUESTED
+    assert store.reconcile_running_tool_invocations("run-1") == []
+
+    ledger = ToolBudgetLedger()
+    for record in store.list_tool_invocations("run-1"):
+        ledger.restore(record)
+    assert ledger.snapshot("run-1").active_processes == 0
+    restart_events = [
+        event
+        for event in store.list_events("run-1")
+        if event["event_type"] == "tool_restart_reconciled"
+    ]
+    assert restart_events[0]["payload"]["automatic_retry_allowed"] is False
+    assert restart_events[0]["payload"]["process_cleanup_confirmed"] is False
+
+
+def test_restart_reconciliation_preserves_persisted_cancellation(
+    tmp_path: Path,
+) -> None:
+    store = create_store(tmp_path)
+    current = invocation(tmp_path, "invocation-1", idempotency_key=None)
+    decision = policy_decision(current)
+    store.record_tool_invocation(current, process_slot=True)
+    store.record_tool_policy_decision("run-1", decision)
+    running = store.mark_tool_invocation_started("run-1", current.invocation_id)
+    cancellation = CancellationToken()
+    cancellation.request("operator requested cancellation")
+    store.persist_cancellation_state("run-1", cancellation.snapshot())
+
+    reconciled = store.reconcile_running_tool_invocations(
+        "run-1",
+        reconciled_at=running.started_at + timedelta(seconds=1),
+    )[0]
+
+    assert reconciled.status == ToolInvocationStatus.CANCELLED
+    assert reconciled.error_category == ToolErrorCategory.CANCELLED
+    assert reconciled.cancellation.requested is True
+    assert reconciled.cancellation.revision == cancellation.snapshot().revision
+    assert reconciled.cancellation.process_terminated is False
