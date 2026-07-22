@@ -33,6 +33,13 @@ def sha256_json(value: Any) -> str:
     return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
 
 
+def idempotency_key_sha256(value: str | None) -> str | None:
+    if value is None:
+        return None
+    encoded = ("agentbus-tool-idempotency-v1\0" + value).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def capability_fingerprint(capabilities: tuple[ToolCapability, ...]) -> str:
     serialized = sorted(
         [capability.model_dump(mode="json") for capability in capabilities],

@@ -19,6 +19,7 @@ from agentbus.policy import (
     ToolApprovalDisposition,
     ToolPolicyEngine,
     build_tool_approval_request,
+    decide_persisted_tool_approval,
     decide_tool_approval,
 )
 from agentbus.tools.budget import ToolBudgetLedger
@@ -546,6 +547,54 @@ def test_tool_approval_round_trips_and_allows_exact_invocation(
         for path in store.database_path.parent.glob(f"{store.database_path.name}*")
     )
     assert b"raw-sensitive-approval-reason" not in persisted_bytes
+
+
+def test_tool_approval_decision_survives_restart_without_raw_invocation(
+    tmp_path: Path,
+) -> None:
+    store = create_store(tmp_path)
+    current, descriptor = approval_invocation(tmp_path)
+    decision = ToolPolicyEngine().evaluate(current, descriptor)
+    request = build_tool_approval_request(
+        current,
+        descriptor,
+        decision,
+        approval_id="approval-restart",
+    )
+    store.record_tool_invocation(current)
+    store.record_tool_policy_decision(
+        "run-1",
+        decision,
+        approval_id=request.approval_id,
+    )
+    store.record_tool_approval_request(request, current, descriptor)
+
+    reopened = StateStore(store.database_path)
+    pending = reopened.get_tool_approval("run-1", request.approval_id)
+    grant = decide_persisted_tool_approval(
+        pending.request,
+        disposition=ToolApprovalDisposition.APPROVED,
+        reason="approved after restart",
+    )
+    approved = reopened.record_persisted_tool_approval_grant(grant)
+    duplicate = reopened.decide_tool_approval(
+        "run-1",
+        request.approval_id,
+        disposition=ToolApprovalDisposition.APPROVED,
+        reason="approved after restart",
+    )
+
+    assert approved == duplicate
+    assert approved.disposition == "approved"
+    assert approved.request.idempotency_key_sha256
+    assert current.idempotency_key not in approved.request.model_dump_json()
+    with pytest.raises(ToolInvocationConflictError, match="cannot be replaced"):
+        reopened.decide_tool_approval(
+            "run-1",
+            request.approval_id,
+            disposition=ToolApprovalDisposition.REJECTED,
+            reason="changed decision",
+        )
 
 
 def test_tool_approval_rejects_changed_resource_summary_and_grant(

@@ -437,6 +437,11 @@ class ToolApprovalRequest(ToolProtocolModel):
     working_directory: str | None = Field(default=None, max_length=2_048)
     network_destination: str | None = Field(default=None, max_length=2_048)
     resource_budget: ToolResourceBudget
+    cancellation_revision: int = Field(default=0, ge=0)
+    idempotency_key_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[a-f0-9]{64}$",
+    )
     policy_rule: str = Field(min_length=1, max_length=128)
     reason: str = Field(min_length=1, max_length=2_048)
     proposed_constraints: tuple[ToolCapability, ...] = ()

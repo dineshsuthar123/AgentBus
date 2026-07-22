@@ -1,6 +1,7 @@
 from agentbus.policy.approvals import (
     approval_binding_sha256,
     build_tool_approval_request,
+    decide_persisted_tool_approval,
     decide_tool_approval,
     validate_tool_approval,
 )
@@ -31,6 +32,7 @@ __all__ = [
     "ToolPolicyError",
     "approval_binding_sha256",
     "build_tool_approval_request",
+    "decide_persisted_tool_approval",
     "decide_tool_approval",
     "validate_tool_approval",
 ]

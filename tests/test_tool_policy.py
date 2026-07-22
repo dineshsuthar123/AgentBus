@@ -11,6 +11,7 @@ from agentbus.policy import (
     ToolApprovalDisposition,
     ToolPolicyEngine,
     build_tool_approval_request,
+    decide_persisted_tool_approval,
     decide_tool_approval,
     validate_tool_approval,
 )
@@ -188,6 +189,41 @@ def test_exact_approval_allows_original_delete_invocation(tmp_path: Path) -> Non
     assert decision.outcome == ToolPolicyOutcome.ALLOW_WITH_CONSTRAINTS
     assert decision.rule_id == "allow.approved_invocation"
     assert decision.safe_metadata["approval_id"] == "approval-1"
+
+
+def test_persisted_approval_binding_revalidates_idempotency_and_cancellation(
+    tmp_path: Path,
+) -> None:
+    invocation, descriptor = _invocation(
+        tmp_path,
+        "filesystem.delete",
+        path="src/obsolete.py",
+    )
+    invocation = invocation.model_copy(
+        update={"idempotency_key": "delete-obsolete", "cancellation_revision": 7}
+    )
+    required = ToolPolicyEngine().evaluate(invocation, descriptor)
+    request = build_tool_approval_request(invocation, descriptor, required)
+    grant = decide_persisted_tool_approval(
+        request,
+        disposition=ToolApprovalDisposition.APPROVED,
+    )
+
+    validate_tool_approval(grant, invocation, descriptor)
+    assert request.idempotency_key_sha256
+    assert request.idempotency_key_sha256 != invocation.idempotency_key
+    with pytest.raises(ToolApprovalBindingError, match="idempotency key changed"):
+        validate_tool_approval(
+            grant,
+            invocation.model_copy(update={"idempotency_key": "broader-delete"}),
+            descriptor,
+        )
+    with pytest.raises(ToolApprovalBindingError, match="cancellation revision changed"):
+        validate_tool_approval(
+            grant,
+            invocation.model_copy(update={"cancellation_revision": 8}),
+            descriptor,
+        )
 
 
 @pytest.mark.parametrize(

@@ -40,6 +40,7 @@ from agentbus.execution.transitions import (
 from agentbus.policy.approvals import (
     approval_binding_sha256,
     build_tool_approval_request,
+    decide_persisted_tool_approval as build_persisted_tool_approval_grant,
     validate_tool_approval,
 )
 from agentbus.policy.errors import ToolApprovalBindingError
@@ -1387,56 +1388,88 @@ class StateStore:
                 raise ToolInvocationConflictError(
                     "Tool approval grant binding does not match the invocation."
                 )
-            if record.disposition is not None:
-                if (
-                    record.disposition == grant.disposition.value
-                    and record.binding_sha256 == grant.binding_sha256
-                    and record.reason == _safe_text(grant.reason)
-                    and record.decided_at == grant.decided_at
-                ):
-                    return record
-                raise ToolInvocationConflictError(
-                    "A decided tool approval cannot be replaced."
-                )
             if grant.disposition == ToolApprovalDisposition.APPROVED:
                 try:
                     validate_tool_approval(grant, invocation, descriptor)
                 except ToolApprovalBindingError as exc:
                     raise ToolInvocationConflictError(str(exc)) from exc
-
-            connection.execute(
-                """UPDATE tool_approvals
-                SET binding_sha256 = ?, disposition = ?, reason = ?, decided_at = ?
-                WHERE approval_id = ? AND disposition IS NULL""",
-                (
-                    grant.binding_sha256,
-                    grant.disposition.value,
-                    _safe_text(grant.reason),
-                    _timestamp(grant.decided_at),
-                    grant.approval_id,
-                ),
-            )
-            self._insert_event(
+            updated = self._persist_tool_approval_grant(
                 connection,
-                grant.request.run_id,
-                grant.request.task_id,
-                (
-                    "tool_approval_approved"
-                    if grant.disposition.value == "approved"
-                    else "tool_approval_rejected"
-                ),
-                {
-                    "approval_id": grant.approval_id,
-                    "invocation_id": grant.request.invocation_id,
-                    "invocation_revision": grant.request.invocation_revision,
-                    "disposition": grant.disposition.value,
-                    "reason": grant.reason,
-                },
+                record,
+                grant,
             )
-            updated = self._require_tool_approval_row(
+        return self._tool_approval_from_row(updated)
+
+    def decide_tool_approval(
+        self,
+        run_id: str,
+        approval_id: str,
+        *,
+        disposition: ToolApprovalDisposition | str,
+        reason: str | None = None,
+    ) -> ToolApprovalRecord:
+        """Decide an exact persisted request without recovering raw arguments."""
+        record = self.get_tool_approval(run_id, approval_id)
+        resolved = ToolApprovalDisposition(disposition)
+        safe_reason = _safe_text(reason)
+        if record.disposition is not None:
+            if record.disposition == resolved.value and record.reason == safe_reason:
+                return record
+            raise ToolInvocationConflictError(
+                "A decided tool approval cannot be replaced."
+            )
+        grant = build_persisted_tool_approval_grant(
+            record.request,
+            disposition=resolved,
+            reason=reason,
+        )
+        return self.record_persisted_tool_approval_grant(grant)
+
+    def record_persisted_tool_approval_grant(
+        self,
+        grant: ToolApprovalGrant,
+    ) -> ToolApprovalRecord:
+        persisted_request = safe_tool_approval_request(grant.request)
+        request_sha256 = approval_request_scope_sha256(persisted_request)
+        with self._write_transaction() as connection:
+            row = self._require_tool_approval_row(
                 connection,
                 grant.request.run_id,
                 grant.approval_id,
+            )
+            record = self._tool_approval_from_row(row)
+            if record.request_sha256 != request_sha256:
+                raise ToolInvocationConflictError(
+                    "Tool approval grant does not match its persisted request."
+                )
+            expected_binding = approval_binding_sha256(grant.request)
+            if grant.binding_sha256 != expected_binding:
+                raise ToolInvocationConflictError(
+                    "Tool approval grant binding does not match its persisted request."
+                )
+            if record.disposition is None:
+                invocation_row = self._require_tool_invocation_row(
+                    connection,
+                    grant.request.run_id,
+                    grant.request.invocation_id,
+                )
+                invocation_record = self._tool_invocation_from_row(invocation_row)
+                self._validate_persisted_tool_approval_binding(
+                    invocation_record,
+                    grant.request,
+                )
+                if (
+                    grant.disposition == ToolApprovalDisposition.APPROVED
+                    and grant.request.expires_at is not None
+                    and grant.decided_at >= grant.request.expires_at
+                ):
+                    raise ToolInvocationConflictError(
+                        "The tool approval has expired."
+                    )
+            updated = self._persist_tool_approval_grant(
+                connection,
+                record,
+                grant,
             )
         return self._tool_approval_from_row(updated)
 
@@ -2075,6 +2108,98 @@ class StateStore:
             raise ToolInvocationConflictError(
                 "Tool approval request resource summary does not match the invocation."
             )
+
+    @staticmethod
+    def _validate_persisted_tool_approval_binding(
+        invocation: ToolInvocationRecord,
+        request: ToolApprovalRequest,
+    ) -> None:
+        policy = invocation.policy_decision
+        matches = (
+            invocation.status == ToolInvocationStatus.AWAITING_APPROVAL
+            and invocation.approval_id == request.approval_id
+            and invocation.invocation_id == request.invocation_id
+            and invocation.invocation_revision == request.invocation_revision
+            and invocation.run_id == request.run_id
+            and invocation.task_id == request.task_id
+            and invocation.tool_name == request.tool_name
+            and invocation.tool_version == request.tool_version
+            and invocation.protocol_version == request.protocol_version
+            and invocation.capabilities == request.requested_capabilities
+            and invocation.capability_fingerprint
+            == request.capability_fingerprint
+            and invocation.arguments_sha256 == request.arguments_sha256
+            and invocation.workspace_identity == request.workspace_identity
+            and invocation.worktree_identity == request.worktree_identity
+            and invocation.resource_budget == request.resource_budget
+            and invocation.cancellation.revision == request.cancellation_revision
+            and invocation.idempotency_key_sha256
+            == request.idempotency_key_sha256
+            and policy is not None
+            and policy.outcome == ToolPolicyOutcome.REQUIRE_APPROVAL
+            and policy.rule_id == request.policy_rule
+            and policy.reason == request.reason
+            and policy.constraints == request.proposed_constraints
+        )
+        if not matches:
+            raise ToolInvocationConflictError(
+                "Persisted tool approval scope does not match its invocation."
+            )
+
+    def _persist_tool_approval_grant(
+        self,
+        connection: sqlite3.Connection,
+        record: ToolApprovalRecord,
+        grant: ToolApprovalGrant,
+    ) -> sqlite3.Row:
+        if record.disposition is not None:
+            if (
+                record.disposition == grant.disposition.value
+                and record.binding_sha256 == grant.binding_sha256
+                and record.reason == _safe_text(grant.reason)
+            ):
+                return self._require_tool_approval_row(
+                    connection,
+                    grant.request.run_id,
+                    grant.approval_id,
+                )
+            raise ToolInvocationConflictError(
+                "A decided tool approval cannot be replaced."
+            )
+        connection.execute(
+            """UPDATE tool_approvals
+            SET binding_sha256 = ?, disposition = ?, reason = ?, decided_at = ?
+            WHERE approval_id = ? AND disposition IS NULL""",
+            (
+                grant.binding_sha256,
+                grant.disposition.value,
+                _safe_text(grant.reason),
+                _timestamp(grant.decided_at),
+                grant.approval_id,
+            ),
+        )
+        self._insert_event(
+            connection,
+            grant.request.run_id,
+            grant.request.task_id,
+            (
+                "tool_approval_approved"
+                if grant.disposition.value == "approved"
+                else "tool_approval_rejected"
+            ),
+            {
+                "approval_id": grant.approval_id,
+                "invocation_id": grant.request.invocation_id,
+                "invocation_revision": grant.request.invocation_revision,
+                "disposition": grant.disposition.value,
+                "reason": grant.reason,
+            },
+        )
+        return self._require_tool_approval_row(
+            connection,
+            grant.request.run_id,
+            grant.approval_id,
+        )
 
     def _require_approved_tool_grant(
         self,

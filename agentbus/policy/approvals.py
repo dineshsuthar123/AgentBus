@@ -14,6 +14,7 @@ from agentbus.tools.protocol import (
     ToolPolicyDecision,
     ToolPolicyOutcome,
     capability_fingerprint,
+    idempotency_key_sha256,
     require_capabilities_unchanged,
     require_invocation_revision,
     sha256_json,
@@ -61,6 +62,10 @@ def build_tool_approval_request(
             facts.network_destinations[0] if facts.network_destinations else None
         ),
         resource_budget=invocation.resource_budget,
+        cancellation_revision=invocation.cancellation_revision,
+        idempotency_key_sha256=idempotency_key_sha256(
+            invocation.idempotency_key
+        ),
         policy_rule=decision.rule_id,
         reason=decision.reason,
         proposed_constraints=decision.constraints,
@@ -77,11 +82,27 @@ def decide_tool_approval(
     decided_at: datetime | None = None,
 ) -> ToolApprovalGrant:
     _validate_request_fields(request, invocation)
+    return decide_persisted_tool_approval(
+        request,
+        disposition=disposition,
+        reason=reason,
+        decided_at=decided_at,
+    )
+
+
+def decide_persisted_tool_approval(
+    request: ToolApprovalRequest,
+    *,
+    disposition: ToolApprovalDisposition,
+    reason: str | None = None,
+    decided_at: datetime | None = None,
+) -> ToolApprovalGrant:
+    """Decide an immutable persisted request without reconstructing raw inputs."""
     return ToolApprovalGrant(
         approval_id=request.approval_id,
         request=request,
         disposition=disposition,
-        binding_sha256=approval_binding_sha256(request, invocation),
+        binding_sha256=approval_binding_sha256(request),
         reason=redact_text(reason, max_chars=2_048),
         decided_at=decided_at or datetime.now(timezone.utc),
     )
@@ -118,27 +139,14 @@ def validate_tool_approval(
 
 def approval_binding_sha256(
     request: ToolApprovalRequest,
-    invocation: ToolInvocation,
+    invocation: ToolInvocation | None = None,
 ) -> str:
+    if invocation is not None:
+        _validate_request_fields(request, invocation)
     return sha256_json(
         {
-            "approval_id": request.approval_id,
-            "invocation_id": invocation.invocation_id,
-            "invocation_revision": invocation.invocation_revision,
-            "run_id": invocation.run_id,
-            "task_id": invocation.task_id,
-            "tool_name": invocation.tool_name,
-            "tool_version": invocation.tool_version.model_dump(mode="json"),
-            "protocol_version": invocation.protocol_version,
-            "arguments_sha256": sha256_json(invocation.arguments),
-            "capability_fingerprint": capability_fingerprint(
-                invocation.requested_capabilities
-            ),
-            "workspace_identity": invocation.context.workspace_identity,
-            "worktree_identity": invocation.context.worktree_identity,
-            "resource_budget": invocation.resource_budget.model_dump(mode="json"),
-            "cancellation_revision": invocation.cancellation_revision,
-            "idempotency_key": invocation.idempotency_key,
+            "binding_version": 2,
+            "request": request.model_dump(mode="json"),
         }
     )
 
@@ -164,6 +172,14 @@ def _validate_request_fields(
         ),
         "resource budget": (request.resource_budget, invocation.resource_budget),
         "arguments": (request.arguments_sha256, sha256_json(invocation.arguments)),
+        "cancellation revision": (
+            request.cancellation_revision,
+            invocation.cancellation_revision,
+        ),
+        "idempotency key": (
+            request.idempotency_key_sha256,
+            idempotency_key_sha256(invocation.idempotency_key),
+        ),
     }
     for field, (approved, current) in comparisons.items():
         if approved != current:

@@ -24,6 +24,7 @@ from agentbus.tools.protocol import (
     ToolResult,
     ToolVersion,
     capability_fingerprint,
+    idempotency_key_sha256,
     sha256_json,
     safe_protocol_dict,
 )
@@ -112,12 +113,7 @@ def invocation_operation_sha256(invocation: ToolInvocation) -> str:
 
 
 def invocation_idempotency_sha256(invocation: ToolInvocation) -> str | None:
-    if invocation.idempotency_key is None:
-        return None
-    encoded = (
-        "agentbus-tool-idempotency-v1\0" + invocation.idempotency_key
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+    return idempotency_key_sha256(invocation.idempotency_key)
 
 
 def policy_decision_sha256(decision: ToolPolicyDecision) -> str:
