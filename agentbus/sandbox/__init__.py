@@ -20,6 +20,10 @@ from agentbus.sandbox.output import (
     OutputCallback,
     ProcessOutputSnapshot,
 )
+from agentbus.sandbox.limits import (
+    effective_wall_clock_limit,
+    process_resource_usage,
+)
 
 __all__ = [
     "EnvironmentValidationError",
@@ -33,7 +37,9 @@ __all__ = [
     "BoundedProcessOutput",
     "OutputCallback",
     "ProcessOutputSnapshot",
+    "effective_wall_clock_limit",
     "environment_diagnostics",
     "sanitized_process_environment",
+    "process_resource_usage",
     "validate_working_directory",
 ]
