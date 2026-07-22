@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import jsonschema
@@ -124,6 +125,10 @@ def scope_contains(allowed: CapabilityScope, requested: CapabilityScope) -> bool
             # Concrete paths narrow a root-scoped descriptor. Policy and the
             # contained implementation still validate each path against roots.
             continue
+        if field_name in {"roots", "working_directories"}:
+            if not _path_scope_contains(allowed_values, requested_values):
+                return False
+            continue
         if not requested_values.issubset(allowed_values):
             return False
     return True
@@ -196,3 +201,24 @@ def _validate_instance(
         raise ToolProtocolValidationError(
             f"{label} failed descriptor JSON Schema validation."
         ) from error
+
+
+def _path_scope_contains(
+    allowed: set[str],
+    requested: set[str],
+) -> bool:
+    if not requested:
+        return True
+    if not allowed:
+        return False
+    allowed_paths = tuple(
+        Path(value).expanduser().resolve(strict=False) for value in allowed
+    )
+    for value in requested:
+        requested_path = Path(value).expanduser().resolve(strict=False)
+        if not any(
+            requested_path == root or requested_path.is_relative_to(root)
+            for root in allowed_paths
+        ):
+            return False
+    return True

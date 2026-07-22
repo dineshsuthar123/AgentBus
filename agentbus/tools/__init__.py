@@ -1,6 +1,12 @@
 from importlib import import_module
 
 from agentbus.tools.descriptors import BUILTIN_TOOL_VERSION, builtin_descriptors
+from agentbus.tools.capabilities import (
+    anticipated_tool_usage,
+    derive_required_capabilities,
+    require_expected_capabilities,
+    requires_process_slot,
+)
 from agentbus.tools.interfaces import (
     ManagedTool,
     ToolExecutionOutput,
@@ -47,6 +53,10 @@ __all__ = [
     "ToolRegistry",
     "ToolRegistryError",
     "ToolVersionMismatchError",
+    "anticipated_tool_usage",
     "builtin_descriptors",
     "builtin_tool_registry",
+    "derive_required_capabilities",
+    "require_expected_capabilities",
+    "requires_process_slot",
 ]
