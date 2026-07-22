@@ -80,7 +80,8 @@ class MultiAgentTaskExecutor:
                     "workspace_trusted": True,
                     "provider_consented": True,
                     "policy_context": {
-                        "attempt_number": context.attempt_number,
+                        # Retry ordinals must not change an approved invocation's
+                        # authorization identity during durable resume.
                         "assigned_role": context.task.assigned_role,
                         "planned_capabilities": list(
                             context.task.metadata.get(

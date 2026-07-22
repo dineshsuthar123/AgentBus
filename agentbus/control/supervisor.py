@@ -102,13 +102,55 @@ class AgentBusRunBackend:
     def resume(self, run_id: str) -> None:
         run = self.store.get_run(run_id)
         self.cancellations.recover(run_id)
+        config = self._config_for_persisted_run(run)
+        MultiAgentOrchestrator(
+            config=config,
+            state_store=self.store,
+            logger=RunLogger(log_dir=config.runs_dir, run_id=run_id),
+            cancellation_registry=self.cancellations,
+        ).resume_durable(run_id)
+
+    def _config_for_persisted_run(self, run: RunRecord) -> AgentBusConfig:
         parallel = run.metadata.get("parallel_execution", {})
         routing = run.metadata.get("model_routing", {})
-        config = self.base_config.with_overrides(
+        deterministic = (
+            routing.get("deterministic", {}) if isinstance(routing, dict) else {}
+        )
+        if not isinstance(deterministic, dict):
+            deterministic = {}
+        return self.base_config.with_overrides(
             workspace_dir=run.workspace,
             provider_name=(
                 routing.get("provider")
                 if isinstance(routing, dict) and routing.get("provider")
+                else None
+            ),
+            fallback_provider_name=(
+                routing.get("fallback_provider")
+                if isinstance(routing, dict) and routing.get("fallback_provider")
+                else None
+            ),
+            enable_provider_fallback=(
+                bool(routing.get("fallback_enabled"))
+                if isinstance(routing, dict) and "fallback_enabled" in routing
+                else None
+            ),
+            deterministic_profile=deterministic.get("profile"),
+            deterministic_latency_seconds=deterministic.get("latency_seconds"),
+            deterministic_latency_roles=(
+                tuple(deterministic["latency_roles"])
+                if isinstance(deterministic.get("latency_roles"), list)
+                else None
+            ),
+            deterministic_failure_kind=deterministic.get("failure_kind"),
+            deterministic_failure_calls=(
+                tuple(deterministic["failure_calls"])
+                if isinstance(deterministic.get("failure_calls"), list)
+                else None
+            ),
+            deterministic_failure_roles=(
+                tuple(deterministic["failure_roles"])
+                if isinstance(deterministic.get("failure_roles"), list)
                 else None
             ),
             parallel_execution=bool(
@@ -126,12 +168,6 @@ class AgentBusRunBackend:
             ),
             tool_resource_budget=self._persisted_tool_budget(run.metadata),
         )
-        MultiAgentOrchestrator(
-            config=config,
-            state_store=self.store,
-            logger=RunLogger(log_dir=config.runs_dir, run_id=run_id),
-            cancellation_registry=self.cancellations,
-        ).resume_durable(run_id)
 
     def cancel(self, run_id: str, reason: str | None = None) -> RunStatus:
         try:

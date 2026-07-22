@@ -14,7 +14,7 @@ from agentbus.control.errors import (
 from agentbus.control.models import RunCreateRequest
 from agentbus.control.supervisor import AgentBusRunBackend, BackgroundRunSupervisor
 from agentbus.execution.cancellation import CancellationState
-from agentbus.execution.models import RunStatus, utc_now
+from agentbus.execution.models import RunRecord, RunStatus, utc_now
 from agentbus.tools.protocol import ToolResourceBudget
 
 
@@ -189,3 +189,48 @@ def test_run_backend_propagates_the_request_tool_budget(tmp_path: Path) -> None:
             }
         }
     ) == budget
+
+
+def test_run_backend_restores_deterministic_routing_for_resume(
+    tmp_path: Path,
+) -> None:
+    base = AgentBusConfig(
+        state_dir=str(tmp_path / "state"),
+        deterministic_profile="python-calculator",
+    )
+    backend = AgentBusRunBackend(base)
+    requested = base.with_overrides(
+        workspace_dir=str(tmp_path / "workspace"),
+        provider_name="deterministic",
+        deterministic_profile="tool-delete-approval",
+        deterministic_latency_seconds=0.25,
+        deterministic_latency_roles=("coder",),
+        deterministic_failure_kind="timeout",
+        deterministic_failure_calls=(2,),
+        deterministic_failure_roles=("reviewer",),
+    )
+    run = RunRecord(
+        run_id="resume-routing",
+        original_task="Resume the exact deterministic profile",
+        model="deterministic-v1",
+        workspace=str((tmp_path / "workspace").resolve()),
+        metadata={
+            "model_routing": requested.safe_model_summary(),
+            "parallel_execution": {"enabled": False},
+            "tool_runtime": {
+                "resource_budget": requested.tool_resource_budget.model_dump(
+                    mode="json"
+                )
+            },
+        },
+    )
+
+    restored = backend._config_for_persisted_run(run)
+
+    assert restored.provider_name == "deterministic"
+    assert restored.deterministic_profile == "tool-delete-approval"
+    assert restored.deterministic_latency_seconds == 0.25
+    assert restored.deterministic_latency_roles == ("coder",)
+    assert restored.deterministic_failure_kind == "timeout"
+    assert restored.deterministic_failure_calls == (2,)
+    assert restored.deterministic_failure_roles == ("reviewer",)

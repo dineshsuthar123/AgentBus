@@ -551,6 +551,14 @@ class AgentBusConfig:
             "azure_auth_mode": self.azure_openai_auth_mode,
             "azure_api_mode": self.azure_openai_api_mode,
             "azure_api_key_configured": bool(self.azure_openai_api_key),
+            "deterministic": {
+                "profile": self.deterministic_profile,
+                "latency_seconds": self.deterministic_latency_seconds,
+                "latency_roles": list(self.deterministic_latency_roles),
+                "failure_kind": self.deterministic_failure_kind,
+                "failure_calls": list(self.deterministic_failure_calls),
+                "failure_roles": list(self.deterministic_failure_roles),
+            },
             "routes": routes,
         }
 
