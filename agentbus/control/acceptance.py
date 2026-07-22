@@ -204,6 +204,86 @@ def main() -> int:
             )
             print("acceptance: traversal denial passed", flush=True)
 
+            timeout_run = _submit_run(
+                base,
+                headers,
+                workspace,
+                task="Bound a slow managed process with its tool timeout.",
+                profile="tool-process-timeout",
+                latency_seconds=0,
+                latency_roles=[],
+                parallel=False,
+                commit_changes=False,
+            )
+            timeout_summary = _wait_for_terminal_run(base, headers, timeout_run)
+            assert timeout_summary["status"] == "succeeded"
+            timeout_events = _replay_events(
+                base,
+                headers,
+                timeout_run,
+                until_event="durable_run_succeeded",
+            )
+            observed_payloads.extend(timeout_events)
+            observed_payloads.extend(
+                _assert_timed_out_process(base, headers, timeout_run)
+            )
+            print("acceptance: process timeout passed", flush=True)
+
+            process_cancel_run = _submit_run(
+                base,
+                headers,
+                workspace,
+                task="Cancel a running managed process and clean up its process tree.",
+                profile="tool-process-cancel",
+                latency_seconds=0,
+                latency_roles=[],
+                parallel=False,
+                commit_changes=False,
+            )
+            running_invocation = _wait_for_running_tool_invocation(
+                base,
+                headers,
+                process_cancel_run,
+                tool_name="process.execute",
+            )
+            observed_payloads.append(running_invocation)
+            process_cancel_response = _request(
+                "POST",
+                (
+                    f"{base}/api/v1/runs/{process_cancel_run}/tool-invocations/"
+                    f"{running_invocation['invocation_id']}/cancel"
+                ),
+                headers=headers,
+                json={"reason": "Offline acceptance managed process cancellation"},
+            ).json()
+            observed_payloads.append(process_cancel_response)
+            assert process_cancel_response["invocation_status"] == "running"
+            assert process_cancel_response["run_cancellation_requested"] is True
+            assert process_cancel_response["cancellation"]["requested"] is True
+            process_cancel_summary = _wait_for_terminal_run(
+                base,
+                headers,
+                process_cancel_run,
+            )
+            assert process_cancel_summary["status"] == "cancelled"
+            process_cancel_events = _replay_events(
+                base,
+                headers,
+                process_cancel_run,
+                until_event=_CANCELLATION_EVENT,
+            )
+            observed_payloads.extend(process_cancel_events)
+            observed_payloads.extend(
+                _assert_cancelled_process(
+                    base,
+                    headers,
+                    process_cancel_run,
+                    running_invocation["invocation_id"],
+                    process_cancel_events,
+                )
+            )
+            print("acceptance: process cancellation passed", flush=True)
+
             cancellation_marker = "acceptance-private-prompt-marker"
             cancelled_run = _submit_run(
                 base,
@@ -444,6 +524,47 @@ def _wait_for_pending_tool_approval(
             return pending[0]
         time.sleep(0.05)
     raise TimeoutError(f"Run {run_id} did not request tool approval.")
+
+
+def _wait_for_running_tool_invocation(
+    base: str,
+    headers: dict[str, str],
+    run_id: str,
+    *,
+    tool_name: str,
+    timeout_seconds: float = 30,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        response = requests.get(
+            f"{base}/api/v1/runs/{run_id}",
+            headers=headers,
+            timeout=15,
+        )
+        if response.status_code == 404:
+            time.sleep(0.05)
+            continue
+        response.raise_for_status()
+        summary = response.json()
+        if summary["status"] in _TERMINAL_STATUSES:
+            raise AssertionError(
+                f"Run {run_id} terminated before {tool_name} started."
+            )
+        invocations = _request(
+            "GET",
+            f"{base}/api/v1/runs/{run_id}/tool-invocations",
+            headers=headers,
+        ).json()["invocations"]
+        running = [
+            item
+            for item in invocations
+            if item["tool_name"] == tool_name and item["status"] == "running"
+        ]
+        if running:
+            assert len(running) == 1
+            return running[0]
+        time.sleep(0.05)
+    raise TimeoutError(f"Run {run_id} did not start {tool_name}.")
 
 
 def _wait_for_provider_operation(
@@ -881,6 +1002,107 @@ def _assert_traversal_denied(
         }
     ]
     return [listed, detail, audit, report]
+
+
+def _assert_timed_out_process(
+    base: str,
+    headers: dict[str, str],
+    run_id: str,
+) -> list[Any]:
+    listed = _request(
+        "GET",
+        f"{base}/api/v1/runs/{run_id}/tool-invocations",
+        headers=headers,
+    ).json()
+    invocation = next(
+        item
+        for item in listed["invocations"]
+        if item["tool_name"] == "process.execute"
+    )
+    assert invocation["status"] == "timed_out"
+    detail = _request(
+        "GET",
+        (
+            f"{base}/api/v1/runs/{run_id}/tool-invocations/"
+            f"{invocation['invocation_id']}"
+        ),
+        headers=headers,
+    ).json()
+    result = detail["result"]
+    assert result["status"] == "timed_out"
+    assert result["timed_out"] is True
+    assert result["error"]["code"] == "wall_clock_timeout"
+    wall_clock_limit = result["resource_usage"]["limits"]["wall_clock_seconds"]
+    assert wall_clock_limit["enforced"] is True
+    report = _request(
+        "GET",
+        f"{base}/api/v1/runs/{run_id}/report",
+        headers=headers,
+    ).json()
+    runtime = report["report"]["tool_runtime"]
+    assert runtime["status_counts"]["timed_out"] == 1
+    assert runtime["timeout_count"] == 1
+    return [listed, detail, report]
+
+
+def _assert_cancelled_process(
+    base: str,
+    headers: dict[str, str],
+    run_id: str,
+    invocation_id: str,
+    events: list[dict[str, Any]],
+) -> list[Any]:
+    detail = _request(
+        "GET",
+        f"{base}/api/v1/runs/{run_id}/tool-invocations/{invocation_id}",
+        headers=headers,
+    ).json()
+    assert detail["status"] == "cancelled"
+    result = detail["result"]
+    assert result["status"] == "cancelled"
+    cancellation = result["cancellation"]
+    assert cancellation["requested"] is True
+    assert cancellation["signal_sent"] is True
+    assert cancellation["acknowledged"] is True
+    assert cancellation["process_terminated"] is True
+    assert cancellation["cleanup_completed"] is True
+
+    audit = _request(
+        "GET",
+        f"{base}/api/v1/runs/{run_id}/tool-audit",
+        headers=headers,
+    ).json()
+    record = next(
+        item["record"]
+        for item in audit["records"]
+        if item["record"]["invocation_id"] == invocation_id
+    )
+    assert record["outcome"] == "cancelled"
+    event_types = [event["event_type"] for event in events]
+    assert {
+        "tool_cancel_requested",
+        "tool_cancel_acknowledged",
+        "tool_cancelled",
+        "tool_cleanup_completed",
+    } <= set(event_types)
+    assert event_types.index("tool_cancel_acknowledged") < event_types.index(
+        "tool_cancelled"
+    )
+    assert event_types.index("tool_cancelled") < event_types.index(
+        "tool_cleanup_completed"
+    )
+
+    report = _request(
+        "GET",
+        f"{base}/api/v1/runs/{run_id}/report",
+        headers=headers,
+    ).json()
+    runtime = report["report"]["tool_runtime"]
+    assert report["status"] == "cancelled"
+    assert report["report"]["current_leases"] == []
+    assert runtime["status_counts"]["cancelled"] == 1
+    assert runtime["cancellation_count"] == 1
+    return [detail, audit, report]
 
 
 def _request(method: str, url: str, **kwargs):
