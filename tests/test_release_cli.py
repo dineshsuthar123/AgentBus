@@ -15,6 +15,7 @@ from agentbus.doctor import CheckStatus, run_doctor
 from agentbus.execution.schema import SCHEMA_VERSION
 from agentbus.execution.state_store import StateStore
 from agentbus.mcp import mcp_server_capabilities
+from agentbus.tools.protocol import ToolResourceBudget
 
 
 def _git_repository(path: Path) -> Path:
@@ -86,6 +87,56 @@ def test_config_file_unknown_values_are_rejected(tmp_path):
 
     with pytest.raises(ValueError, match="Unknown AgentBus config"):
         resolve_configuration(config_file=config_file, environ={})
+
+
+def test_config_file_loads_validated_tool_resource_budget(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.json"
+    config_file.write_text(
+        json.dumps(
+            {
+                "agentbus": {
+                    "tool_resource_budget": {
+                        "wall_clock_seconds": 20,
+                        "stdout_bytes": 1_024,
+                        "stderr_bytes": 1_024,
+                        "combined_output_bytes": 2_048,
+                        "invocations_per_task": 2,
+                        "invocations_per_run": 4,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    resolved = resolve_configuration(config_file=config_file, environ={})
+
+    assert isinstance(resolved.config.tool_resource_budget, ToolResourceBudget)
+    assert resolved.config.tool_resource_budget.wall_clock_seconds == 20
+    assert resolved.config.tool_resource_budget.invocations_per_task == 2
+    assert resolved.safe_values()["tool_resource_budget"]["value"] == (
+        resolved.config.tool_resource_budget.model_dump(mode="json")
+    )
+
+
+def test_invalid_tool_budget_error_does_not_echo_input(tmp_path: Path) -> None:
+    private_value = "budget-secret-must-not-appear"
+    config_file = tmp_path / "config.json"
+    config_file.write_text(
+        json.dumps(
+            {
+                "tool_resource_budget": {
+                    "wall_clock_seconds": private_value,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Invalid tool resource budget") as exc:
+        resolve_configuration(config_file=config_file, environ={})
+
+    assert private_value not in str(exc.value)
 
 
 def test_config_file_loads_mcp_servers_without_exposing_private_values(

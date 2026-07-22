@@ -77,6 +77,11 @@ def test_tool_resource_budget_survives_immutable_config_overrides():
     assert config.tool_resource_budget is budget
 
 
+def test_direct_config_rejects_unvalidated_tool_resource_budget():
+    with pytest.raises(ValueError, match="must be validated"):
+        AgentBusConfig(tool_resource_budget={})
+
+
 def test_env_overrides(monkeypatch):
     monkeypatch.setenv("AGENTBUS_MODEL", "custom-model")
     monkeypatch.setenv("AGENTBUS_OLLAMA_URL", "http://localhost:1234/api/generate")

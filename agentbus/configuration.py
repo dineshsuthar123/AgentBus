@@ -12,6 +12,7 @@ from agentbus.security.redaction import is_sensitive_key, safe_endpoint_host
 
 if TYPE_CHECKING:
     from agentbus.mcp.models import McpServerConfig
+    from agentbus.tools.protocol import ToolResourceBudget
 
 
 ENVIRONMENT_FIELDS: dict[str, str] = {
@@ -153,6 +154,9 @@ def resolve_configuration(
     values["mcp_server_configs"] = _coerce_mcp_server_configs(
         values["mcp_server_configs"]
     )
+    values["tool_resource_budget"] = _coerce_tool_resource_budget(
+        values["tool_resource_budget"]
+    )
     config = AgentBusConfig(**values)
     return ResolvedConfiguration(config=config, sources=sources, config_file=loaded_path)
 
@@ -246,3 +250,26 @@ def _coerce_mcp_server_configs(value: Any) -> tuple[McpServerConfig, ...]:
                 f"Invalid MCP server configuration {index}{suffix}"
             ) from None
     return tuple(servers)
+
+
+def _coerce_tool_resource_budget(value: Any) -> ToolResourceBudget:
+    from agentbus.tools.protocol import ToolResourceBudget
+
+    if isinstance(value, ToolResourceBudget):
+        return value
+    if not isinstance(value, dict):
+        raise ValueError("tool_resource_budget must be an object")
+    try:
+        return ToolResourceBudget.model_validate(value)
+    except ValueError as exc:
+        locations = sorted(
+            {
+                ".".join(str(part) for part in error.get("loc", ()))
+                for error in getattr(exc, "errors", lambda: [])()
+            }
+        )
+        location = ", ".join(item for item in locations if item)
+        suffix = f" ({location})" if location else ""
+        raise ValueError(
+            f"Invalid tool resource budget configuration{suffix}"
+        ) from None

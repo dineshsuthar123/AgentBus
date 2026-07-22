@@ -402,6 +402,10 @@ class AgentBusConfig:
                 "AGENTBUS_DETERMINISTIC_PROFILE must be one of: "
                 f"{choices}"
             )
+        from agentbus.tools.protocol import ToolResourceBudget
+
+        if not isinstance(self.tool_resource_budget, ToolResourceBudget):
+            raise ValueError("Tool resource budget must be validated before use")
         if (
             not math.isfinite(self.deterministic_latency_seconds)
             or self.deterministic_latency_seconds < 0
