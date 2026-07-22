@@ -626,7 +626,14 @@ class DeterministicProvider:
                     "process.execute",
                     {
                         "executable": "python",
-                        "arguments": ["-c", "import time; time.sleep(30)"],
+                        "arguments": [
+                            "-c",
+                            (
+                                "import time; "
+                                "print('agentbus-process-ready', flush=True); "
+                                "time.sleep(30)"
+                            ),
+                        ],
                     },
                     ["process.execute"],
                     f"{task_id}:process-cancel",

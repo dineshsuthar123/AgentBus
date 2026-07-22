@@ -423,7 +423,7 @@ def test_deterministic_cancel_profile_terminates_active_process(
     try:
         with ThreadPoolExecutor(max_workers=1) as pool:
             future = pool.submit(loop.run, "Cancel the active managed process.")
-            _wait_for_running_invocation(harness.store)
+            _wait_for_process_ready(harness.store)
             assert harness.cancellations.request("run-1", "deterministic cancel")
             with pytest.raises(CancellationRequested):
                 future.result(timeout=10)
@@ -538,12 +538,16 @@ def _git(workspace: Path, *arguments: str) -> str:
     return result.stdout.strip()
 
 
-def _wait_for_running_invocation(store: StateStore) -> None:
+def _wait_for_process_ready(store: StateStore) -> None:
     deadline = time.monotonic() + 10
     waiter = threading.Event()
     while time.monotonic() < deadline:
-        records = store.list_tool_invocations("run-1")
-        if records and records[0].status == ToolInvocationStatus.RUNNING:
+        events = store.list_events("run-1")
+        if any(
+            event["event_type"] == "tool_output_chunk"
+            and "agentbus-process-ready" in event["payload"].get("text", "")
+            for event in events
+        ):
             return
         waiter.wait(0.01)
-    raise AssertionError("Managed process did not reach running state.")
+    raise AssertionError("Managed process did not emit its readiness marker.")
