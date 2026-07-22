@@ -8,6 +8,7 @@ import pytest
 
 from agentbus.execution.models import RunRecord, TaskSpec
 from agentbus.execution.state_store import (
+    InvalidToolInvocationTransition,
     StateStore,
     StateStoreError,
     ToolInvocationConflictError,
@@ -20,8 +21,13 @@ from agentbus.tools.protocol import (
     ToolInvocation,
     ToolInvocationContext,
     ToolInvocationStatus,
+    ToolPolicyDecision,
+    ToolPolicyOutcome,
     ToolResourceUsage,
+    ToolResult,
     ToolVersion,
+    capability_fingerprint,
+    sha256_json,
 )
 
 
@@ -82,6 +88,33 @@ def invocation(
             policy_context={"api_key": "raw-sensitive-policy-key"},
         ),
         idempotency_key=idempotency_key,
+    )
+
+
+def policy_decision(
+    current: ToolInvocation,
+    outcome: ToolPolicyOutcome = ToolPolicyOutcome.ALLOW_WITH_CONSTRAINTS,
+    *,
+    approval_id: str | None = None,
+) -> ToolPolicyDecision:
+    return ToolPolicyDecision(
+        outcome=outcome,
+        rule_id=(
+            "allow.approved_invocation"
+            if approval_id is not None
+            else "allow.scoped_mutation"
+        ),
+        reason="Bounded policy result; token=raw-sensitive-policy-reason",
+        invocation_id=current.invocation_id,
+        invocation_revision=current.invocation_revision,
+        capability_fingerprint=capability_fingerprint(
+            current.requested_capabilities
+        ),
+        arguments_sha256=sha256_json(current.arguments),
+        constraints=current.requested_capabilities,
+        safe_metadata=(
+            {"approval_id": approval_id} if approval_id is not None else {}
+        ),
     )
 
 
@@ -219,3 +252,155 @@ def test_corrupt_tool_protocol_state_fails_closed(tmp_path: Path) -> None:
 
     with pytest.raises(StateStoreError, match="recovery cannot continue safely"):
         store.get_tool_invocation("run-1", "invocation-1")
+
+
+def test_tool_lifecycle_persists_ordered_events_and_safe_replay(
+    tmp_path: Path,
+) -> None:
+    store = create_store(tmp_path)
+    current = invocation(tmp_path, "invocation-1", idempotency_key=None)
+    decision = policy_decision(current)
+    store.record_tool_invocation(current)
+    allowed = store.record_tool_policy_decision("run-1", decision)
+    duplicate_allowed = store.record_tool_policy_decision(
+        "run-1",
+        decision.model_copy(
+            update={"evaluated_at": decision.evaluated_at + timedelta(seconds=1)}
+        ),
+    )
+    running = store.mark_tool_invocation_started("run-1", current.invocation_id)
+    result = ToolResult(
+        invocation_id=current.invocation_id,
+        invocation_revision=current.invocation_revision,
+        status=ToolInvocationStatus.SUCCEEDED,
+        structured_output={
+            "content": "raw-sensitive-structured-output",
+            "path": "module.py",
+        },
+        stdout="Bearer raw-sensitive-stdout-token",
+        stderr="api_key=raw-sensitive-stderr-key",
+        duration_seconds=0.25,
+        resource_usage=ToolResourceUsage(
+            stdout_bytes=33,
+            stderr_bytes=35,
+            file_mutations=1,
+            written_bytes=26,
+        ),
+        policy_decision=decision,
+        safe_diagnostic_metadata={"content": "raw-sensitive-diagnostic"},
+    )
+
+    completed = store.complete_tool_invocation("run-1", result)
+    duplicate = store.complete_tool_invocation("run-1", result)
+    delayed_duplicate = store.complete_tool_invocation(
+        "run-1",
+        result.model_copy(
+            update={
+                "policy_decision": decision.model_copy(
+                    update={
+                        "evaluated_at": decision.evaluated_at + timedelta(seconds=2)
+                    }
+                )
+            }
+        ),
+    )
+
+    assert allowed == duplicate_allowed
+    assert allowed.status == ToolInvocationStatus.REQUESTED
+    assert running.status == ToolInvocationStatus.RUNNING
+    assert completed == duplicate == delayed_duplicate
+    assert completed.status == ToolInvocationStatus.SUCCEEDED
+    assert completed.safe_result is not None
+    assert completed.safe_result.stdout == ""
+    assert completed.safe_result.stderr == ""
+    assert completed.safe_result.stdout_truncated is True
+    assert completed.safe_result.stderr_truncated is True
+    assert completed.safe_result.structured_output == {
+        "persisted_summary": True,
+        "sha256": completed.safe_result.safe_diagnostic_metadata[
+            "structured_output_sha256"
+        ],
+        "key_count": 2,
+    }
+    lifecycle_events = [
+        event["event_type"]
+        for event in store.list_events("run-1")
+        if event["event_type"].startswith("tool_")
+    ]
+    assert lifecycle_events == [
+        "tool_invocation_requested",
+        "tool_policy_allowed",
+        "tool_invocation_started",
+        "tool_succeeded",
+    ]
+    persisted_bytes = b"".join(
+        path.read_bytes()
+        for path in store.database_path.parent.glob(f"{store.database_path.name}*")
+    )
+    for forbidden in (
+        b"raw-sensitive-structured-output",
+        b"raw-sensitive-stdout-token",
+        b"raw-sensitive-stderr-key",
+        b"raw-sensitive-diagnostic",
+        b"raw-sensitive-policy-reason",
+    ):
+        assert forbidden not in persisted_bytes
+
+
+def test_policy_denial_is_terminal_and_idempotent(tmp_path: Path) -> None:
+    store = create_store(tmp_path)
+    current = invocation(tmp_path, "invocation-1", idempotency_key=None)
+    denied = policy_decision(current, ToolPolicyOutcome.DENY)
+    store.record_tool_invocation(current)
+
+    first = store.record_tool_policy_decision("run-1", denied)
+    duplicate = store.record_tool_policy_decision("run-1", denied)
+
+    assert first == duplicate
+    assert first.status == ToolInvocationStatus.DENIED
+    assert first.error_category.value == "policy_denied"
+    assert first.completed_at is not None
+    with pytest.raises(InvalidToolInvocationTransition, match="terminal"):
+        store.mark_tool_invocation_started("run-1", current.invocation_id)
+    denied_events = [
+        event
+        for event in store.list_events("run-1")
+        if event["event_type"] == "tool_policy_denied"
+    ]
+    assert len(denied_events) == 1
+
+
+def test_policy_and_result_bindings_reject_cross_invocation_reuse(
+    tmp_path: Path,
+) -> None:
+    store = create_store(tmp_path)
+    first = invocation(tmp_path, "invocation-1", idempotency_key=None)
+    second = invocation(
+        tmp_path,
+        "invocation-2",
+        path="second.py",
+        idempotency_key=None,
+    )
+    store.record_tool_invocation(first)
+    store.record_tool_invocation(second)
+
+    with pytest.raises(ToolInvocationConflictError, match="policy decision"):
+        store.record_tool_policy_decision(
+            "run-1",
+            policy_decision(second).model_copy(
+                update={"invocation_id": first.invocation_id}
+            ),
+        )
+
+    first_decision = policy_decision(first)
+    store.record_tool_policy_decision("run-1", first_decision)
+    with pytest.raises(InvalidToolInvocationTransition, match="running state"):
+        store.complete_tool_invocation(
+            "run-1",
+            ToolResult(
+                invocation_id=first.invocation_id,
+                invocation_revision=first.invocation_revision,
+                status=ToolInvocationStatus.SUCCEEDED,
+                policy_decision=first_decision,
+            ),
+        )

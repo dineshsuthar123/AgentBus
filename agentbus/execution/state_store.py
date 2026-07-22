@@ -38,13 +38,21 @@ from agentbus.execution.transitions import (
 )
 from agentbus.security.redaction import is_sensitive_key, redact_text
 from agentbus.tools.protocol import (
+    ToolErrorCategory,
     ToolInvocation,
     ToolInvocationStatus,
+    ToolPolicyDecision,
+    ToolPolicyOutcome,
     ToolResourceUsage,
+    ToolResult,
 )
 from agentbus.tools.records import (
+    TERMINAL_TOOL_STATUSES,
     ToolInvocationRecord,
     invocation_record_values,
+    policy_decision_sha256,
+    safe_persisted_tool_result,
+    safe_policy_decision,
 )
 from agentbus.worktrees.models import (
     IntegrationRecord,
@@ -77,6 +85,10 @@ class ToolInvocationNotFoundError(StateStoreError):
 
 
 class ToolInvocationConflictError(StateStoreError):
+    pass
+
+
+class InvalidToolInvocationTransition(StateStoreError):
     pass
 
 
@@ -1115,6 +1127,306 @@ class StateStore:
             rows = connection.execute(query, parameters).fetchall()
         return [self._tool_invocation_from_row(row) for row in rows]
 
+    def record_tool_policy_decision(
+        self,
+        run_id: str,
+        decision: ToolPolicyDecision,
+        *,
+        approval_id: str | None = None,
+    ) -> ToolInvocationRecord:
+        _require_id(run_id, "run")
+        if approval_id is not None:
+            _require_id(approval_id, "tool approval")
+        persisted_decision = safe_policy_decision(decision)
+        now = utc_now()
+        with self._write_transaction() as connection:
+            row = self._require_tool_invocation_row(
+                connection,
+                run_id,
+                decision.invocation_id,
+            )
+            record = self._tool_invocation_from_row(row)
+            self._validate_tool_policy_binding(record, persisted_decision)
+            if record.policy_decision is not None and policy_decision_sha256(
+                record.policy_decision
+            ) == policy_decision_sha256(persisted_decision):
+                if approval_id is None or approval_id == record.approval_id:
+                    return record
+                raise ToolInvocationConflictError(
+                    "A persisted tool policy decision cannot change approval scope."
+                )
+
+            if record.policy_decision is None:
+                if record.status != ToolInvocationStatus.REQUESTED:
+                    raise InvalidToolInvocationTransition(
+                        "Initial tool policy evaluation requires requested state."
+                    )
+                if approval_id is not None:
+                    raise ToolInvocationConflictError(
+                        "Initial tool policy evaluation cannot attach an approval."
+                    )
+            else:
+                self._validate_approved_policy_transition(
+                    record,
+                    persisted_decision,
+                    approval_id,
+                )
+
+            status = record.status
+            completed_at = record.completed_at
+            error_category = record.error_category
+            error_message = record.error_message
+            if persisted_decision.outcome == ToolPolicyOutcome.REQUIRE_APPROVAL:
+                status = ToolInvocationStatus.AWAITING_APPROVAL
+            elif persisted_decision.outcome == ToolPolicyOutcome.DENY:
+                status = ToolInvocationStatus.DENIED
+                completed_at = now
+                error_category = ToolErrorCategory.POLICY_DENIED.value
+                error_message = _safe_text(persisted_decision.reason)
+
+            connection.execute(
+                """UPDATE tool_invocations
+                SET status = ?, policy_decision_json = ?, approval_id = ?,
+                    error_category = ?, error_message = ?, completed_at = ?,
+                    updated_at = ?
+                WHERE invocation_id = ?""",
+                (
+                    status.value,
+                    _dump_json(persisted_decision.model_dump(mode="json")),
+                    approval_id,
+                    error_category,
+                    error_message,
+                    _timestamp(completed_at),
+                    _timestamp(now),
+                    record.invocation_id,
+                ),
+            )
+            event_type = {
+                ToolPolicyOutcome.DENY: "tool_policy_denied",
+                ToolPolicyOutcome.REQUIRE_APPROVAL: "tool_approval_required",
+            }.get(persisted_decision.outcome, "tool_policy_allowed")
+            self._insert_event(
+                connection,
+                record.run_id,
+                record.task_id,
+                event_type,
+                {
+                    "invocation_id": record.invocation_id,
+                    "invocation_revision": record.invocation_revision,
+                    "outcome": persisted_decision.outcome.value,
+                    "rule_id": persisted_decision.rule_id,
+                    "reason": persisted_decision.reason,
+                    "approval_id": approval_id,
+                },
+            )
+            updated = self._require_tool_invocation_row(
+                connection,
+                run_id,
+                record.invocation_id,
+            )
+        return self._tool_invocation_from_row(updated)
+
+    def mark_tool_invocation_started(
+        self,
+        run_id: str,
+        invocation_id: str,
+        *,
+        approval_id: str | None = None,
+        started_at: datetime | None = None,
+    ) -> ToolInvocationRecord:
+        _require_id(run_id, "run")
+        _require_id(invocation_id, "tool invocation")
+        if approval_id is not None:
+            _require_id(approval_id, "tool approval")
+        now = started_at or utc_now()
+        with self._write_transaction() as connection:
+            row = self._require_tool_invocation_row(
+                connection,
+                run_id,
+                invocation_id,
+            )
+            record = self._tool_invocation_from_row(row)
+            if record.status == ToolInvocationStatus.RUNNING:
+                if record.approval_id == approval_id:
+                    return record
+                raise ToolInvocationConflictError(
+                    "A running tool invocation cannot change approval scope."
+                )
+            if record.status in TERMINAL_TOOL_STATUSES:
+                raise InvalidToolInvocationTransition(
+                    "A terminal tool invocation cannot be started."
+                )
+            if record.policy_decision is None or (
+                record.policy_decision.outcome
+                not in {
+                    ToolPolicyOutcome.ALLOW,
+                    ToolPolicyOutcome.ALLOW_WITH_CONSTRAINTS,
+                }
+            ):
+                raise InvalidToolInvocationTransition(
+                    "A tool invocation requires an allowing policy decision before start."
+                )
+            if record.status == ToolInvocationStatus.AWAITING_APPROVAL:
+                if approval_id is None or approval_id != record.approval_id:
+                    raise ToolInvocationConflictError(
+                        "The exact persisted tool approval is required before start."
+                    )
+            elif record.status != ToolInvocationStatus.REQUESTED:
+                raise InvalidToolInvocationTransition(
+                    f"Tool invocation cannot start from '{record.status.value}'."
+                )
+            elif approval_id is not None:
+                raise ToolInvocationConflictError(
+                    "An automatically allowed tool cannot attach an approval."
+                )
+            if now < record.requested_at:
+                raise InvalidToolInvocationTransition(
+                    "Tool start time cannot precede its request time."
+                )
+
+            connection.execute(
+                """UPDATE tool_invocations
+                SET status = ?, started_at = ?, updated_at = ?
+                WHERE invocation_id = ?""",
+                (
+                    ToolInvocationStatus.RUNNING.value,
+                    _timestamp(now),
+                    _timestamp(now),
+                    invocation_id,
+                ),
+            )
+            self._insert_event(
+                connection,
+                record.run_id,
+                record.task_id,
+                "tool_invocation_started",
+                {
+                    "invocation_id": invocation_id,
+                    "invocation_revision": record.invocation_revision,
+                    "approval_id": approval_id,
+                },
+            )
+            updated = self._require_tool_invocation_row(
+                connection,
+                run_id,
+                invocation_id,
+            )
+        return self._tool_invocation_from_row(updated)
+
+    def complete_tool_invocation(
+        self,
+        run_id: str,
+        result: ToolResult,
+        *,
+        completed_at: datetime | None = None,
+    ) -> ToolInvocationRecord:
+        _require_id(run_id, "run")
+        if result.status not in TERMINAL_TOOL_STATUSES - {
+            ToolInvocationStatus.DENIED
+        }:
+            raise InvalidToolInvocationTransition(
+                "Tool completion requires a runtime terminal result."
+            )
+        persisted_result = safe_persisted_tool_result(result)
+        now = completed_at or utc_now()
+        with self._write_transaction() as connection:
+            row = self._require_tool_invocation_row(
+                connection,
+                run_id,
+                result.invocation_id,
+            )
+            record = self._tool_invocation_from_row(row)
+            if record.invocation_revision != result.invocation_revision:
+                raise ToolInvocationConflictError(
+                    "Tool result does not match the persisted invocation revision."
+                )
+            if record.policy_decision is None or policy_decision_sha256(
+                record.policy_decision
+            ) != policy_decision_sha256(persisted_result.policy_decision):
+                raise ToolInvocationConflictError(
+                    "Tool result does not match the persisted policy decision."
+                )
+            persisted_result = persisted_result.model_copy(
+                update={"policy_decision": record.policy_decision}
+            )
+            if record.approval_id != result.approval_id:
+                raise ToolInvocationConflictError(
+                    "Tool result does not match the persisted approval scope."
+                )
+            if record.status in TERMINAL_TOOL_STATUSES:
+                if record.safe_result == persisted_result:
+                    return record
+                raise ToolInvocationConflictError(
+                    "A terminal tool result cannot be replaced."
+                )
+            if record.status != ToolInvocationStatus.RUNNING:
+                raise InvalidToolInvocationTransition(
+                    "Tool completion requires running state."
+                )
+            if record.started_at is None or now < record.started_at:
+                raise InvalidToolInvocationTransition(
+                    "Tool completion time cannot precede its start time."
+                )
+            error_category = (
+                persisted_result.error.category.value
+                if persisted_result.error is not None
+                else None
+            )
+            error_message = (
+                _safe_text(persisted_result.error.message)
+                if persisted_result.error is not None
+                else None
+            )
+            connection.execute(
+                """UPDATE tool_invocations
+                SET status = ?, safe_result_json = ?, resource_usage_json = ?,
+                    cancellation_json = ?, error_category = ?, error_message = ?,
+                    completed_at = ?, updated_at = ?
+                WHERE invocation_id = ?""",
+                (
+                    persisted_result.status.value,
+                    _dump_json(persisted_result.model_dump(mode="json")),
+                    _dump_json(
+                        persisted_result.resource_usage.model_dump(mode="json")
+                    ),
+                    _dump_json(
+                        persisted_result.cancellation.model_dump(mode="json")
+                    ),
+                    error_category,
+                    error_message,
+                    _timestamp(now),
+                    _timestamp(now),
+                    result.invocation_id,
+                ),
+            )
+            event_type = {
+                ToolInvocationStatus.SUCCEEDED: "tool_succeeded",
+                ToolInvocationStatus.FAILED: "tool_failed",
+                ToolInvocationStatus.CANCELLED: "tool_cancelled",
+                ToolInvocationStatus.TIMED_OUT: "tool_timed_out",
+            }[persisted_result.status]
+            self._insert_event(
+                connection,
+                record.run_id,
+                record.task_id,
+                event_type,
+                {
+                    "invocation_id": result.invocation_id,
+                    "invocation_revision": result.invocation_revision,
+                    "status": persisted_result.status.value,
+                    "duration_seconds": persisted_result.duration_seconds,
+                    "timed_out": persisted_result.timed_out,
+                    "cancelled": persisted_result.cancellation.requested,
+                    "error_category": error_category,
+                },
+            )
+            updated = self._require_tool_invocation_row(
+                connection,
+                run_id,
+                result.invocation_id,
+            )
+        return self._tool_invocation_from_row(updated)
+
     def _require_matching_tool_invocation(
         self,
         row: sqlite3.Row,
@@ -1138,6 +1450,41 @@ class StateStore:
                 "Tool invocation or idempotency identity was reused with different scope."
             )
         return record
+
+    @staticmethod
+    def _validate_tool_policy_binding(
+        record: ToolInvocationRecord,
+        decision: ToolPolicyDecision,
+    ) -> None:
+        if (
+            decision.invocation_id != record.invocation_id
+            or decision.invocation_revision != record.invocation_revision
+            or decision.capability_fingerprint != record.capability_fingerprint
+            or decision.arguments_sha256 != record.arguments_sha256
+        ):
+            raise ToolInvocationConflictError(
+                "Tool policy decision does not match the invocation binding."
+            )
+
+    @staticmethod
+    def _validate_approved_policy_transition(
+        record: ToolInvocationRecord,
+        decision: ToolPolicyDecision,
+        approval_id: str | None,
+    ) -> None:
+        previous = record.policy_decision
+        if (
+            previous is None
+            or previous.outcome != ToolPolicyOutcome.REQUIRE_APPROVAL
+            or record.status != ToolInvocationStatus.AWAITING_APPROVAL
+            or decision.outcome
+            not in {ToolPolicyOutcome.ALLOW_WITH_CONSTRAINTS, ToolPolicyOutcome.DENY}
+            or approval_id is None
+            or decision.safe_metadata.get("approval_id") != approval_id
+        ):
+            raise ToolInvocationConflictError(
+                "Tool policy may change only after its exact approval is evaluated."
+            )
 
     def persist_cancellation_state(
         self,
@@ -1746,6 +2093,23 @@ class StateStore:
         if row is None:
             raise TaskNotFoundError(
                 f"Task '{task_id}' was not found in run '{run_id}'."
+            )
+        return row
+
+    @staticmethod
+    def _require_tool_invocation_row(
+        connection: sqlite3.Connection,
+        run_id: str,
+        invocation_id: str,
+    ) -> sqlite3.Row:
+        row = connection.execute(
+            """SELECT * FROM tool_invocations
+            WHERE run_id = ? AND invocation_id = ?""",
+            (run_id, invocation_id),
+        ).fetchone()
+        if row is None:
+            raise ToolInvocationNotFoundError(
+                f"Tool invocation '{invocation_id}' was not found in run '{run_id}'."
             )
         return row
 

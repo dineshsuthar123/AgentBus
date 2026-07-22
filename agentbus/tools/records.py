@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import hashlib
 from datetime import datetime
+from typing import Any
 
 from pydantic import Field
 
 from agentbus.tools.protocol import (
+    ToolArtifact,
     ToolCancellationSnapshot,
     ToolCapability,
+    ToolError,
     ToolErrorCategory,
     ToolInvocation,
     ToolInvocationStatus,
@@ -19,6 +22,7 @@ from agentbus.tools.protocol import (
     ToolVersion,
     capability_fingerprint,
     sha256_json,
+    safe_protocol_dict,
 )
 
 
@@ -62,6 +66,17 @@ class ToolInvocationRecord(ToolProtocolModel):
     updated_at: datetime
 
 
+TERMINAL_TOOL_STATUSES = frozenset(
+    {
+        ToolInvocationStatus.SUCCEEDED,
+        ToolInvocationStatus.FAILED,
+        ToolInvocationStatus.DENIED,
+        ToolInvocationStatus.CANCELLED,
+        ToolInvocationStatus.TIMED_OUT,
+    }
+)
+
+
 def invocation_identity_sha256(invocation: ToolInvocation) -> str:
     payload = invocation.model_dump(mode="json")
     payload.pop("requested_at", None)
@@ -82,6 +97,12 @@ def invocation_idempotency_sha256(invocation: ToolInvocation) -> str | None:
         "agentbus-tool-idempotency-v1\0" + invocation.idempotency_key
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def policy_decision_sha256(decision: ToolPolicyDecision) -> str:
+    payload = decision.model_dump(mode="json")
+    payload.pop("evaluated_at", None)
+    return sha256_json(payload)
 
 
 def invocation_record_values(
@@ -121,3 +142,63 @@ def invocation_record_values(
         "requested_at": invocation.requested_at,
         "updated_at": updated_at,
     }
+
+
+def safe_persisted_tool_result(result: ToolResult) -> ToolResult:
+    structured_output = result.structured_output
+    stdout_bytes = result.stdout.encode("utf-8")
+    stderr_bytes = result.stderr.encode("utf-8")
+    diagnostics: dict[str, Any] = {
+        "persisted_replay_summary": True,
+        "structured_output_sha256": sha256_json(structured_output),
+        "structured_output_key_count": len(structured_output),
+        "stdout_sha256": hashlib.sha256(stdout_bytes).hexdigest(),
+        "stdout_retained_bytes": len(stdout_bytes),
+        "stderr_sha256": hashlib.sha256(stderr_bytes).hexdigest(),
+        "stderr_retained_bytes": len(stderr_bytes),
+        "diagnostic_metadata_sha256": sha256_json(
+            result.safe_diagnostic_metadata
+        ),
+        "diagnostic_metadata_key_count": len(result.safe_diagnostic_metadata),
+    }
+    return ToolResult(
+        invocation_id=result.invocation_id,
+        invocation_revision=result.invocation_revision,
+        status=result.status,
+        structured_output={
+            "persisted_summary": True,
+            "sha256": diagnostics["structured_output_sha256"],
+            "key_count": diagnostics["structured_output_key_count"],
+        },
+        stdout="",
+        stderr="",
+        stdout_truncated=result.stdout_truncated or bool(result.stdout),
+        stderr_truncated=result.stderr_truncated or bool(result.stderr),
+        artifacts=tuple(
+            ToolArtifact.model_validate(safe_protocol_dict(artifact))
+            for artifact in result.artifacts
+        ),
+        error=_safe_error(result.error),
+        exit_code=result.exit_code,
+        duration_seconds=result.duration_seconds,
+        timed_out=result.timed_out,
+        cancellation=ToolCancellationSnapshot.model_validate(
+            safe_protocol_dict(result.cancellation)
+        ),
+        resource_usage=ToolResourceUsage.model_validate(
+            safe_protocol_dict(result.resource_usage)
+        ),
+        policy_decision=safe_policy_decision(result.policy_decision),
+        approval_id=result.approval_id,
+        safe_diagnostic_metadata=diagnostics,
+    )
+
+
+def safe_policy_decision(decision: ToolPolicyDecision) -> ToolPolicyDecision:
+    return ToolPolicyDecision.model_validate(safe_protocol_dict(decision))
+
+
+def _safe_error(error: ToolError | None) -> ToolError | None:
+    if error is None:
+        return None
+    return ToolError.model_validate(safe_protocol_dict(error))
