@@ -166,12 +166,12 @@
         },
         {
           "command": "agentbus.approveAction",
-          "when": "viewItem == agentbusApproval",
+          "when": "viewItem == agentbusApprovalPending",
           "group": "inline"
         },
         {
           "command": "agentbus.rejectAction",
-          "when": "viewItem == agentbusApproval",
+          "when": "viewItem == agentbusApprovalPending",
           "group": "inline"
         },
         {

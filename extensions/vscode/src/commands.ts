@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import type { AgentBusClient } from "./apiClient";
+import { formatApprovalConfirmation } from "./approvalPresentation";
 import type { DaemonManager } from "./daemonManager";
 import { changeUri, reportUri } from "./documents";
 import { toolInvocationUri, toolPolicyUri } from "./toolDocuments";
@@ -362,9 +363,9 @@ export class CommandController implements vscode.Disposable {
   private async decide(raw: unknown, decision: "approve" | "reject"): Promise<void> {
     const item = raw as AgentBusItem | undefined;
     let approval = item?.value as ApprovalSummary | undefined;
-    const run = await this.chooseRun();
-    if (!run) return;
     if (!approval) {
+      const run = await this.chooseRun();
+      if (!run) return;
       const response = await (await this.client()).approvals(run.run_id);
       approval = (await vscode.window.showQuickPick(
         response.approvals.map((value) => ({
@@ -375,17 +376,32 @@ export class CommandController implements vscode.Disposable {
       ))?.value;
     }
     if (!approval) return;
-    if (decision === "approve" && approval.risk_category === "high") {
+    if (approval.state !== "pending") {
+      void vscode.window.showInformationMessage(
+        `Approval is already ${approval.state}.`
+      );
+      return;
+    }
+    if (
+      decision === "approve" &&
+      (approval.approval_kind === "tool" || approval.risk_category === "high")
+    ) {
       const confirmed = await vscode.window.showWarningMessage(
         approval.requested_action,
-        { modal: true, detail: approval.reason ?? undefined },
+        {
+          modal: true,
+          detail:
+            approval.approval_kind === "tool"
+              ? formatApprovalConfirmation(approval)
+              : approval.reason ?? undefined
+        },
         "Approve"
       );
       if (confirmed !== "Approve") return;
     }
     const reason = await vscode.window.showInputBox({ prompt: `${decision} reason (optional)` });
     await (await this.client()).decideApproval(
-      run.run_id,
+      approval.run_id,
       approval.approval_id,
       decision,
       { revision: approval.revision ?? 1, reason: reason || undefined }

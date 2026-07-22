@@ -9,6 +9,7 @@ import type {
   WorktreeSummary
 } from "./generated/protocol";
 import type { RunStore } from "./runStore";
+import { formatApprovalTooltip } from "./approvalPresentation";
 import {
   canCancel,
   cancellationDetails,
@@ -327,13 +328,12 @@ function approvalItem(approval: ApprovalSummary): AgentBusItem {
     approval
   );
   item.description = `${approval.risk_category} | ${approval.state}`;
-  item.tooltip = new vscode.MarkdownString(
-    `Reason: ${approval.reason ?? "not provided"}\n\nPaths: ${
-      approval.affected_paths?.join(", ") || "none"
-    }`
-  );
+  item.tooltip = new vscode.MarkdownString(formatApprovalTooltip(approval));
   item.iconPath = new vscode.ThemeIcon("shield");
-  item.contextValue = "agentbusApproval";
+  item.contextValue =
+    approval.state === "pending"
+      ? "agentbusApprovalPending"
+      : "agentbusApprovalTerminal";
   return item;
 }
 
