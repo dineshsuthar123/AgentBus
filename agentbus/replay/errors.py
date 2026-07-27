@@ -25,7 +25,17 @@ class ReplayConsentRequiredError(ReplayError):
     """Raised when a fork requests live behavior without explicit consent."""
 
 
+class RegressionFixtureError(ReplayError):
+    """Raised when a regression fixture is invalid or cannot be captured."""
+
+
+class RegressionFixtureAssertionError(RegressionFixtureError):
+    """Raised when fixture assertions contradict captured evidence."""
+
+
 __all__ = [
+    "RegressionFixtureAssertionError",
+    "RegressionFixtureError",
     "ReplayCancelledError",
     "ReplayConsentRequiredError",
     "ReplayError",
