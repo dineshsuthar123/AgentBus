@@ -69,6 +69,13 @@ from agentbus.trace.redaction import (
     sanitize_document,
     sanitize_text,
 )
+from agentbus.trace.retention import (
+    GC_JOURNAL_SCHEMA_VERSION,
+    GarbageCollectionPlan,
+    GarbageCollectionReport,
+    TraceRetentionManager,
+    TraceRetentionPolicy,
+)
 from agentbus.trace.spans import (
     DeterministicSequence,
     trace_id_for_run,
@@ -86,6 +93,9 @@ __all__ = [
     "BlobMetadata",
     "ContentAddressedStore",
     "EventStreamRange",
+    "GC_JOURNAL_SCHEMA_VERSION",
+    "GarbageCollectionPlan",
+    "GarbageCollectionReport",
     "HIDDEN_CONTENT",
     "PRIVATE_PATH",
     "PROVENANCE_INTEGRITY_ALGORITHM",
@@ -121,6 +131,8 @@ __all__ = [
     "TraceRecordingError",
     "TraceSecretRejectedError",
     "TraceResourceUsage",
+    "TraceRetentionManager",
+    "TraceRetentionPolicy",
     "TraceSpan",
     "TraceSpanType",
     "TraceStatus",
