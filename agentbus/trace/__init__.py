@@ -9,6 +9,8 @@ from agentbus.trace.context import (
     trace_context,
 )
 from agentbus.trace.errors import (
+    TraceArchiveConsentRequiredError,
+    TraceArchiveError,
     TraceError,
     TraceIntegrityError,
     TraceNotFoundError,
@@ -25,12 +27,15 @@ from agentbus.trace.blobs import (
     StoredBlob,
 )
 from agentbus.trace.archive import (
+    MAX_ARCHIVE_COMPRESSION_RATIO,
     MAX_ARCHIVE_ENTRIES,
     MAX_ARCHIVE_UNCOMPRESSED_BYTES,
+    ImportedTraceArchive,
     TRACE_ARCHIVE_FORMAT,
     TRACE_ARCHIVE_SCHEMA_VERSION,
     TraceArchiveEntry,
     TraceArchiveExporter,
+    TraceArchiveImporter,
     TraceArchiveManifest,
 )
 from agentbus.trace.events import TraceEventType
@@ -97,6 +102,7 @@ from agentbus.trace.runtime import RuntimeTrace
 
 __all__ = [
     "ReplayMode",
+    "MAX_ARCHIVE_COMPRESSION_RATIO",
     "MAX_ARCHIVE_ENTRIES",
     "MAX_ARCHIVE_UNCOMPRESSED_BYTES",
     "TRACE_ARCHIVE_FORMAT",
@@ -112,6 +118,7 @@ __all__ = [
     "GarbageCollectionPlan",
     "GarbageCollectionReport",
     "HIDDEN_CONTENT",
+    "ImportedTraceArchive",
     "PRIVATE_PATH",
     "PROVENANCE_INTEGRITY_ALGORITHM",
     "PROVENANCE_SCHEMA_VERSION",
@@ -127,8 +134,11 @@ __all__ = [
     "StoredBlob",
     "StateStoreTraceSink",
     "Trace",
+    "TraceArchiveConsentRequiredError",
     "TraceArchiveEntry",
+    "TraceArchiveError",
     "TraceArchiveExporter",
+    "TraceArchiveImporter",
     "TraceArchiveManifest",
     "TraceArtifactReference",
     "TraceCheckpoint",

@@ -33,7 +33,17 @@ class TraceSecretRejectedError(TraceStorageError):
     """Raised when unredacted secret-classified material reaches storage."""
 
 
+class TraceArchiveError(TraceError):
+    """Raised when a portable trace archive is invalid or unsafe."""
+
+
+class TraceArchiveConsentRequiredError(TraceArchiveError):
+    """Raised before importing source-like archive content without consent."""
+
+
 __all__ = [
+    "TraceArchiveConsentRequiredError",
+    "TraceArchiveError",
     "TraceError",
     "TraceIntegrityError",
     "TraceNotFoundError",
