@@ -13,6 +13,14 @@ from agentbus.replay.errors import (
     ReplayIsolationError,
 )
 from agentbus.replay.engine import ReplayEngine
+from agentbus.replay.comparison import (
+    ComparisonSummary,
+    DriftCategory,
+    FieldDifference,
+    RunComparison,
+    SpanComparison,
+    compare_traces,
+)
 from agentbus.replay.checkpoints import (
     CHECKPOINT_MEDIA_TYPE,
     CHECKPOINT_STATE_SCHEMA_VERSION,
@@ -48,6 +56,9 @@ __all__ = [
     "CHECKPOINT_STATE_SCHEMA_VERSION",
     "CheckpointKind",
     "CheckpointManager",
+    "ComparisonSummary",
+    "DriftCategory",
+    "FieldDifference",
     "ReplayCancelledError",
     "ReplayError",
     "ReplayEngine",
@@ -61,6 +72,7 @@ __all__ = [
     "ReplayabilityClassifier",
     "ReplayabilityLevel",
     "RunReplayability",
+    "RunComparison",
     "ReplayRequest",
     "ReplayResult",
     "ReplaySession",
@@ -68,12 +80,14 @@ __all__ = [
     "ReplaySpanAction",
     "ReplaySpanResult",
     "SpanReplayability",
+    "SpanComparison",
     "MODEL_ENVELOPE_MEDIA_TYPE",
     "MODEL_ENVELOPE_VERSION",
     "CapturedModelEnvelope",
     "CapturedRoutedModel",
     "ModelSubstitutionCatalog",
     "capture_model_envelope",
+    "compare_traces",
     "prompt_fingerprint",
     "ToolReplayStrategy",
 ]
