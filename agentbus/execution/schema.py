@@ -1,4 +1,4 @@
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 SCHEMA_SQL = """
@@ -380,6 +380,90 @@ WHEN OLD.status NOT IN ('pending', 'running')
 BEGIN
     SELECT RAISE(ABORT, 'terminal trace spans are immutable');
 END;
+
+CREATE TABLE IF NOT EXISTS provenance_manifests (
+    trace_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL UNIQUE,
+    integrity_root TEXT NOT NULL,
+    manifest_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (trace_id) REFERENCES traces(trace_id) ON DELETE CASCADE,
+    FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS replay_sessions (
+    replay_id TEXT PRIMARY KEY,
+    source_trace_id TEXT NOT NULL,
+    source_run_id TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    status TEXT NOT NULL,
+    request_json TEXT NOT NULL,
+    session_json TEXT NOT NULL,
+    result_json TEXT,
+    revision INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    completed_at TEXT,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (source_trace_id)
+        REFERENCES traces(trace_id) ON DELETE CASCADE,
+    FOREIGN KEY (source_run_id)
+        REFERENCES runs(run_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS trace_comparisons (
+    comparison_id TEXT PRIMARY KEY,
+    left_trace_id TEXT NOT NULL,
+    right_trace_id TEXT NOT NULL,
+    comparison_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (left_trace_id)
+        REFERENCES traces(trace_id) ON DELETE CASCADE,
+    FOREIGN KEY (right_trace_id)
+        REFERENCES traces(trace_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_replay_sessions_source
+    ON replay_sessions(source_trace_id, created_at, replay_id);
+CREATE INDEX IF NOT EXISTS idx_replay_sessions_status
+    ON replay_sessions(status, updated_at, replay_id);
+CREATE INDEX IF NOT EXISTS idx_trace_comparisons_left
+    ON trace_comparisons(left_trace_id, created_at, comparison_id);
+CREATE INDEX IF NOT EXISTS idx_trace_comparisons_right
+    ON trace_comparisons(right_trace_id, created_at, comparison_id);
+
+CREATE TRIGGER IF NOT EXISTS provenance_manifests_no_update
+BEFORE UPDATE ON provenance_manifests
+BEGIN
+    SELECT RAISE(ABORT, 'provenance manifests are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS provenance_manifests_no_delete
+BEFORE DELETE ON provenance_manifests
+BEGIN
+    SELECT RAISE(ABORT, 'provenance manifests are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS replay_sessions_terminal_no_update
+BEFORE UPDATE ON replay_sessions
+WHEN OLD.status IN (
+    'succeeded', 'failed', 'cancelled', 'incompatible', 'awaiting_input'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'terminal replay sessions are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trace_comparisons_no_update
+BEFORE UPDATE ON trace_comparisons
+BEGIN
+    SELECT RAISE(ABORT, 'trace comparisons are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trace_comparisons_no_delete
+BEFORE DELETE ON trace_comparisons
+BEGIN
+    SELECT RAISE(ABORT, 'trace comparisons are immutable');
+END;
 """
 
 
@@ -617,6 +701,86 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
             WHEN OLD.status NOT IN ('pending', 'running')
             BEGIN
                 SELECT RAISE(ABORT, 'terminal trace spans are immutable');
+            END""",
+    ),
+    5: (
+        """CREATE TABLE provenance_manifests (
+            trace_id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL UNIQUE,
+            integrity_root TEXT NOT NULL,
+            manifest_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (trace_id)
+                REFERENCES traces(trace_id) ON DELETE CASCADE,
+            FOREIGN KEY (run_id)
+                REFERENCES runs(run_id) ON DELETE CASCADE
+        )""",
+        """CREATE TABLE replay_sessions (
+            replay_id TEXT PRIMARY KEY,
+            source_trace_id TEXT NOT NULL,
+            source_run_id TEXT NOT NULL,
+            mode TEXT NOT NULL,
+            status TEXT NOT NULL,
+            request_json TEXT NOT NULL,
+            session_json TEXT NOT NULL,
+            result_json TEXT,
+            revision INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            started_at TEXT,
+            completed_at TEXT,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (source_trace_id)
+                REFERENCES traces(trace_id) ON DELETE CASCADE,
+            FOREIGN KEY (source_run_id)
+                REFERENCES runs(run_id) ON DELETE CASCADE
+        )""",
+        """CREATE TABLE trace_comparisons (
+            comparison_id TEXT PRIMARY KEY,
+            left_trace_id TEXT NOT NULL,
+            right_trace_id TEXT NOT NULL,
+            comparison_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (left_trace_id)
+                REFERENCES traces(trace_id) ON DELETE CASCADE,
+            FOREIGN KEY (right_trace_id)
+                REFERENCES traces(trace_id) ON DELETE CASCADE
+        )""",
+        """CREATE INDEX idx_replay_sessions_source
+            ON replay_sessions(source_trace_id, created_at, replay_id)""",
+        """CREATE INDEX idx_replay_sessions_status
+            ON replay_sessions(status, updated_at, replay_id)""",
+        """CREATE INDEX idx_trace_comparisons_left
+            ON trace_comparisons(left_trace_id, created_at, comparison_id)""",
+        """CREATE INDEX idx_trace_comparisons_right
+            ON trace_comparisons(right_trace_id, created_at, comparison_id)""",
+        """CREATE TRIGGER provenance_manifests_no_update
+            BEFORE UPDATE ON provenance_manifests
+            BEGIN
+                SELECT RAISE(ABORT, 'provenance manifests are immutable');
+            END""",
+        """CREATE TRIGGER provenance_manifests_no_delete
+            BEFORE DELETE ON provenance_manifests
+            BEGIN
+                SELECT RAISE(ABORT, 'provenance manifests are immutable');
+            END""",
+        """CREATE TRIGGER replay_sessions_terminal_no_update
+            BEFORE UPDATE ON replay_sessions
+            WHEN OLD.status IN (
+                'succeeded', 'failed', 'cancelled', 'incompatible',
+                'awaiting_input'
+            )
+            BEGIN
+                SELECT RAISE(ABORT, 'terminal replay sessions are immutable');
+            END""",
+        """CREATE TRIGGER trace_comparisons_no_update
+            BEFORE UPDATE ON trace_comparisons
+            BEGIN
+                SELECT RAISE(ABORT, 'trace comparisons are immutable');
+            END""",
+        """CREATE TRIGGER trace_comparisons_no_delete
+            BEFORE DELETE ON trace_comparisons
+            BEGIN
+                SELECT RAISE(ABORT, 'trace comparisons are immutable');
             END""",
     ),
 }
