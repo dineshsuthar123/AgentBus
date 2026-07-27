@@ -21,7 +21,9 @@ from agentbus.trace.models import (
     TraceEvent,
     TraceFailure,
     TraceInput,
+    TraceLink,
     TraceOutput,
+    TraceReplayMetadata,
     TraceResourceUsage,
     TraceSpan,
     TraceSpanType,
@@ -78,7 +80,58 @@ class TraceRecorder:
         self._created_at: datetime | None = None
         self._completed_at: datetime | None = None
         self._status = TraceStatus.PENDING
+        self._links: list[TraceLink] = []
+        self._replay: TraceReplayMetadata | None = None
+        self._trace_attributes: dict[str, Any] = {}
         self._lock = threading.RLock()
+
+    @classmethod
+    def resume(
+        cls,
+        trace: Trace,
+        *,
+        sink: TraceSink | None = None,
+        clock: Callable[[], datetime] = utc_now,
+        next_sequence: int | None = None,
+        critical_sink: bool = False,
+    ) -> "TraceRecorder":
+        """Restore one active trace without rewriting persisted history."""
+        if trace.status != TraceStatus.RUNNING:
+            raise TraceRecordingError(
+                f"Only running traces can resume; trace is {trace.status.value}."
+            )
+        maximum_sequence = max(
+            [
+                *(span.sequence for span in trace.spans),
+                *(event.sequence for event in trace.events),
+                *(checkpoint.sequence for checkpoint in trace.checkpoints),
+            ],
+            default=0,
+        )
+        durable_next = maximum_sequence + 1
+        if next_sequence is not None and next_sequence < durable_next:
+            raise TraceRecordingError(
+                "The supplied resume sequence would overwrite trace history."
+            )
+        recorder = cls(
+            trace.run_id,
+            trace_id=trace.trace_id,
+            sink=sink,
+            clock=clock,
+            next_sequence=next_sequence or durable_next,
+            critical_sink=critical_sink,
+        )
+        recorder._spans = {span.span_id: span for span in trace.spans}
+        recorder._events = list(trace.events)
+        recorder._checkpoints = list(trace.checkpoints)
+        recorder._root_span_id = trace.root_span_id
+        recorder._created_at = trace.created_at
+        recorder._completed_at = None
+        recorder._status = TraceStatus.RUNNING
+        recorder._links = list(trace.links)
+        recorder._replay = trace.replay
+        recorder._trace_attributes = dict(trace.attributes)
+        return recorder
 
     @property
     def root_span_id(self) -> str | None:
@@ -229,9 +282,10 @@ class TraceRecorder:
                     f"Trace span '{span_id}' already completed as {span.status.value}."
                 )
             merged_attributes = {**span.attributes, **(attributes or {})}
+            completed_at = max(self.clock(), span.started_at)
             updated = span.model_copy(
                 update={
-                    "ended_at": self.clock(),
+                    "ended_at": completed_at,
                     "status": status,
                     "failure": failure,
                     "output_references": (
@@ -415,7 +469,7 @@ class TraceRecorder:
                 )
             assert self._root_span_id is not None
             root = self._spans[self._root_span_id]
-            completed_at = self.clock()
+            completed_at = max(self.clock(), root.started_at)
             root = root.model_copy(
                 update={
                     "ended_at": completed_at,
@@ -451,11 +505,47 @@ class TraceRecorder:
                     self._checkpoints,
                     key=lambda item: item.sequence,
                 ),
+                links=self._links,
+                replay=self._replay,
                 attributes={
+                    **self._trace_attributes,
                     "recording_degraded": bool(self._recording_errors),
                     "recording_error_count": len(self._recording_errors),
                 },
             )
+
+    def reconcile_interrupted_spans(
+        self,
+        *,
+        reason: str = "daemon_restart",
+    ) -> list[TraceSpan]:
+        """Close abandoned child spans while leaving completed history immutable."""
+        with self._lock:
+            self._require_running_trace()
+            active_ids = [
+                span.span_id
+                for span in sorted(
+                    self._spans.values(),
+                    key=lambda item: item.sequence,
+                    reverse=True,
+                )
+                if span.span_id != self._root_span_id
+                and span.status == TraceStatus.RUNNING
+            ]
+        interrupted = [
+            self.finish_span(
+                span_id,
+                status=TraceStatus.INTERRUPTED,
+                attributes={"interruption_reason": reason},
+            )
+            for span_id in active_ids
+        ]
+        if interrupted:
+            self.record_event(
+                TraceEventType.TRACE_RECONCILED,
+                attributes={"interrupted_span_count": len(interrupted)},
+            )
+        return interrupted
 
     def _record_terminal_event(self, status: TraceStatus) -> None:
         assert self._root_span_id is not None

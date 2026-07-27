@@ -8,6 +8,7 @@ class TraceEventType(str, Enum):
     SPAN_COMPLETED = "span.completed"
     CHECKPOINT_CREATED = "checkpoint.created"
     RECORDING_DEGRADED = "recording.degraded"
+    TRACE_RECONCILED = "trace.reconciled"
 
 
 __all__ = ["TraceEventType"]

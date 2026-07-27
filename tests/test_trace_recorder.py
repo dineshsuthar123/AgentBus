@@ -142,3 +142,21 @@ def test_sequence_claims_remain_unique_under_concurrency() -> None:
     sequences = [event.sequence for event in trace.events]
     assert len(sequences) == len(set(sequences))
     assert sequences == sorted(sequences)
+
+
+def test_resume_rejects_a_sequence_that_would_overwrite_history() -> None:
+    recorder = TraceRecorder("run-1", clock=ControlledClock())
+    recorder.start_trace()
+    recorder.record_event("observed")
+
+    with pytest.raises(TraceRecordingError, match="overwrite"):
+        TraceRecorder.resume(recorder.snapshot(), next_sequence=2)
+
+
+def test_terminal_trace_cannot_be_resumed() -> None:
+    recorder = TraceRecorder("run-1", clock=ControlledClock())
+    recorder.start_trace()
+    trace = recorder.finish_trace()
+
+    with pytest.raises(TraceRecordingError, match="Only running traces"):
+        TraceRecorder.resume(trace)

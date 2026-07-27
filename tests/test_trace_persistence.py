@@ -138,3 +138,49 @@ def test_trace_pages_are_bounded_and_resume_sequence_is_durable(tmp_path) -> Non
     assert [event.sequence for event in page] == [4, 5]
     with pytest.raises(Exception, match="between 1 and 5000"):
         store.list_trace_spans(recorder.trace_id, limit=5_001)
+
+
+def test_active_trace_resumes_without_rewriting_completed_spans(tmp_path) -> None:
+    database = tmp_path / "state.db"
+    store = StateStore(database)
+    store.create_run(_run())
+    initial = TraceRecorder(
+        "run-1",
+        sink=StateStoreTraceSink(store),
+        clock=ControlledClock(),
+    )
+    root = initial.start_trace()
+    with trace_context(root):
+        completed = initial.start_span(TraceSpanType.TASK, "completed")
+        initial.finish_span(completed.span_id)
+        abandoned = initial.start_span(TraceSpanType.TASK, "abandoned")
+
+    restarted_store = StateStore(database)
+    persisted = restarted_store.get_run_trace("run-1")
+    resumed = TraceRecorder.resume(
+        persisted,
+        sink=StateStoreTraceSink(restarted_store),
+        clock=ControlledClock(),
+        next_sequence=restarted_store.next_trace_sequence(persisted.trace_id),
+    )
+    interrupted = resumed.reconcile_interrupted_spans()
+    followup = resumed.start_span(
+        TraceSpanType.TASK,
+        "after restart",
+        parent_span_id=persisted.root_span_id,
+    )
+    resumed.finish_span(followup.span_id)
+    final = resumed.finish_trace()
+
+    assert [span.span_id for span in interrupted] == [abandoned.span_id]
+    assert interrupted[0].status == TraceStatus.INTERRUPTED
+    assert final.status == TraceStatus.SUCCEEDED
+    assert restarted_store.get_trace_span(
+        persisted.trace_id,
+        completed.span_id,
+    ).status == TraceStatus.SUCCEEDED
+    sequences = [
+        *(span.sequence for span in resumed.snapshot().spans),
+        *(event.sequence for event in resumed.snapshot().events),
+    ]
+    assert len(sequences) == len(set(sequences))
