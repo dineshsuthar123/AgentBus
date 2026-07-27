@@ -16,10 +16,13 @@ from agentbus.trace.errors import TraceRecordingError
 from agentbus.trace.events import TraceEventType
 from agentbus.trace.models import (
     Trace,
+    TraceArtifactReference,
     TraceCheckpoint,
     TraceEvent,
     TraceFailure,
     TraceInput,
+    TraceOutput,
+    TraceResourceUsage,
     TraceSpan,
     TraceSpanType,
     TraceStatus,
@@ -203,6 +206,12 @@ class TraceRecorder:
         *,
         status: TraceStatus = TraceStatus.SUCCEEDED,
         failure: TraceFailure | None = None,
+        output_references: list[TraceOutput] | None = None,
+        policy_decision_references: list[str] | None = None,
+        approval_references: list[str] | None = None,
+        artifact_references: list[TraceArtifactReference] | None = None,
+        cancellation_state: dict[str, Any] | None = None,
+        resource_usage: TraceResourceUsage | None = None,
         attributes: dict[str, Any] | None = None,
     ) -> TraceSpan:
         if status in {TraceStatus.PENDING, TraceStatus.RUNNING}:
@@ -225,6 +234,32 @@ class TraceRecorder:
                     "ended_at": self.clock(),
                     "status": status,
                     "failure": failure,
+                    "output_references": (
+                        span.output_references
+                        if output_references is None
+                        else output_references
+                    ),
+                    "policy_decision_references": (
+                        span.policy_decision_references
+                        if policy_decision_references is None
+                        else policy_decision_references
+                    ),
+                    "approval_references": (
+                        span.approval_references
+                        if approval_references is None
+                        else approval_references
+                    ),
+                    "artifact_references": (
+                        span.artifact_references
+                        if artifact_references is None
+                        else artifact_references
+                    ),
+                    "cancellation_state": (
+                        span.cancellation_state
+                        if cancellation_state is None
+                        else cancellation_state
+                    ),
+                    "resource_usage": resource_usage or span.resource_usage,
                     "attributes": merged_attributes,
                 }
             )

@@ -46,6 +46,18 @@ from agentbus.trace.models import (
 from agentbus.trace.version import TRACE_SCHEMA_NAME, TRACE_SCHEMA_VERSION
 from agentbus.trace.recorder import TraceRecorder, TraceSink
 from agentbus.trace.persistence import StateStoreTraceSink
+from agentbus.trace.provenance import (
+    PROVENANCE_INTEGRITY_ALGORITHM,
+    PROVENANCE_SCHEMA_VERSION,
+    EventStreamRange,
+    ProvenanceBuilder,
+    ProvenanceIntegrityEntry,
+    ProvenanceManifest,
+    ProviderRouteProvenance,
+    ReplayabilityLevel,
+    ToolDescriptorProvenance,
+    verify_provenance,
+)
 from agentbus.trace.redaction import (
     HIDDEN_CONTENT,
     PRIVATE_PATH,
@@ -72,10 +84,18 @@ __all__ = [
     "BLOB_SCHEMA_VERSION",
     "BlobMetadata",
     "ContentAddressedStore",
+    "EventStreamRange",
     "HIDDEN_CONTENT",
     "PRIVATE_PATH",
+    "PROVENANCE_INTEGRITY_ALGORITHM",
+    "PROVENANCE_SCHEMA_VERSION",
     "REDACTED",
+    "ProvenanceBuilder",
+    "ProvenanceIntegrityEntry",
+    "ProvenanceManifest",
+    "ProviderRouteProvenance",
     "RedactionMetadata",
+    "ReplayabilityLevel",
     "RetentionClass",
     "StoredBlob",
     "StateStoreTraceSink",
@@ -106,6 +126,7 @@ __all__ = [
     "TraceSink",
     "TraceValidationError",
     "TraceValueReference",
+    "ToolDescriptorProvenance",
     "SanitizedDocument",
     "configuration_fingerprint",
     "contains_secret_material",
@@ -118,4 +139,5 @@ __all__ = [
     "trace_context",
     "trace_id_for_run",
     "trace_item_id",
+    "verify_provenance",
 ]
