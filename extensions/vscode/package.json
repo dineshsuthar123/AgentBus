@@ -26,6 +26,7 @@
   "main": "./out/extension.js",
   "activationEvents": [
     "onView:agentbus.runs",
+    "onView:agentbus.timeline",
     "onView:agentbus.tools",
     "onView:agentbus.mcp",
     "onCommand:agentbus.startTask"
@@ -55,6 +56,14 @@
       {
         "command": "agentbus.showRun",
         "title": "AgentBus: Show Run"
+      },
+      {
+        "command": "agentbus.showExecutionTimeline",
+        "title": "AgentBus: Show Execution Timeline"
+      },
+      {
+        "command": "agentbus.showSpan",
+        "title": "AgentBus: Show Span"
       },
       {
         "command": "agentbus.openRunReport",
@@ -145,6 +154,10 @@
           "name": "Run Tasks"
         },
         {
+          "id": "agentbus.timeline",
+          "name": "Execution Timeline"
+        },
+        {
           "id": "agentbus.approvals",
           "name": "Approvals"
         },
@@ -178,6 +191,11 @@
         {
           "command": "agentbus.showRun",
           "when": "viewItem =~ /agentbusRun.*/",
+          "group": "inline"
+        },
+        {
+          "command": "agentbus.showSpan",
+          "when": "viewItem == agentbusTraceSpan",
           "group": "inline"
         },
         {

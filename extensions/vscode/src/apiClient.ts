@@ -20,6 +20,9 @@ import type {
   RunSummary,
   SchedulerResponse,
   TaskListResponse,
+  TraceResponse,
+  TraceSpanDetailResponse,
+  TraceSpanListResponse,
   ToolAuditListResponse,
   ToolDescriptorDetail,
   ToolInvocationCancelResponse,
@@ -135,6 +138,36 @@ export class AgentBusClient {
 
   public tasks(runId: string): Promise<TaskListResponse> {
     return this.request("GET", `/api/v1/runs/${safeSegment(runId)}/tasks`);
+  }
+
+  public trace(runId: string): Promise<TraceResponse> {
+    return this.request("GET", `/api/v1/runs/${safeSegment(runId)}/trace`);
+  }
+
+  public traceSpans(
+    runId: string,
+    after = 0,
+    limit = 500
+  ): Promise<TraceSpanListResponse> {
+    validatePage(after, limit);
+    return this.request(
+      "GET",
+      `/api/v1/runs/${safeSegment(
+        runId
+      )}/trace/spans?after=${after}&limit=${limit}`
+    );
+  }
+
+  public traceSpan(
+    runId: string,
+    spanId: string
+  ): Promise<TraceSpanDetailResponse> {
+    return this.request(
+      "GET",
+      `/api/v1/runs/${safeSegment(
+        runId
+      )}/trace/spans/${safeSegment(spanId)}`
+    );
   }
 
   public scheduler(runId: string): Promise<SchedulerResponse> {

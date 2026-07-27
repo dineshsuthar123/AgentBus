@@ -9,6 +9,7 @@ import {
 import { RunStore } from "./runStore";
 import { ToolArtifactDocumentProvider } from "./artifactDocuments";
 import { McpServerDocumentProvider } from "./mcpDocuments";
+import { SpanDocumentProvider } from "./traceDocuments";
 import {
   ToolInvocationDocumentProvider,
   ToolPolicyDocumentProvider
@@ -16,6 +17,7 @@ import {
 import type { EventEnvelope, RunSummary } from "./generated/protocol";
 import {
   ApprovalsProvider,
+  ExecutionTimelineProvider,
   McpServersProvider,
   ProvidersProvider,
   RunsProvider,
@@ -48,6 +50,7 @@ export function activate(context: vscode.ExtensionContext): AgentBusExtensionApi
   const client = async () => (await daemon.connectOrStart()).client;
   const runs = new RunsProvider(store);
   const tasks = new TasksProvider(client, selection);
+  const timeline = new ExecutionTimelineProvider(client, selection);
   const approvals = new ApprovalsProvider(client, selection);
   const worktrees = new WorktreesProvider(client, selection);
   const tools = new ToolInvocationsProvider(client, selection);
@@ -59,6 +62,7 @@ export function activate(context: vscode.ExtensionContext): AgentBusExtensionApi
     daemon,
     vscode.window.registerTreeDataProvider("agentbus.runs", runs),
     vscode.window.registerTreeDataProvider("agentbus.tasks", tasks),
+    vscode.window.registerTreeDataProvider("agentbus.timeline", timeline),
     vscode.window.registerTreeDataProvider("agentbus.approvals", approvals),
     vscode.window.registerTreeDataProvider("agentbus.worktrees", worktrees),
     vscode.window.registerTreeDataProvider("agentbus.tools", tools),
@@ -91,13 +95,26 @@ export function activate(context: vscode.ExtensionContext): AgentBusExtensionApi
     vscode.workspace.registerTextDocumentContentProvider(
       "agentbus-mcp",
       new McpServerDocumentProvider(client)
+    ),
+    vscode.workspace.registerTextDocumentContentProvider(
+      "agentbus-span",
+      new SpanDocumentProvider(client)
     )
   );
   const controller = new CommandController(
     daemon,
     store,
     selection,
-    [runs, tasks, approvals, worktrees, tools, providers, mcpServers],
+    [
+      runs,
+      tasks,
+      timeline,
+      approvals,
+      worktrees,
+      tools,
+      providers,
+      mcpServers
+    ],
     output,
     status
   );

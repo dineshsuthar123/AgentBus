@@ -1,15 +1,21 @@
 import * as vscode from "vscode";
-import type { AgentBusClient } from "./apiClient";
+import { AgentBusApiError, type AgentBusClient } from "./apiClient";
 import type {
   ApprovalSummary,
   McpServerSummary,
   ProviderSummary,
   RunSummary,
   TaskSummary,
+  TraceSpanSummary,
   ToolInvocationSummary,
   WorktreeSummary
 } from "./generated/protocol";
 import type { RunStore } from "./runStore";
+import {
+  spanDescription,
+  spanTooltip,
+  timelineChildren
+} from "./tracePresentation";
 import { formatApprovalTooltip } from "./approvalPresentation";
 import { formatMcpServerTooltip } from "./mcpPresentation";
 import {
@@ -129,6 +135,68 @@ export class TasksProvider extends RefreshableProvider {
     }
     const response = await (await this.client()).tasks(runId);
     return response.tasks.map(taskItem);
+  }
+}
+
+export class ExecutionTimelineProvider extends RefreshableProvider {
+  private cachedRunId: string | undefined;
+  private cachedSpans: TraceSpanSummary[] | undefined;
+  private cachedTruncated = false;
+
+  public constructor(
+    private readonly client: () => Promise<AgentBusClient>,
+    private readonly selection: RunSelection
+  ) {
+    super();
+  }
+
+  public override refresh(): void {
+    this.cachedRunId = undefined;
+    this.cachedSpans = undefined;
+    this.cachedTruncated = false;
+    super.refresh();
+  }
+
+  public async getChildren(element?: AgentBusItem): Promise<AgentBusItem[]> {
+    const runId = this.selection.get();
+    if (!runId) {
+      return [messageItem("Select a run to inspect its execution timeline.")];
+    }
+    const spans = await this.load(runId);
+    if (!spans) {
+      return [messageItem("This run does not have a recorded trace yet.")];
+    }
+    const parent = element?.value as TraceSpanSummary | undefined;
+    const children = timelineChildren(spans, parent?.span_id).map((span) =>
+      traceSpanItem(span, spans)
+    );
+    if (!element && this.cachedTruncated) {
+      children.push(messageItem("Showing the first 500 trace spans."));
+    }
+    if (!element && children.length === 0) {
+      return [messageItem("The recorded trace does not contain spans.")];
+    }
+    return children;
+  }
+
+  private async load(runId: string): Promise<TraceSpanSummary[] | undefined> {
+    if (this.cachedRunId === runId && this.cachedSpans) {
+      return this.cachedSpans;
+    }
+    try {
+      const response = await (await this.client()).traceSpans(runId, 0, 500);
+      this.cachedRunId = runId;
+      this.cachedSpans = response.spans;
+      this.cachedTruncated = response.truncated ?? false;
+      return this.cachedSpans;
+    } catch (error) {
+      if (error instanceof AgentBusApiError && error.status === 404) {
+        this.cachedRunId = runId;
+        this.cachedSpans = [];
+        return undefined;
+      }
+      throw error;
+    }
   }
 }
 
@@ -323,6 +391,30 @@ function taskItem(task: TaskSummary): AgentBusItem {
   return item;
 }
 
+function traceSpanItem(
+  span: TraceSpanSummary,
+  spans: readonly TraceSpanSummary[]
+): AgentBusItem {
+  const hasChildren = timelineChildren(spans, span.span_id).length > 0;
+  const item = new AgentBusItem(
+    span.name,
+    hasChildren
+      ? vscode.TreeItemCollapsibleState.Collapsed
+      : vscode.TreeItemCollapsibleState.None,
+    span
+  );
+  item.description = spanDescription(span);
+  item.tooltip = new vscode.MarkdownString(spanTooltip(span));
+  item.iconPath = new vscode.ThemeIcon(iconForTraceSpan(span));
+  item.contextValue = "agentbusTraceSpan";
+  item.command = {
+    command: "agentbus.showSpan",
+    title: "Show Span",
+    arguments: [item]
+  };
+  return item;
+}
+
 function approvalItem(approval: ApprovalSummary): AgentBusItem {
   const item = new AgentBusItem(
     approval.requested_action,
@@ -485,6 +577,25 @@ function iconForStatus(status: string): string {
   }
   if (status.includes("approval")) {
     return "shield";
+  }
+  return "sync~spin";
+}
+
+function iconForTraceSpan(span: TraceSpanSummary): string {
+  if (span.status === "failed") return "error";
+  if (span.status === "cancelled" || span.status === "interrupted") {
+    return "circle-slash";
+  }
+  if (span.status === "succeeded") {
+    if (span.span_type === "tool_invocation") return "tools";
+    if (span.span_type === "approval_wait") return "shield";
+    if (span.span_type === "provider_request") return "cloud-upload";
+    if (span.span_type === "provider_response") return "cloud-download";
+    if (span.span_type === "verifier") return "verified";
+    if (span.span_type === "reviewer") return "comment-discussion";
+    if (span.span_type === "integration") return "git-merge";
+    if (span.span_type === "cleanup") return "trash";
+    return "pass-filled";
   }
   return "sync~spin";
 }

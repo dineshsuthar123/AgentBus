@@ -13,6 +13,7 @@ import type {
   RunAcceptedResponse,
   RunCreateRequest,
   RunSummary,
+  TraceSpanSummary,
   ToolInvocationSummary
 } from "./generated/protocol";
 import { ReconnectingSseClient } from "./sse";
@@ -20,6 +21,7 @@ import type { RunStore } from "./runStore";
 import { safeError } from "./redaction";
 import { mcpServerUri } from "./mcpDocuments";
 import { formatMcpServerCheck } from "./mcpPresentation";
+import { spanUri } from "./traceDocuments";
 import {
   canonicalWorkspacePath,
   ensureWorkspaceTrust,
@@ -72,6 +74,8 @@ export class CommandController implements vscode.Disposable {
     );
     command("agentbus.refresh", () => this.refresh());
     command("agentbus.showRun", (item) => this.showRun(item));
+    command("agentbus.showExecutionTimeline", () => this.showTimeline());
+    command("agentbus.showSpan", (item) => this.showSpan(item));
     command("agentbus.resumeRun", () => this.resume());
     command("agentbus.cancelRun", () => this.cancel());
     command("agentbus.openRunReport", () => this.openReport());
@@ -242,6 +246,41 @@ export class CommandController implements vscode.Disposable {
     this.selection.set(run.run_id);
     this.refreshViews();
     await vscode.commands.executeCommand("agentbus.openRunReport");
+  }
+
+  private async showTimeline(): Promise<void> {
+    const run = await this.chooseRun();
+    if (!run) return;
+    this.selection.set(run.run_id);
+    this.refreshViews();
+    await vscode.commands.executeCommand("agentbus.timeline.focus");
+  }
+
+  private async showSpan(raw?: unknown): Promise<void> {
+    const item = raw as AgentBusItem | undefined;
+    let span = item?.value as TraceSpanSummary | undefined;
+    let runId = span?.run_id;
+    if (!span) {
+      const run = await this.chooseRun();
+      if (!run) return;
+      runId = run.run_id;
+      const response = await (await this.client()).traceSpans(runId, 0, 500);
+      span = (
+        await vscode.window.showQuickPick(
+          response.spans.map((value) => ({
+            label: value.name,
+            description: `#${value.sequence} ${value.span_type} | ${value.status}`,
+            value
+          })),
+          { title: "Show AgentBus Span" }
+        )
+      )?.value;
+    }
+    if (!span || !runId) return;
+    const document = await vscode.workspace.openTextDocument(
+      spanUri(runId, span.span_id)
+    );
+    await vscode.window.showTextDocument(document, { preview: true });
   }
 
   private async resume(): Promise<void> {

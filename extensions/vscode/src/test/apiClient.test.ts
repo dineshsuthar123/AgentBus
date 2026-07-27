@@ -143,3 +143,37 @@ test("tool and MCP client routes are encoded bounded and command-free", async ()
   assert.throws(() => client.toolInvocations("run", -1, 10), /bounded/);
   assert.throws(() => client.toolAudit("run", 0, 501), /bounded/);
 });
+
+test("trace client routes encode identifiers and bound span pages", async () => {
+  const requests: string[] = [];
+  const client = new AgentBusClient(
+    "http://127.0.0.1:43123",
+    token,
+    async (input) => {
+      requests.push(String(input));
+      return Response.json({});
+    }
+  );
+
+  await client.trace("run one");
+  await client.traceSpans("run one", 12, 25);
+  await client.traceSpan("run one", "span:provider");
+
+  assert.equal(
+    requests[0]?.endsWith("/api/v1/runs/run%20one/trace"),
+    true
+  );
+  assert.equal(
+    requests[1]?.endsWith(
+      "/api/v1/runs/run%20one/trace/spans?after=12&limit=25"
+    ),
+    true
+  );
+  assert.equal(
+    requests[2]?.endsWith(
+      "/api/v1/runs/run%20one/trace/spans/span%3Aprovider"
+    ),
+    true
+  );
+  assert.throws(() => client.traceSpans("run", 0, 501), /bounded/);
+});
