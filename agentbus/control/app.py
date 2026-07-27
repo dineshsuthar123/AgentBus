@@ -67,6 +67,9 @@ from agentbus.control.models import (
     RunSummary,
     SchedulerResponse,
     TaskListResponse,
+    TraceArchiveExportResponse,
+    TraceArchiveImportRequest,
+    TraceArchiveImportResponse,
     TraceResponse,
     TraceSpanDetailResponse,
     TraceSpanListResponse,
@@ -272,6 +275,7 @@ def create_app(
                 "replayability",
                 "managed-offline-replay",
                 "trace-comparison",
+                "trace-archives",
             ],
         )
 
@@ -509,6 +513,29 @@ def create_app(
             comparison_id,
             after=after,
             limit=limit,
+        )
+
+    @app.post(
+        f"{API_PREFIX}/traces/import",
+        response_model=TraceArchiveImportResponse,
+        status_code=201,
+    )
+    async def import_trace(
+        request: TraceArchiveImportRequest,
+    ) -> TraceArchiveImportResponse:
+        return query_service.import_trace_archive(request)
+
+    @app.get(
+        f"{API_PREFIX}/traces/{{trace_id}}/export",
+        response_model=TraceArchiveExportResponse,
+    )
+    async def export_trace(
+        trace_id: str,
+        include_source_content: bool = False,
+    ) -> TraceArchiveExportResponse:
+        return query_service.export_trace_archive(
+            trace_id,
+            include_source_content=include_source_content,
         )
 
     @app.post(f"{API_PREFIX}/runs/{{run_id}}/resume", response_model=ResumeResponse)

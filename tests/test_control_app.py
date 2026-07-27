@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import sys
@@ -24,6 +25,7 @@ from agentbus.sandbox.platform import ExecutableCatalog
 from agentbus.tools.protocol import ToolCapabilityName
 from agentbus.tools.runtime import build_managed_tool_runtime
 from agentbus.trace import RuntimeTrace, TraceSpanType, TraceStatus
+from agentbus.trace.redaction import canonical_json_bytes
 from agentbus.trace.sealing import seal_run_provenance
 
 TOKEN = "test-control-token-that-is-at-least-thirty-two-bytes"
@@ -71,24 +73,27 @@ def _client(
     *,
     mcp_server_configs: tuple[McpServerConfig, ...] = (),
     mcp_executable_catalog: ExecutableCatalog | None = None,
+    seed_run: bool = True,
 ) -> tuple[TestClient, StubSupervisor]:
+    tmp_path.mkdir(parents=True, exist_ok=True)
     store = StateStore(tmp_path / "state.db")
-    store.create_run_with_tasks(
-        RunRecord(
-            run_id="run-1",
-            original_task="Inspect me",
-            workflow_type="multi",
-            model="fake",
-            workspace=str(tmp_path),
-        ),
-        [
-            TaskSpec(
-                task_id="task-1",
-                title="Inspect tools",
-                description="Exercise control tool APIs",
-            )
-        ],
-    )
+    if seed_run:
+        store.create_run_with_tasks(
+            RunRecord(
+                run_id="run-1",
+                original_task="Inspect me",
+                workflow_type="multi",
+                model="fake",
+                workspace=str(tmp_path),
+            ),
+            [
+                TaskSpec(
+                    task_id="task-1",
+                    title="Inspect tools",
+                    description="Exercise control tool APIs",
+                )
+            ],
+        )
     config = AgentBusConfig(
         workspace_dir=str(tmp_path),
         state_db=str(tmp_path / "state.db"),
@@ -124,6 +129,7 @@ def _record_control_trace(
     *,
     run_id: str = "run-1",
     marker: str = "primary",
+    include_source_object: bool = False,
 ):
     query = client.app.state.query_service
     if run_id != "run-1":
@@ -144,6 +150,45 @@ def _record_control_trace(
         workspace=query.config.workspace_path,
     )
     with runtime.scope(runtime.root_context):
+        if include_source_object:
+            provider_span = runtime.start_span(
+                TraceSpanType.PROVIDER_RESPONSE,
+                "captured source response",
+                attributes={
+                    "provider": "deterministic",
+                    "model": "control-fixture",
+                    "role": "coder",
+                },
+            )
+            captured_value = {"code": "result = 42"}
+            metadata = runtime.object_store.put_json(
+                {
+                    "envelope_version": 1,
+                    "request_id": "control-source-output",
+                    "role": "coder",
+                    "provider": "deterministic",
+                    "model": "control-fixture",
+                    "value": captured_value,
+                    "value_sha256": hashlib.sha256(
+                        canonical_json_bytes(captured_value)
+                    ).hexdigest(),
+                    "request_fingerprint": "a" * 64,
+                    "finish_status": "stop",
+                },
+                producing_span_id=provider_span.span_id,
+                media_type=(
+                    "application/vnd.agentbus.model-envelope+json"
+                ),
+            )
+            output = runtime.object_store.reference_output(
+                metadata,
+                reference_id="control-source-output",
+                name="model.response",
+            )
+            runtime.finish_span(
+                provider_span,
+                output_references=[output],
+            )
         runtime.call(
             TraceSpanType.VERIFIER,
             "control verifier",
@@ -322,6 +367,8 @@ def test_openapi_uses_versioned_routes_and_stable_error_schema(
     assert "/api/v1/replays/{replay_id}/cancel" in schema["paths"]
     assert "/api/v1/comparisons" in schema["paths"]
     assert "/api/v1/comparisons/{comparison_id}" in schema["paths"]
+    assert "/api/v1/traces/import" in schema["paths"]
+    assert "/api/v1/traces/{trace_id}/export" in schema["paths"]
     assert "ErrorResponse" in schema["components"]["schemas"]
 
 
@@ -464,7 +511,10 @@ def test_managed_replay_api_requires_mode_and_runs_offline(
         replay_supervisor.shutdown()
 
     assert missing_mode.status_code == 422
-    assert terminal.status == "succeeded"
+    assert terminal.status == "succeeded", (
+        terminal.failure_category,
+        terminal.failure_message,
+    )
     assert inspected.status_code == 200
     assert inspected.json()["provider_calls"] == 0
     assert inspected.json()["network_calls"] == 0
@@ -520,6 +570,107 @@ def test_comparison_api_returns_bounded_hash_only_differences(
     assert continued.json()["after"] == payload["next_after"]
     assert missing.status_code == 404
     assert missing.json()["error"]["code"] == "not_found"
+
+
+def test_trace_archive_api_imports_then_replays_in_isolated_state(
+    tmp_path: Path,
+) -> None:
+    source_client, _ = _client(tmp_path / "source")
+    trace, _manifest = _record_control_trace(
+        source_client,
+        include_source_object=True,
+    )
+    destination_client, _ = _client(
+        tmp_path / "destination",
+        seed_run=False,
+    )
+    source_replays = source_client.app.state.replay_supervisor
+    destination_replays = destination_client.app.state.replay_supervisor
+    try:
+        exported = source_client.get(
+            f"/api/v1/traces/{trace.trace_id}/export",
+            params={"include_source_content": "true"},
+            headers=_auth(),
+        )
+        assert exported.status_code == 200
+        archive_base64 = exported.json()["archive_base64"]
+        archive_bytes = base64.b64decode(archive_base64, validate=True)
+        assert str(tmp_path).encode() not in archive_bytes
+        assert b"control-private-token" not in archive_bytes
+
+        denied = destination_client.post(
+            "/api/v1/traces/import",
+            headers=_auth(),
+            json={"archive_base64": archive_base64},
+        )
+        imported = destination_client.post(
+            "/api/v1/traces/import",
+            headers=_auth(),
+            json={
+                "archive_base64": archive_base64,
+                "allow_source_content": True,
+            },
+        )
+        assert denied.status_code == 403
+        assert imported.status_code == 201
+        assert imported.json()["trace_id"] == trace.trace_id
+        assert imported.json()["replay_started"] is False
+
+        imported_run = (
+            destination_client.app.state.query_service.get_run(trace.run_id)
+        )
+        assert imported_run.workspace == "[IMPORTED_TRACE_WORKSPACE]"
+
+        accepted = destination_client.post(
+            f"/api/v1/runs/{trace.run_id}/replays",
+            headers=_auth(),
+            json={"mode": "offline"},
+        )
+        assert accepted.status_code == 202
+        terminal = destination_replays.wait(
+            accepted.json()["replay_id"],
+            timeout=5,
+        )
+    finally:
+        source_replays.shutdown()
+        destination_replays.shutdown()
+
+    assert terminal.status == "succeeded", (
+        terminal.failure_category,
+        terminal.failure_message,
+    )
+    assert terminal.provider_calls == 0
+    assert terminal.network_calls == 0
+
+
+def test_trace_archive_api_rejects_invalid_and_oversized_payloads(
+    tmp_path: Path,
+) -> None:
+    client, _ = _client(tmp_path, seed_run=False)
+    invalid = client.post(
+        "/api/v1/traces/import",
+        headers=_auth(),
+        json={"archive_base64": "not-base64!"},
+    )
+    oversized = client.post(
+        "/api/v1/traces/import",
+        headers=_auth(),
+        json={
+            "archive_base64": base64.b64encode(
+                b"x" * 650_001
+            ).decode("ascii")
+        },
+    )
+    missing = client.get(
+        "/api/v1/traces/missing/export",
+        headers=_auth(),
+    )
+
+    assert invalid.status_code == 400
+    assert invalid.json()["error"]["code"] == "control_plane_error"
+    assert oversized.status_code == 413
+    assert oversized.json()["error"]["code"] == "payload_too_large"
+    assert missing.status_code == 404
 
 
 def test_tool_registry_and_policy_endpoints_are_bounded_and_diagnostic_only(

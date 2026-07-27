@@ -5089,6 +5089,120 @@
         "title": "ToolVersion",
         "type": "object"
       },
+      "TraceArchiveExportResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "archive_base64": {
+            "maxLength": 900000,
+            "minLength": 1,
+            "title": "Archive Base64",
+            "type": "string"
+          },
+          "archive_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Archive Sha256",
+            "type": "string"
+          },
+          "provenance_root": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Provenance Root",
+            "type": "string"
+          },
+          "run_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Run Id",
+            "type": "string"
+          },
+          "source_content_included": {
+            "default": false,
+            "title": "Source Content Included",
+            "type": "boolean"
+          },
+          "trace_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Trace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "trace_id",
+          "run_id",
+          "provenance_root",
+          "archive_sha256",
+          "archive_base64"
+        ],
+        "title": "TraceArchiveExportResponse",
+        "type": "object"
+      },
+      "TraceArchiveImportRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "allow_source_content": {
+            "default": false,
+            "title": "Allow Source Content",
+            "type": "boolean"
+          },
+          "archive_base64": {
+            "maxLength": 900000,
+            "minLength": 1,
+            "title": "Archive Base64",
+            "type": "string"
+          }
+        },
+        "required": [
+          "archive_base64"
+        ],
+        "title": "TraceArchiveImportRequest",
+        "type": "object"
+      },
+      "TraceArchiveImportResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "archive_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Archive Sha256",
+            "type": "string"
+          },
+          "objects_imported": {
+            "title": "Objects Imported",
+            "type": "boolean"
+          },
+          "provenance_root": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Provenance Root",
+            "type": "string"
+          },
+          "replay_started": {
+            "const": false,
+            "default": false,
+            "title": "Replay Started",
+            "type": "boolean"
+          },
+          "run_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Run Id",
+            "type": "string"
+          },
+          "trace_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Trace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "trace_id",
+          "run_id",
+          "provenance_root",
+          "archive_sha256",
+          "objects_imported"
+        ],
+        "title": "TraceArchiveImportResponse",
+        "type": "object"
+      },
       "TraceArtifactSummary": {
         "additionalProperties": false,
         "properties": {
@@ -10644,6 +10758,213 @@
           }
         },
         "summary": "Tool"
+      }
+    },
+    "/api/v1/traces/import": {
+      "post": {
+        "operationId": "import_trace_api_v1_traces_import_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TraceArchiveImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceArchiveImportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          }
+        },
+        "summary": "Import Trace"
+      }
+    },
+    "/api/v1/traces/{trace_id}/export": {
+      "get": {
+        "operationId": "export_trace_api_v1_traces__trace_id__export_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "trace_id",
+            "required": true,
+            "schema": {
+              "title": "Trace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_source_content",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Source Content",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceArchiveExportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          }
+        },
+        "summary": "Export Trace"
       }
     },
     "/api/v1/workspaces/validate": {

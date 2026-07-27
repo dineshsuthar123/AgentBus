@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
 import re
 import subprocess
+import tempfile
 import threading
 from collections import Counter
 from datetime import datetime, timezone
@@ -11,8 +15,10 @@ from typing import Any
 from agentbus.config import AgentBusConfig
 from agentbus.control.errors import (
     ControlPlaneConflictError,
+    ControlPlaneError,
     ControlPlaneForbiddenError,
     ControlPlaneNotFoundError,
+    ControlPlanePayloadTooLargeError,
 )
 from agentbus.control.models import (
     ApprovalDecisionRequest,
@@ -49,6 +55,9 @@ from agentbus.control.models import (
     SpanReplayabilityResponse,
     TaskListResponse,
     TaskSummary,
+    TraceArchiveExportResponse,
+    TraceArchiveImportRequest,
+    TraceArchiveImportResponse,
     TraceArtifactSummary,
     TraceCheckpointSummary,
     TraceFailureSummary,
@@ -143,11 +152,18 @@ from agentbus.tools.records import (
     ToolApprovalRecord,
     ToolInvocationRecord,
 )
+from agentbus.trace.errors import (
+    TraceArchiveConsentRequiredError,
+    TraceArchiveError,
+    TraceIntegrityError,
+    TraceStorageError,
+)
 from agentbus.trace.models import Trace, TraceSpan
 from agentbus.trace.redaction import sanitize_document
 
 MAX_DIFF_BYTES = 100_000
 MAX_FILE_BYTES = 1_000_000
+MAX_CONTROL_TRACE_ARCHIVE_BYTES = 650_000
 _SECRET_NAMES = {
     ".env",
     ".npmrc",
@@ -1201,6 +1217,95 @@ class ControlQueryService:
             next_after=after + len(page),
             truncated=len(eligible) > limit,
         )
+
+    def import_trace_archive(
+        self,
+        request: TraceArchiveImportRequest,
+    ) -> TraceArchiveImportResponse:
+        try:
+            archive_bytes = base64.b64decode(
+                request.archive_base64,
+                validate=True,
+            )
+        except (binascii.Error, ValueError) as exc:
+            raise ControlPlaneError(
+                "Trace archive payload is not valid base64."
+            ) from exc
+        if not archive_bytes:
+            raise ControlPlaneError("Trace archive payload is empty.")
+        self._ensure_control_archive_size(len(archive_bytes))
+        archive_sha256 = hashlib.sha256(archive_bytes).hexdigest()
+        try:
+            with tempfile.TemporaryDirectory(
+                prefix="agentbus-trace-import-"
+            ) as temporary:
+                source = Path(temporary) / "upload.agentbus-trace"
+                source.write_bytes(archive_bytes)
+                imported = self._trace_replay().import_archive(
+                    source,
+                    allow_source_content=request.allow_source_content,
+                )
+        except TraceArchiveConsentRequiredError as exc:
+            raise ControlPlaneForbiddenError(
+                "Trace archive source content requires explicit consent."
+            ) from exc
+        except (TraceArchiveError, TraceIntegrityError, TraceStorageError) as exc:
+            raise ControlPlaneConflictError(
+                "Trace archive validation or import failed safely."
+            ) from exc
+        return TraceArchiveImportResponse(
+            trace_id=imported.trace.trace_id,
+            run_id=imported.trace.run_id,
+            provenance_root=imported.provenance.integrity_root,
+            archive_sha256=archive_sha256,
+            objects_imported=imported.objects_imported,
+        )
+
+    def export_trace_archive(
+        self,
+        trace_id: str,
+        *,
+        include_source_content: bool = False,
+    ) -> TraceArchiveExportResponse:
+        try:
+            with tempfile.TemporaryDirectory(
+                prefix="agentbus-trace-export-"
+            ) as temporary:
+                destination = Path(temporary) / "trace.agentbus-trace"
+                manifest = self._trace_replay().export_trace(
+                    trace_id,
+                    destination,
+                    include_source_content=include_source_content,
+                )
+                archive_bytes = destination.read_bytes()
+        except (
+            RunNotFoundError,
+            TraceRecordNotFoundError,
+            ProvenanceRecordNotFoundError,
+        ) as exc:
+            raise ControlPlaneNotFoundError(
+                "The requested trace archive was not found."
+            ) from exc
+        except (TraceArchiveError, TraceIntegrityError, TraceStorageError) as exc:
+            raise ControlPlaneConflictError(
+                "Trace archive export failed safely."
+            ) from exc
+        self._ensure_control_archive_size(len(archive_bytes))
+        return TraceArchiveExportResponse(
+            trace_id=manifest.trace_id,
+            run_id=manifest.run_id,
+            provenance_root=manifest.provenance_root,
+            archive_sha256=hashlib.sha256(archive_bytes).hexdigest(),
+            archive_base64=base64.b64encode(archive_bytes).decode("ascii"),
+            source_content_included=manifest.source_content_included,
+        )
+
+    @staticmethod
+    def _ensure_control_archive_size(byte_length: int) -> None:
+        if byte_length > MAX_CONTROL_TRACE_ARCHIVE_BYTES:
+            raise ControlPlanePayloadTooLargeError(
+                "Trace archive exceeds the control-plane transfer limit."
+            )
 
     def _run_trace(self, run_id: str) -> Trace:
         try:
