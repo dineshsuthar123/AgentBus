@@ -12,7 +12,13 @@ import type {
   McpServerCheckResponse,
   McpServerListResponse,
   ProviderListResponse,
+  ReplayAcceptedResponse,
+  ReplayCancelResponse,
+  ReplayCreateRequest,
+  ReplayListResponse,
+  ReplaySessionResponse,
   ResumeResponse,
+  RunReplayabilityResponse,
   RunAcceptedResponse,
   RunCreateRequest,
   RunListResponse,
@@ -167,6 +173,60 @@ export class AgentBusClient {
       `/api/v1/runs/${safeSegment(
         runId
       )}/trace/spans/${safeSegment(spanId)}`
+    );
+  }
+
+  public replayability(
+    runId: string,
+    after = 0,
+    limit = 500
+  ): Promise<RunReplayabilityResponse> {
+    validatePage(after, limit);
+    return this.request(
+      "GET",
+      `/api/v1/runs/${safeSegment(
+        runId
+      )}/replayability?after=${after}&limit=${limit}`
+    );
+  }
+
+  public createReplay(
+    runId: string,
+    body: ReplayCreateRequest
+  ): Promise<ReplayAcceptedResponse> {
+    return this.request(
+      "POST",
+      `/api/v1/runs/${safeSegment(runId)}/replays`,
+      body
+    );
+  }
+
+  public listReplays(
+    sourceTraceId?: string,
+    status?: string,
+    limit = 500
+  ): Promise<ReplayListResponse> {
+    validatePage(0, limit);
+    if (status && !REPLAY_STATUSES.has(status)) {
+      throw new Error("AgentBus replay status filter is invalid.");
+    }
+    const query = new URLSearchParams({ limit: String(limit) });
+    if (sourceTraceId) query.set("source_trace_id", sourceTraceId);
+    if (status) query.set("status", status);
+    return this.request("GET", `/api/v1/replays?${query.toString()}`);
+  }
+
+  public replay(replayId: string): Promise<ReplaySessionResponse> {
+    return this.request(
+      "GET",
+      `/api/v1/replays/${safeSegment(replayId)}`
+    );
+  }
+
+  public cancelReplay(replayId: string): Promise<ReplayCancelResponse> {
+    return this.request(
+      "POST",
+      `/api/v1/replays/${safeSegment(replayId)}/cancel`
     );
   }
 
@@ -381,3 +441,13 @@ function validatePage(after: number, limit: number): void {
     throw new Error("AgentBus pagination is outside the bounded range.");
   }
 }
+
+const REPLAY_STATUSES = new Set([
+  "pending",
+  "running",
+  "succeeded",
+  "failed",
+  "cancelled",
+  "incompatible",
+  "awaiting_input"
+]);

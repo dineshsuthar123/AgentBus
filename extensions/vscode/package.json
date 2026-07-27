@@ -27,6 +27,7 @@
   "activationEvents": [
     "onView:agentbus.runs",
     "onView:agentbus.timeline",
+    "onView:agentbus.replays",
     "onView:agentbus.tools",
     "onView:agentbus.mcp",
     "onCommand:agentbus.startTask"
@@ -64,6 +65,10 @@
       {
         "command": "agentbus.showSpan",
         "title": "AgentBus: Show Span"
+      },
+      {
+        "command": "agentbus.showReplaySession",
+        "title": "AgentBus: Show Replay Session"
       },
       {
         "command": "agentbus.openRunReport",
@@ -158,6 +163,10 @@
           "name": "Execution Timeline"
         },
         {
+          "id": "agentbus.replays",
+          "name": "Replay Sessions"
+        },
+        {
           "id": "agentbus.approvals",
           "name": "Approvals"
         },
@@ -196,6 +205,11 @@
         {
           "command": "agentbus.showSpan",
           "when": "viewItem == agentbusTraceSpan",
+          "group": "inline"
+        },
+        {
+          "command": "agentbus.showReplaySession",
+          "when": "viewItem == agentbusReplayCancellable || viewItem == agentbusReplayTerminal",
           "group": "inline"
         },
         {

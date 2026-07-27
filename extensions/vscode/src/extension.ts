@@ -7,6 +7,7 @@ import {
   ReportDocumentProvider
 } from "./documents";
 import { RunStore } from "./runStore";
+import { ReplayDocumentProvider } from "./replayDocuments";
 import { ToolArtifactDocumentProvider } from "./artifactDocuments";
 import { McpServerDocumentProvider } from "./mcpDocuments";
 import { SpanDocumentProvider } from "./traceDocuments";
@@ -20,6 +21,7 @@ import {
   ExecutionTimelineProvider,
   McpServersProvider,
   ProvidersProvider,
+  ReplaySessionsProvider,
   RunsProvider,
   Selection,
   TasksProvider,
@@ -55,6 +57,7 @@ export function activate(context: vscode.ExtensionContext): AgentBusExtensionApi
   const worktrees = new WorktreesProvider(client, selection);
   const tools = new ToolInvocationsProvider(client, selection);
   const providers = new ProvidersProvider(client);
+  const replays = new ReplaySessionsProvider(client);
   const mcpServers = new McpServersProvider(client);
   context.subscriptions.push(
     output,
@@ -67,6 +70,7 @@ export function activate(context: vscode.ExtensionContext): AgentBusExtensionApi
     vscode.window.registerTreeDataProvider("agentbus.worktrees", worktrees),
     vscode.window.registerTreeDataProvider("agentbus.tools", tools),
     vscode.window.registerTreeDataProvider("agentbus.providers", providers),
+    vscode.window.registerTreeDataProvider("agentbus.replays", replays),
     vscode.window.registerTreeDataProvider("agentbus.mcp", mcpServers),
     vscode.workspace.registerTextDocumentContentProvider(
       "agentbus-before",
@@ -99,6 +103,10 @@ export function activate(context: vscode.ExtensionContext): AgentBusExtensionApi
     vscode.workspace.registerTextDocumentContentProvider(
       "agentbus-span",
       new SpanDocumentProvider(client)
+    ),
+    vscode.workspace.registerTextDocumentContentProvider(
+      "agentbus-replay",
+      new ReplayDocumentProvider(client)
     )
   );
   const controller = new CommandController(
@@ -113,6 +121,7 @@ export function activate(context: vscode.ExtensionContext): AgentBusExtensionApi
       worktrees,
       tools,
       providers,
+      replays,
       mcpServers
     ],
     output,

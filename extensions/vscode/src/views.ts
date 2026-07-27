@@ -4,6 +4,7 @@ import type {
   ApprovalSummary,
   McpServerSummary,
   ProviderSummary,
+  ReplaySessionResponse,
   RunSummary,
   TaskSummary,
   TraceSpanSummary,
@@ -11,6 +12,13 @@ import type {
   WorktreeSummary
 } from "./generated/protocol";
 import type { RunStore } from "./runStore";
+import {
+  REPLAY_GROUPS,
+  replayDescription,
+  replayGroup,
+  replayTooltip,
+  type ReplayGroupKey
+} from "./replayPresentation";
 import {
   spanDescription,
   spanTooltip,
@@ -335,6 +343,69 @@ export class ProvidersProvider extends RefreshableProvider {
   }
 }
 
+interface ReplayGroupValue {
+  kind: "replay-group";
+  key: ReplayGroupKey;
+}
+
+export class ReplaySessionsProvider extends RefreshableProvider {
+  private cached: ReplaySessionResponse[] | undefined;
+  private truncated = false;
+
+  public constructor(private readonly client: () => Promise<AgentBusClient>) {
+    super();
+  }
+
+  public override refresh(): void {
+    this.cached = undefined;
+    this.truncated = false;
+    super.refresh();
+  }
+
+  public async getChildren(element?: AgentBusItem): Promise<AgentBusItem[]> {
+    const sessions = await this.load();
+    if (element) {
+      const group = element.value as ReplayGroupValue;
+      if (group?.kind !== "replay-group") return [];
+      return sessions
+        .filter((session) => replayGroup(session.status) === group.key)
+        .map(replaySessionItem);
+    }
+    const groups = REPLAY_GROUPS.map(({ key, label }) => {
+      const count = sessions.filter(
+        (session) => replayGroup(session.status) === key
+      ).length;
+      const item = new AgentBusItem(
+        `${label} (${count})`,
+        key === "active"
+          ? vscode.TreeItemCollapsibleState.Expanded
+          : vscode.TreeItemCollapsibleState.Collapsed,
+        { kind: "replay-group", key } satisfies ReplayGroupValue
+      );
+      item.contextValue = "agentbusReplayGroup";
+      item.iconPath = new vscode.ThemeIcon(iconForStatus(key));
+      return item;
+    });
+    if (this.truncated) {
+      groups.push(messageItem("Showing the first 500 replay sessions."));
+    }
+    return groups;
+  }
+
+  private async load(): Promise<ReplaySessionResponse[]> {
+    if (!this.cached) {
+      const response = await (await this.client()).listReplays(
+        undefined,
+        undefined,
+        500
+      );
+      this.cached = response.replays;
+      this.truncated = response.truncated ?? false;
+    }
+    return this.cached;
+  }
+}
+
 function runItem(run: RunSummary): AgentBusItem {
   const item = new AgentBusItem(
     run.original_task,
@@ -513,6 +584,26 @@ function providerItem(provider: ProviderSummary): AgentBusItem {
     provider.ready ? "pass-filled" : "warning"
   );
   item.contextValue = "agentbusProvider";
+  return item;
+}
+
+function replaySessionItem(session: ReplaySessionResponse): AgentBusItem {
+  const item = new AgentBusItem(
+    session.replay_id,
+    vscode.TreeItemCollapsibleState.None,
+    session
+  );
+  item.description = replayDescription(session);
+  item.tooltip = new vscode.MarkdownString(replayTooltip(session));
+  item.iconPath = new vscode.ThemeIcon(iconForStatus(session.status));
+  item.contextValue = ["pending", "running"].includes(session.status)
+    ? "agentbusReplayCancellable"
+    : "agentbusReplayTerminal";
+  item.command = {
+    command: "agentbus.showReplaySession",
+    title: "Show Replay Session",
+    arguments: [item]
+  };
   return item;
 }
 

@@ -177,3 +177,67 @@ test("trace client routes encode identifiers and bound span pages", async () => 
   );
   assert.throws(() => client.traceSpans("run", 0, 501), /bounded/);
 });
+
+test("replay client routes are explicit bounded and command-free", async () => {
+  const requests: Array<{
+    url: string;
+    method: string;
+    body: BodyInit | null | undefined;
+  }> = [];
+  const client = new AgentBusClient(
+    "http://127.0.0.1:43123",
+    token,
+    async (input, init) => {
+      requests.push({
+        url: String(input),
+        method: init?.method ?? "GET",
+        body: init?.body
+      });
+      return Response.json({});
+    }
+  );
+
+  await client.replayability("run one", 4, 20);
+  await client.createReplay("run one", { mode: "offline" });
+  await client.listReplays("trace one", "running", 25);
+  await client.replay("replay:one");
+  await client.cancelReplay("replay:one");
+
+  assert.equal(
+    requests[0]?.url.endsWith(
+      "/api/v1/runs/run%20one/replayability?after=4&limit=20"
+    ),
+    true
+  );
+  assert.equal(
+    requests[1]?.url.endsWith("/api/v1/runs/run%20one/replays"),
+    true
+  );
+  assert.equal(requests[1]?.method, "POST");
+  assert.deepEqual(JSON.parse(String(requests[1]?.body)), {
+    mode: "offline"
+  });
+  assert.equal(
+    requests[2]?.url.endsWith(
+      "/api/v1/replays?limit=25&source_trace_id=trace+one&status=running"
+    ),
+    true
+  );
+  assert.equal(
+    requests[3]?.url.endsWith("/api/v1/replays/replay%3Aone"),
+    true
+  );
+  assert.equal(
+    requests[4]?.url.endsWith("/api/v1/replays/replay%3Aone/cancel"),
+    true
+  );
+  assert.equal(requests[4]?.method, "POST");
+  assert.throws(
+    () => client.listReplays(undefined, "unknown", 10),
+    /status filter/
+  );
+  assert.throws(
+    () => client.listReplays(undefined, undefined, 501),
+    /bounded/
+  );
+});

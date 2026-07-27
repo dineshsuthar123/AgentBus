@@ -10,6 +10,7 @@ import type {
   ApprovalSummary,
   CancelResponse,
   McpServerSummary,
+  ReplaySessionResponse,
   RunAcceptedResponse,
   RunCreateRequest,
   RunSummary,
@@ -21,6 +22,7 @@ import type { RunStore } from "./runStore";
 import { safeError } from "./redaction";
 import { mcpServerUri } from "./mcpDocuments";
 import { formatMcpServerCheck } from "./mcpPresentation";
+import { replayUri } from "./replayDocuments";
 import { spanUri } from "./traceDocuments";
 import {
   canonicalWorkspacePath,
@@ -76,6 +78,9 @@ export class CommandController implements vscode.Disposable {
     command("agentbus.showRun", (item) => this.showRun(item));
     command("agentbus.showExecutionTimeline", () => this.showTimeline());
     command("agentbus.showSpan", (item) => this.showSpan(item));
+    command("agentbus.showReplaySession", (item) =>
+      this.showReplaySession(item)
+    );
     command("agentbus.resumeRun", () => this.resume());
     command("agentbus.cancelRun", () => this.cancel());
     command("agentbus.openRunReport", () => this.openReport());
@@ -279,6 +284,33 @@ export class CommandController implements vscode.Disposable {
     if (!span || !runId) return;
     const document = await vscode.workspace.openTextDocument(
       spanUri(runId, span.span_id)
+    );
+    await vscode.window.showTextDocument(document, { preview: true });
+  }
+
+  private async showReplaySession(raw?: unknown): Promise<void> {
+    const item = raw as AgentBusItem | undefined;
+    let replay = item?.value as ReplaySessionResponse | undefined;
+    if (!replay) {
+      const response = await (await this.client()).listReplays(
+        undefined,
+        undefined,
+        500
+      );
+      replay = (
+        await vscode.window.showQuickPick(
+          response.replays.map((value) => ({
+            label: value.replay_id,
+            description: `${value.mode} | ${value.status}`,
+            value
+          })),
+          { title: "Show AgentBus Replay Session" }
+        )
+      )?.value;
+    }
+    if (!replay) return;
+    const document = await vscode.workspace.openTextDocument(
+      replayUri(replay.replay_id)
     );
     await vscode.window.showTextDocument(document, { preview: true });
   }
