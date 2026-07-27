@@ -390,11 +390,20 @@ class TraceRetentionManager:
 
 
 def _trace_hashes(trace: Trace) -> set[str]:
-    return {
+    hashes = {
         reference.sha256
         for span in trace.spans
-        for reference in (*span.input_references, *span.output_references)
+        for reference in (
+            *span.input_references,
+            *span.output_references,
+        )
     }
+    hashes.update(
+        reference.sha256
+        for checkpoint in trace.checkpoints
+        for reference in checkpoint.state_references
+    )
+    return hashes
 
 
 def _gc_plan_id(

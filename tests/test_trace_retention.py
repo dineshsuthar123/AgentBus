@@ -100,6 +100,32 @@ def test_default_gc_deletes_only_orphans_and_preserves_fixture_objects(
         store.get(orphan.sha256)
 
 
+def test_gc_preserves_checkpoint_state_references(tmp_path) -> None:
+    store = ContentAddressedStore(tmp_path / "objects")
+    recorder = TraceRecorder("run-checkpoint")
+    root = recorder.start_trace()
+    metadata = store.put_json(
+        {"durable_state": "captured"},
+        producing_span_id=root.span_id,
+    )
+    recorder.checkpoint(
+        "checkpoint state",
+        state_references=[
+            store.reference_input(
+                metadata,
+                reference_id="checkpoint-state",
+                name="durable state",
+            )
+        ],
+    )
+    trace = recorder.finish_trace()
+
+    plan = TraceRetentionManager(store).plan([trace])
+
+    assert metadata.sha256 in plan.protected_hashes
+    assert metadata.sha256 not in plan.deletion_hashes
+
+
 def test_failure_recent_and_active_replay_roots_are_preserved(tmp_path) -> None:
     store = ContentAddressedStore(tmp_path / "objects")
     failed, failed_object = _trace_with_object(
