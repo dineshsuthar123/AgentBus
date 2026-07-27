@@ -622,17 +622,59 @@ class RoutedModel:
             **kwargs,
         )
         self._results.append(self.last_result)
-        return self.last_result.json_value()
+        return self._parse_value(json_value=True)
 
     def generate_text(self, prompt: str, **kwargs: Any) -> str:
         self.last_result = self.router.generate_text(self.role, prompt, **kwargs)
         self._results.append(self.last_result)
-        return self.last_result.text_value()
+        return self._parse_value(json_value=False)
 
     def drain_results(self) -> list[ModelResult]:
         results = list(self._results)
         self._results.clear()
         return results
+
+    def _parse_value(self, *, json_value: bool):
+        assert self.last_result is not None
+        runtime_trace = self.router.runtime_trace
+        if runtime_trace is None:
+            return (
+                self.last_result.json_value()
+                if json_value
+                else self.last_result.text_value()
+            )
+        span = runtime_trace.start_span(
+            TraceSpanType.MODEL_PARSE,
+            f"{self.role.value} structured parse",
+            attributes={
+                "value_kind": "json" if json_value else "text",
+                "provider": self.last_result.provider,
+                "model": self.last_result.model,
+            },
+        )
+        try:
+            value = (
+                self.last_result.json_value()
+                if json_value
+                else self.last_result.text_value()
+            )
+        except BaseException as exc:
+            runtime_trace.fail_span(span, exc)
+            raise
+        output = (
+            runtime_trace.capture_json_output(span, "model.parsed", value)
+            if json_value
+            else runtime_trace.capture_text_output(
+                span,
+                "model.parsed",
+                str(value),
+            )
+        )
+        runtime_trace.finish_span(
+            span,
+            output_references=[output] if output is not None else [],
+        )
+        return value
 
 
 @contextmanager

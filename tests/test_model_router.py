@@ -232,6 +232,41 @@ def test_model_router_records_prompt_safe_replay_envelope(tmp_path):
     assert envelope.request_fingerprint == request.attributes["prompt_sha256"]
 
 
+def test_routed_model_records_structured_parse_after_provider_response(tmp_path):
+    config = azure_config(model_max_retries=0)
+    fake = FakeProvider(
+        "azure",
+        "coder-deployment",
+        [result(model="coder-deployment")],
+    )
+    trace_runtime, store = runtime_trace(tmp_path)
+    routed = router_with(
+        config,
+        fake,
+        runtime_trace=trace_runtime,
+    ).for_role(ModelRole.CODER)
+
+    with trace_runtime.scope(trace_runtime.root_context):
+        value = routed.generate_json("bounded prompt")
+    trace_runtime.finish(status=TraceStatus.SUCCEEDED)
+    trace = store.get_run_trace("run-1")
+    provider_response = next(
+        span
+        for span in trace.spans
+        if span.span_type == TraceSpanType.PROVIDER_RESPONSE
+    )
+    parsed = next(
+        span
+        for span in trace.spans
+        if span.span_type == TraceSpanType.MODEL_PARSE
+    )
+
+    assert value == {"ok": True}
+    assert provider_response.sequence < parsed.sequence
+    assert parsed.status == TraceStatus.SUCCEEDED
+    assert parsed.output_references
+
+
 def test_retry_after_is_honored_and_capped():
     config = azure_config(model_retry_max_seconds=4)
     error = ModelRateLimitError(
