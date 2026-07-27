@@ -288,6 +288,11 @@ def test_durable_run_records_hierarchical_trace_and_final_review_order(
         trace,
         trace.checkpoints[-1].checkpoint_id,
     ) == states
+    manifest = store.get_run_provenance_manifest(run_id)
+    trace_metadata = store.get_run(run_id).metadata["execution_trace"]
+    assert manifest.trace_id == trace.trace_id
+    assert manifest.integrity_root == trace_metadata["provenance_root"]
+    assert trace_metadata["status"] == "sealed"
 
 
 def test_final_review_rejection_preserves_successful_task_trace_history(
@@ -315,6 +320,9 @@ def test_final_review_rejection_preserves_successful_task_trace_history(
         and span.status == TraceStatus.SUCCEEDED
         for span in trace.spans
     )
+    assert store.get_run_provenance_manifest(
+        report.run_id
+    ).trace_id == trace.trace_id
 
 
 def test_durable_run_persists_custom_tool_budget_for_resume(tmp_path):

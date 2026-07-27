@@ -43,9 +43,15 @@ from agentbus.runtime.verifier import Verifier
 from agentbus.runtime.durable_workflow import MultiAgentTaskExecutor
 from agentbus.trace import (
     RuntimeTrace,
+    Trace,
     TraceFailure,
     TraceSpanType,
     TraceStatus,
+)
+from agentbus.trace.errors import TraceIntegrityError
+from agentbus.trace.sealing import (
+    repository_state_sha256,
+    seal_run_provenance,
 )
 from agentbus.tools.git_tools import GitTools
 from agentbus.tools.runtime import build_managed_tool_runtime
@@ -726,45 +732,139 @@ class MultiAgentOrchestrator:
             RunStatus.CANCELLED: TraceStatus.CANCELLED,
         }
         status = statuses.get(report.status)
-        if status is None or not runtime_trace.active:
+        if status is None:
             return
-        with runtime_trace.scope(runtime_trace.root_context):
-            report_span = runtime_trace.start_span(
-                TraceSpanType.CUSTOM,
-                "durable run report",
+        if runtime_trace.active:
+            with runtime_trace.scope(runtime_trace.root_context):
+                report_span = runtime_trace.start_span(
+                    TraceSpanType.CUSTOM,
+                    "durable run report",
+                    attributes={
+                        "run_status": report.status.value,
+                        "successful_task_count": len(report.successful_tasks),
+                        "failed_task_count": len(report.failed_tasks),
+                        "changed_file_count": len(report.changed_files),
+                    },
+                )
+                report_output = runtime_trace.capture_json_output(
+                    report_span,
+                    "run.report",
+                    report.model_dump(mode="json"),
+                )
+                runtime_trace.finish_span(
+                    report_span,
+                    output_references=(
+                        [report_output] if report_output is not None else []
+                    ),
+                )
+            failure = None
+            if status == TraceStatus.FAILED:
+                failure = TraceFailure(
+                    category="durable_run_failed",
+                    message=report.failure_reason or "Durable run failed.",
+                    retryable=False,
+                )
+            trace = runtime_trace.finish(
+                status=status,
+                failure=failure,
                 attributes={
-                    "run_status": report.status.value,
-                    "successful_task_count": len(report.successful_tasks),
-                    "failed_task_count": len(report.failed_tasks),
-                    "changed_file_count": len(report.changed_files),
+                    "final_status": report.status.value,
+                    "side_effects_persisted": report.side_effects_persisted,
                 },
             )
-            report_output = runtime_trace.capture_json_output(
-                report_span,
-                "run.report",
-                report.model_dump(mode="json"),
+        else:
+            trace = runtime_trace.snapshot()
+        if trace is None or trace.completed_at is None:
+            return
+        self._seal_run_provenance(runtime_trace, report, trace)
+
+    def _seal_run_provenance(
+        self,
+        runtime_trace: RuntimeTrace,
+        report: ExecutionReport,
+        trace: Trace,
+    ) -> None:
+        try:
+            manifest = self.state_store.find_run_provenance_manifest(
+                report.run_id
             )
-            runtime_trace.finish_span(
-                report_span,
-                output_references=(
-                    [report_output] if report_output is not None else []
-                ),
+            if manifest is None:
+                run = self.state_store.get_run(report.run_id)
+                manifest = seal_run_provenance(
+                    trace,
+                    state_store=self.state_store,
+                    object_store=runtime_trace.object_store,
+                    configuration={
+                        "workflow_type": run.workflow_type,
+                        "model": run.model,
+                        "model_routes": self.config.safe_model_summary(),
+                        "parallel_execution": run.metadata.get(
+                            "parallel_execution",
+                            {},
+                        ),
+                    },
+                    task_graph=run.graph_data,
+                    final_repository_tree_sha256=repository_state_sha256(
+                        self.git_repository,
+                        changed_files=report.changed_files,
+                        commit_identifier=run.commit_identifier,
+                    ),
+                )
+            self.state_store.update_run_details(
+                report.run_id,
+                metadata_updates={
+                    "execution_trace": {
+                        "trace_id": trace.trace_id,
+                        "storage": "local_content_addressed",
+                        "status": "sealed",
+                        "provenance_root": manifest.integrity_root,
+                        "replayability": manifest.replayability.value,
+                    }
+                },
+                event_type="execution_trace_sealed",
             )
-        failure = None
-        if status == TraceStatus.FAILED:
-            failure = TraceFailure(
-                category="durable_run_failed",
-                message=report.failure_reason or "Durable run failed.",
-                retryable=False,
+            self.logger.log(
+                "execution_trace_sealed",
+                {
+                    "run_id": report.run_id,
+                    "trace_id": trace.trace_id,
+                    "provenance_root": manifest.integrity_root,
+                    "replayability": manifest.replayability.value,
+                },
             )
-        runtime_trace.finish(
-            status=status,
-            failure=failure,
-            attributes={
-                "final_status": report.status.value,
-                "side_effects_persisted": report.side_effects_persisted,
-            },
-        )
+        except Exception as exc:
+            failure_status = (
+                "integrity_error"
+                if isinstance(exc, TraceIntegrityError)
+                else "degraded"
+            )
+            try:
+                self.state_store.update_run_details(
+                    report.run_id,
+                    metadata_updates={
+                        "execution_trace": {
+                            "trace_id": trace.trace_id,
+                            "storage": "local_content_addressed",
+                            "status": failure_status,
+                            "failure_category": type(exc).__name__,
+                        }
+                    },
+                    event_type="execution_trace_sealing_failed",
+                )
+                self.logger.log(
+                    "execution_trace_sealing_failed",
+                    {
+                        "run_id": report.run_id,
+                        "trace_id": trace.trace_id,
+                        "failure_category": type(exc).__name__,
+                        "critical_integrity_error": isinstance(
+                            exc,
+                            TraceIntegrityError,
+                        ),
+                    },
+                )
+            except Exception:
+                pass
 
     def _run_final_review(self, run_id: str) -> ExecutionReport:
         cancellation = self._cancellation_for(run_id)

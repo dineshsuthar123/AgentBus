@@ -127,6 +127,26 @@ def test_git_diff_and_changed_files_are_scoped_to_workspace(tmp_path):
     assert "unrelated-parent.txt" not in diff
 
 
+def test_repository_state_fingerprint_tracks_only_target_repository(tmp_path):
+    workspace = init_repository(tmp_path / "target")
+    source = workspace / "module.py"
+    source.write_text("value = 1\n", encoding="utf-8")
+    run_git(workspace, "add", "module.py")
+    run_git(workspace, "commit", "-m", "baseline")
+    repository = GitRepository(str(workspace))
+    baseline = repository.repository_state_sha256()
+
+    (tmp_path / "outside.txt").write_text("outside\n", encoding="utf-8")
+    assert repository.repository_state_sha256() == baseline
+
+    source.write_text("value = 2\n", encoding="utf-8")
+    changed = repository.repository_state_sha256()
+
+    assert changed != baseline
+    assert len(changed) == 64
+    assert str(workspace) not in changed
+
+
 def test_git_diffs_and_commits_exclude_protected_workspace_files(tmp_path):
     workspace = init_repository(tmp_path / "target")
     (workspace / "module.py").write_text("value = 1\n", encoding="utf-8")
