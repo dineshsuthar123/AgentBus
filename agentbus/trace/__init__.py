@@ -1,5 +1,13 @@
 """Versioned execution tracing primitives for AgentBus."""
 
+from agentbus.trace.context import (
+    TraceContext,
+    copy_trace_context,
+    current_trace_context,
+    reset_trace_context,
+    set_trace_context,
+    trace_context,
+)
 from agentbus.trace.errors import (
     TraceError,
     TraceIntegrityError,
@@ -33,6 +41,7 @@ __all__ = [
     "Trace",
     "TraceArtifactReference",
     "TraceCheckpoint",
+    "TraceContext",
     "TraceError",
     "TraceEvent",
     "TraceFailure",
@@ -49,4 +58,9 @@ __all__ = [
     "TraceStatus",
     "TraceValidationError",
     "TraceValueReference",
+    "copy_trace_context",
+    "current_trace_context",
+    "reset_trace_context",
+    "set_trace_context",
+    "trace_context",
 ]
