@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import random
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from typing import Any, Callable, Iterator
 
@@ -25,6 +26,12 @@ from agentbus.models.ollama import OllamaProvider
 from agentbus.models.types import ModelResult, ModelRole, ModelRoute
 from agentbus.models.usage import UsageLedger
 from agentbus.security.redaction import sanitize_json
+from agentbus.trace import (
+    RuntimeTrace,
+    TraceResourceUsage,
+    TraceSpanType,
+)
+from agentbus.trace.redaction import sanitize_text
 
 
 ProviderBuilder = Callable[[ModelRoute], ModelProvider]
@@ -110,6 +117,7 @@ class ModelRouter:
         usage_ledger: UsageLedger | None = None,
         sleeper: Callable[[float], None] = time.sleep,
         jitter: Callable[[], float] = random.random,
+        runtime_trace: RuntimeTrace | None = None,
     ):
         self.config = config or AgentBusConfig.from_env()
         self.provider_factory = provider_factory or ModelProviderFactory(self.config)
@@ -117,10 +125,14 @@ class ModelRouter:
         self.usage_ledger = usage_ledger or UsageLedger()
         self.sleeper = sleeper
         self.jitter = jitter
+        self.runtime_trace = runtime_trace
         self._providers: dict[tuple[Any, ...], ModelProvider] = {}
 
     def set_logger(self, logger: Any | None) -> None:
         self.logger = logger
+
+    def set_runtime_trace(self, runtime_trace: RuntimeTrace | None) -> None:
+        self.runtime_trace = runtime_trace
 
     def route_for(
         self,
@@ -222,12 +234,59 @@ class ModelRouter:
         kwargs["metadata"] = correlation or None
         route = self.route_for(role)
         self._log("model_route_selected", _route_metadata(route))
+        request_span = self._start_request_trace(
+            route,
+            method_name=method_name,
+            prompt=prompt,
+            schema=kwargs.get("schema"),
+        )
         try:
-            result = self._call_with_retries(route, method_name, prompt, kwargs)
-        except ModelProviderError as error:
-            if not self._should_fallback(route, error):
-                raise
-            result = self._fallback(route, method_name, prompt, kwargs, error)
+            scope = (
+                self.runtime_trace.scope(request_span)
+                if self.runtime_trace is not None
+                else nullcontext()
+            )
+            with scope:
+                try:
+                    result = self._call_with_retries(
+                        route,
+                        method_name,
+                        prompt,
+                        kwargs,
+                    )
+                except ModelProviderError as error:
+                    if not self._should_fallback(route, error):
+                        raise
+                    result = self._fallback(
+                        route,
+                        method_name,
+                        prompt,
+                        kwargs,
+                        error,
+                    )
+                self._record_response_trace(
+                    request_span,
+                    result,
+                    prompt=prompt,
+                    schema=kwargs.get("schema"),
+                )
+        except BaseException as error:
+            if self.runtime_trace is not None:
+                self.runtime_trace.fail_span(
+                    request_span,
+                    error,
+                    retryable=bool(getattr(error, "retryable", False)),
+                )
+            raise
+        if self.runtime_trace is not None:
+            self.runtime_trace.finish_span(
+                request_span,
+                attributes={
+                    "result_provider": result.provider,
+                    "retry_count": result.retry_count,
+                    "fallback_used": result.fallback_used,
+                },
+            )
         if cancellation is not None:
             try:
                 cancellation.checkpoint(
@@ -237,6 +296,87 @@ class ModelRouter:
             except CancellationRequested as exc:
                 raise _model_cancellation(exc, role) from exc
         return result
+
+    def _start_request_trace(
+        self,
+        route: ModelRoute,
+        *,
+        method_name: str,
+        prompt: str,
+        schema: type[BaseModel] | dict[str, Any] | None,
+    ):
+        if self.runtime_trace is None:
+            return None
+        return self.runtime_trace.start_span(
+            TraceSpanType.PROVIDER_REQUEST,
+            f"{route.role.value} model request",
+            attributes={
+                **_route_metadata(route),
+                "request_method": method_name,
+                "prompt_sha256": _prompt_sha256(prompt),
+                "schema_name": _schema_name(schema),
+            },
+        )
+
+    def _record_response_trace(
+        self,
+        request_span,
+        result: ModelResult,
+        *,
+        prompt: str,
+        schema: type[BaseModel] | dict[str, Any] | None,
+    ) -> None:
+        if self.runtime_trace is None:
+            return
+        response_span = self.runtime_trace.start_span(
+            TraceSpanType.PROVIDER_RESPONSE,
+            f"{result.role.value} model response",
+            parent_span_id=(
+                request_span.span_id if request_span is not None else None
+            ),
+            attributes={
+                "provider": result.provider,
+                "model": result.model,
+                "role": result.role.value,
+                "fallback_used": result.fallback_used,
+                "retry_count": result.retry_count,
+            },
+        )
+        outputs = []
+        if (
+            response_span is not None
+            and self.runtime_trace.object_store is not None
+        ):
+            try:
+                from agentbus.replay.substitutions import capture_model_envelope
+
+                outputs.append(
+                    capture_model_envelope(
+                        self.runtime_trace.object_store,
+                        result,
+                        prompt=prompt,
+                        producing_span_id=response_span.span_id,
+                        reference_id=f"model-{response_span.span_id}",
+                        schema_name=_schema_name(schema),
+                    )
+                )
+            except Exception as exc:
+                self.runtime_trace.recording_failed("model_capture", exc)
+        usage = TraceResourceUsage(
+            input_tokens=result.usage.input_tokens,
+            output_tokens=result.usage.output_tokens,
+            cached_tokens=result.usage.cached_tokens,
+            wall_time_ms=(
+                round(result.latency_seconds * 1_000)
+                if result.latency_seconds is not None
+                else None
+            ),
+        )
+        self.runtime_trace.finish_span(
+            response_span,
+            output_references=outputs,
+            resource_usage=usage,
+        )
 
     def _call_with_retries(
         self,
@@ -542,6 +682,21 @@ def _route_metadata(route: ModelRoute) -> dict[str, Any]:
         "fallback_enabled": route.fallback_enabled,
         "fallback_provider": route.fallback_provider,
     }
+
+
+def _prompt_sha256(prompt: str) -> str:
+    return hashlib.sha256(sanitize_text(prompt).canonical_bytes).hexdigest()
+
+
+def _schema_name(
+    schema: type[BaseModel] | dict[str, Any] | None,
+) -> str | None:
+    if isinstance(schema, type) and issubclass(schema, BaseModel):
+        return schema.__name__
+    if isinstance(schema, dict):
+        name = schema.get("title") or schema.get("$id")
+        return str(name)[:256] if name else "json_schema"
+    return None
 
 
 def _model_cancellation(

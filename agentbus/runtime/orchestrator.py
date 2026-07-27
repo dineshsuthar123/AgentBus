@@ -631,6 +631,11 @@ class MultiAgentOrchestrator:
             usage_ledger=self.model_router.usage_ledger,
             sleeper=self.model_router.sleeper,
             jitter=self.model_router.jitter,
+            runtime_trace=(
+                self._trace_for_run(run_id)
+                if run_id is not None
+                else None
+            ),
         )
         repository = GitRepository(str(workspace))
         return MultiAgentTaskExecutor(
@@ -677,6 +682,13 @@ class MultiAgentOrchestrator:
                 root_attributes=root_attributes,
                 reconcile=reconcile,
             )
+            set_runtime_trace = getattr(
+                self.model_router,
+                "set_runtime_trace",
+                None,
+            )
+            if set_runtime_trace is not None:
+                set_runtime_trace(runtime)
             self._runtime_traces[run_id] = runtime
             return runtime
 
@@ -940,6 +952,7 @@ class MultiAgentOrchestrator:
         verifier, reviewer = self._parallel_final_runtime(
             integration_path,
             cancellation,
+            run_id,
         )
         self.state_store.record_event(
             run_id,
@@ -1079,6 +1092,7 @@ class MultiAgentOrchestrator:
         self,
         workspace: Path,
         cancellation: CancellationToken,
+        run_id: str,
     ):
         verifier = self.parallel_final_verifier
         reviewer = self.parallel_final_reviewer
@@ -1097,6 +1111,7 @@ class MultiAgentOrchestrator:
             usage_ledger=self.model_router.usage_ledger,
             sleeper=self.model_router.sleeper,
             jitter=self.model_router.jitter,
+            runtime_trace=self._trace_for_run(run_id),
         )
         return (
             verifier or Verifier(config=config, cancellation=cancellation),
