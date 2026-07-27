@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from agentbus.control.models import CONTROL_PROTOCOL_VERSION
-from agentbus.tools.protocol import TOOL_PROTOCOL_NAME, TOOL_PROTOCOL_VERSION
+from agentbus.protocol_identity import (
+    CONTROL_PROTOCOL_VERSION,
+    TOOL_PROTOCOL_NAME,
+    TOOL_PROTOCOL_VERSION,
+)
 from agentbus.trace.version import TRACE_SCHEMA_NAME, TRACE_SCHEMA_VERSION
 
 

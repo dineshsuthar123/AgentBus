@@ -7,6 +7,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from agentbus.control.version import API_PREFIX, CONTROL_PROTOCOL_VERSION
 from agentbus.tools.protocol import (
     ToolAuditRecord,
     ToolCapability,
@@ -18,9 +19,6 @@ from agentbus.tools.protocol import (
     ToolResult,
     ToolVersion,
 )
-
-CONTROL_PROTOCOL_VERSION = "1.0"
-API_PREFIX = "/api/v1"
 
 
 class ProtocolModel(BaseModel):
