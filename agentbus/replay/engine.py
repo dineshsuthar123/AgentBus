@@ -9,6 +9,10 @@ from pydantic import BaseModel
 
 from agentbus.models.base import validate_json_schema
 from agentbus.replay.classification import ReplayabilityClassifier
+from agentbus.replay.checkpoints import (
+    CheckpointManager,
+    ReplayIsolationManager,
+)
 from agentbus.replay.errors import (
     ReplayCancelledError,
     ReplayError,
@@ -54,6 +58,8 @@ class ReplayEngine:
         verifier: Verifier | None = None,
         reviewer: Verifier | None = None,
         tool_executor: ToolExecutor | None = None,
+        checkpoint_manager: CheckpointManager | None = None,
+        isolation_manager: ReplayIsolationManager | None = None,
         source_workspace: str | Path | None = None,
         cancelled: Callable[[], bool] | None = None,
         clock: Callable = utc_now,
@@ -64,6 +70,8 @@ class ReplayEngine:
         self.verifier = verifier
         self.reviewer = reviewer
         self.tool_executor = tool_executor
+        self.checkpoint_manager = checkpoint_manager
+        self.isolation_manager = isolation_manager
         self.source_workspace = (
             Path(source_workspace).expanduser().resolve()
             if source_workspace is not None
@@ -95,15 +103,20 @@ class ReplayEngine:
             missing_inputs=classification.missing_input_hashes,
         )
         try:
+            effective_request = self._prepare_partial_replay(
+                trace,
+                request,
+                session,
+            )
             self._validate_mode(classification.level, request, session)
-            spans = self._selected_spans(trace, request)
+            spans = self._selected_spans(trace, effective_request)
             verifier_result = None
             reviewer_result = None
             for span in spans:
                 self._check_cancelled()
                 result, component_result = self._replay_span(
                     span,
-                    request=request,
+                    request=effective_request,
                     inputs=catalog,
                 )
                 session.span_results.append(result)
@@ -169,6 +182,50 @@ class ReplayEngine:
             result_sha256=result_sha256,
             verifier_result=verifier_result,
             reviewer_result=reviewer_result,
+        )
+
+    def _prepare_partial_replay(
+        self,
+        trace: Trace,
+        request: ReplayRequest,
+        session: ReplaySession,
+    ) -> ReplayRequest:
+        if request.from_checkpoint_id is None and request.from_span_id is None:
+            return request
+        if self.isolation_manager is None:
+            raise ReplayIsolationError(
+                "Partial replay requires an isolated replay state manager."
+            )
+        base_commit = None
+        if request.from_checkpoint_id is not None:
+            if self.checkpoint_manager is None:
+                raise ReplayIncompatibleError(
+                    "Checkpoint replay requires a checkpoint state manager."
+                )
+            ancestry = self.checkpoint_manager.validate_ancestry(
+                trace,
+                request.from_checkpoint_id,
+            )
+            if not ancestry:
+                raise ReplayIncompatibleError(
+                    "Checkpoint replay has no valid ancestry."
+                )
+            base_commit = ancestry[-1].base_commit
+        self.isolation_manager.reconstruct(
+            request.replay_id,
+            run_id=request.source_run_id,
+            base_commit=base_commit,
+        )
+        actual_worktree = self.isolation_manager.actual_worktree_path(
+            request.replay_id
+        )
+        isolated_path = (
+            actual_worktree
+            or self.isolation_manager.actual_database_path(request.replay_id).parent
+        )
+        session.isolated_workspace = "[ISOLATED_REPLAY_WORKSPACE]"
+        return request.model_copy(
+            update={"isolated_workspace": str(isolated_path)}
         )
 
     def _replay_span(

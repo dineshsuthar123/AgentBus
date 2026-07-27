@@ -4,11 +4,14 @@ from pydantic import BaseModel, ConfigDict
 
 from agentbus.models.types import ModelResult, ModelRole
 from agentbus.replay import (
+    CheckpointKind,
+    CheckpointManager,
     ReplayEngine,
     ReplayRequest,
     ReplaySessionStatus,
     ToolReplayStrategy,
     capture_model_envelope,
+    ReplayIsolationManager,
 )
 from agentbus.trace import (
     ContentAddressedStore,
@@ -19,7 +22,10 @@ from agentbus.trace import (
     TraceSpan,
     TraceSpanType,
     TraceStatus,
+    TraceRecorder,
 )
+from agentbus.execution.models import RunRecord
+from agentbus.execution.state_store import StateStore
 
 
 class ParsedOutput(BaseModel):
@@ -226,3 +232,82 @@ def test_replay_cancellation_is_cooperative_and_bounded(tmp_path: Path) -> None:
 
     assert result.session.status == ReplaySessionStatus.CANCELLED
     assert result.session.span_results == []
+
+
+def test_partial_replay_allocates_isolated_state_and_validates_checkpoint(
+    tmp_path: Path,
+) -> None:
+    store, base_trace = _fixture(tmp_path)
+    recorder = TraceRecorder("run-1")
+    recorder.start_trace()
+    checkpoint_manager = CheckpointManager(store)
+    checkpoint = checkpoint_manager.capture(
+        recorder,
+        kind=CheckpointKind.GRAPH_PERSISTED,
+        label="graph persisted",
+    )
+    trace = base_trace.model_copy(
+        update={"checkpoints": [checkpoint.model_copy(update={
+            "trace_id": base_trace.trace_id,
+            "run_id": base_trace.run_id,
+            "span_id": "root",
+            "sequence": 7,
+        })]}
+    )
+    trace = Trace.model_validate(trace.model_dump())
+    state = checkpoint_manager.load_state(checkpoint)
+    rewritten_state = state.model_copy(
+        update={
+            "checkpoint_id": trace.checkpoints[0].checkpoint_id,
+            "trace_id": trace.trace_id,
+            "run_id": trace.run_id,
+        }
+    )
+    reference = trace.checkpoints[0].state_references[0]
+    metadata = store.put_json(
+        rewritten_state.model_dump(mode="json"),
+        producing_span_id="root",
+        media_type=reference.media_type,
+    )
+    trace = Trace.model_validate(
+        trace.model_copy(
+            update={
+                "checkpoints": [
+                    trace.checkpoints[0].model_copy(
+                        update={
+                            "state_references": [
+                                reference.model_copy(
+                                    update={
+                                        "sha256": metadata.sha256,
+                                        "byte_length": metadata.byte_size,
+                                    }
+                                )
+                            ]
+                        }
+                    )
+                ]
+            }
+        ).model_dump()
+    )
+    source_state = StateStore(tmp_path / "source.db")
+    source_state.create_run(
+        RunRecord(
+            run_id="run-1",
+            original_task="Replay",
+            model="deterministic",
+            workspace="workspace",
+        )
+    )
+    isolation = ReplayIsolationManager(tmp_path / "replays", source_state)
+    request = _request()
+    request.from_checkpoint_id = trace.checkpoints[0].checkpoint_id
+
+    result = ReplayEngine(
+        store,
+        checkpoint_manager=checkpoint_manager,
+        isolation_manager=isolation,
+    ).replay(trace, request)
+
+    assert result.session.status == ReplaySessionStatus.SUCCEEDED
+    assert result.session.isolated_workspace == "[ISOLATED_REPLAY_WORKSPACE]"
+    assert isolation.actual_database_path("replay-1").is_file()
