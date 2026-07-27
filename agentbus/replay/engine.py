@@ -34,6 +34,11 @@ from agentbus.replay.substitutions import (
     MODEL_ENVELOPE_MEDIA_TYPE,
     CapturedModelEnvelope,
 )
+from agentbus.replay.tools import (
+    TOOL_ENVELOPE_MEDIA_TYPE,
+    ToolReplayPlanner,
+    load_tool_envelope,
+)
 from agentbus.trace.models import ReplayMode, Trace, TraceSpan, TraceSpanType, utc_now
 from agentbus.trace.provenance import ReplayabilityLevel
 from agentbus.trace.redaction import canonical_json_bytes, sanitize_document
@@ -58,6 +63,8 @@ class ReplayEngine:
         verifier: Verifier | None = None,
         reviewer: Verifier | None = None,
         tool_executor: ToolExecutor | None = None,
+        tool_replay_planner: ToolReplayPlanner | None = None,
+        tool_descriptors: Mapping[str, Any] | None = None,
         checkpoint_manager: CheckpointManager | None = None,
         isolation_manager: ReplayIsolationManager | None = None,
         source_workspace: str | Path | None = None,
@@ -70,6 +77,8 @@ class ReplayEngine:
         self.verifier = verifier
         self.reviewer = reviewer
         self.tool_executor = tool_executor
+        self.tool_replay_planner = tool_replay_planner
+        self.tool_descriptors = dict(tool_descriptors or {})
         self.checkpoint_manager = checkpoint_manager
         self.isolation_manager = isolation_manager
         self.source_workspace = (
@@ -295,7 +304,10 @@ class ReplayEngine:
                 actual,
             )
         if span.span_type == TraceSpanType.TOOL_INVOCATION:
-            return self._replay_tool(span, request, loaded_inputs), None
+            return (
+                self._replay_tool(span, request, loaded_inputs),
+                None,
+            )
         if span.span_type == TraceSpanType.VERIFIER:
             actual = (
                 self.verifier(span, loaded_inputs)
@@ -367,9 +379,49 @@ class ReplayEngine:
         request: ReplayRequest,
         loaded_inputs: list[Any],
     ) -> ReplaySpanResult:
-        strategy = request.tool_strategies.get(
-            span.span_id,
-            _default_tool_strategy(span, request.mode),
+        assessment = None
+        strategy = request.tool_strategies.get(span.span_id)
+        if strategy is None and self.tool_replay_planner is not None:
+            references = [
+                reference
+                for reference in span.output_references
+                if reference.media_type == TOOL_ENVELOPE_MEDIA_TYPE
+            ]
+            if len(references) != 1:
+                raise ReplayInputUnavailableError(
+                    "Managed tool replay requires one captured tool envelope."
+                )
+            envelope = load_tool_envelope(
+                self.store,
+                references[0].sha256,
+            )
+            descriptor = self.tool_descriptors.get(envelope.descriptor.name)
+            if descriptor is None:
+                raise ReplayIncompatibleError(
+                    "Current tool descriptor is unavailable for policy replay."
+                )
+            assessment = self.tool_replay_planner.assess(
+                envelope,
+                descriptor,
+                mode=request.mode,
+                isolated_workspace=(
+                    request.isolated_workspace
+                    or "[ISOLATED_REPLAY_WORKSPACE]"
+                ),
+            )
+            strategy = assessment.strategy
+        if strategy is None:
+            strategy = _default_tool_strategy(span, request.mode)
+        drift = (
+            [
+                reason
+                for reason in assessment.reasons
+                if assessment.policy_drift
+                or assessment.capability_drift
+                or assessment.descriptor_drift
+            ]
+            if assessment is not None
+            else []
         )
         if strategy == ToolReplayStrategy.REUSE_CAPTURED:
             if not span.output_references:
@@ -380,12 +432,14 @@ class ReplayEngine:
                 span,
                 ReplaySpanAction.REUSED,
                 "Captured bounded tool result reused.",
+                drift=drift,
             )
         if strategy == ToolReplayStrategy.SIMULATE_MUTATION:
             return _span_result(
                 span,
                 ReplaySpanAction.SIMULATED,
                 "Tool mutation simulated without filesystem side effects.",
+                drift=drift,
             )
         if strategy == ToolReplayStrategy.REJECT:
             raise ReplayIncompatibleError(
@@ -402,6 +456,7 @@ class ReplayEngine:
             ReplaySpanAction.RERUN,
             "Tool reran in an isolated replay workspace.",
             payload=payload,
+            drift=drift,
         )
 
     def _isolated_workspace(self, request: ReplayRequest) -> Path:

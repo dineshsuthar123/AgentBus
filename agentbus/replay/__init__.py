@@ -48,6 +48,7 @@ from agentbus.replay.session import (
     ToolReplayStrategy,
 )
 from agentbus.trace.provenance import ReplayabilityLevel
+from agentbus.trace.models import ReplayMode
 from agentbus.replay.substitutions import (
     MODEL_ENVELOPE_MEDIA_TYPE,
     MODEL_ENVELOPE_VERSION,
@@ -56,6 +57,15 @@ from agentbus.replay.substitutions import (
     ModelSubstitutionCatalog,
     capture_model_envelope,
     prompt_fingerprint,
+)
+from agentbus.replay.tools import (
+    TOOL_ENVELOPE_MEDIA_TYPE,
+    TOOL_ENVELOPE_VERSION,
+    CapturedToolEnvelope,
+    ToolReplayAssessment,
+    ToolReplayPlanner,
+    capture_tool_envelope,
+    load_tool_envelope,
 )
 
 __all__ = [
@@ -80,6 +90,7 @@ __all__ = [
     "ReplayCheckpointState",
     "ReplayIsolation",
     "ReplayIsolationManager",
+    "ReplayMode",
     "ReplayIsolationError",
     "ReplayabilityClassifier",
     "ReplayabilityLevel",
@@ -96,10 +107,17 @@ __all__ = [
     "MODEL_ENVELOPE_MEDIA_TYPE",
     "MODEL_ENVELOPE_VERSION",
     "CapturedModelEnvelope",
+    "CapturedToolEnvelope",
     "CapturedRoutedModel",
     "ModelSubstitutionCatalog",
     "capture_model_envelope",
     "compare_traces",
     "prompt_fingerprint",
     "ToolReplayStrategy",
+    "TOOL_ENVELOPE_MEDIA_TYPE",
+    "TOOL_ENVELOPE_VERSION",
+    "ToolReplayAssessment",
+    "ToolReplayPlanner",
+    "capture_tool_envelope",
+    "load_tool_envelope",
 ]
