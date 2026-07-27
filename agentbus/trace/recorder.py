@@ -345,8 +345,13 @@ class TraceRecorder:
         *,
         span_id: str | None = None,
         state_references: list[TraceInput] | None = None,
+        state_reference_factory: Callable[[str], list[TraceInput]] | None = None,
         replayable: bool = True,
     ) -> TraceCheckpoint:
+        if state_references is not None and state_reference_factory is not None:
+            raise TraceRecordingError(
+                "Checkpoint references and a reference factory are mutually exclusive."
+            )
         with self._lock:
             self._require_running_trace()
             inherited = current_trace_context()
@@ -362,18 +367,24 @@ class TraceRecorder:
                     f"Checkpoint target span '{target_span}' does not exist."
                 )
             sequence = self._sequence.claim()
+            checkpoint_id = trace_item_id(
+                self.trace_id,
+                sequence,
+                "checkpoint",
+            )
+            references = (
+                state_reference_factory(checkpoint_id)
+                if state_reference_factory is not None
+                else state_references or []
+            )
             checkpoint = TraceCheckpoint(
-                checkpoint_id=trace_item_id(
-                    self.trace_id,
-                    sequence,
-                    "checkpoint",
-                ),
+                checkpoint_id=checkpoint_id,
                 trace_id=self.trace_id,
                 run_id=self.run_id,
                 span_id=target_span,
                 sequence=sequence,
                 label=label,
-                state_references=state_references or [],
+                state_references=references,
                 replayable=replayable,
                 created_at=self.clock(),
             )

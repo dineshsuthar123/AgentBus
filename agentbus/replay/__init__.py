@@ -13,6 +13,15 @@ from agentbus.replay.errors import (
     ReplayIsolationError,
 )
 from agentbus.replay.engine import ReplayEngine
+from agentbus.replay.checkpoints import (
+    CHECKPOINT_MEDIA_TYPE,
+    CHECKPOINT_STATE_SCHEMA_VERSION,
+    CheckpointKind,
+    CheckpointManager,
+    ReplayCheckpointState,
+    ReplayIsolation,
+    ReplayIsolationManager,
+)
 from agentbus.replay.inputs import ReplayInputCatalog
 from agentbus.replay.session import (
     ReplayRequest,
@@ -35,12 +44,19 @@ from agentbus.replay.substitutions import (
 )
 
 __all__ = [
+    "CHECKPOINT_MEDIA_TYPE",
+    "CHECKPOINT_STATE_SCHEMA_VERSION",
+    "CheckpointKind",
+    "CheckpointManager",
     "ReplayCancelledError",
     "ReplayError",
     "ReplayEngine",
     "ReplayIncompatibleError",
     "ReplayInputUnavailableError",
     "ReplayInputCatalog",
+    "ReplayCheckpointState",
+    "ReplayIsolation",
+    "ReplayIsolationManager",
     "ReplayIsolationError",
     "ReplayabilityClassifier",
     "ReplayabilityLevel",

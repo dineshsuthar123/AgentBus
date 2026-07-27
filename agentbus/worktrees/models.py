@@ -23,6 +23,7 @@ class WorktreeStatus(str, Enum):
 class WorktreePurpose(str, Enum):
     TASK = "task"
     INTEGRATION = "integration"
+    REPLAY = "replay"
 
 
 class MergeStatus(str, Enum):
