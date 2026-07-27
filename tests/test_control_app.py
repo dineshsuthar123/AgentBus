@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,6 +23,8 @@ from agentbus.mcp import McpServerConfig, mcp_server_capabilities
 from agentbus.sandbox.platform import ExecutableCatalog
 from agentbus.tools.protocol import ToolCapabilityName
 from agentbus.tools.runtime import build_managed_tool_runtime
+from agentbus.trace import RuntimeTrace, TraceSpanType, TraceStatus
+from agentbus.trace.sealing import seal_run_provenance
 
 TOKEN = "test-control-token-that-is-at-least-thirty-two-bytes"
 MCP_FIXTURE = Path(__file__).parent / "fixtures" / "mcp" / "fake_server.py"
@@ -114,6 +117,48 @@ def _client(
 
 def _auth() -> dict[str, str]:
     return {"Authorization": f"Bearer {TOKEN}"}
+
+
+def _record_control_trace(client: TestClient):
+    query = client.app.state.query_service
+    runtime = RuntimeTrace.open(
+        query.store,
+        "run-1",
+        object_root=query.config.trace_store_path,
+        workspace=query.config.workspace_path,
+    )
+    with runtime.scope(runtime.root_context):
+        runtime.call(
+            TraceSpanType.VERIFIER,
+            "control verifier",
+            lambda: {"passed": True, "exit_code": 0},
+            attributes={
+                "workspace": str(query.config.workspace_path),
+                "authorization": "Bearer control-private-token",
+            },
+            capture="json",
+        )
+        runtime.checkpoint(
+            "verified",
+            {"completed": ["task-1"]},
+        )
+        runtime.call(
+            TraceSpanType.REVIEWER,
+            "control reviewer",
+            lambda: {"approved": True, "issues": []},
+            capture="json",
+        )
+    trace = runtime.finish(status=TraceStatus.SUCCEEDED)
+    assert trace is not None
+    manifest = seal_run_provenance(
+        trace,
+        state_store=query.store,
+        object_store=runtime.object_store,
+        configuration={"provider": "deterministic"},
+        task_graph={"version": 1, "tasks": ["task-1"]},
+        final_repository_tree_sha256="c" * 64,
+    )
+    return trace, manifest
 
 
 def test_health_is_minimal_and_unauthenticated(tmp_path: Path) -> None:
@@ -244,7 +289,113 @@ def test_openapi_uses_versioned_routes_and_stable_error_schema(
 
     assert "/api/v1/runs" in schema["paths"]
     assert "/api/v1/events" in schema["paths"]
+    assert "/api/v1/runs/{run_id}/trace" in schema["paths"]
+    assert "/api/v1/runs/{run_id}/trace/spans" in schema["paths"]
+    assert "/api/v1/runs/{run_id}/provenance" in schema["paths"]
+    assert "/api/v1/runs/{run_id}/replayability" in schema["paths"]
     assert "ErrorResponse" in schema["components"]["schemas"]
+
+
+def test_trace_inspection_is_authenticated_bounded_and_private(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    client, _ = _client(tmp_path)
+    trace, manifest = _record_control_trace(client)
+
+    assert client.get("/api/v1/runs/run-1/trace").status_code == 403
+
+    summary = client.get(
+        "/api/v1/runs/run-1/trace",
+        headers=_auth(),
+    )
+    first_page = client.get(
+        "/api/v1/runs/run-1/trace/spans?limit=1",
+        headers=_auth(),
+    )
+    assert summary.status_code == 200
+    assert summary.json()["trace_id"] == trace.trace_id
+    assert summary.json()["checkpoint_count"] == 1
+    assert summary.json()["checkpoints"][0]["label"] == "verified"
+    assert "workspace" not in summary.json()
+    assert first_page.status_code == 200
+    assert first_page.json()["truncated"] is True
+    assert len(first_page.json()["spans"]) == 1
+
+    query = client.app.state.query_service
+    with monkeypatch.context() as scoped:
+        scoped.setattr(
+            query.store,
+            "get_run_trace",
+            lambda _run_id: (_ for _ in ()).throw(
+                AssertionError(
+                    "bounded span reads must not materialize the trace"
+                )
+            ),
+        )
+        next_page = client.get(
+            "/api/v1/runs/run-1/trace/spans",
+            params={"after": first_page.json()["next_sequence"], "limit": 2},
+            headers=_auth(),
+        )
+    assert next_page.status_code == 200
+    assert all(
+        span["sequence"] > first_page.json()["next_sequence"]
+        for span in next_page.json()["spans"]
+    )
+
+    verifier = next(
+        span
+        for span in trace.spans
+        if span.span_type == TraceSpanType.VERIFIER
+    )
+    detail = client.get(
+        f"/api/v1/runs/run-1/trace/spans/{verifier.span_id}",
+        headers=_auth(),
+    )
+    detail_text = json.dumps(detail.json(), sort_keys=True)
+    assert detail.status_code == 200
+    assert str(tmp_path) not in detail_text
+    assert "control-private-token" not in detail_text
+    assert detail.json()["outputs"][0]["sha256"]
+
+    provenance = client.get(
+        "/api/v1/runs/run-1/provenance",
+        headers=_auth(),
+    )
+    assert provenance.status_code == 200
+    assert provenance.json()["integrity_root"] == manifest.integrity_root
+    assert "integrity_entries" not in provenance.json()
+    assert "input_object_hashes" not in provenance.json()
+
+    replayability = client.get(
+        "/api/v1/runs/run-1/replayability?limit=1",
+        headers=_auth(),
+    )
+    assert replayability.status_code == 200
+    assert replayability.json()["trace_id"] == trace.trace_id
+    assert len(replayability.json()["spans"]) == 1
+    assert replayability.json()["truncated"] is True
+
+
+def test_trace_inspection_returns_safe_not_found_and_validates_page_bounds(
+    tmp_path: Path,
+) -> None:
+    client, _ = _client(tmp_path)
+
+    missing = client.get(
+        "/api/v1/runs/run-1/trace",
+        headers=_auth(),
+    )
+    oversized = client.get(
+        "/api/v1/runs/run-1/trace/spans?limit=501",
+        headers=_auth(),
+    )
+
+    assert missing.status_code == 404
+    assert missing.json()["error"]["code"] == "not_found"
+    assert "SQLite" not in missing.text
+    assert oversized.status_code == 422
 
 
 def test_tool_registry_and_policy_endpoints_are_bounded_and_diagnostic_only(

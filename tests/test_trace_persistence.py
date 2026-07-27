@@ -63,6 +63,7 @@ def test_trace_sink_persists_complete_trace_across_store_restart(tmp_path) -> No
     actual = restored.get_run_trace("run-1")
 
     assert actual == expected
+    assert restored.get_run_trace_id("run-1") == expected.trace_id
     assert restored.get_trace(actual.trace_id) == expected
     assert restored.next_trace_sequence(actual.trace_id) == 9
     assert recorder.recording_errors == ()

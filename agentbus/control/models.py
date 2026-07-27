@@ -363,6 +363,12 @@ class TraceFailureSummary(ProtocolModel):
     retryable: bool = False
 
 
+class TraceLinkSummary(ProtocolModel):
+    link_type: str = Field(min_length=1, max_length=64)
+    trace_id: str = Field(min_length=1, max_length=128)
+    span_id: str | None = Field(default=None, max_length=128)
+
+
 class TraceSpanSummary(ProtocolModel):
     trace_id: str = Field(min_length=1, max_length=128)
     span_id: str = Field(min_length=1, max_length=128)
@@ -404,6 +410,7 @@ class TraceSpanDetailResponse(TraceSpanSummary):
         default_factory=list,
         max_length=256,
     )
+    links: list[TraceLinkSummary] = Field(default_factory=list, max_length=256)
     cancellation_state: dict[str, Any] = Field(default_factory=dict)
     resource_usage: dict[str, Any] = Field(default_factory=dict)
     attributes: dict[str, Any] = Field(default_factory=dict)
@@ -443,6 +450,7 @@ class TraceResponse(ProtocolModel):
     span_count: int = Field(ge=1)
     event_count: int = Field(ge=0)
     checkpoint_count: int = Field(ge=0)
+    link_count: int = Field(default=0, ge=0)
     checkpoints: list[TraceCheckpointSummary] = Field(
         default_factory=list,
         max_length=500,
@@ -530,6 +538,7 @@ class RunReplayabilityResponse(ProtocolModel):
         default_factory=list,
         max_length=1024,
     )
+    missing_inputs_truncated: bool = False
     live_provider_consent_required: bool = False
     spans: list[SpanReplayabilityResponse] = Field(max_length=500)
     after_sequence: int = Field(default=0, ge=0)

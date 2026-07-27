@@ -30,13 +30,27 @@ from agentbus.control.models import (
     McpServerListResponse,
     McpServerSummary,
     ProviderListResponse,
+    ProvenanceProviderRouteSummary,
+    ProvenanceResponse,
+    ProvenanceToolSummary,
     ProviderSummary,
+    RunReplayabilityResponse,
     RunListResponse,
     RunReportResponse,
     RunSummary,
     SchedulerResponse,
+    SpanReplayabilityResponse,
     TaskListResponse,
     TaskSummary,
+    TraceArtifactSummary,
+    TraceCheckpointSummary,
+    TraceFailureSummary,
+    TraceLinkSummary,
+    TraceResponse,
+    TraceSpanDetailResponse,
+    TraceSpanListResponse,
+    TraceSpanSummary,
+    TraceValueReferenceSummary,
     ToolAuditEntryResponse,
     ToolAuditListResponse,
     ToolDescriptorDetail,
@@ -68,9 +82,11 @@ from agentbus.execution.models import (
     TaskStatus,
 )
 from agentbus.execution.state_store import (
+    ProvenanceRecordNotFoundError,
     RunNotFoundError,
     StateStore,
     TaskNotFoundError,
+    TraceRecordNotFoundError,
     ToolApprovalNotFoundError,
     ToolInvocationNotFoundError,
 )
@@ -86,9 +102,10 @@ from agentbus.mcp.models import (
     McpTransportKind,
     namespace_mcp_tool,
 )
-from agentbus.repo.artifact_policy import ArtifactCategory
 from agentbus.policy import ToolApprovalDisposition, ToolPolicyEngine
 from agentbus.policy.defaults import DEFAULT_TOOL_POLICY
+from agentbus.repo.artifact_policy import ArtifactCategory
+from agentbus.replay.service import TraceReplayService
 from agentbus.sandbox.platform import ExecutableCatalog
 from agentbus.security.redaction import (
     redact_text,
@@ -115,6 +132,8 @@ from agentbus.tools.records import (
     ToolApprovalRecord,
     ToolInvocationRecord,
 )
+from agentbus.trace.models import Trace, TraceSpan
+from agentbus.trace.redaction import sanitize_document
 
 MAX_DIFF_BYTES = 100_000
 MAX_FILE_BYTES = 1_000_000
@@ -588,6 +607,8 @@ class ControlQueryService:
             server_id: threading.Lock() for server_id in self._mcp_server_configs
         }
         self._mcp_executable_catalog = mcp_executable_catalog
+        self._trace_replay_service: TraceReplayService | None = None
+        self._trace_replay_lock = threading.Lock()
 
     def get_run(self, run_id: str) -> RunRecord:
         try:
@@ -743,6 +764,317 @@ class ControlQueryService:
             )
         usage.routes = routes
         return usage
+
+    def trace(self, run_id: str) -> TraceResponse:
+        trace = self._run_trace(run_id)
+        checkpoints = sorted(
+            trace.checkpoints,
+            key=lambda item: item.sequence,
+        )
+        replay = trace.replay
+        return TraceResponse(
+            trace_id=trace.trace_id,
+            run_id=trace.run_id,
+            root_span_id=trace.root_span_id,
+            schema_version=trace.schema_version,
+            status=trace.status.value,
+            created_at=trace.created_at,
+            completed_at=trace.completed_at,
+            span_count=len(trace.spans),
+            event_count=len(trace.events),
+            checkpoint_count=len(checkpoints),
+            link_count=len(trace.links),
+            checkpoints=[
+                TraceCheckpointSummary(
+                    checkpoint_id=item.checkpoint_id,
+                    span_id=item.span_id,
+                    sequence=item.sequence,
+                    label=item.label,
+                    replayable=item.replayable,
+                    created_at=item.created_at,
+                )
+                for item in checkpoints[:500]
+            ],
+            checkpoints_truncated=len(checkpoints) > 500,
+            replay_id=replay.replay_id if replay is not None else None,
+            source_trace_id=(
+                replay.source_trace_id if replay is not None else None
+            ),
+            replay_mode=replay.mode.value if replay is not None else None,
+            providerless=replay.providerless if replay is not None else None,
+        )
+
+    def trace_spans(
+        self,
+        run_id: str,
+        *,
+        after_sequence: int = 0,
+        limit: int = 100,
+    ) -> TraceSpanListResponse:
+        trace_id = self._run_trace_id(run_id)
+        spans = self.store.list_trace_spans(
+            trace_id,
+            after_sequence=after_sequence,
+            limit=limit + 1,
+        )
+        truncated = len(spans) > limit
+        page = spans[:limit]
+        return TraceSpanListResponse(
+            trace_id=trace_id,
+            run_id=run_id,
+            spans=[self._trace_span_summary(span) for span in page],
+            after_sequence=after_sequence,
+            next_sequence=page[-1].sequence if page else after_sequence,
+            truncated=truncated,
+        )
+
+    def trace_span(
+        self,
+        run_id: str,
+        span_id: str,
+    ) -> TraceSpanDetailResponse:
+        trace_id = self._run_trace_id(run_id)
+        try:
+            span = self.store.get_trace_span(trace_id, span_id)
+        except TraceRecordNotFoundError as exc:
+            raise ControlPlaneNotFoundError(
+                "The requested trace span was not found."
+            ) from exc
+        summary = self._trace_span_summary(span)
+        return TraceSpanDetailResponse(
+            **summary.model_dump(),
+            inputs=[
+                self._trace_value_reference(item)
+                for item in span.input_references
+            ],
+            outputs=[
+                self._trace_value_reference(item)
+                for item in span.output_references
+            ],
+            policy_decision_references=span.policy_decision_references,
+            approval_references=span.approval_references,
+            artifacts=[
+                TraceArtifactSummary(
+                    artifact_id=item.artifact_id,
+                    artifact_type=item.artifact_type,
+                    identifier=str(self._safe_trace_value(item.identifier)),
+                    sha256=item.sha256,
+                    byte_length=item.byte_length,
+                    media_type=item.media_type,
+                )
+                for item in span.artifact_references
+            ],
+            links=[
+                TraceLinkSummary(
+                    link_type=item.link_type.value,
+                    trace_id=item.trace_id,
+                    span_id=item.span_id,
+                )
+                for item in span.links
+            ],
+            cancellation_state=self._safe_trace_mapping(
+                span.cancellation_state
+            ),
+            resource_usage=self._safe_trace_mapping(
+                span.resource_usage.model_dump(mode="json")
+            ),
+            attributes=self._safe_trace_mapping(span.attributes),
+        )
+
+    def provenance(self, run_id: str) -> ProvenanceResponse:
+        self.get_run(run_id)
+        try:
+            manifest = self.store.get_run_provenance_manifest(run_id)
+        except ProvenanceRecordNotFoundError as exc:
+            raise ControlPlaneNotFoundError(
+                "The requested run does not have sealed provenance."
+            ) from exc
+        tools = manifest.tool_descriptors
+        return ProvenanceResponse(
+            trace_id=manifest.trace_id,
+            run_id=manifest.run_id,
+            generated_at=manifest.generated_at,
+            schema_version=manifest.schema_version,
+            trace_schema_version=manifest.trace_schema_version,
+            agentbus_version=manifest.agentbus_version,
+            operating_system=manifest.operating_system,
+            python_version=manifest.python_version,
+            node_version=manifest.node_version,
+            vscode_version=manifest.vscode_version,
+            configuration_fingerprint=manifest.configuration_fingerprint,
+            provider_routes=[
+                ProvenanceProviderRouteSummary(
+                    role=item.role,
+                    provider=item.provider,
+                    model_identifier=item.model_identifier,
+                    deployment_identifier=item.deployment_identifier,
+                )
+                for item in manifest.provider_routes
+            ],
+            tool_descriptors=[
+                ProvenanceToolSummary(
+                    name=item.name,
+                    version=item.version,
+                    protocol_version=item.protocol_version,
+                    descriptor_sha256=item.descriptor_sha256,
+                )
+                for item in tools[:500]
+            ],
+            tool_descriptors_truncated=len(tools) > 500,
+            policy_version=manifest.policy_version,
+            policy_sha256=manifest.policy_sha256,
+            protocol_hashes=dict(sorted(manifest.protocol_hashes.items())),
+            input_object_count=len(manifest.input_object_hashes),
+            output_object_count=len(manifest.output_object_hashes),
+            generated_artifact_count=len(manifest.generated_artifact_hashes),
+            integrity_object_count=len(manifest.integrity_entries),
+            task_graph_sha256=manifest.task_graph_sha256,
+            event_count=manifest.event_stream.event_count,
+            final_repository_tree_sha256=(
+                manifest.final_repository_tree_sha256
+            ),
+            replayability=manifest.replayability.value,
+            replayability_reasons=manifest.replayability_reasons,
+            integrity_algorithm=manifest.integrity_algorithm,
+            integrity_root=manifest.integrity_root,
+        )
+
+    def replayability(
+        self,
+        run_id: str,
+        *,
+        after_sequence: int = 0,
+        limit: int = 100,
+    ) -> RunReplayabilityResponse:
+        trace = self._run_trace(run_id)
+        classification = self._trace_replay().replayability(trace.trace_id)
+        sequence_by_span = {
+            span.span_id: span.sequence for span in trace.spans
+        }
+        eligible = [
+            item
+            for item in classification.spans
+            if sequence_by_span.get(item.span_id, 0) > after_sequence
+        ]
+        page = eligible[:limit]
+        truncated = len(eligible) > limit
+        missing = classification.missing_input_hashes
+        return RunReplayabilityResponse(
+            trace_id=classification.trace_id,
+            run_id=classification.run_id,
+            level=classification.level.value,
+            replayable_offline=classification.replayable_offline,
+            reasons=classification.reasons,
+            missing_input_hashes=missing[:1024],
+            missing_inputs_truncated=len(missing) > 1024,
+            live_provider_consent_required=(
+                classification.live_provider_consent_required
+            ),
+            spans=[
+                SpanReplayabilityResponse(
+                    span_id=item.span_id,
+                    span_type=item.span_type.value,
+                    level=item.level.value,
+                    reasons=item.reasons,
+                    required_input_count=len(item.required_input_hashes),
+                    missing_input_hashes=item.missing_input_hashes,
+                    substitution_kinds=item.substitution_kinds,
+                    requires_isolated_workspace=(
+                        item.requires_isolated_workspace
+                    ),
+                    live_provider_consent_required=(
+                        item.live_provider_consent_required
+                    ),
+                )
+                for item in page
+            ],
+            after_sequence=after_sequence,
+            next_sequence=(
+                sequence_by_span[page[-1].span_id]
+                if page
+                else after_sequence
+            ),
+            truncated=truncated,
+        )
+
+    def _run_trace(self, run_id: str) -> Trace:
+        try:
+            return self.store.get_run_trace(run_id)
+        except (RunNotFoundError, TraceRecordNotFoundError) as exc:
+            raise ControlPlaneNotFoundError(
+                "The requested run does not have an execution trace."
+            ) from exc
+
+    def _run_trace_id(self, run_id: str) -> str:
+        try:
+            return self.store.get_run_trace_id(run_id)
+        except (RunNotFoundError, TraceRecordNotFoundError) as exc:
+            raise ControlPlaneNotFoundError(
+                "The requested run does not have an execution trace."
+            ) from exc
+
+    def _trace_replay(self) -> TraceReplayService:
+        with self._trace_replay_lock:
+            if self._trace_replay_service is None:
+                self._trace_replay_service = TraceReplayService(
+                    self.config,
+                    state_store=self.store,
+                )
+            return self._trace_replay_service
+
+    @staticmethod
+    def _trace_span_summary(span: TraceSpan) -> TraceSpanSummary:
+        failure = span.failure
+        return TraceSpanSummary(
+            trace_id=span.trace_id,
+            span_id=span.span_id,
+            parent_span_id=span.parent_span_id,
+            run_id=span.run_id,
+            task_id=span.task_id,
+            worker_id=span.worker_id,
+            invocation_id=span.invocation_id,
+            span_type=span.span_type.value,
+            name=span.name,
+            sequence=span.sequence,
+            started_at=span.started_at,
+            ended_at=span.ended_at,
+            status=span.status.value,
+            input_count=len(span.input_references),
+            output_count=len(span.output_references),
+            artifact_count=len(span.artifact_references),
+            failure=(
+                TraceFailureSummary(
+                    category=failure.category,
+                    message=failure.message,
+                    retryable=failure.retryable,
+                )
+                if failure is not None
+                else None
+            ),
+        )
+
+    @staticmethod
+    def _trace_value_reference(item: Any) -> TraceValueReferenceSummary:
+        return TraceValueReferenceSummary(
+            reference_id=item.reference_id,
+            name=item.name,
+            sha256=item.sha256,
+            media_type=item.media_type,
+            byte_length=item.byte_length,
+            redacted=item.redacted,
+            required_for_replay=getattr(item, "required_for_replay", None),
+            replayable=getattr(item, "replayable", None),
+        )
+
+    def _safe_trace_mapping(self, value: dict[str, Any]) -> dict[str, Any]:
+        safe = self._safe_trace_value(value)
+        return safe if isinstance(safe, dict) else {}
+
+    def _safe_trace_value(self, value: Any) -> Any:
+        return sanitize_document(
+            value,
+            private_roots=[self.config.workspace_path],
+        ).value
 
     def tools(self) -> ToolListResponse:
         descriptors = self._tool_descriptors(self.config.workspace_path)

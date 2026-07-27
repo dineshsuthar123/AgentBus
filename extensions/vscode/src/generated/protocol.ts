@@ -493,6 +493,7 @@ export interface RunReplayabilityResponse {
   "replayable_offline": boolean;
   "reasons"?: Array<string>;
   "missing_input_hashes"?: Array<string>;
+  "missing_inputs_truncated"?: boolean;
   "live_provider_consent_required"?: boolean;
   "spans": Array<SpanReplayabilityResponse>;
   "after_sequence"?: number;
@@ -931,6 +932,12 @@ export interface TraceFailureSummary {
   "retryable"?: boolean;
 }
 
+export interface TraceLinkSummary {
+  "link_type": string;
+  "trace_id": string;
+  "span_id"?: string | null;
+}
+
 export interface TraceResponse {
   "trace_id": string;
   "run_id": string;
@@ -942,6 +949,7 @@ export interface TraceResponse {
   "span_count": number;
   "event_count": number;
   "checkpoint_count": number;
+  "link_count"?: number;
   "checkpoints"?: Array<TraceCheckpointSummary>;
   "checkpoints_truncated"?: boolean;
   "replay_id"?: string | null;
@@ -973,6 +981,7 @@ export interface TraceSpanDetailResponse {
   "policy_decision_references"?: Array<string>;
   "approval_references"?: Array<string>;
   "artifacts"?: Array<TraceArtifactSummary>;
+  "links"?: Array<TraceLinkSummary>;
   "cancellation_state"?: Record<string, unknown>;
   "resource_usage"?: Record<string, unknown>;
   "attributes"?: Record<string, unknown>;

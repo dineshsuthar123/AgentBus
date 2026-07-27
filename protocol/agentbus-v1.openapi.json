@@ -1293,6 +1293,295 @@
         "title": "McpServerSummary",
         "type": "object"
       },
+      "ProvenanceProviderRouteSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "deployment_identifier": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deployment Identifier"
+          },
+          "model_identifier": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Model Identifier",
+            "type": "string"
+          },
+          "provider": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Provider",
+            "type": "string"
+          },
+          "role": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role",
+          "provider",
+          "model_identifier"
+        ],
+        "title": "ProvenanceProviderRouteSummary",
+        "type": "object"
+      },
+      "ProvenanceResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "agentbus_version": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Agentbus Version",
+            "type": "string"
+          },
+          "configuration_fingerprint": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Configuration Fingerprint",
+            "type": "string"
+          },
+          "event_count": {
+            "minimum": 0.0,
+            "title": "Event Count",
+            "type": "integer"
+          },
+          "final_repository_tree_sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Final Repository Tree Sha256"
+          },
+          "generated_artifact_count": {
+            "minimum": 0.0,
+            "title": "Generated Artifact Count",
+            "type": "integer"
+          },
+          "generated_at": {
+            "format": "date-time",
+            "title": "Generated At",
+            "type": "string"
+          },
+          "input_object_count": {
+            "minimum": 0.0,
+            "title": "Input Object Count",
+            "type": "integer"
+          },
+          "integrity_algorithm": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Integrity Algorithm",
+            "type": "string"
+          },
+          "integrity_object_count": {
+            "minimum": 0.0,
+            "title": "Integrity Object Count",
+            "type": "integer"
+          },
+          "integrity_root": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Integrity Root",
+            "type": "string"
+          },
+          "node_version": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Node Version"
+          },
+          "operating_system": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Operating System",
+            "type": "string"
+          },
+          "output_object_count": {
+            "minimum": 0.0,
+            "title": "Output Object Count",
+            "type": "integer"
+          },
+          "policy_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Policy Sha256",
+            "type": "string"
+          },
+          "policy_version": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Policy Version",
+            "type": "string"
+          },
+          "protocol_hashes": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Protocol Hashes",
+            "type": "object"
+          },
+          "provider_routes": {
+            "items": {
+              "$ref": "#/components/schemas/ProvenanceProviderRouteSummary"
+            },
+            "maxItems": 256,
+            "title": "Provider Routes",
+            "type": "array"
+          },
+          "python_version": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Python Version",
+            "type": "string"
+          },
+          "replayability": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Replayability",
+            "type": "string"
+          },
+          "replayability_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 1024,
+            "title": "Replayability Reasons",
+            "type": "array"
+          },
+          "run_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Run Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "minimum": 1.0,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "task_graph_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Task Graph Sha256",
+            "type": "string"
+          },
+          "tool_descriptors": {
+            "items": {
+              "$ref": "#/components/schemas/ProvenanceToolSummary"
+            },
+            "maxItems": 500,
+            "title": "Tool Descriptors",
+            "type": "array"
+          },
+          "tool_descriptors_truncated": {
+            "default": false,
+            "title": "Tool Descriptors Truncated",
+            "type": "boolean"
+          },
+          "trace_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Trace Id",
+            "type": "string"
+          },
+          "trace_schema_version": {
+            "minimum": 1.0,
+            "title": "Trace Schema Version",
+            "type": "integer"
+          },
+          "vscode_version": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vscode Version"
+          }
+        },
+        "required": [
+          "trace_id",
+          "run_id",
+          "generated_at",
+          "schema_version",
+          "trace_schema_version",
+          "agentbus_version",
+          "operating_system",
+          "python_version",
+          "configuration_fingerprint",
+          "provider_routes",
+          "tool_descriptors",
+          "policy_version",
+          "policy_sha256",
+          "input_object_count",
+          "output_object_count",
+          "generated_artifact_count",
+          "integrity_object_count",
+          "task_graph_sha256",
+          "event_count",
+          "replayability",
+          "integrity_algorithm",
+          "integrity_root"
+        ],
+        "title": "ProvenanceResponse",
+        "type": "object"
+      },
+      "ProvenanceToolSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "descriptor_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Descriptor Sha256",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "protocol_version": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Protocol Version",
+            "type": "string"
+          },
+          "version": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "version",
+          "protocol_version",
+          "descriptor_sha256"
+        ],
+        "title": "ProvenanceToolSummary",
+        "type": "object"
+      },
       "ProviderCheckRequest": {
         "additionalProperties": false,
         "properties": {
@@ -1666,6 +1955,93 @@
         "title": "RunListResponse",
         "type": "object"
       },
+      "RunReplayabilityResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "after_sequence": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "After Sequence",
+            "type": "integer"
+          },
+          "level": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Level",
+            "type": "string"
+          },
+          "live_provider_consent_required": {
+            "default": false,
+            "title": "Live Provider Consent Required",
+            "type": "boolean"
+          },
+          "missing_input_hashes": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 1024,
+            "title": "Missing Input Hashes",
+            "type": "array"
+          },
+          "missing_inputs_truncated": {
+            "default": false,
+            "title": "Missing Inputs Truncated",
+            "type": "boolean"
+          },
+          "next_sequence": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Next Sequence",
+            "type": "integer"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 1024,
+            "title": "Reasons",
+            "type": "array"
+          },
+          "replayable_offline": {
+            "title": "Replayable Offline",
+            "type": "boolean"
+          },
+          "run_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Run Id",
+            "type": "string"
+          },
+          "spans": {
+            "items": {
+              "$ref": "#/components/schemas/SpanReplayabilityResponse"
+            },
+            "maxItems": 500,
+            "title": "Spans",
+            "type": "array"
+          },
+          "trace_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Trace Id",
+            "type": "string"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "trace_id",
+          "run_id",
+          "level",
+          "replayable_offline",
+          "spans"
+        ],
+        "title": "RunReplayabilityResponse",
+        "type": "object"
+      },
       "RunReportResponse": {
         "additionalProperties": false,
         "properties": {
@@ -1865,6 +2241,78 @@
           "parallel_enabled"
         ],
         "title": "SchedulerResponse",
+        "type": "object"
+      },
+      "SpanReplayabilityResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "level": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Level",
+            "type": "string"
+          },
+          "live_provider_consent_required": {
+            "default": false,
+            "title": "Live Provider Consent Required",
+            "type": "boolean"
+          },
+          "missing_input_hashes": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 256,
+            "title": "Missing Input Hashes",
+            "type": "array"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 128,
+            "minItems": 1,
+            "title": "Reasons",
+            "type": "array"
+          },
+          "required_input_count": {
+            "minimum": 0.0,
+            "title": "Required Input Count",
+            "type": "integer"
+          },
+          "requires_isolated_workspace": {
+            "default": false,
+            "title": "Requires Isolated Workspace",
+            "type": "boolean"
+          },
+          "span_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Span Id",
+            "type": "string"
+          },
+          "span_type": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Span Type",
+            "type": "string"
+          },
+          "substitution_kinds": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 64,
+            "title": "Substitution Kinds",
+            "type": "array"
+          }
+        },
+        "required": [
+          "span_id",
+          "span_type",
+          "level",
+          "reasons",
+          "required_input_count"
+        ],
+        "title": "SpanReplayabilityResponse",
         "type": "object"
       },
       "TaskListResponse": {
@@ -3767,6 +4215,810 @@
           "major"
         ],
         "title": "ToolVersion",
+        "type": "object"
+      },
+      "TraceArtifactSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Artifact Id",
+            "type": "string"
+          },
+          "artifact_type": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Artifact Type",
+            "type": "string"
+          },
+          "byte_length": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Byte Length"
+          },
+          "identifier": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Identifier",
+            "type": "string"
+          },
+          "media_type": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media Type"
+          },
+          "sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sha256"
+          }
+        },
+        "required": [
+          "artifact_id",
+          "artifact_type",
+          "identifier"
+        ],
+        "title": "TraceArtifactSummary",
+        "type": "object"
+      },
+      "TraceCheckpointSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "checkpoint_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Checkpoint Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "label": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "replayable": {
+            "title": "Replayable",
+            "type": "boolean"
+          },
+          "sequence": {
+            "minimum": 1.0,
+            "title": "Sequence",
+            "type": "integer"
+          },
+          "span_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Span Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "checkpoint_id",
+          "span_id",
+          "sequence",
+          "label",
+          "replayable",
+          "created_at"
+        ],
+        "title": "TraceCheckpointSummary",
+        "type": "object"
+      },
+      "TraceFailureSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "category": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Category",
+            "type": "string"
+          },
+          "message": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Message",
+            "type": "string"
+          },
+          "retryable": {
+            "default": false,
+            "title": "Retryable",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "category",
+          "message"
+        ],
+        "title": "TraceFailureSummary",
+        "type": "object"
+      },
+      "TraceLinkSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "link_type": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Link Type",
+            "type": "string"
+          },
+          "span_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Span Id"
+          },
+          "trace_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Trace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "link_type",
+          "trace_id"
+        ],
+        "title": "TraceLinkSummary",
+        "type": "object"
+      },
+      "TraceResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "checkpoint_count": {
+            "minimum": 0.0,
+            "title": "Checkpoint Count",
+            "type": "integer"
+          },
+          "checkpoints": {
+            "items": {
+              "$ref": "#/components/schemas/TraceCheckpointSummary"
+            },
+            "maxItems": 500,
+            "title": "Checkpoints",
+            "type": "array"
+          },
+          "checkpoints_truncated": {
+            "default": false,
+            "title": "Checkpoints Truncated",
+            "type": "boolean"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "event_count": {
+            "minimum": 0.0,
+            "title": "Event Count",
+            "type": "integer"
+          },
+          "link_count": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Link Count",
+            "type": "integer"
+          },
+          "providerless": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Providerless"
+          },
+          "replay_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replay Id"
+          },
+          "replay_mode": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replay Mode"
+          },
+          "root_span_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Root Span Id",
+            "type": "string"
+          },
+          "run_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Run Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "minimum": 1.0,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "source_trace_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Trace Id"
+          },
+          "span_count": {
+            "minimum": 1.0,
+            "title": "Span Count",
+            "type": "integer"
+          },
+          "status": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Status",
+            "type": "string"
+          },
+          "trace_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Trace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "trace_id",
+          "run_id",
+          "root_span_id",
+          "schema_version",
+          "status",
+          "created_at",
+          "span_count",
+          "event_count",
+          "checkpoint_count"
+        ],
+        "title": "TraceResponse",
+        "type": "object"
+      },
+      "TraceSpanDetailResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "approval_references": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 256,
+            "title": "Approval References",
+            "type": "array"
+          },
+          "artifact_count": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Artifact Count",
+            "type": "integer"
+          },
+          "artifacts": {
+            "items": {
+              "$ref": "#/components/schemas/TraceArtifactSummary"
+            },
+            "maxItems": 256,
+            "title": "Artifacts",
+            "type": "array"
+          },
+          "attributes": {
+            "additionalProperties": true,
+            "title": "Attributes",
+            "type": "object"
+          },
+          "cancellation_state": {
+            "additionalProperties": true,
+            "title": "Cancellation State",
+            "type": "object"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "failure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TraceFailureSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "input_count": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Input Count",
+            "type": "integer"
+          },
+          "inputs": {
+            "items": {
+              "$ref": "#/components/schemas/TraceValueReferenceSummary"
+            },
+            "maxItems": 256,
+            "title": "Inputs",
+            "type": "array"
+          },
+          "invocation_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invocation Id"
+          },
+          "links": {
+            "items": {
+              "$ref": "#/components/schemas/TraceLinkSummary"
+            },
+            "maxItems": 256,
+            "title": "Links",
+            "type": "array"
+          },
+          "name": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "output_count": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Output Count",
+            "type": "integer"
+          },
+          "outputs": {
+            "items": {
+              "$ref": "#/components/schemas/TraceValueReferenceSummary"
+            },
+            "maxItems": 256,
+            "title": "Outputs",
+            "type": "array"
+          },
+          "parent_span_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Span Id"
+          },
+          "policy_decision_references": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 256,
+            "title": "Policy Decision References",
+            "type": "array"
+          },
+          "resource_usage": {
+            "additionalProperties": true,
+            "title": "Resource Usage",
+            "type": "object"
+          },
+          "run_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Run Id",
+            "type": "string"
+          },
+          "sequence": {
+            "minimum": 1.0,
+            "title": "Sequence",
+            "type": "integer"
+          },
+          "span_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Span Id",
+            "type": "string"
+          },
+          "span_type": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Span Type",
+            "type": "string"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "status": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Status",
+            "type": "string"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
+          },
+          "trace_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Trace Id",
+            "type": "string"
+          },
+          "worker_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Worker Id"
+          }
+        },
+        "required": [
+          "trace_id",
+          "span_id",
+          "run_id",
+          "span_type",
+          "name",
+          "sequence",
+          "started_at",
+          "status"
+        ],
+        "title": "TraceSpanDetailResponse",
+        "type": "object"
+      },
+      "TraceSpanListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "after_sequence": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "After Sequence",
+            "type": "integer"
+          },
+          "next_sequence": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Next Sequence",
+            "type": "integer"
+          },
+          "run_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Run Id",
+            "type": "string"
+          },
+          "spans": {
+            "items": {
+              "$ref": "#/components/schemas/TraceSpanSummary"
+            },
+            "maxItems": 500,
+            "title": "Spans",
+            "type": "array"
+          },
+          "trace_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Trace Id",
+            "type": "string"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "trace_id",
+          "run_id",
+          "spans"
+        ],
+        "title": "TraceSpanListResponse",
+        "type": "object"
+      },
+      "TraceSpanSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_count": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Artifact Count",
+            "type": "integer"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "failure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TraceFailureSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "input_count": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Input Count",
+            "type": "integer"
+          },
+          "invocation_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invocation Id"
+          },
+          "name": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "output_count": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Output Count",
+            "type": "integer"
+          },
+          "parent_span_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Span Id"
+          },
+          "run_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Run Id",
+            "type": "string"
+          },
+          "sequence": {
+            "minimum": 1.0,
+            "title": "Sequence",
+            "type": "integer"
+          },
+          "span_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Span Id",
+            "type": "string"
+          },
+          "span_type": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Span Type",
+            "type": "string"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "status": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Status",
+            "type": "string"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
+          },
+          "trace_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Trace Id",
+            "type": "string"
+          },
+          "worker_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Worker Id"
+          }
+        },
+        "required": [
+          "trace_id",
+          "span_id",
+          "run_id",
+          "span_type",
+          "name",
+          "sequence",
+          "started_at",
+          "status"
+        ],
+        "title": "TraceSpanSummary",
+        "type": "object"
+      },
+      "TraceValueReferenceSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "byte_length": {
+            "minimum": 0.0,
+            "title": "Byte Length",
+            "type": "integer"
+          },
+          "media_type": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Media Type",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "redacted": {
+            "default": true,
+            "title": "Redacted",
+            "type": "boolean"
+          },
+          "reference_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Reference Id",
+            "type": "string"
+          },
+          "replayable": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replayable"
+          },
+          "required_for_replay": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Required For Replay"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reference_id",
+          "name",
+          "sha256",
+          "media_type",
+          "byte_length"
+        ],
+        "title": "TraceValueReferenceSummary",
         "type": "object"
       },
       "UsageResponse": {
@@ -6027,6 +7279,227 @@
         "summary": "Run Events"
       }
     },
+    "/api/v1/runs/{run_id}/provenance": {
+      "get": {
+        "operationId": "run_provenance_api_v1_runs__run_id__provenance_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvenanceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          }
+        },
+        "summary": "Run Provenance"
+      }
+    },
+    "/api/v1/runs/{run_id}/replayability": {
+      "get": {
+        "operationId": "run_replayability_api_v1_runs__run_id__replayability_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "After",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunReplayabilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          }
+        },
+        "summary": "Run Replayability"
+      }
+    },
     "/api/v1/runs/{run_id}/report": {
       "get": {
         "operationId": "report_api_v1_runs__run_id__report_get",
@@ -6898,6 +8371,335 @@
           }
         },
         "summary": "Cancel Tool Invocation"
+      }
+    },
+    "/api/v1/runs/{run_id}/trace": {
+      "get": {
+        "operationId": "run_trace_api_v1_runs__run_id__trace_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          }
+        },
+        "summary": "Run Trace"
+      }
+    },
+    "/api/v1/runs/{run_id}/trace/spans": {
+      "get": {
+        "operationId": "run_trace_spans_api_v1_runs__run_id__trace_spans_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "After",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceSpanListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          }
+        },
+        "summary": "Run Trace Spans"
+      }
+    },
+    "/api/v1/runs/{run_id}/trace/spans/{span_id}": {
+      "get": {
+        "operationId": "run_trace_span_api_v1_runs__run_id__trace_spans__span_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "span_id",
+            "required": true,
+            "schema": {
+              "title": "Span Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceSpanDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          }
+        },
+        "summary": "Run Trace Span"
       }
     },
     "/api/v1/runs/{run_id}/usage": {

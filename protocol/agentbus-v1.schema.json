@@ -3073,6 +3073,11 @@
           "title": "Missing Input Hashes",
           "type": "array"
         },
+        "missing_inputs_truncated": {
+          "default": false,
+          "title": "Missing Inputs Truncated",
+          "type": "boolean"
+        },
         "next_sequence": {
           "default": 0,
           "minimum": 0,
@@ -5667,6 +5672,42 @@
       "title": "TraceFailureSummary",
       "type": "object"
     },
+    "TraceLinkSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "link_type": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Link Type",
+          "type": "string"
+        },
+        "span_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Span Id"
+        },
+        "trace_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Trace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "link_type",
+        "trace_id"
+      ],
+      "title": "TraceLinkSummary",
+      "type": "object"
+    },
     "TraceResponse": {
       "additionalProperties": false,
       "properties": {
@@ -5709,6 +5750,12 @@
         "event_count": {
           "minimum": 0,
           "title": "Event Count",
+          "type": "integer"
+        },
+        "link_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Link Count",
           "type": "integer"
         },
         "providerless": {
@@ -5896,6 +5943,14 @@
           ],
           "default": null,
           "title": "Invocation Id"
+        },
+        "links": {
+          "items": {
+            "$ref": "#/$defs/TraceLinkSummary"
+          },
+          "maxItems": 256,
+          "title": "Links",
+          "type": "array"
         },
         "name": {
           "maxLength": 256,

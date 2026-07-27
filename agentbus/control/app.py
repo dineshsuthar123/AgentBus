@@ -49,15 +49,20 @@ from agentbus.control.models import (
     ProviderCheckRequest,
     ProviderListResponse,
     ProviderSummary,
+    ProvenanceResponse,
     ResumeResponse,
     RunAcceptedResponse,
     RunActionRequest,
     RunCreateRequest,
     RunListResponse,
+    RunReplayabilityResponse,
     RunReportResponse,
     RunSummary,
     SchedulerResponse,
     TaskListResponse,
+    TraceResponse,
+    TraceSpanDetailResponse,
+    TraceSpanListResponse,
     ToolAuditListResponse,
     ToolDescriptorDetail,
     ToolInvocationCancelRequest,
@@ -247,6 +252,9 @@ def create_app(
                 "tool-cancellation",
                 "mcp",
                 "mcp-diagnostics",
+                "execution-traces",
+                "run-provenance",
+                "replayability",
             ],
         )
 
@@ -356,6 +364,60 @@ def create_app(
     @app.get(f"{API_PREFIX}/runs/{{run_id}}", response_model=RunSummary)
     async def get_run(run_id: str) -> RunSummary:
         return query_service.run_summary(query_service.get_run(run_id))
+
+    @app.get(
+        f"{API_PREFIX}/runs/{{run_id}}/trace",
+        response_model=TraceResponse,
+    )
+    async def run_trace(run_id: str) -> TraceResponse:
+        return query_service.trace(run_id)
+
+    @app.get(
+        f"{API_PREFIX}/runs/{{run_id}}/trace/spans",
+        response_model=TraceSpanListResponse,
+    )
+    async def run_trace_spans(
+        run_id: str,
+        after: int = Query(default=0, ge=0),
+        limit: int = Query(default=100, ge=1, le=500),
+    ) -> TraceSpanListResponse:
+        return query_service.trace_spans(
+            run_id,
+            after_sequence=after,
+            limit=limit,
+        )
+
+    @app.get(
+        f"{API_PREFIX}/runs/{{run_id}}/trace/spans/{{span_id}}",
+        response_model=TraceSpanDetailResponse,
+    )
+    async def run_trace_span(
+        run_id: str,
+        span_id: str,
+    ) -> TraceSpanDetailResponse:
+        return query_service.trace_span(run_id, span_id)
+
+    @app.get(
+        f"{API_PREFIX}/runs/{{run_id}}/provenance",
+        response_model=ProvenanceResponse,
+    )
+    async def run_provenance(run_id: str) -> ProvenanceResponse:
+        return query_service.provenance(run_id)
+
+    @app.get(
+        f"{API_PREFIX}/runs/{{run_id}}/replayability",
+        response_model=RunReplayabilityResponse,
+    )
+    async def run_replayability(
+        run_id: str,
+        after: int = Query(default=0, ge=0),
+        limit: int = Query(default=100, ge=1, le=500),
+    ) -> RunReplayabilityResponse:
+        return query_service.replayability(
+            run_id,
+            after_sequence=after,
+            limit=limit,
+        )
 
     @app.post(f"{API_PREFIX}/runs/{{run_id}}/resume", response_model=ResumeResponse)
     async def resume_run(run_id: str) -> ResumeResponse:

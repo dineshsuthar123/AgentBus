@@ -1416,6 +1416,9 @@ class StateStore:
         )
 
     def get_run_trace(self, run_id: str) -> Trace:
+        return self.get_trace(self.get_run_trace_id(run_id))
+
+    def get_run_trace_id(self, run_id: str) -> str:
         _require_id(run_id, "run")
         with self._connection() as connection:
             self._require_run_row(connection, run_id)
@@ -1427,7 +1430,7 @@ class StateStore:
             raise TraceRecordNotFoundError(
                 f"Run '{run_id}' does not have an execution trace."
             )
-        return self.get_trace(row["trace_id"])
+        return str(row["trace_id"])
 
     def find_run_trace(self, run_id: str) -> Trace | None:
         try:
