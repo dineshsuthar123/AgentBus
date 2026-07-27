@@ -112,7 +112,7 @@ def test_v1_database_migrates_transactionally_and_reopens(tmp_path):
 
     store = StateStore(database)
 
-    assert store.schema_version == 4
+    assert store.schema_version == 5
     assert store.get_run("legacy-run").original_task == "Legacy task"
     assert store.get_task("legacy-run", "step-1").current_attempt_count == 1
     assert store.get_attempt("legacy-attempt").status.value == "running"
@@ -132,8 +132,12 @@ def test_v1_database_migrates_transactionally_and_reopens(tmp_path):
         "tool_invocations",
         "tool_approvals",
         "tool_audit_records",
+        "traces",
+        "trace_spans",
+        "trace_events",
+        "trace_checkpoints",
     } <= tables
-    assert StateStore(database).schema_version == 4
+    assert StateStore(database).schema_version == 5
 
 
 def test_v2_database_adds_cancellation_state_without_changing_runs(tmp_path):
@@ -149,7 +153,7 @@ def test_v2_database_adds_cancellation_state_without_changing_runs(tmp_path):
 
     store = StateStore(database)
 
-    assert store.schema_version == 4
+    assert store.schema_version == 5
     assert store.get_run("legacy-run").original_task == "Legacy task"
     with sqlite3.connect(database) as connection:
         cancellation_table = connection.execute(
@@ -172,7 +176,7 @@ def test_v3_database_adds_tool_runtime_state_and_immutable_audit(tmp_path):
 
     store = StateStore(database)
 
-    assert store.schema_version == 4
+    assert store.schema_version == 5
     assert store.get_run("legacy-run").original_task == "Legacy task"
     with sqlite3.connect(database) as connection:
         objects = {
@@ -220,7 +224,7 @@ def test_failed_migration_rolls_back_schema_and_version(tmp_path, monkeypatch):
 def test_state_database_backup_is_explicit_and_reopenable(tmp_path):
     store = StateStore(tmp_path / "state.db")
 
-    backup = store.backup(tmp_path / "backups" / "state-v4.db")
+    backup = store.backup(tmp_path / "backups" / "state-v5.db")
 
     assert backup.is_file()
-    assert StateStore(backup).schema_version == 4
+    assert StateStore(backup).schema_version == 5

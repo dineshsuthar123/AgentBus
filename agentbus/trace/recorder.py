@@ -44,6 +44,9 @@ class TraceSink(Protocol):
     def write_checkpoint(self, checkpoint: TraceCheckpoint) -> None:
         ...
 
+    def write_trace(self, trace: Trace) -> None:
+        ...
+
 
 class TraceRecorder:
     """Build a causal trace while treating persistence as an observer."""
@@ -381,7 +384,9 @@ class TraceRecorder:
             self._status = status
             self._emit_span(root)
             self._record_terminal_event(status)
-            return self.snapshot()
+            trace = self.snapshot()
+            self._emit_trace(trace)
+            return trace
 
     def snapshot(self) -> Trace:
         with self._lock:
@@ -446,6 +451,13 @@ class TraceRecorder:
                 "checkpoint",
                 lambda: self.sink.write_checkpoint(checkpoint),
             )
+
+    def _emit_trace(self, trace: Trace) -> None:
+        if self.sink is None:
+            return
+        write_trace = getattr(self.sink, "write_trace", None)
+        if write_trace is not None:
+            self._write_sink("trace", lambda: write_trace(trace))
 
     def _write_sink(self, item_type: str, write: Callable[[], None]) -> None:
         try:

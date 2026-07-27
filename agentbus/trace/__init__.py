@@ -45,6 +45,7 @@ from agentbus.trace.models import (
 )
 from agentbus.trace.version import TRACE_SCHEMA_NAME, TRACE_SCHEMA_VERSION
 from agentbus.trace.recorder import TraceRecorder, TraceSink
+from agentbus.trace.persistence import StateStoreTraceSink
 from agentbus.trace.redaction import (
     HIDDEN_CONTENT,
     PRIVATE_PATH,
@@ -77,6 +78,7 @@ __all__ = [
     "RedactionMetadata",
     "RetentionClass",
     "StoredBlob",
+    "StateStoreTraceSink",
     "Trace",
     "TraceArtifactReference",
     "TraceCheckpoint",
