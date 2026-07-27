@@ -180,6 +180,16 @@ def test_source_fixture_has_warning_and_requires_import_consent(
     trace, provenance, source_store = _completed_run(tmp_path, source=True)
     archive = tmp_path / "source-fixture.agentbus-trace"
 
+    refused = tmp_path / "source-without-consent.agentbus-trace"
+    with pytest.raises(RegressionFixtureError, match="source-like"):
+        capture_regression_fixture(
+            trace,
+            provenance,
+            source_store,
+            refused,
+        )
+    assert not refused.exists()
+
     captured = capture_regression_fixture(
         trace,
         provenance,

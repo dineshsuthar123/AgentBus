@@ -192,6 +192,23 @@ class TraceArchiveExporter:
         self.max_entries = max_entries
         self.max_uncompressed_bytes = max_uncompressed_bytes
 
+    def source_content_hashes(
+        self,
+        trace: Trace,
+        provenance: ProvenanceManifest,
+    ) -> list[str]:
+        verify_provenance_core(provenance, trace)
+        names_by_hash = _reference_names(trace)
+        source_hashes = []
+        for digest in _provenance_blob_hashes(provenance):
+            stored = self.object_store.get(digest)
+            if _is_potential_source_content(
+                stored.metadata,
+                names_by_hash.get(digest, set()),
+            ):
+                source_hashes.append(digest)
+        return source_hashes
+
     def export(
         self,
         trace: Trace,

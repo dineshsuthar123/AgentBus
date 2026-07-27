@@ -237,6 +237,24 @@ def capture_regression_fixture(
         raise RegressionFixtureError(
             "Only successful terminal runs can become regression fixtures."
         )
+    exporter = TraceArchiveExporter(object_store)
+    source_hashes = set(
+        exporter.source_content_hashes(trace, provenance)
+    )
+    replay_hashes = {
+        reference.sha256
+        for span in trace.spans
+        for reference in (
+            *span.input_references,
+            *span.output_references,
+        )
+    }
+    unavailable = sorted(source_hashes & replay_hashes)
+    if unavailable and not include_source_content:
+        raise RegressionFixtureError(
+            "Fixture replay requires source-like captured content; rerun "
+            "capture with explicit source-content consent."
+        )
     expected = assertions or derive_fixture_assertions(trace, object_store)
     failures = _source_assertion_failures(trace, object_store, expected)
     if failures:
@@ -263,7 +281,7 @@ def capture_regression_fixture(
         ),
         replay_command=replay_command,
     )
-    archive = TraceArchiveExporter(object_store).export(
+    archive = exporter.export(
         trace,
         provenance,
         destination,
