@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -40,6 +41,17 @@ class RuntimeTrace:
         self.recorder = recorder
         self.object_store = object_store
         self._terminal_trace = terminal_trace
+        self._checkpoint_guard = threading.RLock()
+        snapshot = (
+            recorder.snapshot()
+            if recorder is not None
+            else terminal_trace
+        )
+        self._last_checkpoint_id = (
+            snapshot.checkpoints[-1].checkpoint_id
+            if snapshot is not None and snapshot.checkpoints
+            else None
+        )
 
     @classmethod
     def open(
@@ -314,14 +326,63 @@ class RuntimeTrace:
             return [reference] if reference is not None else []
 
         try:
-            return self.recorder.checkpoint(
+            checkpoint = self.recorder.checkpoint(
                 label,
                 span_id=target.span_id if target is not None else None,
                 state_reference_factory=references,
                 replayable=replayable,
             )
+            self._last_checkpoint_id = checkpoint.checkpoint_id
+            return checkpoint
         except Exception as exc:
             self.recording_failed("checkpoint", exc)
+            return None
+
+    def replay_checkpoint(
+        self,
+        kind,
+        label: str,
+        *,
+        task_id: str | None = None,
+        completed_task_ids: list[str] | None = None,
+        required_task_ids: list[str] | None = None,
+        durable_state: dict[str, Any] | None = None,
+        base_commit: str | None = None,
+        repository_tree_sha256: str | None = None,
+        protocol_versions: dict[str, int] | None = None,
+        context: TraceContext | None = None,
+    ):
+        if self.recorder is None or self.object_store is None:
+            return None
+        try:
+            from agentbus.replay.checkpoints import (
+                CheckpointKind,
+                CheckpointManager,
+            )
+
+            selected_kind = (
+                kind if isinstance(kind, CheckpointKind) else CheckpointKind(kind)
+            )
+            target = context or self.root_context
+            with self._checkpoint_guard:
+                checkpoint = CheckpointManager(self.object_store).capture(
+                    self.recorder,
+                    kind=selected_kind,
+                    label=label,
+                    parent_checkpoint_id=self._last_checkpoint_id,
+                    task_id=task_id,
+                    completed_task_ids=completed_task_ids,
+                    required_task_ids=required_task_ids,
+                    durable_state=durable_state,
+                    base_commit=base_commit,
+                    repository_tree_sha256=repository_tree_sha256,
+                    protocol_versions=protocol_versions,
+                    span_id=target.span_id if target is not None else None,
+                )
+                self._last_checkpoint_id = checkpoint.checkpoint_id
+                return checkpoint
+        except Exception as exc:
+            self.recording_failed("replay_checkpoint", exc)
             return None
 
     def record_event(

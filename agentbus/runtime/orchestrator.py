@@ -15,7 +15,7 @@ from agentbus.execution.cancellation_registry import CancellationRegistry
 from agentbus.execution.engine import DurableExecutionEngine
 from agentbus.execution.integration import IntegrationCoordinator
 from agentbus.execution.leases import LeaseService
-from agentbus.execution.models import ExecutionReport, RunStatus
+from agentbus.execution.models import ExecutionReport, RunStatus, TaskStatus
 from agentbus.execution.scheduler import ParallelExecutionScheduler
 from agentbus.execution.state_store import StateStore, StateStoreError
 from agentbus.execution.worker import LocalTaskWorker
@@ -387,7 +387,11 @@ class MultiAgentOrchestrator:
                 "integration_order": [],
             },
         }
-        engine = self._durable_engine(run_id, executor=False)
+        engine = self._durable_engine(
+            run_id,
+            executor=False,
+            attach_trace=False,
+        )
         engine.create_run(
             user_task,
             plan,
@@ -425,13 +429,21 @@ class MultiAgentOrchestrator:
                 planning_span,
                 output_references=[plan_output] if plan_output is not None else [],
             )
+            runtime_trace.replay_checkpoint(
+                "plan_created",
+                "plan-created",
+                durable_state={
+                    "planner_output": plan,
+                    "workspace_validated": True,
+                },
+            )
             persisted_run = self.state_store.get_run(run_id)
-            runtime_trace.checkpoint(
+            runtime_trace.replay_checkpoint(
+                "graph_persisted",
                 "task-graph-persisted",
-                {
+                durable_state={
                     "graph": persisted_run.graph_data,
                     "planner_output": persisted_run.planner_output,
-                    "base_commit": initial_head,
                     "workspace_validated": True,
                 },
             )
@@ -519,6 +531,7 @@ class MultiAgentOrchestrator:
         run_id: str,
         *,
         executor: bool = True,
+        attach_trace: bool = True,
     ) -> DurableExecutionEngine:
         logger = RunLogger(log_dir=self.config.runs_dir, run_id=run_id)
         task_executor = None
@@ -549,6 +562,9 @@ class MultiAgentOrchestrator:
             crash_hook=self.durable_crash_hook,
             cancellation=self._cancellation_for(run_id),
             cancellation_registry=self._cancellation_registry_for_use(),
+            runtime_trace=(
+                self._trace_for_run(run_id) if attach_trace else None
+            ),
         )
 
     def _parallel_scheduler(self, run_id: str) -> ParallelExecutionScheduler:
@@ -595,6 +611,7 @@ class MultiAgentOrchestrator:
                 ),
                 cancellation=cancellation,
                 crash_hook=self.worker_crash_hook,
+                runtime_trace=self._trace_for_run(run_id),
             )
 
         return ParallelExecutionScheduler(
@@ -795,6 +812,7 @@ class MultiAgentOrchestrator:
             "final-review",
             stage="after-final-verification",
         )
+        self._checkpoint_final_verifier(run_id, verifier_result)
         baseline = run.metadata.get("workspace_baseline", {})
         changed_since = getattr(self.git_repository, "changed_since", None)
         changed_files = (
@@ -955,6 +973,11 @@ class MultiAgentOrchestrator:
             ) from exc
         repository = GitRepository(str(integration_path))
         repository.validate_workspace()
+        self._checkpoint_integration(
+            run_id,
+            base_commit=base_commit,
+            integration_commit=repository.head_commit(short=False),
+        )
         verifier, reviewer = self._parallel_final_runtime(
             integration_path,
             cancellation,
@@ -998,6 +1021,11 @@ class MultiAgentOrchestrator:
         cancellation.checkpoint(
             "final-review",
             stage="after-integration-verification",
+        )
+        self._checkpoint_final_verifier(
+            run_id,
+            verifier_result,
+            integrated=True,
         )
         changed_files = repository.changed_files_between(base_commit)
         changes = repository.change_set(changed_files)
@@ -1141,6 +1169,58 @@ class MultiAgentOrchestrator:
             function,
             attributes=attributes,
             capture=capture,
+        )
+
+    def _checkpoint_final_verifier(
+        self,
+        run_id: str,
+        result: dict[str, Any],
+        *,
+        integrated: bool = False,
+    ) -> None:
+        tasks = self.state_store.list_tasks(run_id)
+        completed = sorted(
+            task.task_id
+            for task in tasks
+            if task.status == TaskStatus.SUCCEEDED
+        )
+        self._trace_for_run(run_id).replay_checkpoint(
+            "verifier_completed",
+            (
+                "integration-verifier-completed"
+                if integrated
+                else "final-verifier-completed"
+            ),
+            completed_task_ids=completed,
+            durable_state={
+                "passed": bool(result.get("passed")),
+                "exit_code": result.get("exit_code"),
+                "integrated": integrated,
+            },
+        )
+
+    def _checkpoint_integration(
+        self,
+        run_id: str,
+        *,
+        base_commit: str,
+        integration_commit: str,
+    ) -> None:
+        tasks = self.state_store.list_tasks(run_id)
+        completed = sorted(
+            task.task_id
+            for task in tasks
+            if task.status == TaskStatus.SUCCEEDED
+        )
+        self._trace_for_run(run_id).replay_checkpoint(
+            "integration_completed",
+            "integration-completed",
+            completed_task_ids=completed,
+            durable_state={
+                "base_commit": base_commit,
+                "integration_commit": integration_commit,
+            },
+            base_commit=base_commit,
         )
 
     def _review_with_context(

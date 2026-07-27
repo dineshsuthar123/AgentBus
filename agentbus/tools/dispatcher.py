@@ -422,6 +422,29 @@ class ToolDispatcher:
                 "in_progress": response.in_progress,
             },
         )
+        if approval is not None:
+            self.runtime_trace.replay_checkpoint(
+                "approval_decided",
+                f"tool-approval-{approval.disposition.value}",
+                task_id=invocation.task_id,
+                durable_state={
+                    "approval_id": approval.approval_id,
+                    "disposition": approval.disposition.value,
+                    "invocation_id": invocation.invocation_id,
+                },
+            )
+        if result is not None:
+            self.runtime_trace.replay_checkpoint(
+                "tool_completed",
+                f"tool-completed-{invocation.tool_name}",
+                task_id=invocation.task_id,
+                durable_state={
+                    "invocation_id": invocation.invocation_id,
+                    "invocation_revision": invocation.invocation_revision,
+                    "status": result.status.value,
+                    "replayed": response.replayed,
+                },
+            )
 
     def recover_run(self, run_id: str) -> tuple[ToolInvocationRecord, ...]:
         with self._run_lock(run_id):

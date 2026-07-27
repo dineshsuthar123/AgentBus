@@ -10,6 +10,7 @@ from agentbus.execution.models import RunStatus, TaskStatus
 from agentbus.execution.models import FailureCategory
 from agentbus.execution.state_store import StateStore, StateStoreError
 from agentbus.models.errors import ModelAuthenticationError
+from agentbus.replay.checkpoints import CheckpointKind, CheckpointManager
 from agentbus.runtime.orchestrator import MultiAgentOrchestrator
 from agentbus.trace import TraceSpanType, TraceStatus
 from agentbus.tools.protocol import ToolResourceBudget
@@ -242,7 +243,8 @@ def test_durable_run_records_hierarchical_trace_and_final_review_order(
         span.span_type == TraceSpanType.PLANNING for span in active.spans
     )
     assert [item.label for item in active.checkpoints] == [
-        "task-graph-persisted"
+        "plan-created",
+        "task-graph-persisted",
     ]
     assert store.get_run(run_id).metadata["execution_trace"]["trace_id"] == (
         active.trace_id
@@ -271,6 +273,21 @@ def test_durable_run_records_hierarchical_trace_and_final_review_order(
         for span in trace.spans
         if span.span_id != trace.root_span_id
     )
+    manager = CheckpointManager(runner._trace_for_run(run_id).object_store)
+    states = [
+        manager.load_state(checkpoint) for checkpoint in trace.checkpoints
+    ]
+    assert [state.kind for state in states] == [
+        CheckpointKind.PLAN_CREATED,
+        CheckpointKind.GRAPH_PERSISTED,
+        CheckpointKind.TASK_COMPLETED,
+        CheckpointKind.TASK_COMPLETED,
+        CheckpointKind.VERIFIER_COMPLETED,
+    ]
+    assert manager.validate_ancestry(
+        trace,
+        trace.checkpoints[-1].checkpoint_id,
+    ) == states
 
 
 def test_final_review_rejection_preserves_successful_task_trace_history(
