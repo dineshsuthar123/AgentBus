@@ -17,9 +17,14 @@ class TraceIntegrityError(TraceError):
     """Raised when persisted trace material fails integrity validation."""
 
 
+class TraceRecordingError(TraceError):
+    """Raised when deterministic trace recording cannot continue safely."""
+
+
 __all__ = [
     "TraceError",
     "TraceIntegrityError",
     "TraceNotFoundError",
+    "TraceRecordingError",
     "TraceValidationError",
 ]
