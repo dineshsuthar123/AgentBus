@@ -1435,6 +1435,30 @@ class StateStore:
         except TraceRecordNotFoundError:
             return None
 
+    @_domain_decode("execution traces")
+    def list_traces(
+        self,
+        *,
+        status: TraceStatus | None = None,
+        limit: int = 100,
+    ) -> list[Trace]:
+        if limit < 1 or limit > 1_000:
+            raise StateStoreError(
+                "Trace page limit must be between 1 and 1000."
+            )
+        where = " WHERE status = ?" if status is not None else ""
+        parameters: list[object] = (
+            [status.value, limit] if status is not None else [limit]
+        )
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT trace_id FROM traces"
+                + where
+                + " ORDER BY created_at DESC, trace_id DESC LIMIT ?",
+                parameters,
+            ).fetchall()
+        return [self.get_trace(row["trace_id"]) for row in rows]
+
     @_domain_decode("trace span")
     def get_trace_span(self, trace_id: str, span_id: str) -> TraceSpan:
         _require_id(trace_id, "trace")

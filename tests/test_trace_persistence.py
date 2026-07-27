@@ -10,6 +10,7 @@ from agentbus.execution.state_store import (
 from agentbus.trace import (
     StateStoreTraceSink,
     TraceEvent,
+    TraceFailure,
     TraceRecorder,
     TraceSpan,
     TraceSpanType,
@@ -138,6 +139,44 @@ def test_trace_pages_are_bounded_and_resume_sequence_is_durable(tmp_path) -> Non
     assert [event.sequence for event in page] == [4, 5]
     with pytest.raises(Exception, match="between 1 and 5000"):
         store.list_trace_spans(recorder.trace_id, limit=5_001)
+
+
+def test_trace_listing_is_bounded_filtered_and_newest_first(tmp_path) -> None:
+    store = StateStore(tmp_path / "state.db")
+    traces = []
+    clock = ControlledClock()
+    for run_id, status in (
+        ("run-success", TraceStatus.SUCCEEDED),
+        ("run-failed", TraceStatus.FAILED),
+    ):
+        store.create_run(_run(run_id))
+        recorder = TraceRecorder(
+            run_id,
+            sink=StateStoreTraceSink(store),
+            clock=clock,
+        )
+        recorder.start_trace()
+        traces.append(
+            recorder.finish_trace(
+                status=status,
+                failure=(
+                    None
+                    if status == TraceStatus.SUCCEEDED
+                    else TraceFailure(
+                        category="FixtureFailure",
+                        message="failed safely",
+                    )
+                ),
+            )
+        )
+
+    assert [trace.run_id for trace in store.list_traces()] == [
+        "run-failed",
+        "run-success",
+    ]
+    assert store.list_traces(status=TraceStatus.FAILED) == [traces[1]]
+    with pytest.raises(Exception, match="between 1 and 1000"):
+        store.list_traces(limit=1_001)
 
 
 def test_active_trace_resumes_without_rewriting_completed_spans(tmp_path) -> None:
