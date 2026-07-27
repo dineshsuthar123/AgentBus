@@ -24,6 +24,15 @@ from agentbus.trace.blobs import (
     RetentionClass,
     StoredBlob,
 )
+from agentbus.trace.archive import (
+    MAX_ARCHIVE_ENTRIES,
+    MAX_ARCHIVE_UNCOMPRESSED_BYTES,
+    TRACE_ARCHIVE_FORMAT,
+    TRACE_ARCHIVE_SCHEMA_VERSION,
+    TraceArchiveEntry,
+    TraceArchiveExporter,
+    TraceArchiveManifest,
+)
 from agentbus.trace.events import TraceEventType
 from agentbus.trace.models import (
     ReplayMode,
@@ -57,6 +66,8 @@ from agentbus.trace.provenance import (
     ReplayabilityLevel,
     ToolDescriptorProvenance,
     verify_provenance,
+    verify_provenance_core,
+    verify_provenance_root,
 )
 from agentbus.trace.redaction import (
     HIDDEN_CONTENT,
@@ -86,6 +97,10 @@ from agentbus.trace.runtime import RuntimeTrace
 
 __all__ = [
     "ReplayMode",
+    "MAX_ARCHIVE_ENTRIES",
+    "MAX_ARCHIVE_UNCOMPRESSED_BYTES",
+    "TRACE_ARCHIVE_FORMAT",
+    "TRACE_ARCHIVE_SCHEMA_VERSION",
     "TRACE_SCHEMA_NAME",
     "TRACE_SCHEMA_VERSION",
     "DeterministicSequence",
@@ -112,6 +127,9 @@ __all__ = [
     "StoredBlob",
     "StateStoreTraceSink",
     "Trace",
+    "TraceArchiveEntry",
+    "TraceArchiveExporter",
+    "TraceArchiveManifest",
     "TraceArtifactReference",
     "TraceCheckpoint",
     "TraceContext",
@@ -154,4 +172,6 @@ __all__ = [
     "trace_id_for_run",
     "trace_item_id",
     "verify_provenance",
+    "verify_provenance_core",
+    "verify_provenance_root",
 ]

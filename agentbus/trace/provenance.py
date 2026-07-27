@@ -311,7 +311,39 @@ def verify_provenance(
     )
     if entries != manifest.integrity_entries:
         raise TraceIntegrityError("Provenance integrity entries do not match.")
-    actual_root = _integrity_root(entries)
+    verify_provenance_root(manifest)
+
+
+def verify_provenance_core(
+    manifest: ProvenanceManifest,
+    trace: Trace,
+) -> None:
+    """Verify trace/blob leaves while retaining opaque durable evidence leaves."""
+    if manifest.trace_id != trace.trace_id or manifest.run_id != trace.run_id:
+        raise TraceIntegrityError(
+            "Provenance manifest does not identify the supplied trace."
+        )
+    blob_hashes = {
+        *manifest.input_object_hashes,
+        *manifest.output_object_hashes,
+    }
+    expected_prefix = _integrity_entries(
+        manifest,
+        trace,
+        blob_hashes=blob_hashes,
+        approvals=(),
+        audit_entries=(),
+        artifacts=(),
+    )
+    if manifest.integrity_entries[: len(expected_prefix)] != expected_prefix:
+        raise TraceIntegrityError(
+            "Provenance trace or blob integrity entries do not match."
+        )
+    verify_provenance_root(manifest)
+
+
+def verify_provenance_root(manifest: ProvenanceManifest) -> None:
+    actual_root = _integrity_root(manifest.integrity_entries)
     if actual_root != manifest.integrity_root:
         raise TraceIntegrityError("Provenance integrity root does not match.")
 
@@ -458,4 +490,6 @@ __all__ = [
     "ReplayabilityLevel",
     "ToolDescriptorProvenance",
     "verify_provenance",
+    "verify_provenance_core",
+    "verify_provenance_root",
 ]

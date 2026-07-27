@@ -5,10 +5,8 @@ import re
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any
 
-from agentbus.control.models import CONTROL_PROTOCOL_VERSION
 from agentbus.policy.defaults import DEFAULT_TOOL_POLICY
 from agentbus.replay.classification import ReplayabilityClassifier
-from agentbus.tools.protocol import TOOL_PROTOCOL_NAME, TOOL_PROTOCOL_VERSION
 from agentbus.trace.errors import TraceIntegrityError
 from agentbus.trace.models import (
     MAX_TRACE_ITEMS,
@@ -22,8 +20,8 @@ from agentbus.trace.provenance import (
     ToolDescriptorProvenance,
     verify_provenance,
 )
+from agentbus.trace.protocols import provenance_protocol_documents
 from agentbus.trace.redaction import canonical_json_bytes
-from agentbus.trace.version import TRACE_SCHEMA_NAME, TRACE_SCHEMA_VERSION
 
 if TYPE_CHECKING:
     from agentbus.execution.state_store import StateStore
@@ -213,27 +211,11 @@ def _tool_version(value: Any) -> str | None:
 
 
 def _protocol_hashes() -> dict[str, str]:
-    documents = {
-        "control": {
-            "name": "agentbus.control",
-            "version": CONTROL_PROTOCOL_VERSION,
-        },
-        "replay_checkpoint": {
-            "name": "agentbus.replay.checkpoint",
-            "version": 1,
-        },
-        "tool": {
-            "name": TOOL_PROTOCOL_NAME,
-            "version": TOOL_PROTOCOL_VERSION,
-        },
-        "trace": {
-            "name": TRACE_SCHEMA_NAME,
-            "version": TRACE_SCHEMA_VERSION,
-        },
-    }
     return {
         name: hashlib.sha256(canonical_json_bytes(document)).hexdigest()
-        for name, document in sorted(documents.items())
+        for name, document in sorted(
+            provenance_protocol_documents().items()
+        )
     }
 
 
