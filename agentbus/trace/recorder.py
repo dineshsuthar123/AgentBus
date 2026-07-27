@@ -143,6 +143,14 @@ class TraceRecorder:
         with self._lock:
             return tuple(self._recording_errors)
 
+    def recording_failed(self, item_type: str, error: BaseException) -> None:
+        """Record an optional integration failure without changing run truth."""
+        safe_error = (
+            redact_text(str(error), max_chars=1_000) or type(error).__name__
+        )
+        with self._lock:
+            self._recording_errors.append(f"{item_type}: {safe_error}")
+
     def start_trace(
         self,
         *,
@@ -599,8 +607,8 @@ class TraceRecorder:
         try:
             write()
         except Exception as exc:
+            self.recording_failed(item_type, exc)
             safe_error = redact_text(str(exc), max_chars=1_000) or "unknown error"
-            self._recording_errors.append(f"{item_type}: {safe_error}")
             if self.critical_sink:
                 raise TraceRecordingError(
                     f"Critical trace {item_type} persistence failed: {safe_error}"

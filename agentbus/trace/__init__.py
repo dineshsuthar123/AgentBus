@@ -75,6 +75,7 @@ from agentbus.trace.spans import (
     trace_item_id,
 )
 from agentbus.trace.storage import ContentAddressedStore
+from agentbus.trace.runtime import RuntimeTrace
 
 __all__ = [
     "ReplayMode",
@@ -96,6 +97,7 @@ __all__ = [
     "ProviderRouteProvenance",
     "RedactionMetadata",
     "ReplayabilityLevel",
+    "RuntimeTrace",
     "RetentionClass",
     "StoredBlob",
     "StateStoreTraceSink",
