@@ -36,6 +36,17 @@ from agentbus.trace.models import (
 )
 from agentbus.trace.version import TRACE_SCHEMA_NAME, TRACE_SCHEMA_VERSION
 from agentbus.trace.recorder import TraceRecorder, TraceSink
+from agentbus.trace.redaction import (
+    HIDDEN_CONTENT,
+    PRIVATE_PATH,
+    REDACTED,
+    RedactionMetadata,
+    SanitizedDocument,
+    configuration_fingerprint,
+    contains_secret_material,
+    sanitize_document,
+    sanitize_text,
+)
 from agentbus.trace.spans import (
     DeterministicSequence,
     trace_id_for_run,
@@ -47,6 +58,10 @@ __all__ = [
     "TRACE_SCHEMA_NAME",
     "TRACE_SCHEMA_VERSION",
     "DeterministicSequence",
+    "HIDDEN_CONTENT",
+    "PRIVATE_PATH",
+    "REDACTED",
+    "RedactionMetadata",
     "Trace",
     "TraceArtifactReference",
     "TraceCheckpoint",
@@ -71,10 +86,15 @@ __all__ = [
     "TraceSink",
     "TraceValidationError",
     "TraceValueReference",
+    "SanitizedDocument",
+    "configuration_fingerprint",
+    "contains_secret_material",
     "copy_trace_context",
     "current_trace_context",
     "reset_trace_context",
     "set_trace_context",
+    "sanitize_document",
+    "sanitize_text",
     "trace_context",
     "trace_id_for_run",
     "trace_item_id",
