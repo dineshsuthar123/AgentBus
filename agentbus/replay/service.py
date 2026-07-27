@@ -10,6 +10,7 @@ from agentbus.config import AgentBusConfig
 from agentbus.execution.state_store import (
     ComparisonRecordNotFoundError,
     ProvenanceRecordNotFoundError,
+    ReplaySessionNotFoundError,
     StateStore,
     StateStoreError,
     TraceRecordNotFoundError,
@@ -216,19 +217,13 @@ class TraceReplayService:
         request: ReplayRequest,
     ) -> ReplayResult:
         trace = self.resolve_trace(identifier)
-        if (
-            request.source_trace_id != trace.trace_id
-            or request.source_run_id != trace.run_id
-        ):
-            raise StateStoreError(
-                "Replay request does not match the selected trace."
-            )
-        engine = self._engine(trace, request)
-        pending = self.state_store.create_replay_session(request)
+        prepared = self._prepared_request(trace, request)
+        engine = self._engine(trace, prepared)
+        pending = self._pending_session(prepared)
         try:
             result = engine.replay(
                 trace,
-                request,
+                prepared,
                 session_created_at=pending.created_at,
             )
         except Exception as exc:
@@ -244,14 +239,23 @@ class TraceReplayService:
                     }
                 ).model_dump()
             )
-            self.state_store.record_replay_session(request, failed)
+            self.state_store.record_replay_session(prepared, failed)
             raise
         self.state_store.record_replay_session(
-            request,
+            prepared,
             result.session,
             result=result,
         )
         return result
+
+    def queue_replay(
+        self,
+        identifier: str,
+        request: ReplayRequest,
+    ) -> tuple[ReplayRequest, ReplaySession]:
+        trace = self.resolve_trace(identifier)
+        prepared = self._prepared_request(trace, request)
+        return prepared, self._pending_session(prepared)
 
     def replay_archive(
         self,
@@ -312,7 +316,6 @@ class TraceReplayService:
             self.object_store,
             cancelled=self.cancelled,
         )
-        result = ForkManager(self.object_store, engine).fork(trace, request)
         persisted_request = ReplayRequest(
             replay_id=request.replay_id,
             source_trace_id=request.source_trace_id,
@@ -322,12 +325,63 @@ class TraceReplayService:
             changed_inputs=request.changed_inputs,
             live_provider_consent=request.live_provider_consent,
         )
+        pending = self._pending_session(persisted_request)
+        try:
+            result = ForkManager(self.object_store, engine).fork(
+                trace,
+                request,
+                session_created_at=pending.created_at,
+            )
+        except Exception as exc:
+            started_at = max(pending.created_at, utc_now())
+            failed = ReplaySession.model_validate(
+                pending.model_copy(
+                    update={
+                        "status": ReplaySessionStatus.FAILED,
+                        "started_at": started_at,
+                        "completed_at": max(started_at, utc_now()),
+                        "failure_category": type(exc).__name__,
+                        "failure_message": str(exc),
+                    }
+                ).model_dump()
+            )
+            self.state_store.record_replay_session(
+                persisted_request,
+                failed,
+            )
+            raise
         self.state_store.record_replay_session(
             persisted_request,
             result.replay.session,
             result=result.replay,
         )
         return result
+
+    def _pending_session(self, request: ReplayRequest) -> ReplaySession:
+        try:
+            pending = self.state_store.get_replay_session(request.replay_id)
+        except ReplaySessionNotFoundError:
+            return self.state_store.create_replay_session(request)
+        persisted_request = self.state_store.get_replay_request(
+            request.replay_id
+        )
+        persisted_identity = persisted_request.model_dump(
+            exclude={"isolated_workspace"}
+        )
+        request_identity = request.model_dump(exclude={"isolated_workspace"})
+        isolation_matches = (
+            persisted_request.isolated_workspace is None
+        ) == (request.isolated_workspace is None)
+        if persisted_identity != request_identity or not isolation_matches:
+            raise StateStoreError(
+                f"Replay request '{request.replay_id}' is immutable."
+            )
+        if pending.status != ReplaySessionStatus.PENDING:
+            raise StateStoreError(
+                f"Replay session '{request.replay_id}' is already "
+                f"{pending.status.value}."
+            )
+        return pending
 
     def compare(
         self,
@@ -404,9 +458,10 @@ class TraceReplayService:
                 / ".agentbus-replays"
                 / source_workspace.name
             )
-            request.isolated_workspace = str(
-                replay_root / request.replay_id
-            )
+            if request.isolated_workspace is None:
+                raise StateStoreError(
+                    "Partial replay request was not prepared for isolation."
+                )
             checkpoint_manager = CheckpointManager(self.object_store)
             isolation_manager = ReplayIsolationManager(
                 replay_root,
@@ -420,6 +475,35 @@ class TraceReplayService:
             source_workspace=source_workspace,
             cancelled=self.cancelled,
         )
+
+    def _prepared_request(
+        self,
+        trace: Trace,
+        request: ReplayRequest,
+    ) -> ReplayRequest:
+        if (
+            request.source_trace_id != trace.trace_id
+            or request.source_run_id != trace.run_id
+        ):
+            raise StateStoreError(
+                "Replay request does not match the selected trace."
+            )
+        prepared = request.model_copy(deep=True)
+        if (
+            prepared.from_checkpoint_id is not None
+            or prepared.from_span_id is not None
+        ):
+            run = self.state_store.get_run(trace.run_id)
+            source_workspace = Path(run.workspace).expanduser().resolve()
+            replay_root = (
+                source_workspace.parent
+                / ".agentbus-replays"
+                / source_workspace.name
+            )
+            prepared.isolated_workspace = str(
+                replay_root / prepared.replay_id
+            )
+        return prepared
 
     def _find_provenance(
         self,

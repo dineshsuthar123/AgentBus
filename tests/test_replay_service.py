@@ -91,7 +91,8 @@ def test_service_verifies_replays_and_persists_terminal_session(
 
     verification = service.verify(trace.run_id)
     replayability = service.replayability(trace.trace_id)
-    result = service.replay(trace.run_id, request)
+    prepared, pending = service.queue_replay(trace.run_id, request)
+    result = service.replay(trace.run_id, prepared)
 
     assert verification.valid is True
     assert verification.provenance_root == manifest.integrity_root
@@ -99,6 +100,7 @@ def test_service_verifies_replays_and_persists_terminal_session(
     assert verification.protocol_drift == []
     assert replayability.replayable_offline is True
     assert result.session.status == ReplaySessionStatus.SUCCEEDED
+    assert result.session.created_at == pending.created_at
     assert result.session.provider_calls == 0
     assert result.session.network_calls == 0
     assert store.get_replay_result(request.replay_id) == result
@@ -122,9 +124,13 @@ def test_service_partial_replay_uses_owned_isolation_and_persists_it(
         from_span_id=verifier.span_id,
     )
 
-    result = service.replay(trace.run_id, request)
+    prepared, pending = service.queue_replay(trace.run_id, request)
+    result = service.replay(trace.run_id, prepared)
 
     assert result.session.status == ReplaySessionStatus.SUCCEEDED
+    assert result.session.created_at == pending.created_at
+    assert request.isolated_workspace is None
+    assert prepared.isolated_workspace is not None
     assert (
         result.session.isolated_workspace
         == "[ISOLATED_REPLAY_WORKSPACE]"
@@ -199,19 +205,28 @@ def test_service_comparison_is_idempotent_and_fork_stays_offline(
 
     first = service.compare(left.run_id, right.trace_id)
     second = service.compare(left.trace_id, right.run_id)
-    fork = service.fork(
-        left.run_id,
-        ForkRequest(
-            replay_id="replay-fork",
-            source_trace_id=left.trace_id,
-            source_run_id=left.run_id,
-            changed_inputs={"task_text": "Changed offline task"},
-        ),
+    fork_request = ForkRequest(
+        replay_id="replay-fork",
+        source_trace_id=left.trace_id,
+        source_run_id=left.run_id,
+        changed_inputs={"task_text": "Changed offline task"},
     )
+    pending = store.create_replay_session(
+        ReplayRequest(
+            replay_id=fork_request.replay_id,
+            source_trace_id=fork_request.source_trace_id,
+            source_run_id=fork_request.source_run_id,
+            mode=fork_request.mode,
+            fork=True,
+            changed_inputs=fork_request.changed_inputs,
+        )
+    )
+    fork = service.fork(left.run_id, fork_request)
 
     assert first == second
     assert store.get_trace_comparison(first.comparison_id) == first
     assert fork.replay.session.status == ReplaySessionStatus.SUCCEEDED
+    assert fork.replay.session.created_at == pending.created_at
     assert fork.replay.session.provider_calls == 0
     assert fork.replay.session.network_calls == 0
     assert fork.fork_trace.trace_id != left.trace_id

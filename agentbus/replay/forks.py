@@ -115,7 +115,13 @@ class ForkManager:
         self.clock = clock
         self.live_replay_executor = live_replay_executor
 
-    def fork(self, source: Trace, request: ForkRequest) -> ForkResult:
+    def fork(
+        self,
+        source: Trace,
+        request: ForkRequest,
+        *,
+        session_created_at: datetime | None = None,
+    ) -> ForkResult:
         if (
             request.source_trace_id != source.trace_id
             or request.source_run_id != source.run_id
@@ -145,6 +151,7 @@ class ForkManager:
                     fork=True,
                     changed_inputs=request.changed_inputs,
                 ),
+                session_created_at=session_created_at,
             )
         if replay.session.status != ReplaySessionStatus.SUCCEEDED:
             raise ReplayIncompatibleError(
