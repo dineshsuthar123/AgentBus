@@ -27,6 +27,9 @@ COMMANDS = (
     "daemon",
     "control-schema",
     "worktrees",
+    "trace",
+    "replay",
+    "compare",
     "evaluate",
     "release-report",
     "version",
@@ -62,6 +65,19 @@ def main(argv: list[str] | None = None) -> int:
         return _providers_command(rest)
     if command == "worktrees":
         return _worktrees_command(rest)
+    if command in {"trace", "replay", "compare"}:
+        from agentbus.replay.commands import (
+            compare_command,
+            replay_command,
+            trace_command,
+        )
+
+        operations = {
+            "trace": trace_command,
+            "replay": replay_command,
+            "compare": compare_command,
+        }
+        return operations[command](rest)
     if command == "evaluate":
         from agentbus.eval import main as evaluation_main
 
@@ -113,6 +129,9 @@ def _root_parser() -> argparse.ArgumentParser:
         "daemon": "Inspect or safely manage local daemons.",
         "control-schema": "Export generated control-protocol artifacts.",
         "worktrees": "Inspect or explicitly clean owned worktrees.",
+        "trace": "Inspect, verify, capture, export, import, or retain traces.",
+        "replay": "Replay a run or archive without providers.",
+        "compare": "Compare two persisted execution traces.",
         "evaluate": "Run the evaluation harness.",
         "release-report": "Generate evidence-based release reports.",
         "version": "Print version metadata.",

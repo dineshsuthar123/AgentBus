@@ -264,6 +264,21 @@ class TraceReplayService:
             source,
             allow_source_content=allow_source_content,
         )
+        try:
+            fixture = RegressionFixtureSpec.model_validate(
+                imported.assertions
+            )
+        except Exception:
+            fixture = None
+        if fixture is not None and (
+            fixture.trace_id != imported.trace.trace_id
+            or fixture.run_id != imported.trace.run_id
+            or fixture.provenance_root
+            != imported.provenance.integrity_root
+        ):
+            raise TraceIntegrityError(
+                "Regression fixture identities do not match its trace."
+            )
         request = ReplayRequest(
             source_trace_id=imported.trace.trace_id,
             source_run_id=imported.trace.run_id,
@@ -274,22 +289,7 @@ class TraceReplayService:
             cancelled=self.cancelled,
         ).replay(imported.trace, request)
         fixture_report = None
-        try:
-            fixture = RegressionFixtureSpec.model_validate(
-                imported.assertions
-            )
-        except Exception:
-            fixture = None
         if fixture is not None:
-            if (
-                fixture.trace_id != imported.trace.trace_id
-                or fixture.run_id != imported.trace.run_id
-                or fixture.provenance_root
-                != imported.provenance.integrity_root
-            ):
-                raise TraceIntegrityError(
-                    "Regression fixture identities do not match its trace."
-                )
             fixture_report = evaluate_fixture_assertions(
                 fixture.assertions,
                 imported.trace,
