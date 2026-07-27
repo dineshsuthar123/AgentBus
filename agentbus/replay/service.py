@@ -7,10 +7,12 @@ from pathlib import Path
 from pydantic import Field
 
 from agentbus.config import AgentBusConfig
+from agentbus.execution.models import RunRecord, RunStatus
 from agentbus.execution.state_store import (
     ComparisonRecordNotFoundError,
     ProvenanceRecordNotFoundError,
     ReplaySessionNotFoundError,
+    RunNotFoundError,
     StateStore,
     StateStoreError,
     TraceRecordNotFoundError,
@@ -206,10 +208,12 @@ class TraceReplayService:
         *,
         allow_source_content: bool = False,
     ) -> ImportedTraceArchive:
-        return TraceArchiveImporter(self.object_store).import_archive(
+        imported = TraceArchiveImporter(self.object_store).import_archive(
             source,
             allow_source_content=allow_source_content,
         )
+        self._catalog_imported_trace(imported)
+        return imported
 
     def replay(
         self,
@@ -494,6 +498,11 @@ class TraceReplayService:
             or prepared.from_span_id is not None
         ):
             run = self.state_store.get_run(trace.run_id)
+            if run.metadata.get("imported_trace") is True:
+                raise StateStoreError(
+                    "Partial replay of an imported trace requires a "
+                    "reconstructed repository and is not available."
+                )
             source_workspace = Path(run.workspace).expanduser().resolve()
             replay_root = (
                 source_workspace.parent
@@ -504,6 +513,65 @@ class TraceReplayService:
                 replay_root / prepared.replay_id
             )
         return prepared
+
+    def _catalog_imported_trace(
+        self,
+        imported: ImportedTraceArchive,
+    ) -> None:
+        trace = imported.trace
+        try:
+            self.state_store.get_run(trace.run_id)
+        except RunNotFoundError:
+            status = {
+                TraceStatus.SUCCEEDED: RunStatus.SUCCEEDED,
+                TraceStatus.CANCELLED: RunStatus.CANCELLED,
+            }.get(trace.status, RunStatus.FAILED)
+            run = RunRecord(
+                run_id=trace.run_id,
+                original_task="Imported deterministic trace; task text omitted.",
+                workflow_type="imported-trace",
+                status=status,
+                model="captured",
+                workspace="[IMPORTED_TRACE_WORKSPACE]",
+                created_at=trace.created_at,
+                updated_at=trace.completed_at or trace.created_at,
+                completed_at=trace.completed_at,
+                graph_data={"version": 1, "tasks": []},
+                metadata={
+                    "imported_trace": True,
+                    "trace_id": trace.trace_id,
+                    "archive_root": imported.manifest.archive_root,
+                    "provenance_root": imported.provenance.integrity_root,
+                    "source_content_included": (
+                        imported.manifest.source_content_included
+                    ),
+                },
+            )
+            self.state_store.import_trace_records(
+                run,
+                trace,
+                imported.provenance,
+            )
+            return
+
+        existing = self.state_store.find_run_trace(trace.run_id)
+        if existing is None:
+            raise StateStoreError(
+                "Imported trace run ID collides with a run that has no trace."
+            )
+        if existing != trace:
+            raise StateStoreError(
+                "Imported trace identity collides with different local data."
+            )
+        provenance = self.state_store.find_run_provenance_manifest(
+            trace.run_id
+        )
+        if provenance is None:
+            self.state_store.record_provenance_manifest(imported.provenance)
+        elif provenance != imported.provenance:
+            raise StateStoreError(
+                "Imported provenance collides with different local data."
+            )
 
     def _find_provenance(
         self,

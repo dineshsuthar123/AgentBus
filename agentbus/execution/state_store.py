@@ -1036,6 +1036,178 @@ class StateStore:
                 payload or {},
             )
 
+    def import_trace_records(
+        self,
+        run: RunRecord,
+        trace: Trace,
+        manifest: ProvenanceManifest,
+    ) -> Trace:
+        """Atomically catalog one externally validated trace archive."""
+        from agentbus.trace.provenance import verify_provenance_core
+
+        if (
+            run.run_id != trace.run_id
+            or manifest.run_id != trace.run_id
+            or manifest.trace_id != trace.trace_id
+        ):
+            raise TraceRecordConflictError(
+                "Imported run, trace, and provenance identities do not match."
+            )
+        if trace.completed_at is None:
+            raise TraceRecordConflictError(
+                "Only terminal execution traces can be imported."
+            )
+        verify_provenance_core(manifest, trace)
+        now = _timestamp(utc_now())
+        with self._write_transaction() as connection:
+            if connection.execute(
+                "SELECT run_id FROM runs WHERE run_id = ?",
+                (run.run_id,),
+            ).fetchone():
+                raise TraceRecordConflictError(
+                    f"Run '{run.run_id}' already exists."
+                )
+            if connection.execute(
+                "SELECT trace_id FROM traces WHERE trace_id = ?",
+                (trace.trace_id,),
+            ).fetchone():
+                raise TraceRecordConflictError(
+                    f"Trace '{trace.trace_id}' already exists."
+                )
+
+            self._insert_run(connection, run)
+            self._insert_event(
+                connection,
+                run.run_id,
+                None,
+                "durable_run_created",
+                {
+                    "workflow_type": run.workflow_type,
+                    "status": run.status.value,
+                },
+            )
+            connection.execute(
+                """
+                INSERT INTO traces(
+                    trace_id, run_id, schema_name, schema_version,
+                    root_span_id, status, created_at, completed_at,
+                    links_json, replay_json, attributes_json, finalized,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+                """,
+                (
+                    trace.trace_id,
+                    trace.run_id,
+                    trace.schema_name,
+                    trace.schema_version,
+                    trace.root_span_id,
+                    trace.status.value,
+                    _timestamp(trace.created_at),
+                    _timestamp(trace.completed_at),
+                    _dump_json(
+                        [
+                            link.model_dump(mode="json")
+                            for link in trace.links
+                        ]
+                    ),
+                    (
+                        _dump_json(trace.replay.model_dump(mode="json"))
+                        if trace.replay is not None
+                        else None
+                    ),
+                    _dump_json(trace.attributes),
+                    now,
+                ),
+            )
+            for span in trace.spans:
+                connection.execute(
+                    """
+                    INSERT INTO trace_spans(
+                        trace_id, span_id, run_id, task_id, parent_span_id,
+                        span_type, sequence, status, started_at, ended_at,
+                        span_json, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        span.trace_id,
+                        span.span_id,
+                        span.run_id,
+                        span.task_id,
+                        span.parent_span_id,
+                        span.span_type.value,
+                        span.sequence,
+                        span.status.value,
+                        _timestamp(span.started_at),
+                        _timestamp(span.ended_at),
+                        _dump_json(span.model_dump(mode="json")),
+                        now,
+                    ),
+                )
+            for event in trace.events:
+                connection.execute(
+                    """
+                    INSERT INTO trace_events(
+                        trace_id, event_id, run_id, span_id, sequence,
+                        event_type, timestamp, event_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        event.trace_id,
+                        event.event_id,
+                        event.run_id,
+                        event.span_id,
+                        event.sequence,
+                        event.event_type,
+                        _timestamp(event.timestamp),
+                        _dump_json(event.model_dump(mode="json")),
+                    ),
+                )
+            for checkpoint in trace.checkpoints:
+                connection.execute(
+                    """
+                    INSERT INTO trace_checkpoints(
+                        trace_id, checkpoint_id, run_id, span_id, sequence,
+                        replayable, created_at, checkpoint_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        checkpoint.trace_id,
+                        checkpoint.checkpoint_id,
+                        checkpoint.run_id,
+                        checkpoint.span_id,
+                        checkpoint.sequence,
+                        int(checkpoint.replayable),
+                        _timestamp(checkpoint.created_at),
+                        _dump_json(checkpoint.model_dump(mode="json")),
+                    ),
+                )
+            _validate_persisted_trace_members(connection, trace)
+            connection.execute(
+                """
+                INSERT INTO provenance_manifests(
+                    trace_id, run_id, integrity_root, manifest_json, created_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    manifest.trace_id,
+                    manifest.run_id,
+                    manifest.integrity_root,
+                    _dump_json(manifest.model_dump(mode="json")),
+                    _timestamp(manifest.generated_at),
+                ),
+            )
+            self._insert_event(
+                connection,
+                run.run_id,
+                None,
+                "trace_archive_imported",
+                {
+                    "trace_id": trace.trace_id,
+                    "provenance_root": manifest.integrity_root,
+                },
+            )
+        return self.get_trace(trace.trace_id)
+
     def record_trace_span(self, span: TraceSpan) -> TraceSpan:
         """Persist a start or one terminal update for a trace span."""
         payload_json = _dump_json(span.model_dump(mode="json"))

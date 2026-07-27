@@ -195,6 +195,46 @@ def test_service_exports_imports_and_replays_archive_without_execution_on_import
     assert replayed.replay.session.provider_calls == 0
     assert replayed.replay.session.network_calls == 0
 
+    isolated_root = tmp_path / "isolated"
+    isolated_workspace = isolated_root / "workspace"
+    isolated_workspace.mkdir(parents=True)
+    isolated_config = AgentBusConfig(
+        workspace_dir=str(isolated_workspace),
+        state_db=str(isolated_root / "state.db"),
+    )
+    isolated_store = StateStore(isolated_config.state_database_path)
+    isolated_service = TraceReplayService(
+        isolated_config,
+        state_store=isolated_store,
+    )
+
+    isolated_import = isolated_service.import_archive(archive)
+    imported_run = isolated_store.get_run(isolated_import.trace.run_id)
+    persisted_trace = isolated_store.get_run_trace(isolated_import.trace.run_id)
+    persisted_provenance = isolated_store.get_run_provenance_manifest(
+        isolated_import.trace.run_id
+    )
+
+    assert imported_run.workspace == "[IMPORTED_TRACE_WORKSPACE]"
+    assert imported_run.metadata["imported_trace"] is True
+    assert persisted_trace == isolated_import.trace
+    assert persisted_provenance == isolated_import.provenance
+    assert isolated_store.list_replay_sessions() == []
+
+    imported_request = ReplayRequest(
+        replay_id="replay-imported",
+        source_trace_id=isolated_import.trace.trace_id,
+        source_run_id=isolated_import.trace.run_id,
+        mode=ReplayMode.OFFLINE,
+    )
+    imported_replay = isolated_service.replay(
+        isolated_import.trace.run_id,
+        imported_request,
+    )
+    assert imported_replay.session.status == ReplaySessionStatus.SUCCEEDED
+    assert imported_replay.session.provider_calls == 0
+    assert imported_replay.session.network_calls == 0
+
 
 def test_service_comparison_is_idempotent_and_fork_stays_offline(
     tmp_path,
