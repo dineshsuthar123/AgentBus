@@ -22,6 +22,9 @@ from agentbus.control.models import (
     CancellationLifecycle,
     ChangeListResponse,
     ChangeSummary,
+    ComparisonDifferenceResponse,
+    ComparisonResponse,
+    ComparisonSummaryResponse,
     DiffResponse,
     DoctorResponse,
     FileContentResponse,
@@ -42,6 +45,7 @@ from agentbus.control.models import (
     RunReportResponse,
     RunSummary,
     SchedulerResponse,
+    SpanComparisonResponse,
     SpanReplayabilityResponse,
     TaskListResponse,
     TaskSummary,
@@ -85,6 +89,7 @@ from agentbus.execution.models import (
     TaskStatus,
 )
 from agentbus.execution.state_store import (
+    ComparisonRecordNotFoundError,
     ProvenanceRecordNotFoundError,
     ReplaySessionNotFoundError,
     RunNotFoundError,
@@ -109,6 +114,7 @@ from agentbus.mcp.models import (
 from agentbus.policy import ToolApprovalDisposition, ToolPolicyEngine
 from agentbus.policy.defaults import DEFAULT_TOOL_POLICY
 from agentbus.repo.artifact_policy import ArtifactCategory
+from agentbus.replay.comparison import RunComparison
 from agentbus.replay.service import TraceReplayService
 from agentbus.replay.session import ReplaySession, ReplaySessionStatus
 from agentbus.sandbox.platform import ExecutableCatalog
@@ -1093,6 +1099,107 @@ class ControlQueryService:
             ),
             provider_calls=session.provider_calls,
             network_calls=session.network_calls,
+        )
+
+    def compare(
+        self,
+        left_identifier: str,
+        right_identifier: str,
+        *,
+        after: int = 0,
+        limit: int = 100,
+    ) -> ComparisonResponse:
+        comparison = self._trace_replay().compare(
+            left_identifier,
+            right_identifier,
+        )
+        return self.comparison_response(
+            comparison,
+            after=after,
+            limit=limit,
+        )
+
+    def comparison(
+        self,
+        comparison_id: str,
+        *,
+        after: int = 0,
+        limit: int = 100,
+    ) -> ComparisonResponse:
+        try:
+            comparison = self.store.get_trace_comparison(comparison_id)
+        except ComparisonRecordNotFoundError as exc:
+            raise ControlPlaneNotFoundError(
+                "The requested trace comparison was not found."
+            ) from exc
+        return self.comparison_response(
+            comparison,
+            after=after,
+            limit=limit,
+        )
+
+    @staticmethod
+    def comparison_response(
+        comparison: RunComparison,
+        *,
+        after: int,
+        limit: int,
+    ) -> ComparisonResponse:
+        eligible = comparison.spans[after:]
+        page = eligible[:limit]
+        return ComparisonResponse(
+            comparison_id=comparison.comparison_id,
+            left_trace_id=comparison.left_trace_id,
+            right_trace_id=comparison.right_trace_id,
+            created_at=comparison.created_at,
+            summary=ComparisonSummaryResponse(
+                unchanged_spans=comparison.summary.unchanged_spans,
+                changed_spans=comparison.summary.changed_spans,
+                added_spans=comparison.summary.added_spans,
+                removed_spans=comparison.summary.removed_spans,
+                category_counts={
+                    category.value: count
+                    for category, count in (
+                        comparison.summary.category_counts.items()
+                    )
+                },
+                final_status_changed=(
+                    comparison.summary.final_status_changed
+                ),
+                provenance_root_changed=(
+                    comparison.summary.provenance_root_changed
+                ),
+            ),
+            categories=[item.value for item in comparison.categories],
+            left_status=comparison.left_status,
+            right_status=comparison.right_status,
+            left_provenance_root=comparison.left_provenance_root,
+            right_provenance_root=comparison.right_provenance_root,
+            spans=[
+                SpanComparisonResponse(
+                    semantic_key=item.semantic_key,
+                    left_span_id=item.left_span_id,
+                    right_span_id=item.right_span_id,
+                    unchanged=item.unchanged,
+                    categories=[
+                        category.value for category in item.categories
+                    ],
+                    differences=[
+                        ComparisonDifferenceResponse(
+                            field=difference.field,
+                            left_sha256=difference.left_sha256,
+                            right_sha256=difference.right_sha256,
+                            category=difference.category.value,
+                            summary=difference.summary,
+                        )
+                        for difference in item.differences
+                    ],
+                )
+                for item in page
+            ],
+            after=after,
+            next_after=after + len(page),
+            truncated=len(eligible) > limit,
         )
 
     def _run_trace(self, run_id: str) -> Trace:

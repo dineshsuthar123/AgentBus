@@ -37,6 +37,8 @@ from agentbus.control.models import (
     ApprovalListResponse,
     CancelResponse,
     ChangeListResponse,
+    ComparisonCreateRequest,
+    ComparisonResponse,
     DiffResponse,
     DoctorResponse,
     ErrorBody,
@@ -269,6 +271,7 @@ def create_app(
                 "run-provenance",
                 "replayability",
                 "managed-offline-replay",
+                "trace-comparison",
             ],
         )
 
@@ -475,6 +478,38 @@ def create_app(
     )
     async def cancel_replay(replay_id: str) -> ReplayCancelResponse:
         return replay_supervisor.cancel(replay_id)
+
+    @app.post(
+        f"{API_PREFIX}/comparisons",
+        response_model=ComparisonResponse,
+        status_code=201,
+    )
+    async def create_comparison(
+        request: ComparisonCreateRequest,
+        after: int = Query(default=0, ge=0),
+        limit: int = Query(default=100, ge=1, le=500),
+    ) -> ComparisonResponse:
+        return query_service.compare(
+            request.left,
+            request.right,
+            after=after,
+            limit=limit,
+        )
+
+    @app.get(
+        f"{API_PREFIX}/comparisons/{{comparison_id}}",
+        response_model=ComparisonResponse,
+    )
+    async def get_comparison(
+        comparison_id: str,
+        after: int = Query(default=0, ge=0),
+        limit: int = Query(default=100, ge=1, le=500),
+    ) -> ComparisonResponse:
+        return query_service.comparison(
+            comparison_id,
+            after=after,
+            limit=limit,
+        )
 
     @app.post(f"{API_PREFIX}/runs/{{run_id}}/resume", response_model=ResumeResponse)
     async def resume_run(run_id: str) -> ResumeResponse:

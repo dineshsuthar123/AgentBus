@@ -119,11 +119,27 @@ def _auth() -> dict[str, str]:
     return {"Authorization": f"Bearer {TOKEN}"}
 
 
-def _record_control_trace(client: TestClient):
+def _record_control_trace(
+    client: TestClient,
+    *,
+    run_id: str = "run-1",
+    marker: str = "primary",
+):
     query = client.app.state.query_service
+    if run_id != "run-1":
+        query.store.create_run(
+            RunRecord(
+                run_id=run_id,
+                original_task="Compare me",
+                workflow_type="multi",
+                model="fake",
+                workspace=str(query.config.workspace_path),
+                graph_data={"version": 1, "tasks": []},
+            )
+        )
     runtime = RuntimeTrace.open(
         query.store,
-        "run-1",
+        run_id,
         object_root=query.config.trace_store_path,
         workspace=query.config.workspace_path,
     )
@@ -131,7 +147,11 @@ def _record_control_trace(client: TestClient):
         runtime.call(
             TraceSpanType.VERIFIER,
             "control verifier",
-            lambda: {"passed": True, "exit_code": 0},
+            lambda: {
+                "passed": True,
+                "exit_code": 0,
+                "marker": marker,
+            },
             attributes={
                 "workspace": str(query.config.workspace_path),
                 "authorization": "Bearer control-private-token",
@@ -145,7 +165,11 @@ def _record_control_trace(client: TestClient):
         runtime.call(
             TraceSpanType.REVIEWER,
             "control reviewer",
-            lambda: {"approved": True, "issues": []},
+            lambda: {
+                "approved": True,
+                "issues": [],
+                "marker": marker,
+            },
             capture="json",
         )
     trace = runtime.finish(status=TraceStatus.SUCCEEDED)
@@ -296,6 +320,8 @@ def test_openapi_uses_versioned_routes_and_stable_error_schema(
     assert "/api/v1/runs/{run_id}/replays" in schema["paths"]
     assert "/api/v1/replays" in schema["paths"]
     assert "/api/v1/replays/{replay_id}/cancel" in schema["paths"]
+    assert "/api/v1/comparisons" in schema["paths"]
+    assert "/api/v1/comparisons/{comparison_id}" in schema["paths"]
     assert "ErrorResponse" in schema["components"]["schemas"]
 
 
@@ -446,6 +472,54 @@ def test_managed_replay_api_requires_mode_and_runs_offline(
     assert listed.status_code == 200
     assert listed.json()["replays"][0]["replay_id"] == replay_id
     assert cancelled.json()["cancellation_requested"] is False
+
+
+def test_comparison_api_returns_bounded_hash_only_differences(
+    tmp_path: Path,
+) -> None:
+    client, _ = _client(tmp_path)
+    left, _ = _record_control_trace(client, marker="left-private-value")
+    right, _ = _record_control_trace(
+        client,
+        run_id="run-compare-right",
+        marker="right-private-value",
+    )
+
+    unauthenticated = client.post(
+        "/api/v1/comparisons",
+        json={"left": left.trace_id, "right": right.trace_id},
+    )
+    created = client.post(
+        "/api/v1/comparisons?limit=1",
+        headers=_auth(),
+        json={"left": left.run_id, "right": right.trace_id},
+    )
+
+    assert unauthenticated.status_code == 403
+    assert created.status_code == 201
+    payload = created.json()
+    assert payload["left_trace_id"] == left.trace_id
+    assert payload["right_trace_id"] == right.trace_id
+    assert payload["truncated"] is True
+    assert len(payload["spans"]) == 1
+    assert "left-private-value" not in created.text
+    assert "right-private-value" not in created.text
+
+    comparison_id = payload["comparison_id"]
+    continued = client.get(
+        f"/api/v1/comparisons/{comparison_id}",
+        params={"after": payload["next_after"], "limit": 2},
+        headers=_auth(),
+    )
+    missing = client.get(
+        "/api/v1/comparisons/missing",
+        headers=_auth(),
+    )
+
+    assert continued.status_code == 200
+    assert continued.json()["after"] == payload["next_after"]
+    assert missing.status_code == 404
+    assert missing.json()["error"]["code"] == "not_found"
 
 
 def test_tool_registry_and_policy_endpoints_are_bounded_and_diagnostic_only(

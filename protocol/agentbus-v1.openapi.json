@@ -741,6 +741,245 @@
         "title": "ChangeSummary",
         "type": "object"
       },
+      "ComparisonCreateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "left": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Left",
+            "type": "string"
+          },
+          "right": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Right",
+            "type": "string"
+          }
+        },
+        "required": [
+          "left",
+          "right"
+        ],
+        "title": "ComparisonCreateRequest",
+        "type": "object"
+      },
+      "ComparisonDifferenceResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "category": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Category",
+            "type": "string"
+          },
+          "field": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Field",
+            "type": "string"
+          },
+          "left_sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Left Sha256"
+          },
+          "right_sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Right Sha256"
+          },
+          "summary": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "field",
+          "category",
+          "summary"
+        ],
+        "title": "ComparisonDifferenceResponse",
+        "type": "object"
+      },
+      "ComparisonResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "After",
+            "type": "integer"
+          },
+          "categories": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "title": "Categories",
+            "type": "array"
+          },
+          "comparison_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Comparison Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "left_provenance_root": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Left Provenance Root"
+          },
+          "left_status": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Left Status",
+            "type": "string"
+          },
+          "left_trace_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Left Trace Id",
+            "type": "string"
+          },
+          "next_after": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Next After",
+            "type": "integer"
+          },
+          "right_provenance_root": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Right Provenance Root"
+          },
+          "right_status": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Right Status",
+            "type": "string"
+          },
+          "right_trace_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Right Trace Id",
+            "type": "string"
+          },
+          "spans": {
+            "items": {
+              "$ref": "#/components/schemas/SpanComparisonResponse"
+            },
+            "maxItems": 500,
+            "title": "Spans",
+            "type": "array"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/ComparisonSummaryResponse"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "comparison_id",
+          "left_trace_id",
+          "right_trace_id",
+          "created_at",
+          "summary",
+          "left_status",
+          "right_status",
+          "spans"
+        ],
+        "title": "ComparisonResponse",
+        "type": "object"
+      },
+      "ComparisonSummaryResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "added_spans": {
+            "minimum": 0.0,
+            "title": "Added Spans",
+            "type": "integer"
+          },
+          "category_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Category Counts",
+            "type": "object"
+          },
+          "changed_spans": {
+            "minimum": 0.0,
+            "title": "Changed Spans",
+            "type": "integer"
+          },
+          "final_status_changed": {
+            "default": false,
+            "title": "Final Status Changed",
+            "type": "boolean"
+          },
+          "provenance_root_changed": {
+            "default": false,
+            "title": "Provenance Root Changed",
+            "type": "boolean"
+          },
+          "removed_spans": {
+            "minimum": 0.0,
+            "title": "Removed Spans",
+            "type": "integer"
+          },
+          "unchanged_spans": {
+            "minimum": 0.0,
+            "title": "Unchanged Spans",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "unchanged_spans",
+          "changed_spans",
+          "added_spans",
+          "removed_spans"
+        ],
+        "title": "ComparisonSummaryResponse",
+        "type": "object"
+      },
       "DeterministicProviderOptions": {
         "additionalProperties": false,
         "properties": {
@@ -2813,6 +3052,67 @@
           "parallel_enabled"
         ],
         "title": "SchedulerResponse",
+        "type": "object"
+      },
+      "SpanComparisonResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "categories": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "title": "Categories",
+            "type": "array"
+          },
+          "differences": {
+            "items": {
+              "$ref": "#/components/schemas/ComparisonDifferenceResponse"
+            },
+            "maxItems": 256,
+            "title": "Differences",
+            "type": "array"
+          },
+          "left_span_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Left Span Id"
+          },
+          "right_span_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Right Span Id"
+          },
+          "semantic_key": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Semantic Key",
+            "type": "string"
+          },
+          "unchanged": {
+            "title": "Unchanged",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "semantic_key",
+          "unchanged"
+        ],
+        "title": "SpanComparisonResponse",
         "type": "object"
       },
       "SpanReplayabilityResponse": {
@@ -5822,6 +6122,251 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/comparisons": {
+      "post": {
+        "operationId": "create_comparison_api_v1_comparisons_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "After",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ComparisonCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComparisonResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          }
+        },
+        "summary": "Create Comparison"
+      }
+    },
+    "/api/v1/comparisons/{comparison_id}": {
+      "get": {
+        "operationId": "get_comparison_api_v1_comparisons__comparison_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "comparison_id",
+            "required": true,
+            "schema": {
+              "title": "Comparison Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "After",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComparisonResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          }
+        },
+        "summary": "Get Comparison"
+      }
+    },
     "/api/v1/doctor": {
       "get": {
         "operationId": "doctor_api_v1_doctor_get",
