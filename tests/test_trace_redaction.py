@@ -82,3 +82,13 @@ def test_home_paths_are_redacted_without_explicit_roots() -> None:
     assert "/home/alice" not in posix.value
     assert PRIVATE_PATH in windows.value
     assert PRIVATE_PATH in posix.value
+
+
+def test_home_paths_with_spaces_are_fully_redacted() -> None:
+    windows = sanitize_text(
+        r"C:\Users\Alice Example\private project\secret.txt"
+    )
+    posix = sanitize_text("/Users/Alice Example/private project/secret.txt")
+
+    assert windows.value == PRIVATE_PATH
+    assert posix.value == PRIVATE_PATH

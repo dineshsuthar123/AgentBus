@@ -45,10 +45,10 @@ _SECRET_ASSIGNMENT_PATTERN = re.compile(
 )
 _WINDOWS_HOME_PATTERN = re.compile(
     r"(?i)(?<![A-Za-z0-9])(?:[A-Z]:[\\/](?:Users|Documents and Settings)"
-    r"[\\/][^\\/\s\"']+(?:[\\/][^\s\"';,]*)?)"
+    r"[\\/][^\\/\r\n\"']+(?:[\\/][^\r\n\"';,]*)?)"
 )
 _POSIX_HOME_PATTERN = re.compile(
-    r"(?<![A-Za-z0-9])/(?:home|Users)/[^/\s\"']+(?:/[^\s\"';,]*)?"
+    r"(?<![A-Za-z0-9])/(?:home|Users)/[^/\r\n\"']+(?:/[^\r\n\"';,]*)?"
 )
 
 
