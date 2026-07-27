@@ -41,7 +41,7 @@ _BEARER_PATTERN = re.compile(
 )
 _SECRET_ASSIGNMENT_PATTERN = re.compile(
     r"(?i)\b(?:api[_-]?key|authorization|password|secret|token)"
-    r"\s*[:=]\s*(?!\[REDACTED\])\S{4,}"
+    r"\s*[:=]\s*(?:\"([^\"]{4,})\"|'([^']{4,})'|([^\s,;]{4,}))"
 )
 _WINDOWS_HOME_PATTERN = re.compile(
     r"(?i)(?<![A-Za-z0-9])(?:[A-Z]:[\\/](?:Users|Documents and Settings)"
@@ -175,11 +175,13 @@ def contains_secret_material(payload: str | bytes) -> bool:
             return True
     else:
         text = payload
-    return bool(
-        _PRIVATE_KEY_PATTERN.search(text)
-        or _BEARER_PATTERN.search(text)
-        or _SECRET_ASSIGNMENT_PATTERN.search(text)
-    )
+    if _PRIVATE_KEY_PATTERN.search(text) or _BEARER_PATTERN.search(text):
+        return True
+    for match in _SECRET_ASSIGNMENT_PATTERN.finditer(text):
+        captured = next((item for item in match.groups() if item is not None), "")
+        if not captured.startswith(REDACTED):
+            return True
+    return False
 
 
 def canonical_json_bytes(value: Any) -> bytes:

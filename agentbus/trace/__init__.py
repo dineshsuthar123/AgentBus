@@ -12,8 +12,17 @@ from agentbus.trace.errors import (
     TraceError,
     TraceIntegrityError,
     TraceNotFoundError,
+    TraceObjectTooLargeError,
     TraceRecordingError,
+    TraceSecretRejectedError,
+    TraceStorageError,
     TraceValidationError,
+)
+from agentbus.trace.blobs import (
+    BLOB_SCHEMA_VERSION,
+    BlobMetadata,
+    RetentionClass,
+    StoredBlob,
 )
 from agentbus.trace.events import TraceEventType
 from agentbus.trace.models import (
@@ -52,16 +61,22 @@ from agentbus.trace.spans import (
     trace_id_for_run,
     trace_item_id,
 )
+from agentbus.trace.storage import ContentAddressedStore
 
 __all__ = [
     "ReplayMode",
     "TRACE_SCHEMA_NAME",
     "TRACE_SCHEMA_VERSION",
     "DeterministicSequence",
+    "BLOB_SCHEMA_VERSION",
+    "BlobMetadata",
+    "ContentAddressedStore",
     "HIDDEN_CONTENT",
     "PRIVATE_PATH",
     "REDACTED",
     "RedactionMetadata",
+    "RetentionClass",
+    "StoredBlob",
     "Trace",
     "TraceArtifactReference",
     "TraceCheckpoint",
@@ -75,14 +90,17 @@ __all__ = [
     "TraceLink",
     "TraceLinkType",
     "TraceNotFoundError",
+    "TraceObjectTooLargeError",
     "TraceOutput",
     "TraceReplayMetadata",
     "TraceRecorder",
     "TraceRecordingError",
+    "TraceSecretRejectedError",
     "TraceResourceUsage",
     "TraceSpan",
     "TraceSpanType",
     "TraceStatus",
+    "TraceStorageError",
     "TraceSink",
     "TraceValidationError",
     "TraceValueReference",

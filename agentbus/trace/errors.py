@@ -21,10 +21,25 @@ class TraceRecordingError(TraceError):
     """Raised when deterministic trace recording cannot continue safely."""
 
 
+class TraceStorageError(TraceError):
+    """Raised when sanitized trace material cannot be stored safely."""
+
+
+class TraceObjectTooLargeError(TraceStorageError):
+    """Raised when a trace object exceeds its configured storage bound."""
+
+
+class TraceSecretRejectedError(TraceStorageError):
+    """Raised when unredacted secret-classified material reaches storage."""
+
+
 __all__ = [
     "TraceError",
     "TraceIntegrityError",
     "TraceNotFoundError",
+    "TraceObjectTooLargeError",
     "TraceRecordingError",
+    "TraceSecretRejectedError",
+    "TraceStorageError",
     "TraceValidationError",
 ]
