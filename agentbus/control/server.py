@@ -19,6 +19,7 @@ from agentbus.control.lifecycle import (
     bind_loopback_socket,
 )
 from agentbus.control.models import DaemonRegistryEntry, ReadyHandshake
+from agentbus.control.replay_supervisor import BackgroundReplaySupervisor
 from agentbus.control.registry import (
     DaemonRegistry,
     executable_identity,
@@ -58,6 +59,7 @@ def serve(
     query = ControlQueryService(config, store)
     backend = AgentBusRunBackend(config, store)
     supervisor = BackgroundRunSupervisor(backend)
+    replay_supervisor = BackgroundReplaySupervisor(query)
     context = ControlAppContext(
         daemon_id=daemon_id,
         host=normalized_host,
@@ -69,6 +71,7 @@ def serve(
         token=token,
         query_service=query,
         supervisor=supervisor,
+        replay_supervisor=replay_supervisor,
         context=context,
     )
     entry = DaemonRegistryEntry(
@@ -101,7 +104,10 @@ def serve(
         server,
         app,
         idle_timeout,
-        has_active_work=supervisor.has_active_runs,
+        has_active_work=lambda: (
+            supervisor.has_active_runs()
+            or replay_supervisor.has_active_replays()
+        ),
     )
     try:
         heartbeat.start()
@@ -131,6 +137,7 @@ def serve(
     finally:
         idle.stop()
         heartbeat.stop()
+        replay_supervisor.shutdown(wait=True)
         supervisor.shutdown(wait=True)
         registry.remove(daemon_id)
         listener.close()

@@ -50,6 +50,11 @@ from agentbus.control.models import (
     ProviderListResponse,
     ProviderSummary,
     ProvenanceResponse,
+    ReplayAcceptedResponse,
+    ReplayCancelResponse,
+    ReplayCreateRequest,
+    ReplayListResponse,
+    ReplaySessionResponse,
     ResumeResponse,
     RunAcceptedResponse,
     RunActionRequest,
@@ -78,12 +83,14 @@ from agentbus.control.models import (
     WorkspaceValidationResponse,
     WorktreeListResponse,
 )
+from agentbus.control.replay_supervisor import BackgroundReplaySupervisor
 from agentbus.control.services import ControlQueryService
 from agentbus.control.supervisor import BackgroundRunSupervisor
 from agentbus.execution.models import ApprovalOutcome
 from agentbus.execution.state_store import StateStoreError
 from agentbus.git.repository import GitRepositoryError
 from agentbus.mcp.server import AgentBusMcpServer
+from agentbus.replay.session import ReplaySessionStatus
 from agentbus.security.redaction import sanitize_json
 from agentbus.tools.descriptors import builtin_descriptors
 
@@ -105,8 +112,12 @@ def create_app(
     query_service: ControlQueryService,
     supervisor: BackgroundRunSupervisor,
     context: ControlAppContext,
+    replay_supervisor: BackgroundReplaySupervisor | None = None,
     shutdown_supervisor: bool = True,
 ):
+    replay_supervisor = replay_supervisor or BackgroundReplaySupervisor(
+        query_service
+    )
     authenticator = BearerAuthenticator(token)
     event_reader = ControlEventReader(query_service.store)
     mcp_server = AgentBusMcpServer(
@@ -122,6 +133,7 @@ def create_app(
     async def lifespan(_app):
         yield
         if shutdown_supervisor:
+            replay_supervisor.shutdown(wait=True)
             supervisor.shutdown(wait=True)
 
     app = FastAPI(
@@ -143,6 +155,7 @@ def create_app(
     app.state.control_context = context
     app.state.query_service = query_service
     app.state.supervisor = supervisor
+    app.state.replay_supervisor = replay_supervisor
     app.state.mcp_server = mcp_server
     app.state.last_activity = time.monotonic()
 
@@ -255,6 +268,7 @@ def create_app(
                 "execution-traces",
                 "run-provenance",
                 "replayability",
+                "managed-offline-replay",
             ],
         )
 
@@ -418,6 +432,49 @@ def create_app(
             after_sequence=after,
             limit=limit,
         )
+
+    @app.post(
+        f"{API_PREFIX}/runs/{{run_id}}/replays",
+        response_model=ReplayAcceptedResponse,
+        status_code=202,
+    )
+    async def create_replay(
+        run_id: str,
+        request: ReplayCreateRequest,
+    ) -> ReplayAcceptedResponse:
+        return replay_supervisor.submit(run_id, request)
+
+    @app.get(f"{API_PREFIX}/replays", response_model=ReplayListResponse)
+    async def list_replays(
+        source_trace_id: str | None = None,
+        status: str | None = Query(
+            default=None,
+            pattern=(
+                "^(pending|running|succeeded|failed|cancelled|"
+                "incompatible|awaiting_input)$"
+            ),
+        ),
+        limit: int = Query(default=100, ge=1, le=500),
+    ) -> ReplayListResponse:
+        return query_service.replays(
+            source_trace_id=source_trace_id,
+            status=ReplaySessionStatus(status) if status is not None else None,
+            limit=limit,
+        )
+
+    @app.get(
+        f"{API_PREFIX}/replays/{{replay_id}}",
+        response_model=ReplaySessionResponse,
+    )
+    async def get_replay(replay_id: str) -> ReplaySessionResponse:
+        return query_service.replay(replay_id)
+
+    @app.post(
+        f"{API_PREFIX}/replays/{{replay_id}}/cancel",
+        response_model=ReplayCancelResponse,
+    )
+    async def cancel_replay(replay_id: str) -> ReplayCancelResponse:
+        return replay_supervisor.cancel(replay_id)
 
     @app.post(f"{API_PREFIX}/runs/{{run_id}}/resume", response_model=ResumeResponse)
     async def resume_run(run_id: str) -> ResumeResponse:

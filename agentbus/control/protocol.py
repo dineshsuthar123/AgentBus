@@ -20,6 +20,7 @@ def build_openapi() -> dict[str, Any]:
         token="schema-only-token-with-at-least-thirty-two-bytes",
         query_service=query,
         supervisor=_SchemaSupervisor(),
+        replay_supervisor=_SchemaReplaySupervisor(),
         context=ControlAppContext(
             daemon_id="schema",
             host="127.0.0.1",
@@ -226,5 +227,10 @@ class _SchemaQuery:
 
 
 class _SchemaSupervisor:
+    def shutdown(self, *, wait: bool = True) -> None:
+        return None
+
+
+class _SchemaReplaySupervisor:
     def shutdown(self, *, wait: bool = True) -> None:
         return None

@@ -98,6 +98,22 @@ def test_replay_protocol_requires_explicit_consistent_mode() -> None:
             mode="offline",
             changed_inputs={"task": "changed"},
         )
+    with pytest.raises(ValidationError, match="at least one"):
+        ReplayCreateRequest(mode="offline", fork=True)
+    with pytest.raises(ValidationError, match="live_provider_consent"):
+        ReplayCreateRequest(
+            mode="offline",
+            fork=True,
+            changed_inputs={"model_route": {"provider": "azure"}},
+        )
+
+    consented = ReplayCreateRequest(
+        mode="offline",
+        fork=True,
+        changed_inputs={"model_route": {"provider": "azure"}},
+        live_provider_consent=True,
+    )
+    assert consented.live_provider_consent is True
 
 
 def test_committed_protocol_artifacts_are_fresh() -> None:

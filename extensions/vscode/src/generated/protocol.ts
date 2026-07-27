@@ -370,6 +370,7 @@ export interface ReplayAcceptedResponse {
   "isolated"?: boolean;
   "span_results"?: Array<ReplaySpanResultResponse>;
   "span_results_truncated"?: boolean;
+  "diagnostics_truncated"?: boolean;
   "substitutions"?: Array<string>;
   "missing_inputs"?: Array<string>;
   "policy_drift"?: Array<string>;
@@ -417,6 +418,7 @@ export interface ReplaySessionResponse {
   "isolated"?: boolean;
   "span_results"?: Array<ReplaySpanResultResponse>;
   "span_results_truncated"?: boolean;
+  "diagnostics_truncated"?: boolean;
   "substitutions"?: Array<string>;
   "missing_inputs"?: Array<string>;
   "policy_drift"?: Array<string>;

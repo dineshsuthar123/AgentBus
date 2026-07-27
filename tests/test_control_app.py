@@ -293,6 +293,9 @@ def test_openapi_uses_versioned_routes_and_stable_error_schema(
     assert "/api/v1/runs/{run_id}/trace/spans" in schema["paths"]
     assert "/api/v1/runs/{run_id}/provenance" in schema["paths"]
     assert "/api/v1/runs/{run_id}/replayability" in schema["paths"]
+    assert "/api/v1/runs/{run_id}/replays" in schema["paths"]
+    assert "/api/v1/replays" in schema["paths"]
+    assert "/api/v1/replays/{replay_id}/cancel" in schema["paths"]
     assert "ErrorResponse" in schema["components"]["schemas"]
 
 
@@ -396,6 +399,53 @@ def test_trace_inspection_returns_safe_not_found_and_validates_page_bounds(
     assert missing.json()["error"]["code"] == "not_found"
     assert "SQLite" not in missing.text
     assert oversized.status_code == 422
+
+
+def test_managed_replay_api_requires_mode_and_runs_offline(
+    tmp_path: Path,
+) -> None:
+    client, _ = _client(tmp_path)
+    trace, _manifest = _record_control_trace(client)
+    replay_supervisor = client.app.state.replay_supervisor
+    try:
+        missing_mode = client.post(
+            "/api/v1/runs/run-1/replays",
+            headers=_auth(),
+            json={},
+        )
+        accepted = client.post(
+            "/api/v1/runs/run-1/replays",
+            headers=_auth(),
+            json={"mode": "offline"},
+        )
+        assert accepted.status_code == 202
+        replay_id = accepted.json()["replay_id"]
+        terminal = replay_supervisor.wait(replay_id, timeout=5)
+        inspected = client.get(
+            f"/api/v1/replays/{replay_id}",
+            headers=_auth(),
+        )
+        listed = client.get(
+            "/api/v1/replays",
+            params={"source_trace_id": trace.trace_id, "limit": 1},
+            headers=_auth(),
+        )
+        cancelled = client.post(
+            f"/api/v1/replays/{replay_id}/cancel",
+            headers=_auth(),
+        )
+    finally:
+        replay_supervisor.shutdown()
+
+    assert missing_mode.status_code == 422
+    assert terminal.status == "succeeded"
+    assert inspected.status_code == 200
+    assert inspected.json()["provider_calls"] == 0
+    assert inspected.json()["network_calls"] == 0
+    assert "isolated_workspace" not in inspected.json()
+    assert listed.status_code == 200
+    assert listed.json()["replays"][0]["replay_id"] == replay_id
+    assert cancelled.json()["cancellation_requested"] is False
 
 
 def test_tool_registry_and_policy_endpoints_are_bounded_and_diagnostic_only(

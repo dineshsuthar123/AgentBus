@@ -1680,6 +1680,578 @@
         "title": "ProviderSummary",
         "type": "object"
       },
+      "ReplayAcceptedResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "changed_input_names": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 1024,
+            "title": "Changed Input Names",
+            "type": "array"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "diagnostics_truncated": {
+            "default": false,
+            "title": "Diagnostics Truncated",
+            "type": "boolean"
+          },
+          "failure_category": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Category"
+          },
+          "failure_message": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Message"
+          },
+          "fork": {
+            "default": false,
+            "title": "Fork",
+            "type": "boolean"
+          },
+          "from_checkpoint_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Checkpoint Id"
+          },
+          "from_span_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Span Id"
+          },
+          "isolated": {
+            "default": false,
+            "title": "Isolated",
+            "type": "boolean"
+          },
+          "missing_inputs": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 4096,
+            "title": "Missing Inputs",
+            "type": "array"
+          },
+          "mode": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Mode",
+            "type": "string"
+          },
+          "network_calls": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Network Calls",
+            "type": "integer"
+          },
+          "policy_drift": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 1024,
+            "title": "Policy Drift",
+            "type": "array"
+          },
+          "provider_calls": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Provider Calls",
+            "type": "integer"
+          },
+          "replay_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Replay Id",
+            "type": "string"
+          },
+          "source_run_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Source Run Id",
+            "type": "string"
+          },
+          "source_trace_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Source Trace Id",
+            "type": "string"
+          },
+          "span_results": {
+            "items": {
+              "$ref": "#/components/schemas/ReplaySpanResultResponse"
+            },
+            "maxItems": 500,
+            "title": "Span Results",
+            "type": "array"
+          },
+          "span_results_truncated": {
+            "default": false,
+            "title": "Span Results Truncated",
+            "type": "boolean"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Status",
+            "type": "string"
+          },
+          "substitutions": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 4096,
+            "title": "Substitutions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "replay_id",
+          "source_trace_id",
+          "source_run_id",
+          "mode",
+          "status",
+          "created_at"
+        ],
+        "title": "ReplayAcceptedResponse",
+        "type": "object"
+      },
+      "ReplayCancelResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "cancellation_requested": {
+            "title": "Cancellation Requested",
+            "type": "boolean"
+          },
+          "replay_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Replay Id",
+            "type": "string"
+          },
+          "status": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "replay_id",
+          "status",
+          "cancellation_requested"
+        ],
+        "title": "ReplayCancelResponse",
+        "type": "object"
+      },
+      "ReplayCreateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "changed_inputs": {
+            "additionalProperties": true,
+            "title": "Changed Inputs",
+            "type": "object"
+          },
+          "fork": {
+            "default": false,
+            "title": "Fork",
+            "type": "boolean"
+          },
+          "from_checkpoint_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Checkpoint Id"
+          },
+          "from_span_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Span Id"
+          },
+          "live_provider_consent": {
+            "default": false,
+            "title": "Live Provider Consent",
+            "type": "boolean"
+          },
+          "mode": {
+            "enum": [
+              "strict",
+              "offline",
+              "verify",
+              "simulate"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "tool_strategies": {
+            "additionalProperties": {
+              "enum": [
+                "reuse_captured",
+                "rerun_sandbox",
+                "simulate_mutation",
+                "reject"
+              ],
+              "type": "string"
+            },
+            "title": "Tool Strategies",
+            "type": "object"
+          }
+        },
+        "required": [
+          "mode"
+        ],
+        "title": "ReplayCreateRequest",
+        "type": "object"
+      },
+      "ReplayListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "replays": {
+            "items": {
+              "$ref": "#/components/schemas/ReplaySessionResponse"
+            },
+            "maxItems": 500,
+            "title": "Replays",
+            "type": "array"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "replays",
+          "total"
+        ],
+        "title": "ReplayListResponse",
+        "type": "object"
+      },
+      "ReplaySessionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "changed_input_names": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 1024,
+            "title": "Changed Input Names",
+            "type": "array"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "diagnostics_truncated": {
+            "default": false,
+            "title": "Diagnostics Truncated",
+            "type": "boolean"
+          },
+          "failure_category": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Category"
+          },
+          "failure_message": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Message"
+          },
+          "fork": {
+            "default": false,
+            "title": "Fork",
+            "type": "boolean"
+          },
+          "from_checkpoint_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Checkpoint Id"
+          },
+          "from_span_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Span Id"
+          },
+          "isolated": {
+            "default": false,
+            "title": "Isolated",
+            "type": "boolean"
+          },
+          "missing_inputs": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 4096,
+            "title": "Missing Inputs",
+            "type": "array"
+          },
+          "mode": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Mode",
+            "type": "string"
+          },
+          "network_calls": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Network Calls",
+            "type": "integer"
+          },
+          "policy_drift": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 1024,
+            "title": "Policy Drift",
+            "type": "array"
+          },
+          "provider_calls": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Provider Calls",
+            "type": "integer"
+          },
+          "replay_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Replay Id",
+            "type": "string"
+          },
+          "source_run_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Source Run Id",
+            "type": "string"
+          },
+          "source_trace_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Source Trace Id",
+            "type": "string"
+          },
+          "span_results": {
+            "items": {
+              "$ref": "#/components/schemas/ReplaySpanResultResponse"
+            },
+            "maxItems": 500,
+            "title": "Span Results",
+            "type": "array"
+          },
+          "span_results_truncated": {
+            "default": false,
+            "title": "Span Results Truncated",
+            "type": "boolean"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Status",
+            "type": "string"
+          },
+          "substitutions": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 4096,
+            "title": "Substitutions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "replay_id",
+          "source_trace_id",
+          "source_run_id",
+          "mode",
+          "status",
+          "created_at"
+        ],
+        "title": "ReplaySessionResponse",
+        "type": "object"
+      },
+      "ReplaySpanResultResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Action",
+            "type": "string"
+          },
+          "drift": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 256,
+            "title": "Drift",
+            "type": "array"
+          },
+          "output_sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Sha256"
+          },
+          "span_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Span Id",
+            "type": "string"
+          },
+          "succeeded": {
+            "title": "Succeeded",
+            "type": "boolean"
+          },
+          "summary": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "span_id",
+          "action",
+          "succeeded",
+          "summary"
+        ],
+        "title": "ReplaySpanResultResponse",
+        "type": "object"
+      },
       "ResumeResponse": {
         "additionalProperties": false,
         "properties": {
@@ -6089,6 +6661,339 @@
         "summary": "Check Provider"
       }
     },
+    "/api/v1/replays": {
+      "get": {
+        "operationId": "list_replays_api_v1_replays_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "source_trace_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Source Trace Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^(pending|running|succeeded|failed|cancelled|incompatible|awaiting_input)$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReplayListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          }
+        },
+        "summary": "List Replays"
+      }
+    },
+    "/api/v1/replays/{replay_id}": {
+      "get": {
+        "operationId": "get_replay_api_v1_replays__replay_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "replay_id",
+            "required": true,
+            "schema": {
+              "title": "Replay Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReplaySessionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          }
+        },
+        "summary": "Get Replay"
+      }
+    },
+    "/api/v1/replays/{replay_id}/cancel": {
+      "post": {
+        "operationId": "cancel_replay_api_v1_replays__replay_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "replay_id",
+            "required": true,
+            "schema": {
+              "title": "Replay Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReplayCancelResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          }
+        },
+        "summary": "Cancel Replay"
+      }
+    },
     "/api/v1/runs": {
       "get": {
         "operationId": "list_runs_api_v1_runs_get",
@@ -7498,6 +8403,115 @@
           }
         },
         "summary": "Run Replayability"
+      }
+    },
+    "/api/v1/runs/{run_id}/replays": {
+      "post": {
+        "operationId": "create_replay_api_v1_runs__run_id__replays_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplayCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReplayAcceptedResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          }
+        },
+        "summary": "Create Replay"
       }
     },
     "/api/v1/runs/{run_id}/report": {

@@ -574,6 +574,45 @@ class ReplayCreateRequest(ProtocolModel):
             raise ValueError("choose either from_span_id or from_checkpoint_id")
         if self.changed_inputs and not self.fork:
             raise ValueError("changed_inputs require fork=true")
+        if self.fork and not self.changed_inputs:
+            raise ValueError("fork=true requires at least one changed input")
+        if self.fork and (
+            self.from_span_id is not None
+            or self.from_checkpoint_id is not None
+            or self.tool_strategies
+        ):
+            raise ValueError(
+                "fork replay cannot select a checkpoint, span, or tool strategy"
+            )
+        allowed_changes = {
+            "approval_decisions",
+            "deterministic_provider_profile",
+            "model_route",
+            "policy_configuration",
+            "resource_budgets",
+            "retry_limit",
+            "selected_source_patch",
+            "task_text",
+            "tool_response",
+        }
+        unknown = sorted(set(self.changed_inputs) - allowed_changes)
+        if unknown:
+            raise ValueError(
+                "unsupported fork input changes: " + ", ".join(unknown)
+            )
+        route = self.changed_inputs.get("model_route")
+        live_provider = (
+            str(route.get("provider", "")).lower()
+            if isinstance(route, dict)
+            else ""
+        )
+        if (
+            live_provider in {"azure", "ollama"}
+            and not self.live_provider_consent
+        ):
+            raise ValueError(
+                "a live provider route requires explicit live_provider_consent"
+            )
         return self
 
 
@@ -605,6 +644,7 @@ class ReplaySessionResponse(ProtocolModel):
         max_length=500,
     )
     span_results_truncated: bool = False
+    diagnostics_truncated: bool = False
     substitutions: list[str] = Field(default_factory=list, max_length=4096)
     missing_inputs: list[str] = Field(default_factory=list, max_length=4096)
     policy_drift: list[str] = Field(default_factory=list, max_length=1024)

@@ -2216,6 +2216,11 @@
           "title": "Created At",
           "type": "string"
         },
+        "diagnostics_truncated": {
+          "default": false,
+          "title": "Diagnostics Truncated",
+          "type": "boolean"
+        },
         "failure_category": {
           "anyOf": [
             {
@@ -2541,6 +2546,11 @@
           "format": "date-time",
           "title": "Created At",
           "type": "string"
+        },
+        "diagnostics_truncated": {
+          "default": false,
+          "title": "Diagnostics Truncated",
+          "type": "boolean"
         },
         "failure_category": {
           "anyOf": [

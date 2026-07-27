@@ -34,6 +34,9 @@ from agentbus.control.models import (
     ProvenanceResponse,
     ProvenanceToolSummary,
     ProviderSummary,
+    ReplayListResponse,
+    ReplaySessionResponse,
+    ReplaySpanResultResponse,
     RunReplayabilityResponse,
     RunListResponse,
     RunReportResponse,
@@ -83,6 +86,7 @@ from agentbus.execution.models import (
 )
 from agentbus.execution.state_store import (
     ProvenanceRecordNotFoundError,
+    ReplaySessionNotFoundError,
     RunNotFoundError,
     StateStore,
     TaskNotFoundError,
@@ -106,6 +110,7 @@ from agentbus.policy import ToolApprovalDisposition, ToolPolicyEngine
 from agentbus.policy.defaults import DEFAULT_TOOL_POLICY
 from agentbus.repo.artifact_policy import ArtifactCategory
 from agentbus.replay.service import TraceReplayService
+from agentbus.replay.session import ReplaySession, ReplaySessionStatus
 from agentbus.sandbox.platform import ExecutableCatalog
 from agentbus.security.redaction import (
     redact_text,
@@ -995,6 +1000,99 @@ class ControlQueryService:
                 else after_sequence
             ),
             truncated=truncated,
+        )
+
+    def replays(
+        self,
+        *,
+        source_trace_id: str | None = None,
+        status: ReplaySessionStatus | None = None,
+        limit: int = 100,
+    ) -> ReplayListResponse:
+        sessions = self.store.list_replay_sessions(
+            source_trace_id=source_trace_id,
+            status=status,
+            limit=limit + 1,
+        )
+        truncated = len(sessions) > limit
+        page = sessions[:limit]
+        return ReplayListResponse(
+            replays=[
+                self.replay_session_response(session) for session in page
+            ],
+            total=len(page),
+            truncated=truncated,
+        )
+
+    def replay(self, replay_id: str) -> ReplaySessionResponse:
+        try:
+            session = self.store.get_replay_session(replay_id)
+        except ReplaySessionNotFoundError as exc:
+            raise ControlPlaneNotFoundError(
+                "The requested replay session was not found."
+            ) from exc
+        return self.replay_session_response(session)
+
+    def replay_session_response(
+        self,
+        session: ReplaySession,
+    ) -> ReplaySessionResponse:
+        span_results = session.span_results
+        substitutions = session.substitutions[:4096]
+        missing_inputs = session.missing_inputs[:4096]
+        policy_drift = session.policy_drift[:1024]
+        return ReplaySessionResponse(
+            replay_id=session.replay_id,
+            source_trace_id=session.source_trace_id,
+            source_run_id=session.source_run_id,
+            mode=session.mode.value,
+            status=session.status.value,
+            created_at=session.created_at,
+            started_at=session.started_at,
+            completed_at=session.completed_at,
+            from_span_id=session.from_span_id,
+            from_checkpoint_id=session.from_checkpoint_id,
+            fork=session.fork,
+            changed_input_names=session.changed_input_names,
+            isolated=session.isolated_workspace is not None,
+            span_results=[
+                ReplaySpanResultResponse(
+                    span_id=item.span_id,
+                    action=item.action.value,
+                    succeeded=item.succeeded,
+                    summary=str(self._safe_trace_value(item.summary)),
+                    output_sha256=item.output_sha256,
+                    drift=[
+                        str(self._safe_trace_value(value))
+                        for value in item.drift
+                    ],
+                )
+                for item in span_results[:500]
+            ],
+            span_results_truncated=len(span_results) > 500,
+            diagnostics_truncated=(
+                len(session.substitutions) > len(substitutions)
+                or len(session.missing_inputs) > len(missing_inputs)
+                or len(session.policy_drift) > len(policy_drift)
+            ),
+            substitutions=substitutions,
+            missing_inputs=missing_inputs,
+            policy_drift=[
+                str(self._safe_trace_value(value))
+                for value in policy_drift
+            ],
+            failure_category=(
+                str(self._safe_trace_value(session.failure_category))
+                if session.failure_category is not None
+                else None
+            ),
+            failure_message=(
+                str(self._safe_trace_value(session.failure_message))
+                if session.failure_message is not None
+                else None
+            ),
+            provider_calls=session.provider_calls,
+            network_calls=session.network_calls,
         )
 
     def _run_trace(self, run_id: str) -> Trace:
