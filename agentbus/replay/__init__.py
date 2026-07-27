@@ -78,6 +78,11 @@ from agentbus.replay.session import (
     ReplaySpanResult,
     ToolReplayStrategy,
 )
+from agentbus.replay.service import (
+    ArchiveReplayResult,
+    TraceReplayService,
+    TraceVerificationReport,
+)
 from agentbus.trace.provenance import ReplayabilityLevel
 from agentbus.trace.models import ReplayMode
 from agentbus.replay.substitutions import (
@@ -107,6 +112,7 @@ __all__ = [
     "REGRESSION_FIXTURE_FORMAT",
     "REGRESSION_FIXTURE_SCHEMA_VERSION",
     "CapturedRegressionFixture",
+    "ArchiveReplayResult",
     "CheckpointKind",
     "CheckpointManager",
     "ComparisonSummary",
@@ -171,6 +177,8 @@ __all__ = [
     "evaluate_fixture_assertions",
     "prompt_fingerprint",
     "ToolReplayStrategy",
+    "TraceReplayService",
+    "TraceVerificationReport",
     "TOOL_ENVELOPE_MEDIA_TYPE",
     "TOOL_ENVELOPE_VERSION",
     "ToolReplayAssessment",

@@ -1459,6 +1459,13 @@ class StateStore:
             ).fetchall()
         return [self.get_trace(row["trace_id"]) for row in rows]
 
+    def count_traces(self) -> int:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS trace_count FROM traces"
+            ).fetchone()
+        return int(row["trace_count"])
+
     @_domain_decode("trace span")
     def get_trace_span(self, trace_id: str, span_id: str) -> TraceSpan:
         _require_id(trace_id, "trace")

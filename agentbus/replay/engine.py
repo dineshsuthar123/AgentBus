@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable, Mapping
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -89,21 +90,28 @@ class ReplayEngine:
         self.cancelled = cancelled or (lambda: False)
         self.clock = clock
 
-    def replay(self, trace: Trace, request: ReplayRequest) -> ReplayResult:
+    def replay(
+        self,
+        trace: Trace,
+        request: ReplayRequest,
+        *,
+        session_created_at: datetime | None = None,
+    ) -> ReplayResult:
         self._validate_request(trace, request)
         catalog = ReplayInputCatalog(trace, self.store)
         classification = ReplayabilityClassifier().classify_trace(
             trace,
             available_object_hashes=catalog.available_hashes,
         )
+        created_at = session_created_at or self.clock()
         session = ReplaySession(
             replay_id=request.replay_id,
             source_trace_id=trace.trace_id,
             source_run_id=trace.run_id,
             mode=request.mode,
             status=ReplaySessionStatus.RUNNING,
-            created_at=self.clock(),
-            started_at=self.clock(),
+            created_at=created_at,
+            started_at=max(created_at, self.clock()),
             from_span_id=request.from_span_id,
             from_checkpoint_id=request.from_checkpoint_id,
             fork=request.fork,

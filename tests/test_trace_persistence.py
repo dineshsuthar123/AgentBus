@@ -174,6 +174,7 @@ def test_trace_listing_is_bounded_filtered_and_newest_first(tmp_path) -> None:
         "run-failed",
         "run-success",
     ]
+    assert store.count_traces() == 2
     assert store.list_traces(status=TraceStatus.FAILED) == [traces[1]]
     with pytest.raises(Exception, match="between 1 and 1000"):
         store.list_traces(limit=1_001)
