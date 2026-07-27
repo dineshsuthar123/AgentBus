@@ -17,6 +17,7 @@ from agentbus.policy import (
     ToolPolicyEngine,
     decide_tool_approval,
 )
+from agentbus.replay.tools import load_tool_envelope
 from agentbus.sandbox.platform import ExecutableCatalog
 from agentbus.tools import builtin_tool_registry
 from agentbus.tools.budget import ToolBudgetExceeded
@@ -26,6 +27,7 @@ from agentbus.tools.capabilities import (
     requires_process_slot,
 )
 from agentbus.tools.dispatcher import ToolDispatcher
+from agentbus.trace import RuntimeTrace, TraceSpanType, TraceStatus
 from agentbus.tools.protocol import (
     ToolInvocation,
     ToolInvocationContext,
@@ -67,6 +69,118 @@ def test_dispatcher_executes_and_audits_real_managed_mutation(
     )
     assert event_types.index("tool_invocation_started") < event_types.index(
         "tool_succeeded"
+    )
+
+
+def test_dispatcher_records_replayable_tool_and_policy_spans(
+    tmp_path: Path,
+) -> None:
+    dispatcher, store = _runtime(tmp_path)
+    runtime_trace = RuntimeTrace.open(
+        store,
+        "run-1",
+        object_root=tmp_path / "trace-objects",
+        workspace=tmp_path,
+    )
+    dispatcher.runtime_trace = runtime_trace
+    invocation = _invocation(
+        dispatcher,
+        tmp_path,
+        "filesystem.create",
+        {"path": "src/traced.py", "content": "value = 1\n"},
+    )
+
+    with runtime_trace.scope(runtime_trace.root_context):
+        response = dispatcher.dispatch(invocation)
+    runtime_trace.finish(status=TraceStatus.SUCCEEDED)
+    trace = store.get_run_trace("run-1")
+    tool_span = next(
+        span
+        for span in trace.spans
+        if span.span_type == TraceSpanType.TOOL_INVOCATION
+    )
+    policy_span = next(
+        span
+        for span in trace.spans
+        if span.span_type == TraceSpanType.TOOL_POLICY
+    )
+    envelope = load_tool_envelope(
+        runtime_trace.object_store,
+        tool_span.output_references[0].sha256,
+    )
+
+    assert response.result is not None
+    assert policy_span.parent_span_id == tool_span.span_id
+    assert policy_span.policy_decision_references
+    assert tool_span.status == TraceStatus.SUCCEEDED
+    assert tool_span.input_references
+    assert tool_span.output_references
+    assert tool_span.attributes["tool_effect"] == "filesystem_mutation"
+    assert envelope.result.status == ToolInvocationStatus.SUCCEEDED
+    assert str(tmp_path) not in runtime_trace.object_store.get(
+        tool_span.output_references[0].sha256
+    ).data.decode()
+
+
+def test_dispatcher_records_approval_wait_and_approved_resume(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "obsolete.py"
+    target.write_text("obsolete\n", encoding="utf-8")
+    digest = hashlib.sha256(target.read_bytes()).hexdigest()
+    dispatcher, store = _runtime(tmp_path)
+    runtime_trace = RuntimeTrace.open(
+        store,
+        "run-1",
+        object_root=tmp_path / "trace-objects",
+        workspace=tmp_path,
+    )
+    dispatcher.runtime_trace = runtime_trace
+    invocation = _invocation(
+        dispatcher,
+        tmp_path,
+        "filesystem.delete",
+        {"path": "obsolete.py", "expected_sha256": digest},
+    )
+
+    with runtime_trace.scope(runtime_trace.root_context):
+        pending = dispatcher.dispatch(invocation)
+        grant = decide_tool_approval(
+            pending.approval_request,
+            invocation,
+            disposition=ToolApprovalDisposition.APPROVED,
+            reason="Delete obsolete source",
+        )
+        completed = dispatcher.dispatch(invocation, approval=grant)
+    runtime_trace.finish(status=TraceStatus.SUCCEEDED)
+    trace = store.get_run_trace("run-1")
+    tool_spans = [
+        span
+        for span in trace.spans
+        if span.span_type == TraceSpanType.TOOL_INVOCATION
+    ]
+    waits = [
+        span
+        for span in trace.spans
+        if span.span_type == TraceSpanType.APPROVAL_WAIT
+    ]
+    approved_envelope = load_tool_envelope(
+        runtime_trace.object_store,
+        tool_spans[1].output_references[0].sha256,
+    )
+
+    assert completed.result.status == ToolInvocationStatus.SUCCEEDED
+    assert [span.status for span in tool_spans] == [
+        TraceStatus.INTERRUPTED,
+        TraceStatus.SUCCEEDED,
+    ]
+    assert len(waits) == 1
+    assert waits[0].approval_references == [
+        pending.approval_request.approval_id
+    ]
+    assert approved_envelope.approval is not None
+    assert approved_envelope.approval.approval_id == (
+        pending.approval_request.approval_id
     )
 
 

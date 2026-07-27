@@ -267,6 +267,7 @@ class TraceRecorder:
         *,
         status: TraceStatus = TraceStatus.SUCCEEDED,
         failure: TraceFailure | None = None,
+        input_references: list[TraceInput] | None = None,
         output_references: list[TraceOutput] | None = None,
         policy_decision_references: list[str] | None = None,
         approval_references: list[str] | None = None,
@@ -296,6 +297,11 @@ class TraceRecorder:
                     "ended_at": completed_at,
                     "status": status,
                     "failure": failure,
+                    "input_references": (
+                        span.input_references
+                        if input_references is None
+                        else input_references
+                    ),
                     "output_references": (
                         span.output_references
                         if output_references is None

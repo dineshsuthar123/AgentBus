@@ -21,6 +21,14 @@ from agentbus.policy import (
 )
 from agentbus.sandbox.errors import ProcessSupervisionError
 from agentbus.security.redaction import redact_text
+from agentbus.trace import (
+    RuntimeTrace,
+    TraceArtifactReference,
+    TraceFailure,
+    TraceResourceUsage,
+    TraceSpanType,
+    TraceStatus,
+)
 from agentbus.tools.budget import (
     ToolBudgetExceeded,
     ToolBudgetLedger,
@@ -37,6 +45,7 @@ from agentbus.tools.interfaces import ToolExecutionOutput
 from agentbus.tools.protocol import (
     ToolApprovalRequest,
     ToolAuditRecord,
+    ToolCapabilityName,
     ToolCancellationSnapshot,
     ToolError,
     ToolErrorCategory,
@@ -83,16 +92,85 @@ class ToolDispatcher:
         *,
         policy_engine: ToolPolicyEngine | None = None,
         budget_ledger: ToolBudgetLedger | None = None,
+        runtime_trace: RuntimeTrace | None = None,
     ) -> None:
         self.registry = registry
         self.state_store = state_store
         self.policy_engine = policy_engine or ToolPolicyEngine()
         self.budget_ledger = budget_ledger or ToolBudgetLedger()
+        self.runtime_trace = runtime_trace
         self._guard = threading.RLock()
         self._run_locks: dict[str, threading.RLock] = {}
         self._restored_runs: set[str] = set()
 
     def dispatch(
+        self,
+        invocation: ToolInvocation,
+        *,
+        approval: ToolApprovalGrant | None = None,
+        cancellation: CancellationToken | None = None,
+    ) -> ToolDispatchResponse:
+        if self.runtime_trace is None:
+            return self._dispatch(
+                invocation,
+                approval=approval,
+                cancellation=cancellation,
+            )
+        descriptor = self.registry.descriptor(
+            invocation.tool_name,
+            version=invocation.tool_version,
+        )
+        effect, strategy = _trace_tool_effect(invocation)
+        span = self.runtime_trace.start_span(
+            TraceSpanType.TOOL_INVOCATION,
+            invocation.tool_name,
+            task_id=invocation.task_id,
+            invocation_id=invocation.invocation_id,
+            attributes={
+                "tool_name": invocation.tool_name,
+                "tool_version": invocation.tool_version,
+                "tool_effect": effect,
+                "replay_strategy": strategy,
+                "descriptor_protocol_version": descriptor.protocol_version,
+            },
+        )
+        input_reference = self.runtime_trace.capture_json_input(
+            span,
+            "tool.invocation",
+            safe_protocol_dict(invocation),
+        )
+        try:
+            with self.runtime_trace.scope(span):
+                response = self._dispatch(
+                    invocation,
+                    approval=approval,
+                    cancellation=cancellation,
+                )
+        except BaseException as exc:
+            self.runtime_trace.finish_span(
+                span,
+                status=TraceStatus.FAILED,
+                failure=TraceFailure(
+                    category=type(exc).__name__,
+                    message=redact_text(str(exc)) or "Tool dispatch failed.",
+                    retryable=False,
+                ),
+                input_references=(
+                    [input_reference] if input_reference is not None else []
+                ),
+            )
+            raise
+        self._finish_tool_trace(
+            span,
+            descriptor,
+            invocation,
+            response,
+            approval=approval,
+            input_reference=input_reference,
+        )
+        return response
+
+    def _dispatch(
         self,
         invocation: ToolInvocation,
         *,
@@ -226,6 +304,125 @@ class ToolDispatcher:
             replayed=replayed,
         )
 
+    def _finish_tool_trace(
+        self,
+        span,
+        descriptor,
+        invocation: ToolInvocation,
+        response: ToolDispatchResponse,
+        *,
+        approval: ToolApprovalGrant | None,
+        input_reference,
+    ) -> None:
+        assert self.runtime_trace is not None
+        outputs = []
+        policy = response.record.policy_decision
+        if (
+            span is not None
+            and policy is not None
+            and self.runtime_trace.object_store is not None
+        ):
+            try:
+                from agentbus.replay.tools import capture_tool_envelope
+
+                outputs.append(
+                    capture_tool_envelope(
+                        self.runtime_trace.object_store,
+                        descriptor=descriptor,
+                        invocation=response.invocation,
+                        policy_decision=policy,
+                        producing_span_id=span.span_id,
+                        reference_id=f"tool-result-{span.span_id}",
+                        result=response.result,
+                        approval=approval,
+                    )
+                )
+            except Exception as exc:
+                self.runtime_trace.recording_failed("tool_capture", exc)
+        result = response.result
+        artifacts = [
+            TraceArtifactReference(
+                artifact_id=artifact.artifact_id,
+                artifact_type=artifact.kind.value,
+                identifier=artifact.relative_path or artifact.artifact_id,
+                sha256=artifact.sha256,
+                byte_length=artifact.size_bytes,
+                media_type=artifact.media_type,
+            )
+            for artifact in (result.artifacts if result is not None else ())
+        ]
+        usage = result.resource_usage if result is not None else response.record.resource_usage
+        trace_usage = TraceResourceUsage(
+            wall_time_ms=round(usage.wall_clock_seconds * 1_000),
+            cpu_time_ms=(
+                round(usage.cpu_seconds * 1_000)
+                if usage.cpu_seconds is not None
+                else None
+            ),
+            peak_memory_bytes=usage.memory_bytes,
+            stdout_bytes=usage.stdout_bytes,
+            stderr_bytes=usage.stderr_bytes,
+            custom={
+                "artifact_bytes": usage.artifact_bytes,
+                "child_processes": usage.child_processes,
+                "file_mutations": usage.file_mutations,
+                "written_bytes": usage.written_bytes,
+            },
+        )
+        status, failure = _trace_tool_status(response)
+        policy_references = (
+            [_trace_reference("policy", invocation.invocation_id)]
+            if policy is not None
+            else []
+        )
+        approval_references = (
+            [response.record.approval_id]
+            if response.record.approval_id is not None
+            else []
+        )
+        if response.awaiting_approval:
+            wait = self.runtime_trace.start_span(
+                TraceSpanType.APPROVAL_WAIT,
+                f"approval for {invocation.tool_name}",
+                task_id=invocation.task_id,
+                invocation_id=invocation.invocation_id,
+                parent_span_id=(
+                    span.span_id if span is not None else None
+                ),
+                attributes={"pending": True},
+            )
+            approval_output = self.runtime_trace.capture_json_output(
+                wait,
+                "tool.approval-request",
+                safe_protocol_dict(response.approval_request),
+            )
+            self.runtime_trace.finish_span(
+                wait,
+                output_references=(
+                    [approval_output] if approval_output is not None else []
+                ),
+                approval_references=approval_references,
+            )
+        self.runtime_trace.finish_span(
+            span,
+            status=status,
+            failure=failure,
+            input_references=(
+                [input_reference] if input_reference is not None else []
+            ),
+            output_references=outputs,
+            policy_decision_references=policy_references,
+            approval_references=approval_references,
+            artifact_references=artifacts,
+            resource_usage=trace_usage,
+            attributes={
+                "tool_status": response.record.status.value,
+                "awaiting_approval": response.awaiting_approval,
+                "replayed": response.replayed,
+                "in_progress": response.in_progress,
+            },
+        )
+
     def recover_run(self, run_id: str) -> tuple[ToolInvocationRecord, ...]:
         with self._run_lock(run_id):
             with self._guard:
@@ -294,6 +491,85 @@ class ToolDispatcher:
             self._restored_runs.discard(run_id)
 
     def _authorize(
+        self,
+        invocation: ToolInvocation,
+        record: ToolInvocationRecord,
+        reservation: ToolBudgetReservation,
+        *,
+        approval: ToolApprovalGrant | None,
+        cancellation: CancellationToken | None,
+        replayed: bool,
+    ) -> ToolDispatchResponse | None:
+        if self.runtime_trace is None:
+            return self._authorize_untraced(
+                invocation,
+                record,
+                reservation,
+                approval=approval,
+                cancellation=cancellation,
+                replayed=replayed,
+            )
+        span = self.runtime_trace.start_span(
+            TraceSpanType.TOOL_POLICY,
+            f"policy for {invocation.tool_name}",
+            task_id=invocation.task_id,
+            invocation_id=invocation.invocation_id,
+            attributes={
+                "tool_name": invocation.tool_name,
+                "invocation_revision": invocation.invocation_revision,
+            },
+        )
+        try:
+            response = self._authorize_untraced(
+                invocation,
+                record,
+                reservation,
+                approval=approval,
+                cancellation=cancellation,
+                replayed=replayed,
+            )
+        except BaseException as exc:
+            self.runtime_trace.fail_span(span, exc)
+            raise
+        persisted = self.state_store.get_tool_invocation(
+            invocation.run_id,
+            invocation.invocation_id,
+        )
+        decision = persisted.policy_decision
+        output = (
+            self.runtime_trace.capture_json_output(
+                span,
+                "tool.policy-decision",
+                safe_protocol_dict(decision),
+            )
+            if decision is not None
+            else None
+        )
+        policy_references = (
+            [_trace_reference("policy", invocation.invocation_id)]
+            if decision is not None
+            else []
+        )
+        approval_references = (
+            [persisted.approval_id]
+            if persisted.approval_id is not None
+            else []
+        )
+        self.runtime_trace.finish_span(
+            span,
+            output_references=[output] if output is not None else [],
+            policy_decision_references=policy_references,
+            approval_references=approval_references,
+            attributes={
+                "outcome": (
+                    decision.outcome.value if decision is not None else "unknown"
+                ),
+                "rule_id": decision.rule_id if decision is not None else "unknown",
+            },
+        )
+        return response
+
+    def _authorize_untraced(
         self,
         invocation: ToolInvocation,
         record: ToolInvocationRecord,
@@ -962,3 +1238,71 @@ def _affected_resource_hashes(result: ToolResult) -> dict[str, str]:
         artifact.relative_path or artifact.artifact_id: artifact.sha256
         for artifact in result.artifacts
     }
+
+
+def _trace_tool_effect(invocation: ToolInvocation) -> tuple[str, str]:
+    names = {capability.name for capability in invocation.requested_capabilities}
+    external = {
+        ToolCapabilityName.PROCESS_NETWORK,
+        ToolCapabilityName.MCP_CONNECT,
+        ToolCapabilityName.MCP_INVOKE,
+    }
+    mutations = {
+        ToolCapabilityName.FILESYSTEM_WRITE,
+        ToolCapabilityName.FILESYSTEM_CREATE,
+        ToolCapabilityName.FILESYSTEM_DELETE,
+        ToolCapabilityName.FILESYSTEM_RENAME,
+        ToolCapabilityName.GIT_WRITE,
+        ToolCapabilityName.GIT_COMMIT,
+        ToolCapabilityName.GIT_BRANCH,
+        ToolCapabilityName.GIT_WORKTREE,
+        ToolCapabilityName.PACKAGE_INSTALL,
+    }
+    if names & external:
+        return "network", "reuse_captured"
+    if names & mutations:
+        return "filesystem_mutation", "rerun_sandbox"
+    if (
+        ToolCapabilityName.PROCESS_EXECUTE in names
+        or ToolCapabilityName.TEST_EXECUTE in names
+    ):
+        return "process", "rerun_sandbox"
+    return "pure_read", "reuse_captured"
+
+
+def _trace_tool_status(
+    response: ToolDispatchResponse,
+) -> tuple[TraceStatus, TraceFailure | None]:
+    if response.awaiting_approval or response.in_progress:
+        return TraceStatus.INTERRUPTED, None
+    result = response.result
+    if result is None:
+        return (
+            TraceStatus.FAILED,
+            TraceFailure(
+                category="tool_result_missing",
+                message="Tool dispatch completed without a terminal result.",
+            ),
+        )
+    if result.status == ToolInvocationStatus.SUCCEEDED:
+        return TraceStatus.SUCCEEDED, None
+    if result.status == ToolInvocationStatus.CANCELLED:
+        return TraceStatus.CANCELLED, None
+    message = (
+        result.error.message
+        if result.error is not None
+        else response.record.error_message or "Tool execution failed."
+    )
+    return (
+        TraceStatus.FAILED,
+        TraceFailure(
+            category=result.status.value,
+            message=message,
+            retryable=bool(result.error and result.error.retryable),
+        ),
+    )
+
+
+def _trace_reference(kind: str, identifier: str) -> str:
+    digest = hashlib.sha256(f"{kind}:{identifier}".encode("utf-8")).hexdigest()
+    return f"{kind}-{digest[:32]}"

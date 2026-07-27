@@ -5,13 +5,19 @@ from typing import Any
 
 from pydantic import Field, model_validator
 
-from agentbus.policy import ToolApprovalGrant, ToolPolicyEngine
+from agentbus.policy import (
+    ToolApprovalGrant,
+    ToolPolicyEngine,
+    approval_binding_sha256,
+)
 from agentbus.replay.errors import ReplayIncompatibleError
 from agentbus.replay.session import ToolReplayStrategy
 from agentbus.trace.models import ReplayMode, TraceModel, TraceOutput
+from agentbus.trace.redaction import sanitize_document
 from agentbus.trace.storage import ContentAddressedStore
 from agentbus.tools.protocol import (
     ToolCapabilityName,
+    ToolApprovalRequest,
     ToolDescriptor,
     ToolInvocation,
     ToolInvocationContext,
@@ -20,7 +26,9 @@ from agentbus.tools.protocol import (
     ToolResult,
     ToolSafetyClassification,
     capability_fingerprint,
+    idempotency_key_sha256,
     safe_protocol_dict,
+    sha256_json,
 )
 
 TOOL_ENVELOPE_MEDIA_TYPE = "application/vnd.agentbus.tool-envelope+json"
@@ -100,18 +108,43 @@ def capture_tool_envelope(
     result: ToolResult | None = None,
     approval: ToolApprovalGrant | None = None,
 ) -> TraceOutput:
+    safe_descriptor = ToolDescriptor.model_validate(
+        _sanitize_protocol_model(store, descriptor)
+    )
+    safe_invocation = ToolInvocation.model_validate(
+        _sanitize_protocol_model(store, invocation)
+    )
+    decision_payload = _sanitize_protocol_model(store, policy_decision)
+    decision_payload.update(
+        {
+            "capability_fingerprint": capability_fingerprint(
+                safe_invocation.requested_capabilities
+            ),
+            "arguments_sha256": sha256_json(safe_invocation.arguments),
+        }
+    )
+    safe_decision = ToolPolicyDecision.model_validate(decision_payload)
+    safe_result = None
+    if result is not None:
+        result_payload = _sanitize_protocol_model(store, result)
+        result_payload["policy_decision"] = safe_decision.model_dump(mode="json")
+        safe_result = ToolResult.model_validate(result_payload)
+    safe_approval = (
+        _sanitize_approval(
+            store,
+            approval,
+            invocation=safe_invocation,
+            decision=safe_decision,
+        )
+        if approval is not None
+        else None
+    )
     envelope = CapturedToolEnvelope(
-        descriptor=ToolDescriptor.model_validate(safe_protocol_dict(descriptor)),
-        invocation=ToolInvocation.model_validate(safe_protocol_dict(invocation)),
-        policy_decision=ToolPolicyDecision.model_validate(
-            safe_protocol_dict(policy_decision)
-        ),
-        result=(
-            ToolResult.model_validate(safe_protocol_dict(result))
-            if result is not None
-            else None
-        ),
-        approval=approval,
+        descriptor=safe_descriptor,
+        invocation=safe_invocation,
+        policy_decision=safe_decision,
+        result=safe_result,
+        approval=safe_approval,
     )
     metadata = store.put_json(
         envelope.model_dump(mode="json"),
@@ -124,6 +157,58 @@ def capture_tool_envelope(
         name=f"tool.invocation.{invocation.tool_name}",
         replayable=True,
     )
+
+
+def _sanitize_protocol_model(
+    store: ContentAddressedStore,
+    value: Any,
+) -> dict[str, Any]:
+    sanitized = sanitize_document(
+        safe_protocol_dict(value),
+        private_roots=store.private_roots,
+    ).value
+    if not isinstance(sanitized, dict):
+        raise ValueError("sanitized tool protocol value must remain an object")
+    return sanitized
+
+
+def _sanitize_approval(
+    store: ContentAddressedStore,
+    approval: ToolApprovalGrant,
+    *,
+    invocation: ToolInvocation,
+    decision: ToolPolicyDecision,
+) -> ToolApprovalGrant:
+    request_payload = _sanitize_protocol_model(store, approval.request)
+    request_payload.update(
+        {
+            "requested_capabilities": [
+                item.model_dump(mode="json")
+                for item in invocation.requested_capabilities
+            ],
+            "capability_fingerprint": capability_fingerprint(
+                invocation.requested_capabilities
+            ),
+            "arguments_sha256": sha256_json(invocation.arguments),
+            "workspace_identity": invocation.context.workspace_identity,
+            "worktree_identity": invocation.context.worktree_identity,
+            "idempotency_key_sha256": idempotency_key_sha256(
+                invocation.idempotency_key
+            ),
+            "proposed_constraints": [
+                item.model_dump(mode="json") for item in decision.constraints
+            ],
+        }
+    )
+    request = ToolApprovalRequest.model_validate(request_payload)
+    approval_payload = _sanitize_protocol_model(store, approval)
+    approval_payload.update(
+        {
+            "request": request.model_dump(mode="json"),
+            "binding_sha256": approval_binding_sha256(request, invocation),
+        }
+    )
+    return ToolApprovalGrant.model_validate(approval_payload)
 
 
 def load_tool_envelope(

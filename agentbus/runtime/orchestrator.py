@@ -539,6 +539,7 @@ class MultiAgentOrchestrator:
                     cancellation_registry=self._cancellation_registry_for_use(),
                     mcp_server_configs=self.config.mcp_server_configs,
                     mcp_run_id=run_id,
+                    runtime_trace=self._trace_for_run(run_id),
                 ),
             )
         return DurableExecutionEngine(
@@ -660,6 +661,11 @@ class MultiAgentOrchestrator:
                 owned_worktree=True,
                 mcp_server_configs=self.config.mcp_server_configs,
                 mcp_run_id=run_id,
+                runtime_trace=(
+                    self._trace_for_run(run_id)
+                    if run_id is not None
+                    else None
+                ),
             ),
         )
 
@@ -968,6 +974,7 @@ class MultiAgentOrchestrator:
             owned_worktree=True,
             mcp_server_configs=self.config.mcp_server_configs,
             mcp_run_id=run_id,
+            runtime_trace=self._trace_for_run(run_id),
         ) as tool_runtime:
             tool_runtime.recover_run(run_id)
             verifier_result = self._trace_runtime_call(
@@ -1281,6 +1288,7 @@ class MultiAgentOrchestrator:
             cancellation_registry=self._cancellation_registry_for_use(),
             mcp_server_configs=self.config.mcp_server_configs,
             mcp_run_id=run_id,
+            runtime_trace=self._trace_for_run(run_id),
         ) as tool_runtime:
             tool_runtime.recover_run(run_id)
             return self._call_with_supported_arguments(
