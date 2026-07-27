@@ -87,17 +87,20 @@ def compare_traces(
     comparisons: list[SpanComparison] = []
     added = 0
     removed = 0
+    linked = _linked(left, right)
     for key in sorted(set(left_spans) | set(right_spans)):
         left_span = left_spans.get(key)
         right_span = right_spans.get(key)
         if left_span is None:
             added += 1
-            comparisons.append(_one_sided(key, right_span, added=True, expected=_linked(left, right)))
+            comparisons.append(_one_sided(key, right_span, added=True, expected=linked))
         elif right_span is None:
             removed += 1
-            comparisons.append(_one_sided(key, left_span, added=False, expected=_linked(left, right)))
+            comparisons.append(_one_sided(key, left_span, added=False, expected=linked))
         else:
-            comparisons.append(_compare_span(key, left_span, right_span))
+            comparisons.append(
+                _compare_span(key, left_span, right_span, linked=linked)
+            )
 
     final_status_changed = left.status != right.status
     if final_status_changed:
@@ -176,6 +179,8 @@ def _compare_span(
     key: str,
     left: TraceSpan,
     right: TraceSpan,
+    *,
+    linked: bool,
 ) -> SpanComparison:
     values = {
         "status": (left.status.value, right.status.value),
@@ -221,7 +226,7 @@ def _compare_span(
         safe_right = sanitize_document(right_value).value
         if safe_left == safe_right:
             continue
-        category = _field_category(left, right, field)
+        category = _field_category(left, right, field, linked=linked)
         differences.append(
             FieldDifference(
                 field=field,
@@ -275,7 +280,16 @@ def _field_category(
     left: TraceSpan,
     right: TraceSpan,
     field: str,
+    *,
+    linked: bool,
 ) -> DriftCategory:
+    if linked and field in {"inputs", "approvals"}:
+        return DriftCategory.EXPECTED
+    if linked and field == "attributes" and (
+        "fork_source_span_id" in right.attributes
+        or "fork_source_span_id" in left.attributes
+    ):
+        return DriftCategory.EXPECTED
     if field == "status":
         return _status_category(left.status.value, right.status.value)
     if field in {"sequence", "parent"}:

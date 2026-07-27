@@ -21,8 +21,13 @@ class ReplayCancelledError(ReplayError):
     """Raised when a replay session is cooperatively cancelled."""
 
 
+class ReplayConsentRequiredError(ReplayError):
+    """Raised when a fork requests live behavior without explicit consent."""
+
+
 __all__ = [
     "ReplayCancelledError",
+    "ReplayConsentRequiredError",
     "ReplayError",
     "ReplayIncompatibleError",
     "ReplayInputUnavailableError",

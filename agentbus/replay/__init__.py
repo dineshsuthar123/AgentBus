@@ -7,10 +7,17 @@ from agentbus.replay.classification import (
 )
 from agentbus.replay.errors import (
     ReplayCancelledError,
+    ReplayConsentRequiredError,
     ReplayError,
     ReplayIncompatibleError,
     ReplayInputUnavailableError,
     ReplayIsolationError,
+)
+from agentbus.replay.forks import (
+    FORK_INPUT_MEDIA_TYPE,
+    ForkManager,
+    ForkRequest,
+    ForkResult,
 )
 from agentbus.replay.engine import ReplayEngine
 from agentbus.replay.comparison import (
@@ -59,7 +66,12 @@ __all__ = [
     "ComparisonSummary",
     "DriftCategory",
     "FieldDifference",
+    "FORK_INPUT_MEDIA_TYPE",
+    "ForkManager",
+    "ForkRequest",
+    "ForkResult",
     "ReplayCancelledError",
+    "ReplayConsentRequiredError",
     "ReplayError",
     "ReplayEngine",
     "ReplayIncompatibleError",
