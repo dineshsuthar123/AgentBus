@@ -245,8 +245,9 @@ class ReplayEngine:
         inputs: ReplayInputCatalog,
     ) -> tuple[ReplaySpanResult, dict[str, Any] | None]:
         loaded_inputs = [_load_reference(inputs, item) for item in span.input_references]
-        for output in span.output_references:
-            inputs.read(output)
+        loaded_outputs = [
+            _load_reference(inputs, item) for item in span.output_references
+        ]
         if span.span_type in {
             TraceSpanType.PROVIDER_REQUEST,
             TraceSpanType.PROVIDER_RESPONSE,
@@ -288,9 +289,14 @@ class ReplayEngine:
             actual = (
                 self.policy_evaluator(span, loaded_inputs)
                 if self.policy_evaluator is not None
-                else _captured_component_result(span)
+                else _captured_component_result(span, loaded_outputs)
             )
-            drift = _component_drift(span, actual, "policy")
+            drift = _component_drift(
+                span,
+                actual,
+                "policy",
+                loaded_outputs,
+            )
             if drift and request.mode == ReplayMode.STRICT:
                 raise ReplayIncompatibleError(drift[0])
             return (
@@ -312,7 +318,7 @@ class ReplayEngine:
             actual = (
                 self.verifier(span, loaded_inputs)
                 if self.verifier is not None
-                else _captured_component_result(span)
+                else _captured_component_result(span, loaded_outputs)
             )
             return (
                 _span_result(
@@ -320,7 +326,12 @@ class ReplayEngine:
                     ReplaySpanAction.REPLAYED,
                     "Verifier reran against captured replay artifacts.",
                     payload=actual,
-                    drift=_component_drift(span, actual, "verifier"),
+                    drift=_component_drift(
+                        span,
+                        actual,
+                        "verifier",
+                        loaded_outputs,
+                    ),
                 ),
                 actual,
             )
@@ -328,7 +339,7 @@ class ReplayEngine:
             actual = (
                 self.reviewer(span, loaded_inputs)
                 if self.reviewer is not None
-                else _captured_component_result(span)
+                else _captured_component_result(span, loaded_outputs)
             )
             return (
                 _span_result(
@@ -336,7 +347,12 @@ class ReplayEngine:
                     ReplaySpanAction.REPLAYED,
                     "Reviewer output passed captured structured replay.",
                     payload=actual,
-                    drift=_component_drift(span, actual, "reviewer"),
+                    drift=_component_drift(
+                        span,
+                        actual,
+                        "reviewer",
+                        loaded_outputs,
+                    ),
                 ),
                 actual,
             )
@@ -613,24 +629,45 @@ def _validate_registered_schema(
     return value
 
 
-def _captured_component_result(span: TraceSpan) -> dict[str, Any]:
+def _captured_component_result(
+    span: TraceSpan,
+    loaded_outputs: list[Any],
+) -> dict[str, Any]:
+    captured = _find_captured_component_result(span, loaded_outputs)
+    if captured is not None:
+        return captured
+    raise ReplayInputUnavailableError(
+        f"Span '{span.span_id}' has no captured structured result."
+    )
+
+
+def _find_captured_component_result(
+    span: TraceSpan,
+    loaded_outputs: list[Any],
+) -> dict[str, Any] | None:
     value = span.attributes.get("result")
-    if not isinstance(value, dict):
-        raise ReplayInputUnavailableError(
-            f"Span '{span.span_id}' has no captured structured result."
-        )
-    return value
+    if isinstance(value, dict):
+        return value
+    return next(
+        (
+            output
+            for output in reversed(loaded_outputs)
+            if isinstance(output, dict)
+        ),
+        None,
+    )
 
 
 def _component_drift(
     span: TraceSpan,
     actual: dict[str, Any],
     component: str,
+    loaded_outputs: list[Any],
 ) -> list[str]:
-    expected = span.attributes.get("result")
-    if (
-        isinstance(expected, dict)
-        and sanitize_document(expected).value != sanitize_document(actual).value
+    expected = _find_captured_component_result(span, loaded_outputs)
+    if expected is not None and (
+        sanitize_document(expected).value
+        != sanitize_document(actual).value
     ):
         return [f"{component} result drifted from the captured decision."]
     return []

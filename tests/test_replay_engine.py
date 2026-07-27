@@ -187,6 +187,59 @@ def test_providerless_replay_runs_parsing_policy_and_verifier(tmp_path: Path) ->
     assert "provider" in result.session.substitutions
 
 
+def test_replay_uses_content_addressed_component_outputs(tmp_path: Path) -> None:
+    store, trace = _fixture(tmp_path)
+    policy_metadata = store.put_json(
+        {"outcome": "allow"},
+        producing_span_id="policy",
+        media_type="application/vnd.agentbus.policy+json",
+    )
+    verifier_metadata = store.put_json(
+        {"passed": True},
+        producing_span_id="verifier",
+        media_type="application/vnd.agentbus.verifier+json",
+    )
+    outputs = {
+        "policy": store.reference_output(
+            policy_metadata,
+            reference_id="policy-output",
+            name="policy decision",
+        ),
+        "verifier": store.reference_output(
+            verifier_metadata,
+            reference_id="verifier-output",
+            name="verifier result",
+        ),
+    }
+    trace = Trace.model_validate(
+        trace.model_copy(
+            update={
+                "spans": [
+                    span.model_copy(
+                        update={
+                            "attributes": {},
+                            "output_references": [outputs[span.span_id]],
+                        }
+                    )
+                    if span.span_id in outputs
+                    else span
+                    for span in trace.spans
+                ]
+            }
+        ).model_dump()
+    )
+
+    result = ReplayEngine(store, schemas={"parse": ParsedOutput}).replay(
+        trace,
+        _request(),
+    )
+
+    assert result.session.status == ReplaySessionStatus.SUCCEEDED
+    assert result.verifier_result == {"passed": True}
+    assert result.session.provider_calls == 0
+    assert result.session.network_calls == 0
+
+
 def test_strict_replay_fails_closed_on_policy_drift(tmp_path: Path) -> None:
     store, trace = _fixture(tmp_path)
     result = ReplayEngine(
