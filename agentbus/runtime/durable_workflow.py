@@ -16,6 +16,13 @@ from agentbus.models.errors import ModelCancellationError
 from agentbus.models.router import model_request_context
 from agentbus.git.repository import RepositoryChangeSet
 from agentbus.runtime.loop import ManagedToolApprovalRequired
+from agentbus.trace import (
+    RuntimeTrace,
+    TraceArtifactReference,
+    TraceFailure,
+    TraceSpanType,
+    TraceStatus,
+)
 from agentbus.tools.runtime import ManagedToolRuntime
 
 
@@ -33,6 +40,8 @@ class MultiAgentTaskExecutor:
         workspace: str | None = None,
         cancellation: CancellationToken | None = None,
         tool_runtime: ManagedToolRuntime | None = None,
+        runtime_trace: RuntimeTrace | None = None,
+        worker_id: str | None = None,
     ):
         self.coder = coder
         self.verifier = verifier
@@ -46,6 +55,8 @@ class MultiAgentTaskExecutor:
         self.workspace = Path(selected_workspace).expanduser().resolve()
         self.cancellation = cancellation
         self.tool_runtime = tool_runtime
+        self.runtime_trace = runtime_trace
+        self.worker_id = worker_id
         self._recovered_tool_runs: set[str] = set()
 
     def close(self) -> None:
@@ -53,6 +64,89 @@ class MultiAgentTaskExecutor:
             self.tool_runtime.close()
 
     def execute(self, context: TaskExecutionContext) -> TaskExecutionResult:
+        if self.runtime_trace is None:
+            return self._execute(context)
+        span = self.runtime_trace.start_span(
+            TraceSpanType.TASK,
+            context.task.title,
+            task_id=context.task.task_id,
+            worker_id=self.worker_id,
+            attributes={
+                "attempt_number": context.attempt_number,
+                "assigned_role": context.task.assigned_role,
+                "risk": context.task.risk.value,
+                "expected_output_count": len(context.task.expected_outputs),
+                "done_criteria_count": len(context.task.done_criteria),
+            },
+        )
+        try:
+            with self.runtime_trace.scope(span):
+                result = self._execute(context)
+        except BaseException as exc:
+            self.runtime_trace.fail_span(
+                span,
+                exc,
+                retryable=True,
+                attributes={"attempt_number": context.attempt_number},
+            )
+            raise
+
+        output = self.runtime_trace.capture_json_output(
+            span,
+            "task.execution-result",
+            result.model_dump(mode="json"),
+        )
+        artifacts = [
+            TraceArtifactReference(
+                artifact_id=artifact.artifact_id,
+                artifact_type=artifact.artifact_type,
+                identifier=artifact.identifier,
+            )
+            for artifact in result.artifacts
+        ]
+        if result.succeeded:
+            self.runtime_trace.finish_span(
+                span,
+                output_references=[output] if output is not None else [],
+                artifact_references=artifacts,
+                attributes={
+                    "attempt_number": context.attempt_number,
+                    "changed_file_count": len(result.changed_files),
+                },
+            )
+        else:
+            category = (
+                result.failure_category.value
+                if result.failure_category is not None
+                else "unknown"
+            )
+            status = (
+                TraceStatus.CANCELLED
+                if result.failure_category == FailureCategory.CANCELLED
+                else TraceStatus.FAILED
+            )
+            self.runtime_trace.finish_span(
+                span,
+                status=status,
+                failure=(
+                    None
+                    if status == TraceStatus.CANCELLED
+                    else TraceFailure(
+                        category=category,
+                        message=result.error_message or result.summary,
+                        retryable=bool(result.retryable),
+                    )
+                ),
+                output_references=[output] if output is not None else [],
+                artifact_references=artifacts,
+                attributes={
+                    "attempt_number": context.attempt_number,
+                    "changed_file_count": len(result.changed_files),
+                },
+            )
+        return result
+
+    def _execute(self, context: TaskExecutionContext) -> TaskExecutionResult:
         _drain_model_results(self.coder)
         _drain_model_results(self.reviewer)
         plan = self._task_plan(context)
@@ -91,40 +185,55 @@ class MultiAgentTaskExecutor:
                         ),
                     },
                 }
-                coder_summary = self.coder.execute(
-                    **_supported_arguments(
-                        self.coder.execute,
-                        coder_arguments,
-                    )
+                coder_summary = self._trace_call(
+                    TraceSpanType.CUSTOM,
+                    "coder",
+                    lambda: self.coder.execute(
+                        **_supported_arguments(
+                            self.coder.execute,
+                            coder_arguments,
+                        )
+                    ),
+                    capture="text",
                 )
                 self._checkpoint("after-coder")
-                verifier_result = self.verifier.verify(
-                    **_supported_arguments(
-                        self.verifier.verify,
-                        {
-                            "tool_runtime": self.tool_runtime,
-                            "run_id": context.run.run_id,
-                            "task_id": context.task.task_id,
-                            "invocation_key": (
-                                f"attempt-{context.attempt_number}"
-                            ),
-                            "workspace_trusted": True,
-                            "provider_consented": True,
-                        },
-                    )
+                verifier_result = self._trace_call(
+                    TraceSpanType.VERIFIER,
+                    "task verifier",
+                    lambda: self.verifier.verify(
+                        **_supported_arguments(
+                            self.verifier.verify,
+                            {
+                                "tool_runtime": self.tool_runtime,
+                                "run_id": context.run.run_id,
+                                "task_id": context.task.task_id,
+                                "invocation_key": (
+                                    f"attempt-{context.attempt_number}"
+                                ),
+                                "workspace_trusted": True,
+                                "provider_consented": True,
+                            },
+                        )
+                    ),
+                    capture="json",
                 )
                 self._checkpoint("after-verifier")
                 changed_files = self._changed_since(before)
                 changes = self._change_set(changed_files)
                 task_diff = self._task_diff(changes)
                 self._checkpoint("before-task-review")
-                reviewer_result = self._review_task(
-                    context,
-                    plan,
-                    changes,
-                    task_diff,
-                    coder_summary,
-                    verifier_result,
+                reviewer_result = self._trace_call(
+                    TraceSpanType.REVIEWER,
+                    "task reviewer",
+                    lambda: self._review_task(
+                        context,
+                        plan,
+                        changes,
+                        task_diff,
+                        coder_summary,
+                        verifier_result,
+                    ),
+                    capture="json",
                 )
                 self._checkpoint("after-task-review")
         except ManagedToolApprovalRequired as exc:
@@ -371,6 +480,24 @@ class MultiAgentTaskExecutor:
                 "durable-task-executor",
                 stage=stage,
             )
+
+    def _trace_call(
+        self,
+        span_type: TraceSpanType,
+        name: str,
+        function,
+        *,
+        capture: str,
+    ):
+        if self.runtime_trace is None:
+            return function()
+        return self.runtime_trace.call(
+            span_type,
+            name,
+            function,
+            worker_id=self.worker_id,
+            capture=capture,
+        )
 
     def _task_plan(self, context: TaskExecutionContext) -> dict[str, Any]:
         task = context.task

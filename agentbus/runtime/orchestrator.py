@@ -1,4 +1,5 @@
 import inspect
+import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -40,6 +41,12 @@ from agentbus.repo.scanner import RepoScanner
 from agentbus.repo.test_detection import TestCommandDetector
 from agentbus.runtime.verifier import Verifier
 from agentbus.runtime.durable_workflow import MultiAgentTaskExecutor
+from agentbus.trace import (
+    RuntimeTrace,
+    TraceFailure,
+    TraceSpanType,
+    TraceStatus,
+)
 from agentbus.tools.git_tools import GitTools
 from agentbus.tools.runtime import build_managed_tool_runtime
 from agentbus.worktrees.manager import GitWorktreeManager
@@ -155,6 +162,8 @@ class MultiAgentOrchestrator:
         self.lease_clock = lease_clock
         self._explicit_cancellation = cancellation
         self._cancellation_registry = cancellation_registry
+        self._trace_guard = threading.RLock()
+        self._runtime_traces: dict[str, RuntimeTrace] = {}
 
     def run(self, user_task: str) -> OrchestrationResult:
         cancellation = self._explicit_cancellation
@@ -389,6 +398,54 @@ class MultiAgentOrchestrator:
             metadata=metadata,
             run_id=run_id,
         )
+        runtime_trace = self._trace_for_run(
+            run_id,
+            reconcile=False,
+            root_attributes={
+                "durable": True,
+                "parallel": parallel_enabled,
+                "workspace_repository_validated": True,
+            },
+        )
+        with runtime_trace.scope(runtime_trace.root_context):
+            planning_span = runtime_trace.start_span(
+                TraceSpanType.PLANNING,
+                "planner",
+                attributes={
+                    "step_count": len(plan.get("steps", [])),
+                    "provider": self.config.provider_name,
+                },
+            )
+            plan_output = runtime_trace.capture_json_output(
+                planning_span,
+                "planner.output",
+                plan,
+            )
+            runtime_trace.finish_span(
+                planning_span,
+                output_references=[plan_output] if plan_output is not None else [],
+            )
+            persisted_run = self.state_store.get_run(run_id)
+            runtime_trace.checkpoint(
+                "task-graph-persisted",
+                {
+                    "graph": persisted_run.graph_data,
+                    "planner_output": persisted_run.planner_output,
+                    "base_commit": initial_head,
+                    "workspace_validated": True,
+                },
+            )
+        self.state_store.update_run_details(
+            run_id,
+            metadata_updates={
+                "execution_trace": {
+                    "trace_id": runtime_trace.trace_id,
+                    "storage": "local_content_addressed",
+                    "status": "recording",
+                }
+            },
+            event_type="execution_trace_started",
+        )
         return run_id
 
     def run_durable(self, run_id: str, *, resume: bool = False) -> ExecutionReport:
@@ -398,52 +455,58 @@ class MultiAgentOrchestrator:
         else:
             cancellation = self._cancellation_for(run_id)
         self._bind_component_cancellation(cancellation)
-        if cancellation.is_requested:
-            return self._durable_engine(run_id, executor=False).finalize_cancellation(
-                run_id
-            )
         persisted = self.state_store.get_run(run_id)
-        try:
-            parallel = persisted.metadata.get("parallel_execution", {})
-            if isinstance(parallel, dict) and parallel.get("enabled"):
-                scheduler = self._parallel_scheduler(run_id)
-                report = scheduler.run(run_id, resume=resume)
-                if report.status == RunStatus.WAITING_FOR_REVIEW:
-                    cancellation.checkpoint(
-                        "orchestrator",
-                        stage="before-final-integration-review",
-                    )
-                    report = self._run_parallel_final_review(run_id)
-                if report.status == RunStatus.SUCCEEDED:
-                    cancellation.checkpoint(
-                        "orchestrator",
-                        stage="before-parallel-git-finalization",
-                    )
-                    report = self._finalize_parallel_git(run_id)
-                return report
-            with self._durable_engine(run_id) as engine:
-                report = (
-                    engine.resume(run_id)
-                    if resume
-                    else engine.run_until_blocked(run_id)
-                )
-            if report.status == RunStatus.WAITING_FOR_REVIEW:
-                cancellation.checkpoint(
-                    "orchestrator",
-                    stage="before-final-review",
-                )
-                report = self._run_final_review(run_id)
-            if report.status == RunStatus.SUCCEEDED:
-                cancellation.checkpoint(
-                    "orchestrator",
-                    stage="before-git-finalization",
-                )
-                report = self._finalize_durable_git(run_id)
-            return report
-        except (CancellationRequested, ModelCancellationError):
-            return self._durable_engine(run_id, executor=False).finalize_cancellation(
-                run_id
-            )
+        runtime_trace = self._trace_for_run(run_id, reconcile=resume)
+        with runtime_trace.scope(runtime_trace.root_context):
+            if cancellation.is_requested:
+                report = self._durable_engine(
+                    run_id,
+                    executor=False,
+                ).finalize_cancellation(run_id)
+            else:
+                try:
+                    parallel = persisted.metadata.get("parallel_execution", {})
+                    if isinstance(parallel, dict) and parallel.get("enabled"):
+                        scheduler = self._parallel_scheduler(run_id)
+                        report = scheduler.run(run_id, resume=resume)
+                        if report.status == RunStatus.WAITING_FOR_REVIEW:
+                            cancellation.checkpoint(
+                                "orchestrator",
+                                stage="before-final-integration-review",
+                            )
+                            report = self._run_parallel_final_review(run_id)
+                        if report.status == RunStatus.SUCCEEDED:
+                            cancellation.checkpoint(
+                                "orchestrator",
+                                stage="before-parallel-git-finalization",
+                            )
+                            report = self._finalize_parallel_git(run_id)
+                    else:
+                        with self._durable_engine(run_id) as engine:
+                            report = (
+                                engine.resume(run_id)
+                                if resume
+                                else engine.run_until_blocked(run_id)
+                            )
+                        if report.status == RunStatus.WAITING_FOR_REVIEW:
+                            cancellation.checkpoint(
+                                "orchestrator",
+                                stage="before-final-review",
+                            )
+                            report = self._run_final_review(run_id)
+                        if report.status == RunStatus.SUCCEEDED:
+                            cancellation.checkpoint(
+                                "orchestrator",
+                                stage="before-git-finalization",
+                            )
+                            report = self._finalize_durable_git(run_id)
+                except (CancellationRequested, ModelCancellationError):
+                    report = self._durable_engine(
+                        run_id,
+                        executor=False,
+                    ).finalize_cancellation(run_id)
+        self._finish_trace_for_report(runtime_trace, report)
+        return report
 
     def resume_durable(self, run_id: str) -> ExecutionReport:
         return self.run_durable(run_id, resume=True)
@@ -469,6 +532,7 @@ class MultiAgentOrchestrator:
                 git_repository=self.git_repository,
                 workspace=str(self.workspace),
                 cancellation=cancellation,
+                runtime_trace=self._trace_for_run(run_id),
                 tool_runtime=build_managed_tool_runtime(
                     workspace=self.workspace,
                     state_store=self.state_store,
@@ -521,6 +585,7 @@ class MultiAgentOrchestrator:
                     workspace,
                     cancellation,
                     run_id,
+                    worker_id,
                 ),
                 heartbeat_seconds=float(
                     parallel.get(
@@ -547,6 +612,7 @@ class MultiAgentOrchestrator:
         workspace: Path,
         cancellation: CancellationToken | None = None,
         run_id: str | None = None,
+        worker_id: str | None = None,
     ):
         if self.parallel_executor_factory is not None:
             return self.parallel_executor_factory(workspace)
@@ -575,6 +641,12 @@ class MultiAgentOrchestrator:
             git_repository=repository,
             workspace=str(workspace),
             cancellation=cancellation,
+            runtime_trace=(
+                self._trace_for_run(run_id)
+                if run_id is not None
+                else None
+            ),
+            worker_id=worker_id,
             tool_runtime=build_managed_tool_runtime(
                 workspace=self.workspace,
                 worktree=workspace,
@@ -584,6 +656,79 @@ class MultiAgentOrchestrator:
                 mcp_server_configs=self.config.mcp_server_configs,
                 mcp_run_id=run_id,
             ),
+        )
+
+    def _trace_for_run(
+        self,
+        run_id: str,
+        *,
+        reconcile: bool = True,
+        root_attributes: dict[str, Any] | None = None,
+    ) -> RuntimeTrace:
+        with self._trace_guard:
+            existing = self._runtime_traces.get(run_id)
+            if existing is not None:
+                return existing
+            runtime = RuntimeTrace.open(
+                self.state_store,
+                run_id,
+                object_root=self.config.trace_store_path,
+                workspace=self.workspace,
+                root_attributes=root_attributes,
+                reconcile=reconcile,
+            )
+            self._runtime_traces[run_id] = runtime
+            return runtime
+
+    def _finish_trace_for_report(
+        self,
+        runtime_trace: RuntimeTrace,
+        report: ExecutionReport,
+    ) -> None:
+        statuses = {
+            RunStatus.SUCCEEDED: TraceStatus.SUCCEEDED,
+            RunStatus.FAILED: TraceStatus.FAILED,
+            RunStatus.CANCELLED: TraceStatus.CANCELLED,
+        }
+        status = statuses.get(report.status)
+        if status is None or not runtime_trace.active:
+            return
+        with runtime_trace.scope(runtime_trace.root_context):
+            report_span = runtime_trace.start_span(
+                TraceSpanType.CUSTOM,
+                "durable run report",
+                attributes={
+                    "run_status": report.status.value,
+                    "successful_task_count": len(report.successful_tasks),
+                    "failed_task_count": len(report.failed_tasks),
+                    "changed_file_count": len(report.changed_files),
+                },
+            )
+            report_output = runtime_trace.capture_json_output(
+                report_span,
+                "run.report",
+                report.model_dump(mode="json"),
+            )
+            runtime_trace.finish_span(
+                report_span,
+                output_references=(
+                    [report_output] if report_output is not None else []
+                ),
+            )
+        failure = None
+        if status == TraceStatus.FAILED:
+            failure = TraceFailure(
+                category="durable_run_failed",
+                message=report.failure_reason or "Durable run failed.",
+                retryable=False,
+            )
+        runtime_trace.finish(
+            status=status,
+            failure=failure,
+            attributes={
+                "final_status": report.status.value,
+                "side_effects_persisted": report.side_effects_persisted,
+            },
         )
 
     def _run_final_review(self, run_id: str) -> ExecutionReport:
@@ -621,7 +766,13 @@ class MultiAgentOrchestrator:
                 )
                 return self.get_durable_report(run_id)
 
-        verifier_result = self._verify_final(run_id)
+        verifier_result = self._trace_runtime_call(
+            run_id,
+            TraceSpanType.VERIFIER,
+            "final verifier",
+            lambda: self._verify_final(run_id),
+            capture="json",
+        )
         cancellation.checkpoint(
             "final-review",
             stage="after-final-verification",
@@ -677,17 +828,22 @@ class MultiAgentOrchestrator:
             "final-review",
             stage="before-final-reviewer",
         )
-        with model_request_context(
-            run_id=run_id,
-            cancellation=cancellation,
-        ):
-            reviewer_result = self._call_reviewer(
+        reviewer_result = self._trace_runtime_call(
+            run_id,
+            TraceSpanType.REVIEWER,
+            "final reviewer",
+            lambda: self._review_with_context(
+                run_id=run_id,
+                cancellation=cancellation,
                 user_task=run.original_task,
                 plan=run.planner_output,
                 git_diff=git_diff,
                 test_output=verifier_result.get("output"),
                 changes=changes,
-            )
+            ),
+            capture="json",
+            attributes={"review_scope": "whole_run"},
+        )
         cancellation.checkpoint(
             "final-review",
             stage="after-final-reviewer",
@@ -801,17 +957,23 @@ class MultiAgentOrchestrator:
             mcp_run_id=run_id,
         ) as tool_runtime:
             tool_runtime.recover_run(run_id)
-            verifier_result = self._call_with_supported_arguments(
-                verify,
-                {
-                    "require_command": True,
-                    "tool_runtime": tool_runtime,
-                    "run_id": run_id,
-                    "task_id": self._final_tool_task_id(run_id),
-                    "invocation_key": "final-integration",
-                    "workspace_trusted": True,
-                    "provider_consented": True,
-                },
+            verifier_result = self._trace_runtime_call(
+                run_id,
+                TraceSpanType.VERIFIER,
+                "final integration verifier",
+                lambda: self._call_with_supported_arguments(
+                    verify,
+                    {
+                        "require_command": True,
+                        "tool_runtime": tool_runtime,
+                        "run_id": run_id,
+                        "task_id": self._final_tool_task_id(run_id),
+                        "invocation_key": "final-integration",
+                        "workspace_trusted": True,
+                        "provider_consented": True,
+                    },
+                ),
+                capture="json",
             )
         cancellation.checkpoint(
             "final-review",
@@ -858,18 +1020,23 @@ class MultiAgentOrchestrator:
             "final-review",
             stage="before-integration-reviewer",
         )
-        with model_request_context(
-            run_id=run_id,
-            cancellation=cancellation,
-        ):
-            reviewer_result = self._call_reviewer(
+        reviewer_result = self._trace_runtime_call(
+            run_id,
+            TraceSpanType.REVIEWER,
+            "final integration reviewer",
+            lambda: self._review_with_context(
+                run_id=run_id,
+                cancellation=cancellation,
                 user_task=run.original_task,
                 plan=run.planner_output,
                 git_diff=git_diff,
                 test_output=verifier_result.get("output"),
                 changes=changes,
                 reviewer=reviewer,
-            )
+            ),
+            capture="json",
+            attributes={"review_scope": "integrated_run"},
+        )
         cancellation.checkpoint(
             "final-review",
             stage="after-integration-reviewer",
@@ -935,6 +1102,49 @@ class MultiAgentOrchestrator:
             verifier or Verifier(config=config, cancellation=cancellation),
             reviewer or ReviewerAgent(config=config, model_router=router),
         )
+
+    def _trace_runtime_call(
+        self,
+        run_id: str,
+        span_type: TraceSpanType,
+        name: str,
+        function,
+        *,
+        capture: str,
+        attributes: dict[str, Any] | None = None,
+    ):
+        return self._trace_for_run(run_id).call(
+            span_type,
+            name,
+            function,
+            attributes=attributes,
+            capture=capture,
+        )
+
+    def _review_with_context(
+        self,
+        *,
+        run_id: str,
+        cancellation: CancellationToken,
+        user_task: str,
+        plan: dict[str, Any],
+        git_diff: str,
+        test_output: str | None,
+        changes: RepositoryChangeSet,
+        reviewer=None,
+    ) -> dict[str, Any]:
+        with model_request_context(
+            run_id=run_id,
+            cancellation=cancellation,
+        ):
+            return self._call_reviewer(
+                user_task=user_task,
+                plan=plan,
+                git_diff=git_diff,
+                test_output=test_output,
+                changes=changes,
+                reviewer=reviewer,
+            )
 
     def _finalize_parallel_git(self, run_id: str) -> ExecutionReport:
         run = self.state_store.get_run(run_id)

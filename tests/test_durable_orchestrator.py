@@ -11,6 +11,7 @@ from agentbus.execution.models import FailureCategory
 from agentbus.execution.state_store import StateStore, StateStoreError
 from agentbus.models.errors import ModelAuthenticationError
 from agentbus.runtime.orchestrator import MultiAgentOrchestrator
+from agentbus.trace import TraceSpanType, TraceStatus
 from agentbus.tools.protocol import ToolResourceBudget
 
 
@@ -225,6 +226,78 @@ def test_durable_mode_persists_validated_planner_graph_before_execution(tmp_path
 
     assert report.status == RunStatus.SUCCEEDED
     assert [call["task_id"] for call in coder.calls] == ["step-1", "step-2"]
+
+
+def test_durable_run_records_hierarchical_trace_and_final_review_order(
+    tmp_path,
+):
+    runner, store = orchestrator(tmp_path)
+
+    run_id = runner.create_durable_run("Create calculator")
+    active = store.get_run_trace(run_id)
+
+    assert active.status == TraceStatus.RUNNING
+    assert active.spans[0].span_type == TraceSpanType.RUN
+    assert any(
+        span.span_type == TraceSpanType.PLANNING for span in active.spans
+    )
+    assert [item.label for item in active.checkpoints] == [
+        "task-graph-persisted"
+    ]
+    assert store.get_run(run_id).metadata["execution_trace"]["trace_id"] == (
+        active.trace_id
+    )
+
+    report = runner.run_durable(run_id)
+    trace = store.get_run_trace(run_id)
+    task_spans = [
+        span for span in trace.spans if span.span_type == TraceSpanType.TASK
+    ]
+    final_verifier = next(
+        span for span in trace.spans if span.name == "final verifier"
+    )
+    final_reviewer = next(
+        span for span in trace.spans if span.name == "final reviewer"
+    )
+
+    assert report.status == RunStatus.SUCCEEDED
+    assert trace.status == TraceStatus.SUCCEEDED
+    assert [span.task_id for span in task_spans] == ["step-1", "step-2"]
+    assert all(span.status == TraceStatus.SUCCEEDED for span in task_spans)
+    assert max(span.sequence for span in task_spans) < final_verifier.sequence
+    assert final_verifier.sequence < final_reviewer.sequence
+    assert all(
+        span.parent_span_id is not None
+        for span in trace.spans
+        if span.span_id != trace.root_span_id
+    )
+
+
+def test_final_review_rejection_preserves_successful_task_trace_history(
+    tmp_path,
+):
+    runner, store = orchestrator(
+        tmp_path,
+        reviewer=FakeReviewer(approved=False),
+    )
+
+    report = runner.run_durable(
+        runner.create_durable_run("Create calculator")
+    )
+    trace = store.get_run_trace(report.run_id)
+    task_spans = [
+        span for span in trace.spans if span.span_type == TraceSpanType.TASK
+    ]
+
+    assert report.status == RunStatus.FAILED
+    assert trace.status == TraceStatus.FAILED
+    assert trace.spans[0].failure.category == "durable_run_failed"
+    assert all(span.status == TraceStatus.SUCCEEDED for span in task_spans)
+    assert any(
+        span.name == "final reviewer"
+        and span.status == TraceStatus.SUCCEEDED
+        for span in trace.spans
+    )
 
 
 def test_durable_run_persists_custom_tool_budget_for_resume(tmp_path):
