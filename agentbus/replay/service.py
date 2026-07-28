@@ -819,7 +819,7 @@ class _CachedToolReplayPlanner:
     def __init__(self, planner: ToolReplayPlanner) -> None:
         self._planner = planner
         self._assessments: dict[
-            tuple[str, int, str, str, str],
+            tuple[str, int, str, str, str, str],
             ToolReplayAssessment,
         ] = {}
 
@@ -836,12 +836,16 @@ class _CachedToolReplayPlanner:
                 current_descriptor.model_dump(mode="json")
             )
         ).hexdigest()
+        envelope_sha256 = hashlib.sha256(
+            canonical_json_bytes(envelope.model_dump(mode="json"))
+        ).hexdigest()
         key = (
             envelope.invocation.invocation_id,
             envelope.invocation.invocation_revision,
             mode.value,
             str(isolated_workspace),
             descriptor_sha256,
+            envelope_sha256,
         )
         assessment = self._assessments.get(key)
         if assessment is None:

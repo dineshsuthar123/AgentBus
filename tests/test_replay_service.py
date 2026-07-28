@@ -13,8 +13,12 @@ from agentbus.replay import (
     ReplaySessionStatus,
     ReplaySpanAction,
     ToolReplayPlanner,
+    load_tool_envelope,
 )
-from agentbus.replay.service import TraceReplayService
+from agentbus.replay.service import (
+    TraceReplayService,
+    _CachedToolReplayPlanner,
+)
 from agentbus.sandbox.platform import ExecutableCatalog
 from agentbus.tools import builtin_tool_registry
 from agentbus.tools.capabilities import derive_required_capabilities
@@ -258,6 +262,44 @@ def test_service_replays_managed_tool_through_current_policy_once(
         for reference in source_by_id[policy_span.span_id].output_references
     }
     assert result.session.policy_drift == []
+
+
+def test_service_policy_cache_distinguishes_changed_envelopes(
+    tmp_path,
+) -> None:
+    config, store, service = _service(tmp_path)
+    trace, _ = _record_tool_run(config, store, "run-cache-envelope")
+    tool_span = next(
+        span
+        for span in trace.spans
+        if span.span_type == TraceSpanType.TOOL_INVOCATION
+    )
+    envelope = load_tool_envelope(
+        service.object_store,
+        tool_span.output_references[0].sha256,
+    )
+    calls = []
+
+    class CountingPlanner:
+        def assess(self, *args, **kwargs):
+            calls.append(args[0])
+            return ToolReplayPlanner().assess(*args, **kwargs)
+
+    planner = _CachedToolReplayPlanner(CountingPlanner())
+    descriptor = service.tool_descriptors[envelope.descriptor.name]
+
+    planner.assess(
+        envelope,
+        descriptor,
+        mode=ReplayMode.OFFLINE,
+    )
+    planner.assess(
+        envelope.model_copy(update={"result": None}),
+        descriptor,
+        mode=ReplayMode.OFFLINE,
+    )
+
+    assert len(calls) == 2
 
 
 def test_service_partial_replay_uses_owned_isolation_and_persists_it(
