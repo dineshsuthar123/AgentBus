@@ -1,15 +1,23 @@
 import assert from "node:assert/strict";
+import { readFile, stat, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import * as vscode from "vscode";
-import { AgentBusApiError } from "../../apiClient";
+import { AgentBusApiError, type AgentBusClient } from "../../apiClient";
 import { formatApprovalConfirmation } from "../../approvalPresentation";
 import { toolArtifactUri } from "../../artifactDocuments";
 import type { AgentBusExtensionApi } from "../../extension";
 import type {
   ApprovalSummary,
   CancelResponse,
+  ComparisonResponse,
+  RegressionFixtureCaptureResponse,
+  ReplayAcceptedResponse,
+  ReplaySessionResponse,
   RunAcceptedResponse,
   RunCreateRequest,
   RunSummary,
+  TraceArchiveExportResponse,
+  TraceArchiveImportResponse,
   ToolInvocationSummary
 } from "../../generated/protocol";
 
@@ -23,6 +31,7 @@ export async function run(): Promise<void> {
   const mcpPrivateMarker = requiredEnvironment("AGENTBUS_E2E_MCP_MARKER");
   const registryPath = requiredEnvironment("AGENTBUS_E2E_REGISTRY");
   const workspace = requiredEnvironment("AGENTBUS_E2E_WORKSPACE");
+  const artifactRoot = requiredEnvironment("AGENTBUS_E2E_ARTIFACT_ROOT");
   const configuration = vscode.workspace.getConfiguration("agentbus");
   await configuration.update(
     "pythonPath",
@@ -65,6 +74,18 @@ export async function run(): Promise<void> {
   assert.ok(commands.includes("agentbus.openToolArtifact"));
   assert.ok(commands.includes("agentbus.checkMcpServer"));
   assert.ok(commands.includes("agentbus.runDoctor"));
+  assert.ok(commands.includes("agentbus.showExecutionTimeline"));
+  assert.ok(commands.includes("agentbus.showSpan"));
+  assert.ok(commands.includes("agentbus.showReplaySession"));
+  assert.ok(commands.includes("agentbus.replayRunOffline"));
+  assert.ok(commands.includes("agentbus.replayFromCheckpoint"));
+  assert.ok(commands.includes("agentbus.forkRun"));
+  assert.ok(commands.includes("agentbus.showComparison"));
+  assert.ok(commands.includes("agentbus.openStructuredReplayDifferences"));
+  assert.ok(commands.includes("agentbus.exportTrace"));
+  assert.ok(commands.includes("agentbus.importTrace"));
+  assert.ok(commands.includes("agentbus.captureRegressionFixture"));
+  assert.ok(commands.includes("agentbus.openProvenanceManifest"));
 
   const client = await api.client();
   const initialDaemon = api.daemonId();
@@ -177,6 +198,14 @@ export async function run(): Promise<void> {
   assert.match(successReport.getText(), /commit_identifier/);
   assert.match(successReport.getText(), /## Tool Runtime/);
   assert.match(successReport.getText(), /acceptance_tool\.py/);
+
+  const replayLifecycle = await exerciseReplayLifecycle({
+    client,
+    runId: toolRun.run_id,
+    workspace,
+    artifactRoot,
+    mcpPrivateMarker
+  });
 
   const approvalRun = await submitAfterWorkspaceRelease(
     runRequest(
@@ -385,6 +414,34 @@ export async function run(): Promise<void> {
     "cancelled"
   );
   const recoveredClient = await api.client();
+  const recoveredReplays = await recoveredClient.listReplays(
+    replayLifecycle.traceId,
+    undefined,
+    500
+  );
+  const recoveredReplayIds = new Set(
+    recoveredReplays.replays.map((replay) => replay.replay_id)
+  );
+  assert.ok(recoveredReplayIds.has(replayLifecycle.fullReplayId));
+  assert.ok(recoveredReplayIds.has(replayLifecycle.checkpointReplayId));
+  assert.ok(recoveredReplayIds.has(replayLifecycle.forkReplayId));
+  assert.ok(
+    recoveredReplays.replays.every(
+      (replay) =>
+        !recoveredReplayIds.has(replay.replay_id) ||
+        replay.status === "succeeded"
+    )
+  );
+  const recoveredComparison = await recoveredClient.comparison(
+    replayLifecycle.comparisonId,
+    0,
+    500
+  );
+  assert.equal(
+    recoveredComparison.right_trace_id,
+    replayLifecycle.forkTraceId
+  );
+  assert.ok(recoveredComparison.categories?.includes("expected"));
   assert.equal(
     requiredInvocation(
       (await recoveredClient.toolInvocations(toolRun.run_id)).invocations,
@@ -403,6 +460,357 @@ export async function run(): Promise<void> {
   );
   assert.equal((await recoveredClient.mcpServers()).servers[0]?.server_id, "fixture");
   await vscode.commands.executeCommand("agentbus.stopDaemon");
+}
+
+interface ReplayLifecycleInput {
+  client: AgentBusClient;
+  runId: string;
+  workspace: string;
+  artifactRoot: string;
+  mcpPrivateMarker: string;
+}
+
+interface ReplayLifecycleState {
+  traceId: string;
+  fullReplayId: string;
+  checkpointReplayId: string;
+  forkReplayId: string;
+  forkTraceId: string;
+  comparisonId: string;
+}
+
+async function exerciseReplayLifecycle(
+  input: ReplayLifecycleInput
+): Promise<ReplayLifecycleState> {
+  const {
+    client,
+    runId,
+    workspace,
+    artifactRoot,
+    mcpPrivateMarker
+  } = input;
+  const reportBefore = await client.report(runId);
+  const diffBefore = await client.diff(runId);
+  const sourceBefore = await readFile(
+    join(workspace, "acceptance_tool.py"),
+    "utf8"
+  );
+  const trace = await client.trace(runId);
+  assert.equal(trace.status, "succeeded");
+  assert.ok(trace.completed_at);
+  assert.ok(trace.checkpoint_count > 0);
+  assert.equal(trace.checkpoints_truncated, false);
+
+  const spanPage = await client.traceSpans(runId, 0, 500);
+  assert.equal(spanPage.truncated, false);
+  const spanTypes = new Set(spanPage.spans.map((span) => span.span_type));
+  for (const required of [
+    "provider_request",
+    "provider_response",
+    "model_parse",
+    "tool_policy",
+    "tool_invocation",
+    "verifier",
+    "reviewer"
+  ]) {
+    assert.ok(spanTypes.has(required), `Missing ${required} timeline span`);
+  }
+  await vscode.commands.executeCommand("agentbus.showExecutionTimeline");
+  const providerSpan = spanPage.spans.find(
+    (span) => span.span_type === "provider_response"
+  );
+  assert.ok(providerSpan);
+  await vscode.commands.executeCommand("agentbus.showSpan", {
+    value: providerSpan
+  });
+  const spanDocument = await waitFor(() =>
+    vscode.workspace.textDocuments.find(
+      (document) =>
+        document.uri.scheme === "agentbus-span" &&
+        document.uri.path.includes(providerSpan.span_id)
+    )
+  );
+  assert.match(spanDocument.getText(), /provider\\_response/);
+  assert.doesNotMatch(spanDocument.getText(), new RegExp(mcpPrivateMarker));
+
+  const provenance = await client.provenance(runId);
+  assert.equal(provenance.trace_id, trace.trace_id);
+  assert.match(provenance.integrity_root, /^[0-9a-f]{64}$/);
+  await vscode.commands.executeCommand(
+    "agentbus.openProvenanceManifest",
+    runId
+  );
+  const provenanceDocument = await waitFor(() =>
+    vscode.workspace.textDocuments.find(
+      (document) =>
+        document.uri.scheme === "agentbus-provenance" &&
+        document.uri.path.includes(runId)
+    )
+  );
+  assert.match(provenanceDocument.getText(), /Provenance root/);
+  assert.match(provenanceDocument.getText(), /Replayable offline/);
+  assert.doesNotMatch(
+    provenanceDocument.getText(),
+    new RegExp(mcpPrivateMarker)
+  );
+
+  const fullAccepted = await vscode.commands.executeCommand<
+    ReplayAcceptedResponse
+  >("agentbus.replayRunOffline", runId);
+  assert.ok(fullAccepted?.replay_id);
+  const fullReplay = await waitForReplay(client, fullAccepted.replay_id);
+  assertProviderlessReplay(fullReplay, false);
+  assert.ok(
+    fullReplay.span_results?.some(
+      (result) =>
+        result.action === "replayed" &&
+        result.span_id ===
+          spanPage.spans.find((span) => span.span_type === "model_parse")
+            ?.span_id
+    )
+  );
+  await vscode.commands.executeCommand("agentbus.showReplaySession", {
+    value: fullReplay
+  });
+  const replayDocument = await waitFor(() =>
+    vscode.workspace.textDocuments.find(
+      (document) =>
+        document.uri.scheme === "agentbus-replay" &&
+        document.uri.path.includes(fullReplay.replay_id)
+    )
+  );
+  assert.match(replayDocument.getText(), /Provider calls \| 0/);
+  assert.match(replayDocument.getText(), /Network calls \| 0/);
+  assert.match(replayDocument.getText(), /Captured provider payloads are not rendered/);
+
+  const checkpoint = trace.checkpoints?.find(
+    (candidate) =>
+      candidate.replayable &&
+      candidate.label === "task-graph-persisted"
+  ) ?? trace.checkpoints?.find((candidate) => candidate.replayable);
+  assert.ok(checkpoint, "The completed run has no replayable checkpoint");
+  const checkpointAccepted = await vscode.commands.executeCommand<
+    ReplayAcceptedResponse
+  >("agentbus.replayFromCheckpoint", {
+    runId,
+    checkpointId: checkpoint.checkpoint_id
+  });
+  assert.ok(checkpointAccepted?.replay_id);
+  const checkpointReplay = await waitForReplay(
+    client,
+    checkpointAccepted.replay_id
+  );
+  assertProviderlessReplay(checkpointReplay, true);
+  assert.equal(
+    checkpointReplay.from_checkpoint_id,
+    checkpoint.checkpoint_id
+  );
+
+  const forkAccepted = await vscode.commands.executeCommand<
+    ReplayAcceptedResponse
+  >("agentbus.forkRun", {
+    runId,
+    changedInputs: {
+      resource_budgets: { invocations_per_run: 64 }
+    }
+  });
+  assert.ok(forkAccepted?.replay_id);
+  const forkReplay = await waitForReplay(client, forkAccepted.replay_id);
+  assertProviderlessReplay(forkReplay, false);
+  assert.equal(forkReplay.fork, true);
+  assert.deepEqual(forkReplay.changed_input_names, ["resource_budgets"]);
+  assert.ok(forkReplay.result_trace_id);
+  assert.ok(forkReplay.comparison_id);
+  const comparison = await client.comparison(
+    forkReplay.comparison_id,
+    0,
+    500
+  );
+  assertExpectedComparison(
+    comparison,
+    trace.trace_id,
+    forkReplay.result_trace_id,
+    provenance.integrity_root
+  );
+  await vscode.commands.executeCommand("agentbus.showComparison", {
+    value: { comparison }
+  });
+  const comparisonDocument = await waitFor(() =>
+    vscode.workspace.textDocuments.find(
+      (document) =>
+        document.uri.scheme === "agentbus-comparison" &&
+        document.uri.path.includes(comparison.comparison_id)
+    )
+  );
+  assert.match(comparisonDocument.getText(), /Expected Differences/);
+  assert.match(comparisonDocument.getText(), /Provenance root changed \| true/);
+  await vscode.commands.executeCommand(
+    "agentbus.openStructuredReplayDifferences",
+    { value: { comparison } }
+  );
+  const comparisonSides = await waitFor(() => {
+    const documents = vscode.workspace.textDocuments.filter(
+      (document) =>
+        document.uri.scheme === "agentbus-comparison-side" &&
+        document.uri.path.includes(comparison.comparison_id)
+    );
+    return documents.length === 2 ? documents : undefined;
+  });
+  assert.ok(
+    comparisonSides.every((document) =>
+      document.getText().includes('"categories"')
+    )
+  );
+  assert.ok(
+    comparisonSides.every((document) =>
+      document.getText().includes('"sha256"')
+    )
+  );
+
+  const tracePath = join(
+    artifactRoot,
+    `${trace.trace_id}.agentbus-trace`
+  );
+  const corruptPath = join(
+    artifactRoot,
+    `${trace.trace_id}.corrupt.agentbus-trace`
+  );
+  const fixturePath = join(
+    artifactRoot,
+    `${trace.trace_id}.regression.agentbus-trace`
+  );
+  assert.equal(tracePath.startsWith(workspace), false);
+  const exported = await vscode.commands.executeCommand<
+    TraceArchiveExportResponse
+  >("agentbus.exportTrace", {
+    runId,
+    destination: tracePath,
+    includeSourceContent: true
+  });
+  assert.ok(exported);
+  assert.equal(exported.trace_id, trace.trace_id);
+  assert.equal(exported.source_content_included, true);
+  const archiveBytes = await readFile(tracePath);
+  assert.ok(archiveBytes.length > 0 && archiveBytes.length <= 650_000);
+  assert.equal((await stat(tracePath)).size, archiveBytes.length);
+
+  const imported = await vscode.commands.executeCommand<
+    TraceArchiveImportResponse
+  >("agentbus.importTrace", {
+    source: tracePath,
+    allowSourceContent: true
+  });
+  assert.ok(imported);
+  assert.equal(imported.trace_id, trace.trace_id);
+  assert.equal(imported.replay_started, false);
+
+  const replayCountBeforeCorruption = (
+    await client.listReplays(trace.trace_id, undefined, 500)
+  ).total;
+  const corruptArchive = Buffer.from(archiveBytes);
+  corruptArchive[0] = (corruptArchive[0] ?? 0) ^ 0xff;
+  await writeFile(corruptPath, corruptArchive);
+  let corruptionRejected = false;
+  try {
+    await vscode.commands.executeCommand("agentbus.importTrace", {
+      source: corruptPath,
+      allowSourceContent: true
+    });
+  } catch (error) {
+    assert.ok(error instanceof AgentBusApiError);
+    assert.equal(error.status, 409);
+    corruptionRejected = true;
+  }
+  assert.equal(corruptionRejected, true);
+  assert.equal(
+    (await client.listReplays(trace.trace_id, undefined, 500)).total,
+    replayCountBeforeCorruption
+  );
+
+  const fixture = await vscode.commands.executeCommand<
+    RegressionFixtureCaptureResponse
+  >("agentbus.captureRegressionFixture", {
+    runId,
+    destination: fixturePath,
+    includeSourceContent: true
+  });
+  assert.ok(fixture);
+  assert.equal(fixture.trace_id, trace.trace_id);
+  assert.equal(fixture.assertions_validated, true);
+  assert.equal(fixture.replay_started, false);
+  assert.ok((await stat(fixturePath)).size > 0);
+
+  assert.deepEqual(await client.report(runId), reportBefore);
+  assert.deepEqual(await client.diff(runId), diffBefore);
+  assert.equal(
+    await readFile(join(workspace, "acceptance_tool.py"), "utf8"),
+    sourceBefore
+  );
+  return {
+    traceId: trace.trace_id,
+    fullReplayId: fullReplay.replay_id,
+    checkpointReplayId: checkpointReplay.replay_id,
+    forkReplayId: forkReplay.replay_id,
+    forkTraceId: forkReplay.result_trace_id,
+    comparisonId: forkReplay.comparison_id
+  };
+}
+
+async function waitForReplay(
+  client: AgentBusClient,
+  replayId: string
+): Promise<ReplaySessionResponse> {
+  const terminal = new Set([
+    "succeeded",
+    "failed",
+    "cancelled",
+    "incompatible",
+    "awaiting_input"
+  ]);
+  return waitFor(async () => {
+    try {
+      const replay = await client.replay(replayId);
+      return terminal.has(replay.status) ? replay : undefined;
+    } catch {
+      return undefined;
+    }
+  }, 60_000);
+}
+
+function assertProviderlessReplay(
+  replay: ReplaySessionResponse,
+  isolated: boolean
+): void {
+  assert.equal(replay.status, "succeeded", replay.failure_message ?? undefined);
+  assert.equal(replay.provider_calls, 0);
+  assert.equal(replay.network_calls, 0);
+  assert.deepEqual(replay.missing_inputs, []);
+  assert.equal(replay.isolated, isolated);
+  assert.equal(
+    replay.isolation_scope,
+    isolated ? "daemon_managed_temporary_workspace" : null
+  );
+}
+
+function assertExpectedComparison(
+  comparison: ComparisonResponse,
+  sourceTraceId: string,
+  forkTraceId: string,
+  sourceProvenanceRoot: string
+): void {
+  assert.equal(comparison.left_trace_id, sourceTraceId);
+  assert.equal(comparison.right_trace_id, forkTraceId);
+  assert.equal(comparison.left_provenance_root, sourceProvenanceRoot);
+  assert.notEqual(comparison.right_provenance_root, sourceProvenanceRoot);
+  assert.equal(comparison.summary.provenance_root_changed, true);
+  assert.ok(comparison.categories?.includes("expected"));
+  assert.ok(
+    comparison.summary.changed_spans +
+      comparison.summary.added_spans +
+      comparison.summary.removed_spans >
+      0
+  );
+  assert.equal(comparison.truncated, false);
 }
 
 function runRequest(
