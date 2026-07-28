@@ -94,16 +94,24 @@ def sanitize_document(
         raise ValueError("max_text_chars must be positive")
     if max_collection_items < 1 or max_nodes < 1 or max_depth < 1:
         raise ValueError("trace redaction bounds must be positive")
-    resolved_roots = {
-        str(Path(root).expanduser().resolve())
-        for root in private_roots
-        if str(root).strip()
-    }
+    configured_roots: set[str] = set()
+    for root in private_roots:
+        raw_root = str(root).strip()
+        if not raw_root:
+            continue
+        expanded_root = str(Path(raw_root).expanduser())
+        configured_roots.update(
+            {
+                raw_root,
+                expanded_root,
+                str(Path(expanded_root).resolve()),
+            }
+        )
     roots = tuple(
         sorted(
             {
                 variant
-                for root in resolved_roots
+                for root in configured_roots
                 for variant in {
                     root,
                     root.replace("\\", "/"),
@@ -330,6 +338,10 @@ def _sanitize_string(
         counters.replacements += 1
         if sanitized.endswith("\n[truncated]"):
             counters.truncated_values += 1
+    for pattern in (_WINDOWS_HOME_PATTERN, _POSIX_HOME_PATTERN):
+        sanitized, replacement_count = pattern.subn(PRIVATE_PATH, sanitized)
+        counters.replacements += replacement_count
+        counters.private_paths += replacement_count
     for root in roots:
         replacement_count = sanitized.lower().count(root.lower())
         if replacement_count:
@@ -341,10 +353,6 @@ def _sanitize_string(
             )
             counters.replacements += replacement_count
             counters.private_paths += replacement_count
-    for pattern in (_WINDOWS_HOME_PATTERN, _POSIX_HOME_PATTERN):
-        sanitized, replacement_count = pattern.subn(PRIVATE_PATH, sanitized)
-        counters.replacements += replacement_count
-        counters.private_paths += replacement_count
     if _PRIVATE_KEY_PATTERN.search(sanitized):
         counters.replacements += 1
         counters.secret_fields += 1

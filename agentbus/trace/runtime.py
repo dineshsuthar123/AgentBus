@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, TypeVar
 
-from agentbus.security.redaction import redact_text
+from agentbus.security.redaction import redact_text, sanitize_json
 from agentbus.trace.context import TraceContext, trace_context
 from agentbus.trace.events import TraceEventType
 from agentbus.trace.models import (
@@ -23,6 +23,7 @@ from agentbus.trace.models import (
 )
 from agentbus.trace.persistence import StateStoreTraceSink
 from agentbus.trace.recorder import TraceRecorder
+from agentbus.trace.redaction import sanitize_document
 from agentbus.trace.storage import ContentAddressedStore
 
 _Result = TypeVar("_Result")
@@ -37,9 +38,11 @@ class RuntimeTrace:
         object_store: ContentAddressedStore | None,
         *,
         terminal_trace: Trace | None = None,
+        private_roots: tuple[str | Path, ...] = (),
     ) -> None:
         self.recorder = recorder
         self.object_store = object_store
+        self.private_roots = private_roots
         self._terminal_trace = terminal_trace
         self._checkpoint_guard = threading.RLock()
         snapshot = (
@@ -66,10 +69,11 @@ class RuntimeTrace:
     ) -> "RuntimeTrace":
         object_store: ContentAddressedStore | None
         object_error: Exception | None = None
+        private_roots = (workspace, Path.home())
         try:
             object_store = ContentAddressedStore(
                 object_root,
-                private_roots=(workspace, Path.home()),
+                private_roots=private_roots,
             )
         except Exception as exc:
             object_store = None
@@ -81,7 +85,7 @@ class RuntimeTrace:
             recorder = TraceRecorder(run_id, sink=sink)
             recorder.start_trace(
                 name="AgentBus durable run",
-                attributes=root_attributes or {},
+                attributes=_safe_mapping(root_attributes, private_roots) or {},
             )
         elif existing.status == TraceStatus.RUNNING:
             recorder = TraceRecorder.resume(
@@ -96,8 +100,13 @@ class RuntimeTrace:
                 None,
                 object_store,
                 terminal_trace=existing,
+                private_roots=private_roots,
             )
-        runtime = cls(recorder, object_store)
+        runtime = cls(
+            recorder,
+            object_store,
+            private_roots=private_roots,
+        )
         if object_error is not None:
             runtime.recording_failed("object_store", object_error)
         return runtime
@@ -142,7 +151,13 @@ class RuntimeTrace:
         if self.recorder is None:
             return None
         try:
-            return self.recorder.start_span(span_type, name, **kwargs)
+            safe_kwargs = dict(kwargs)
+            if "attributes" in safe_kwargs:
+                safe_kwargs["attributes"] = _safe_mapping(
+                    safe_kwargs["attributes"],
+                    self.private_roots,
+                )
+            return self.recorder.start_span(span_type, name, **safe_kwargs)
         except Exception as exc:
             self.recording_failed("span_start", exc)
             return None
@@ -174,9 +189,14 @@ class RuntimeTrace:
                 policy_decision_references=policy_decision_references,
                 approval_references=approval_references,
                 artifact_references=artifact_references,
-                cancellation_state=cancellation_state,
+                cancellation_state=_safe_mapping(
+                    cancellation_state,
+                    self.private_roots,
+                )
+                if cancellation_state is not None
+                else None,
                 resource_usage=resource_usage,
-                attributes=attributes,
+                attributes=_safe_mapping(attributes, self.private_roots),
             )
         except Exception as exc:
             self.recording_failed("span_finish", exc)
@@ -400,7 +420,7 @@ class RuntimeTrace:
                 event_type,
                 span_id=context.span_id if context is not None else None,
                 task_id=task_id,
-                attributes=attributes,
+                attributes=_safe_mapping(attributes, self.private_roots),
             )
         except Exception as exc:
             self.recording_failed("event", exc)
@@ -419,7 +439,7 @@ class RuntimeTrace:
             trace = self.recorder.finish_trace(
                 status=status,
                 failure=failure,
-                attributes=attributes,
+                attributes=_safe_mapping(attributes, self.private_roots),
             )
         except Exception as exc:
             self.recording_failed("trace_finish", exc)
@@ -472,6 +492,24 @@ def _safe_failure(
         message=redact_text(str(error), max_chars=2_000) or "Operation failed.",
         retryable=retryable,
     )
+
+
+def _safe_mapping(
+    value: dict[str, Any] | None,
+    private_roots: tuple[str | Path, ...],
+) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not value:
+        return {}
+    try:
+        sanitized = sanitize_document(
+            sanitize_json(value),
+            private_roots=private_roots,
+        ).value
+    except (TypeError, ValueError):
+        return {}
+    return sanitized if isinstance(sanitized, dict) else {}
 
 
 def _reference_id(

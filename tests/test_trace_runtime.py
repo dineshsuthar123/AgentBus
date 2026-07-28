@@ -117,3 +117,34 @@ def test_terminal_runtime_trace_is_read_only_on_reopen(tmp_path) -> None:
     assert restored.active is False
     assert restored.snapshot() == expected
     assert restored.start_span(TraceSpanType.TASK, "ignored") is None
+
+
+def test_runtime_trace_redacts_foreign_platform_workspace_attributes(
+    tmp_path,
+) -> None:
+    workspace = "/tmp/private-agentbus-workspace"
+    store = StateStore(tmp_path / "state.db")
+    store.create_run(_run(tmp_path, "run-foreign-path"))
+    runtime = RuntimeTrace.open(
+        store,
+        "run-foreign-path",
+        object_root=tmp_path / "objects",
+        workspace=workspace,
+    )
+
+    span = runtime.start_span(
+        TraceSpanType.TASK,
+        "foreign path",
+        attributes={
+            "workspace": f"{workspace}/worktree",
+            "version": Path("1.0"),
+        },
+    )
+    runtime.finish_span(span)
+    trace = runtime.finish(status=TraceStatus.SUCCEEDED)
+
+    assert trace is not None
+    serialized = trace.model_dump_json()
+    assert workspace not in serialized
+    assert "[PRIVATE_PATH]" in serialized
+    assert trace.spans[1].attributes["version"] == "1.0"

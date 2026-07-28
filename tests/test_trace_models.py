@@ -61,6 +61,7 @@ def test_trace_contract_is_versioned_and_hierarchical() -> None:
 
 
 def test_trace_sanitizes_sensitive_attributes_and_failure_text() -> None:
+    password_value = "synthetic-" + "password-value"
     failed = TraceSpan(
         trace_id="trace-1",
         span_id="task-1",
@@ -76,7 +77,7 @@ def test_trace_sanitizes_sensitive_attributes_and_failure_text() -> None:
         failure=TraceFailure(
             category="provider",
             message="authorization: Bearer abc.def",
-            details={"password": "not-for-storage"},
+            details={"password": password_value},
         ),
     )
 

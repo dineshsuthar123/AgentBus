@@ -49,7 +49,7 @@ def test_text_redaction_is_bounded_and_reports_truncation() -> None:
 @pytest.mark.parametrize(
     "payload",
     [
-        "Authorization: Bearer abcdefghijklmnop",
+        "Authorization: Bearer " + "synthetic-" + "bearer-value",
         "api_key=definitely-secret",
         "-----BEGIN PRIVATE KEY-----\nsecret",
         b"\x00\xff",
@@ -92,6 +92,29 @@ def test_home_paths_with_spaces_are_fully_redacted() -> None:
 
     assert windows.value == PRIVATE_PATH
     assert posix.value == PRIVATE_PATH
+
+
+@pytest.mark.parametrize(
+    ("root", "value"),
+    [
+        (
+            "D:/private-agentbus-worktrees/run-1",
+            r"D:\private-agentbus-worktrees\run-1\artifact.txt",
+        ),
+        (
+            "/tmp/private-agentbus-worktrees/run-1",
+            "/tmp/private-agentbus-worktrees/run-1/artifact.txt",
+        ),
+    ],
+)
+def test_explicit_private_roots_are_redacted_independent_of_host_os(
+    root: str,
+    value: str,
+) -> None:
+    document = sanitize_text(value, private_roots=[root])
+
+    assert document.value.startswith(PRIVATE_PATH)
+    assert "private-agentbus-worktrees" not in document.value
 
 
 def test_explicit_private_root_matches_alternate_path_separators(

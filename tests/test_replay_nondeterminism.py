@@ -200,14 +200,16 @@ def test_recorded_inputs_are_injected_without_global_monkeypatches() -> None:
 
 
 def test_finding_sanitizes_evidence_and_reason() -> None:
+    bearer_value = "synthetic-" + "bearer-value"
+    password_value = "synthetic-" + "password-value"
     finding = NondeterminismFinding(
         source=NondeterminismSource.ENVIRONMENT,
         disposition=NondeterminismDisposition.CAPTURED,
-        reason="authorization: Bearer abcdefghijklmnop",
-        evidence={"password": "do-not-store"},
+        reason=f"authorization: Bearer {bearer_value}",
+        evidence={"password": password_value},
     )
 
     serialized = finding.model_dump_json()
-    assert "abcdefghijklmnop" not in serialized
-    assert "do-not-store" not in serialized
+    assert bearer_value not in serialized
+    assert password_value not in serialized
     assert "REDACTED" in serialized
