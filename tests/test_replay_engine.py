@@ -278,6 +278,41 @@ def test_simulation_replays_external_state_without_calling_it(tmp_path: Path) ->
     assert external.action.value == "simulated"
 
 
+def test_offline_replay_simulates_recorded_mutation_by_default(
+    tmp_path: Path,
+) -> None:
+    store, trace = _fixture(tmp_path)
+    trace = Trace.model_validate(
+        trace.model_copy(
+            update={
+                "spans": [
+                    span.model_copy(
+                        update={
+                            "attributes": {
+                                "tool_effect": "filesystem_mutation",
+                                "replay_strategy": "rerun_sandbox",
+                            }
+                        }
+                    )
+                    if span.span_id == "tool"
+                    else span
+                    for span in trace.spans
+                ]
+            }
+        ).model_dump()
+    )
+
+    result = ReplayEngine(store).replay(trace, _request())
+
+    assert result.session.status == ReplaySessionStatus.SUCCEEDED
+    tool = next(
+        item for item in result.session.span_results if item.span_id == "tool"
+    )
+    assert tool.action.value == "simulated"
+    assert result.session.provider_calls == 0
+    assert result.session.network_calls == 0
+
+
 def test_replay_cancellation_is_cooperative_and_bounded(tmp_path: Path) -> None:
     store, trace = _fixture(tmp_path)
 

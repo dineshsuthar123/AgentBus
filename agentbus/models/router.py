@@ -652,6 +652,11 @@ class RoutedModel:
                 "model": self.last_result.model,
             },
         )
+        parse_input = runtime_trace.capture_json_input(
+            span,
+            "model.raw",
+            self.last_result.value,
+        )
         try:
             value = (
                 self.last_result.json_value()
@@ -672,6 +677,9 @@ class RoutedModel:
         )
         runtime_trace.finish_span(
             span,
+            input_references=(
+                [parse_input] if parse_input is not None else []
+            ),
             output_references=[output] if output is not None else [],
         )
         return value

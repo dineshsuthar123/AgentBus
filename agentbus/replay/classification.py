@@ -130,8 +130,44 @@ class ReplayabilityClassifier:
                 required=required,
             )
 
+        if span.span_type == TraceSpanType.MODEL_PARSE:
+            captured_values = [
+                *span.input_references,
+                *(
+                    reference
+                    for reference in span.output_references
+                    if reference.replayable
+                ),
+            ]
+            if not captured_values:
+                return _result(
+                    span,
+                    ReplayabilityLevel.NON_REPLAYABLE,
+                    ["No captured structured model value is available."],
+                    required=required,
+                )
+            missing_values = sorted(
+                {
+                    reference.sha256
+                    for reference in captured_values
+                    if reference.sha256 not in available
+                }
+            )
+            if missing_values:
+                return _result(
+                    span,
+                    ReplayabilityLevel.NON_REPLAYABLE,
+                    ["Captured structured model values are unavailable."],
+                    required=required,
+                    missing=missing_values,
+                )
+            return _result(
+                span,
+                ReplayabilityLevel.EXACTLY_REPLAYABLE,
+                ["Captured structured model input can be parsed deterministically."],
+                required=required,
+            )
         if span.span_type in {
-            TraceSpanType.MODEL_PARSE,
             TraceSpanType.TOOL_POLICY,
             TraceSpanType.VERIFIER,
             TraceSpanType.REVIEWER,

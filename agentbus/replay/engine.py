@@ -281,7 +281,7 @@ class ReplayEngine:
         if span.span_type == TraceSpanType.MODEL_PARSE:
             parsed = _validate_registered_schema(
                 span,
-                loaded_inputs,
+                loaded_inputs or loaded_outputs,
                 self.schemas.get(span.span_id),
             )
             return (
@@ -687,13 +687,19 @@ def _default_tool_strategy(
 ) -> ToolReplayStrategy:
     if mode == ReplayMode.SIMULATE:
         return ToolReplayStrategy.SIMULATE_MUTATION
+    effect = str(span.attributes.get("tool_effect", "unknown")).lower()
+    if mode == ReplayMode.OFFLINE and effect in {
+        "filesystem_mutation",
+        "git_mutation",
+        "process",
+    }:
+        return ToolReplayStrategy.SIMULATE_MUTATION
     configured = span.attributes.get("replay_strategy")
     if configured is not None:
         try:
             return ToolReplayStrategy(str(configured))
         except ValueError:
             return ToolReplayStrategy.REJECT
-    effect = str(span.attributes.get("tool_effect", "unknown")).lower()
     if effect in {"read", "pure_read"}:
         return ToolReplayStrategy.REUSE_CAPTURED
     if effect in {"filesystem_mutation", "git_mutation", "process"}:

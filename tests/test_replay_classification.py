@@ -169,8 +169,8 @@ def test_run_classification_conservatively_aggregates_span_results() -> None:
         available_object_hashes={OUTPUT},
     )
 
-    assert result.level == ReplayabilityLevel.PARTIALLY_REPLAYABLE
-    assert result.replayable_offline is True
+    assert result.level == ReplayabilityLevel.NON_REPLAYABLE
+    assert result.replayable_offline is False
     assert len(result.spans) == 3
 
 

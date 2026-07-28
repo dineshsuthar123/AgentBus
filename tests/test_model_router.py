@@ -264,7 +264,14 @@ def test_routed_model_records_structured_parse_after_provider_response(tmp_path)
     assert value == {"ok": True}
     assert provider_response.sequence < parsed.sequence
     assert parsed.status == TraceStatus.SUCCEEDED
+    assert parsed.input_references
     assert parsed.output_references
+    assert (
+        trace_runtime.object_store.get_json(
+            parsed.input_references[0].sha256
+        )
+        == {"ok": True}
+    )
 
 
 def test_retry_after_is_honored_and_capped():
