@@ -76,6 +76,8 @@ export function formatReplayDocument(
       ["From span", session.from_span_id ?? "beginning"],
       ["From checkpoint", session.from_checkpoint_id ?? "beginning"],
       ["Fork", session.fork ?? false],
+      ["Result trace", session.result_trace_id ?? "not applicable"],
+      ["Comparison", session.comparison_id ?? "not applicable"],
       ["Isolated", session.isolated ?? false],
       ["Isolation scope", session.isolation_scope ?? "not required"],
       ["Provider calls", session.provider_calls ?? 0],

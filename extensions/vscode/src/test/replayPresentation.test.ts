@@ -24,6 +24,8 @@ const session: ReplaySessionResponse = {
   completed_at: "2026-01-01T00:00:01Z",
   isolated: true,
   changed_input_names: ["budget"],
+  result_trace_id: "trace-fork",
+  comparison_id: "comparison-fork",
   substitutions: ["provider.response"],
   missing_inputs: [],
   policy_drift: ["policy-version"],
@@ -68,6 +70,8 @@ test("replay document exposes safe state and hashes without raw summaries", () =
   assert.match(rendered, /Provider calls \| 0/);
   assert.match(rendered, new RegExp("a{64}"));
   assert.match(rendered, /policy\\-version/);
+  assert.match(rendered, /trace\\-fork/);
+  assert.match(rendered, /comparison\\-fork/);
   assert.doesNotMatch(rendered, /private-value/);
 });
 

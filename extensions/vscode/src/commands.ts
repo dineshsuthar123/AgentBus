@@ -852,6 +852,15 @@ export class CommandController implements vscode.Disposable {
       const replay = await (await this.client()).replay(replayId);
       this.refreshViews();
       if (isTerminalReplayStatus(replay.status)) {
+        if (replay.comparison_id) {
+          const comparison = await (await this.client()).comparison(
+            replay.comparison_id,
+            0,
+            500
+          );
+          await this.comparisons.upsert(comparison);
+          this.refreshViews();
+        }
         const message = `AgentBus replay ${replayId} ${replay.status}.`;
         if (replay.status === "succeeded") {
           void vscode.window.showInformationMessage(message);
