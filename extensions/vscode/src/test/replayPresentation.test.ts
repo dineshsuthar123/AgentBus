@@ -4,10 +4,14 @@ import type { ReplaySessionResponse } from "../generated/protocol";
 import {
   formatReplayabilityDocument,
   formatReplayDocument,
+  FORK_INPUT_NAMES,
   isTerminalReplayStatus,
   offlineReplayBlockReason,
+  parseForkInput,
   REPLAY_GROUPS,
-  replayGroup
+  replayableCheckpoints,
+  replayGroup,
+  validateForkInputs
 } from "../replayPresentation";
 
 const session: ReplaySessionResponse = {
@@ -114,4 +118,68 @@ test("offline replay plan explains substitutions isolation and blockers", () => 
   );
   assert.equal(isTerminalReplayStatus("succeeded"), true);
   assert.equal(isTerminalReplayStatus("running"), false);
+});
+
+test("checkpoint selection is replayable and sequence ordered", () => {
+  const checkpoints = replayableCheckpoints([
+    {
+      checkpoint_id: "checkpoint-3",
+      span_id: "span-3",
+      sequence: 3,
+      label: "task completed",
+      replayable: true,
+      created_at: "2026-01-01T00:00:03Z"
+    },
+    {
+      checkpoint_id: "checkpoint-1",
+      span_id: "span-1",
+      sequence: 1,
+      label: "planning completed",
+      replayable: true,
+      created_at: "2026-01-01T00:00:01Z"
+    },
+    {
+      checkpoint_id: "checkpoint-2",
+      span_id: "span-2",
+      sequence: 2,
+      label: "unsafe",
+      replayable: false,
+      created_at: "2026-01-01T00:00:02Z"
+    }
+  ]);
+
+  assert.deepEqual(
+    checkpoints.map((checkpoint) => checkpoint.checkpoint_id),
+    ["checkpoint-1", "checkpoint-3"]
+  );
+});
+
+test("fork input validation enforces allowlist bounds and live-route safety", () => {
+  assert.equal(FORK_INPUT_NAMES.includes("resource_budgets"), true);
+  assert.deepEqual(
+    parseForkInput("resource_budgets", '{"tokens":100}').changedInputNames,
+    ["resource_budgets"]
+  );
+  assert.equal(
+    validateForkInputs({
+      model_route: { provider: "azure", model: "private-deployment" }
+    }).liveProviderRequested,
+    true
+  );
+  assert.throws(() => validateForkInputs({}), /at least one/);
+  assert.throws(
+    () => validateForkInputs({ unsupported: true }),
+    /Unsupported/
+  );
+  assert.throws(
+    () => parseForkInput("task_text", "not-json"),
+    /valid JSON/
+  );
+  assert.throws(
+    () =>
+      validateForkInputs({
+        task_text: "x".repeat(70_000)
+      }),
+    /64 KiB/
+  );
 });

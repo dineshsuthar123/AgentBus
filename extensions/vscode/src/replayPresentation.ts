@@ -1,6 +1,7 @@
 import type {
   ReplaySessionResponse,
-  RunReplayabilityResponse
+  RunReplayabilityResponse,
+  TraceCheckpointSummary
 } from "./generated/protocol";
 import { redactText } from "./redaction";
 import { escapeMarkdown } from "./toolPresentation";
@@ -227,6 +228,85 @@ export function isTerminalReplayStatus(status: string): boolean {
     "incompatible",
     "awaiting_input"
   ].includes(status);
+}
+
+export const FORK_INPUT_NAMES = [
+  "approval_decisions",
+  "deterministic_provider_profile",
+  "model_route",
+  "policy_configuration",
+  "resource_budgets",
+  "retry_limit",
+  "selected_source_patch",
+  "task_text",
+  "tool_response"
+] as const;
+
+export type ForkInputName = (typeof FORK_INPUT_NAMES)[number];
+
+export interface ValidatedForkInputs {
+  changedInputs: Record<string, unknown>;
+  changedInputNames: string[];
+  liveProviderRequested: boolean;
+}
+
+export function validateForkInputs(
+  value: Record<string, unknown>
+): ValidatedForkInputs {
+  const names = Object.keys(value).sort();
+  if (names.length === 0) {
+    throw new Error("A fork must change at least one input.");
+  }
+  const allowed = new Set<string>(FORK_INPUT_NAMES);
+  const unknown = names.filter((name) => !allowed.has(name));
+  if (unknown.length) {
+    throw new Error(`Unsupported fork input: ${unknown.join(", ")}.`);
+  }
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(value);
+  } catch {
+    throw new Error("Fork inputs must be finite JSON.");
+  }
+  if (!serialized || new TextEncoder().encode(serialized).byteLength > 65_536) {
+    throw new Error("Fork inputs exceed the 64 KiB protocol limit.");
+  }
+  const route = recordValue(value.model_route);
+  const provider = String(route?.provider ?? "").toLowerCase();
+  return {
+    changedInputs: JSON.parse(serialized) as Record<string, unknown>,
+    changedInputNames: names,
+    liveProviderRequested: ["azure", "ollama"].includes(provider)
+  };
+}
+
+export function parseForkInput(
+  name: ForkInputName,
+  json: string
+): ValidatedForkInputs {
+  let value: unknown;
+  try {
+    value = JSON.parse(json);
+  } catch {
+    throw new Error("Fork input must be valid JSON.");
+  }
+  return validateForkInputs({ [name]: value });
+}
+
+export function replayableCheckpoints(
+  checkpoints: readonly TraceCheckpointSummary[]
+): TraceCheckpointSummary[] {
+  return checkpoints
+    .filter((checkpoint) => checkpoint.replayable)
+    .sort((left, right) => left.sequence - right.sequence);
+}
+
+function recordValue(
+  value: unknown
+): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
 }
 
 function table(rows: ReadonlyArray<readonly [string, unknown]>): string {

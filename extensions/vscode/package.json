@@ -84,6 +84,14 @@
         "title": "AgentBus: Replay Run Offline"
       },
       {
+        "command": "agentbus.replayFromCheckpoint",
+        "title": "AgentBus: Replay from Checkpoint"
+      },
+      {
+        "command": "agentbus.forkRun",
+        "title": "AgentBus: Fork Run"
+      },
+      {
         "command": "agentbus.cancelReplay",
         "title": "AgentBus: Cancel Replay"
       },
@@ -252,6 +260,16 @@
           "command": "agentbus.replayRunOffline",
           "when": "viewItem == agentbusRunTerminal",
           "group": "navigation"
+        },
+        {
+          "command": "agentbus.replayFromCheckpoint",
+          "when": "viewItem == agentbusRunTerminal",
+          "group": "navigation@2"
+        },
+        {
+          "command": "agentbus.forkRun",
+          "when": "viewItem == agentbusRunTerminal",
+          "group": "navigation@3"
         },
         {
           "command": "agentbus.approveAction",

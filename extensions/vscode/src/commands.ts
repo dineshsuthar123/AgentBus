@@ -15,6 +15,7 @@ import type {
   McpServerSummary,
   ReplayAcceptedResponse,
   ReplayCancelResponse,
+  ReplayCreateRequest,
   ReplaySessionResponse,
   RunAcceptedResponse,
   RunCreateRequest,
@@ -30,8 +31,14 @@ import { formatMcpServerCheck } from "./mcpPresentation";
 import { replayUri } from "./replayDocuments";
 import { replayPlanUri } from "./replayPlanDocuments";
 import {
+  FORK_INPUT_NAMES,
   isTerminalReplayStatus,
-  offlineReplayBlockReason
+  offlineReplayBlockReason,
+  parseForkInput,
+  replayableCheckpoints,
+  validateForkInputs,
+  type ForkInputName,
+  type ValidatedForkInputs
 } from "./replayPresentation";
 import { spanUri } from "./traceDocuments";
 import {
@@ -103,6 +110,10 @@ export class CommandController implements vscode.Disposable {
     command("agentbus.replayRunOffline", (run) =>
       this.replayRunOffline(run)
     );
+    command("agentbus.replayFromCheckpoint", (request) =>
+      this.replayFromCheckpoint(request)
+    );
+    command("agentbus.forkRun", (request) => this.forkRun(request));
     command("agentbus.cancelReplay", (replay) =>
       this.cancelReplay(replay)
     );
@@ -349,21 +360,131 @@ export class CommandController implements vscode.Disposable {
   ): Promise<ReplayAcceptedResponse | undefined> {
     const run = await this.resolveRun(raw);
     if (!run) return undefined;
-    const client = await this.client();
-    const replayability = await client.replayability(run.run_id, 0, 500);
-    const document = await vscode.workspace.openTextDocument(
-      replayPlanUri(run.run_id, "offline")
-    );
-    await vscode.window.showTextDocument(document, { preview: true });
-    const blocked = offlineReplayBlockReason(replayability);
-    if (blocked) {
-      void vscode.window.showWarningMessage(blocked);
-      return undefined;
-    }
-    const accepted = await client.createReplay(run.run_id, {
+    if (!(await this.prepareOfflineReplay(run.run_id))) return undefined;
+    return this.submitReplay(run.run_id, {
       mode: "offline",
       live_provider_consent: false
     });
+  }
+
+  private async replayFromCheckpoint(
+    raw?: unknown
+  ): Promise<ReplayAcceptedResponse | undefined> {
+    const request = commandRecord(raw);
+    const run = await this.resolveRun(request?.runId ?? raw);
+    if (!run) return undefined;
+    const trace = await (await this.client()).trace(run.run_id);
+    const checkpoints = replayableCheckpoints(trace.checkpoints ?? []);
+    if (checkpoints.length === 0) {
+      void vscode.window.showInformationMessage(
+        "This trace has no replayable checkpoints."
+      );
+      return undefined;
+    }
+    const requestedId =
+      typeof request?.checkpointId === "string"
+        ? request.checkpointId
+        : undefined;
+    let checkpoint = requestedId
+      ? checkpoints.find((value) => value.checkpoint_id === requestedId)
+      : undefined;
+    if (requestedId && !checkpoint) {
+      throw new Error(
+        "The requested checkpoint is not replayable for this trace."
+      );
+    }
+    checkpoint ??= (
+      await vscode.window.showQuickPick(
+        checkpoints.map((value) => ({
+          label: value.label,
+          description: `#${value.sequence} | ${value.checkpoint_id}`,
+          value
+        })),
+        { title: "Replay AgentBus from Checkpoint" }
+      )
+    )?.value;
+    if (!checkpoint) return undefined;
+    if (!(await this.prepareOfflineReplay(run.run_id))) return undefined;
+    void vscode.window.showInformationMessage(
+      `Replay will start from checkpoint ${checkpoint.label} (${checkpoint.checkpoint_id}).`
+    );
+    return this.submitReplay(run.run_id, {
+      mode: "offline",
+      from_checkpoint_id: checkpoint.checkpoint_id,
+      live_provider_consent: false
+    });
+  }
+
+  private async forkRun(
+    raw?: unknown
+  ): Promise<ReplayAcceptedResponse | undefined> {
+    const request = commandRecord(raw);
+    const run = await this.resolveRun(request?.runId ?? raw);
+    if (!run) return undefined;
+    let inputs: ValidatedForkInputs;
+    if (isRecord(request?.changedInputs)) {
+      inputs = validateForkInputs(request.changedInputs);
+    } else {
+      const name = await vscode.window.showQuickPick(
+        FORK_INPUT_NAMES.map((value) => ({
+          label: value,
+          value
+        })),
+        { title: "Select Fork Input" }
+      );
+      if (!name) return undefined;
+      const json = await vscode.window.showInputBox({
+        title: `Fork Input: ${name.value}`,
+        prompt: "Enter the replacement value as JSON",
+        value: "null",
+        validateInput: (value) => {
+          try {
+            parseForkInput(name.value as ForkInputName, value);
+            return undefined;
+          } catch (error) {
+            return safeError(error);
+          }
+        }
+      });
+      if (json === undefined) return undefined;
+      inputs = parseForkInput(name.value as ForkInputName, json);
+    }
+    if (inputs.liveProviderRequested) {
+      void vscode.window.showErrorMessage(
+        "VS Code fork replay does not enable live Azure or Ollama routes. No provider request was sent."
+      );
+      return undefined;
+    }
+    if (!(await this.prepareOfflineReplay(run.run_id))) return undefined;
+    void vscode.window.showInformationMessage(
+      `Fork replay will change: ${inputs.changedInputNames.join(", ")}. Changed values are not displayed.`
+    );
+    return this.submitReplay(run.run_id, {
+      mode: "offline",
+      fork: true,
+      changed_inputs: inputs.changedInputs,
+      live_provider_consent: false
+    });
+  }
+
+  private async prepareOfflineReplay(runId: string): Promise<boolean> {
+    const client = await this.client();
+    const replayability = await client.replayability(runId, 0, 500);
+    const document = await vscode.workspace.openTextDocument(
+      replayPlanUri(runId, "offline")
+    );
+    await vscode.window.showTextDocument(document, { preview: true });
+    const blocked = offlineReplayBlockReason(replayability);
+    if (!blocked) return true;
+    void vscode.window.showWarningMessage(blocked);
+    return false;
+  }
+
+  private async submitReplay(
+    runId: string,
+    request: ReplayCreateRequest
+  ): Promise<ReplayAcceptedResponse> {
+    const accepted = await (await this.client()).createReplay(runId, request);
     this.refreshViews();
     await vscode.commands.executeCommand("agentbus.replays.focus");
     void vscode.window.showInformationMessage(
@@ -961,4 +1082,14 @@ function abortableDelay(
     }, milliseconds);
     signal.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+function commandRecord(
+  value: unknown
+): Record<string, unknown> | undefined {
+  return isRecord(value) ? value : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
