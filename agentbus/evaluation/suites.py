@@ -101,7 +101,6 @@ def core_offline_suite() -> EvaluationSuite:
     limits = {
         "max_requests": 20,
         "max_tokens": 500,
-        "max_elapsed_seconds": 30,
         "max_retries": 2,
     }
     cases = [

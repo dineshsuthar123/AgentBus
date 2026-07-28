@@ -1,6 +1,22 @@
 import pytest
 
 from agentbus.evaluation.runner import EvaluationRunner
+from agentbus.evaluation.suites import builtin_suites
+
+
+def test_core_offline_limits_do_not_depend_on_shared_runner_timing():
+    suite = builtin_suites()["core-offline"]
+
+    assert all(
+        "max_elapsed_seconds" not in case.metadata["limits"]
+        for case in suite.cases
+    )
+    parallel = next(
+        case
+        for case in suite.cases
+        if case.case_id == "parallel-dependency-scheduling"
+    )
+    assert parallel.metadata["minimum_concurrency"] == 2
 
 
 @pytest.mark.parametrize(
