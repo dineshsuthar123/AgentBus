@@ -270,4 +270,20 @@ def test_service_comparison_is_idempotent_and_fork_stays_offline(
     assert fork.replay.session.provider_calls == 0
     assert fork.replay.session.network_calls == 0
     assert fork.fork_trace.trace_id != left.trace_id
+    assert fork.replay.session.result_trace_id == fork.fork_trace.trace_id
+    assert (
+        fork.replay.session.comparison_id
+        == fork.comparison.comparison_id
+    )
+    assert store.get_trace(fork.fork_trace.trace_id) == fork.fork_trace
+    fork_run = store.get_run(fork.fork_trace.run_id)
+    assert fork_run.metadata["forked_trace"] is True
+    assert (
+        store.get_provenance_manifest(fork.fork_trace.trace_id).integrity_root
+        == fork.comparison.right_provenance_root
+    )
+    assert (
+        store.get_trace_comparison(fork.comparison.comparison_id)
+        == fork.comparison
+    )
     assert store.get_replay_result("replay-fork") == fork.replay

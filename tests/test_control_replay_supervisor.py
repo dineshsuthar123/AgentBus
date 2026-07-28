@@ -110,6 +110,13 @@ def test_background_replay_runs_offline_fork(tmp_path: Path) -> None:
     assert terminal.changed_input_names == ["task_text"]
     assert terminal.provider_calls == 0
     assert terminal.network_calls == 0
+    assert terminal.result_trace_id is not None
+    assert terminal.comparison_id is not None
+    fork_trace = query.store.get_trace(terminal.result_trace_id)
+    assert query.trace(fork_trace.run_id).source_trace_id == trace.trace_id
+    comparison = query.comparison(terminal.comparison_id)
+    assert comparison.left_trace_id == trace.trace_id
+    assert comparison.right_trace_id == terminal.result_trace_id
 
 
 def test_background_replay_cancellation_is_cooperative_and_capacity_is_bounded(

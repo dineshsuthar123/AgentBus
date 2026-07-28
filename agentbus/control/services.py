@@ -1082,6 +1082,8 @@ class ControlQueryService:
             from_checkpoint_id=session.from_checkpoint_id,
             fork=session.fork,
             changed_input_names=session.changed_input_names,
+            result_trace_id=session.result_trace_id,
+            comparison_id=session.comparison_id,
             isolated=session.isolated_workspace is not None,
             isolation_scope=(
                 "daemon_managed_temporary_workspace"

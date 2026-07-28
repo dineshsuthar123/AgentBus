@@ -100,6 +100,8 @@ class ReplaySession(TraceModel):
     from_checkpoint_id: TraceIdentifier | None = None
     fork: bool = False
     changed_input_names: list[str] = Field(default_factory=list, max_length=1_024)
+    result_trace_id: TraceIdentifier | None = None
+    comparison_id: TraceIdentifier | None = None
     isolated_workspace: str | None = Field(default=None, max_length=4_096)
     span_results: list[ReplaySpanResult] = Field(default_factory=list)
     substitutions: list[str] = Field(default_factory=list, max_length=4_096)

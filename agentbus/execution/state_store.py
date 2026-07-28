@@ -1043,6 +1043,62 @@ class StateStore:
         manifest: ProvenanceManifest,
     ) -> Trace:
         """Atomically catalog one externally validated trace archive."""
+        return self._catalog_terminal_trace(
+            run,
+            trace,
+            manifest,
+            event_type="trace_archive_imported",
+            event_payload={
+                "trace_id": trace.trace_id,
+                "provenance_root": manifest.integrity_root,
+            },
+        )
+
+    def record_fork_trace(
+        self,
+        run: RunRecord,
+        trace: Trace,
+        manifest: ProvenanceManifest,
+        comparison: RunComparison,
+        *,
+        source_trace_id: str,
+        replay_id: str,
+        changed_input_names: list[str],
+    ) -> Trace:
+        """Atomically catalog a providerless fork and its comparison."""
+        if (
+            comparison.left_trace_id != source_trace_id
+            or comparison.right_trace_id != trace.trace_id
+        ):
+            raise TraceRecordConflictError(
+                "Fork comparison identities do not match the derived trace."
+            )
+        return self._catalog_terminal_trace(
+            run,
+            trace,
+            manifest,
+            event_type="replay_fork_recorded",
+            event_payload={
+                "trace_id": trace.trace_id,
+                "source_trace_id": source_trace_id,
+                "replay_id": replay_id,
+                "comparison_id": comparison.comparison_id,
+                "changed_input_names": changed_input_names,
+                "provenance_root": manifest.integrity_root,
+            },
+            comparison=comparison,
+        )
+
+    def _catalog_terminal_trace(
+        self,
+        run: RunRecord,
+        trace: Trace,
+        manifest: ProvenanceManifest,
+        *,
+        event_type: str,
+        event_payload: dict[str, Any],
+        comparison: RunComparison | None = None,
+    ) -> Trace:
         from agentbus.trace.provenance import verify_provenance_core
 
         if (
@@ -1051,11 +1107,11 @@ class StateStore:
             or manifest.trace_id != trace.trace_id
         ):
             raise TraceRecordConflictError(
-                "Imported run, trace, and provenance identities do not match."
+                "Cataloged run, trace, and provenance identities do not match."
             )
         if trace.completed_at is None:
             raise TraceRecordConflictError(
-                "Only terminal execution traces can be imported."
+                "Only terminal execution traces can be cataloged."
             )
         verify_provenance_core(manifest, trace)
         now = _timestamp(utc_now())
@@ -1196,15 +1252,36 @@ class StateStore:
                     _timestamp(manifest.generated_at),
                 ),
             )
+            if comparison is not None:
+                self._require_trace_row(
+                    connection,
+                    comparison.left_trace_id,
+                )
+                self._require_trace_row(
+                    connection,
+                    comparison.right_trace_id,
+                )
+                connection.execute(
+                    """
+                    INSERT INTO trace_comparisons(
+                        comparison_id, left_trace_id, right_trace_id,
+                        comparison_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        comparison.comparison_id,
+                        comparison.left_trace_id,
+                        comparison.right_trace_id,
+                        _dump_json(comparison.model_dump(mode="json")),
+                        _timestamp(comparison.created_at),
+                    ),
+                )
             self._insert_event(
                 connection,
                 run.run_id,
                 None,
-                "trace_archive_imported",
-                {
-                    "trace_id": trace.trace_id,
-                    "provenance_root": manifest.integrity_root,
-                },
+                event_type,
+                event_payload,
             )
         return self.get_trace(trace.trace_id)
 
@@ -4592,6 +4669,14 @@ def _validate_replay_session_update(
         raise ReplaySessionConflictError(
             f"Replay session '{current.replay_id}' changed immutable fields."
         )
+    for field in ("result_trace_id", "comparison_id"):
+        previous_value = getattr(previous, field)
+        current_value = getattr(current, field)
+        if previous_value is not None and previous_value != current_value:
+            raise ReplaySessionConflictError(
+                f"Replay session '{current.replay_id}' changed its "
+                f"{field.replace('_', ' ')}."
+            )
     if previous.status == ReplaySessionStatus.RUNNING and (
         current.status == ReplaySessionStatus.PENDING
     ):

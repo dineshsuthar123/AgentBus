@@ -385,6 +385,8 @@ export interface ReplayAcceptedResponse {
   "from_checkpoint_id"?: string | null;
   "fork"?: boolean;
   "changed_input_names"?: Array<string>;
+  "result_trace_id"?: string | null;
+  "comparison_id"?: string | null;
   "isolated"?: boolean;
   "isolation_scope"?: "daemon_managed_temporary_workspace" | null;
   "span_results"?: Array<ReplaySpanResultResponse>;
@@ -434,6 +436,8 @@ export interface ReplaySessionResponse {
   "from_checkpoint_id"?: string | null;
   "fork"?: boolean;
   "changed_input_names"?: Array<string>;
+  "result_trace_id"?: string | null;
+  "comparison_id"?: string | null;
   "isolated"?: boolean;
   "isolation_scope"?: "daemon_managed_temporary_workspace" | null;
   "span_results"?: Array<ReplaySpanResultResponse>;

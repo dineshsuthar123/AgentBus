@@ -2032,6 +2032,18 @@
             "title": "Changed Input Names",
             "type": "array"
           },
+          "comparison_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comparison Id"
+          },
           "completed_at": {
             "anyOf": [
               {
@@ -2163,6 +2175,18 @@
             "minLength": 1,
             "title": "Replay Id",
             "type": "string"
+          },
+          "result_trace_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result Trace Id"
           },
           "source_run_id": {
             "maxLength": 128,
@@ -2367,6 +2391,18 @@
             "title": "Changed Input Names",
             "type": "array"
           },
+          "comparison_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comparison Id"
+          },
           "completed_at": {
             "anyOf": [
               {
@@ -2498,6 +2534,18 @@
             "minLength": 1,
             "title": "Replay Id",
             "type": "string"
+          },
+          "result_trace_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result Trace Id"
           },
           "source_run_id": {
             "maxLength": 128,

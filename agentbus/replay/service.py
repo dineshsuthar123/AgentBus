@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 
 from pydantic import Field
@@ -17,6 +18,7 @@ from agentbus.execution.state_store import (
     StateStoreError,
     TraceRecordNotFoundError,
 )
+from agentbus.policy.defaults import DEFAULT_TOOL_POLICY
 from agentbus.replay.checkpoints import (
     CheckpointManager,
     ReplayIsolationManager,
@@ -59,6 +61,7 @@ from agentbus.trace.models import (
 )
 from agentbus.trace.protocols import provenance_protocol_documents
 from agentbus.trace.provenance import (
+    ProvenanceBuilder,
     ProvenanceManifest,
     verify_provenance_core,
 )
@@ -331,7 +334,11 @@ class TraceReplayService:
         )
         pending = self._pending_session(persisted_request)
         try:
-            result = ForkManager(self.object_store, engine).fork(
+            result = ForkManager(
+                self.object_store,
+                engine,
+                clock=lambda: pending.created_at,
+            ).fork(
                 trace,
                 request,
                 session_created_at=pending.created_at,
@@ -354,12 +361,156 @@ class TraceReplayService:
                 failed,
             )
             raise
+        source_manifest = self.state_store.get_provenance_manifest(
+            trace.trace_id
+        )
+        fork_manifest = self._fork_provenance(
+            result,
+            source_manifest,
+            generated_at=pending.created_at,
+        )
+        comparison = compare_traces(
+            trace,
+            result.fork_trace,
+            left_provenance=source_manifest,
+            right_provenance=fork_manifest,
+            clock=lambda: pending.created_at,
+        )
+        result = ForkResult.model_validate(
+            result.model_copy(
+                update={"comparison": comparison}
+            ).model_dump()
+        )
+        terminal_session = ReplaySession.model_validate(
+            result.replay.session.model_copy(
+                update={
+                    "result_trace_id": result.fork_trace.trace_id,
+                    "comparison_id": result.comparison.comparison_id,
+                }
+            ).model_dump()
+        )
+        terminal_replay = ReplayResult.model_validate(
+            result.replay.model_copy(
+                update={"session": terminal_session}
+            ).model_dump()
+        )
+        result = ForkResult.model_validate(
+            result.model_copy(
+                update={"replay": terminal_replay}
+            ).model_dump()
+        )
+        self.state_store.record_fork_trace(
+            self._fork_run_record(result, fork_manifest),
+            result.fork_trace,
+            fork_manifest,
+            result.comparison,
+            source_trace_id=trace.trace_id,
+            replay_id=request.replay_id,
+            changed_input_names=result.changed_input_names,
+        )
         self.state_store.record_replay_session(
             persisted_request,
             result.replay.session,
             result=result.replay,
         )
         return result
+
+    def _fork_provenance(
+        self,
+        result: ForkResult,
+        source: ProvenanceManifest,
+        *,
+        generated_at: datetime,
+    ) -> ProvenanceManifest:
+        classification = ReplayabilityClassifier().classify_trace(
+            result.fork_trace,
+            available_object_hashes=ReplayInputCatalog(
+                result.fork_trace,
+                self.object_store,
+            ).available_hashes,
+        )
+        return ProvenanceBuilder(clock=lambda: generated_at).build(
+            result.fork_trace,
+            configuration={
+                "mode": "providerless_fork",
+                "source_configuration_fingerprint": (
+                    source.configuration_fingerprint
+                ),
+                "changed_inputs_sha256": result.changed_inputs_sha256,
+            },
+            provider_routes=source.provider_routes,
+            tool_descriptors=source.tool_descriptors,
+            policy_version="agentbus.replay.captured-policy.v1",
+            policy_document={
+                "source_policy_version": source.policy_version,
+                "source_policy_sha256": source.policy_sha256,
+                "current_default_policy_sha256": hashlib.sha256(
+                    canonical_json_bytes(
+                        DEFAULT_TOOL_POLICY.model_dump(mode="json")
+                    )
+                ).hexdigest(),
+            },
+            protocol_hashes=source.protocol_hashes,
+            task_graph={
+                "source_task_graph_sha256": source.task_graph_sha256,
+                "changed_inputs_sha256": result.changed_inputs_sha256,
+                "changed_input_names": result.changed_input_names,
+            },
+            final_repository_tree_sha256=(
+                source.final_repository_tree_sha256
+            ),
+            replayability=classification.level,
+            replayability_reasons=classification.reasons,
+        )
+
+    @staticmethod
+    def _fork_run_record(
+        result: ForkResult,
+        manifest: ProvenanceManifest,
+    ) -> RunRecord:
+        trace = result.fork_trace
+        return RunRecord(
+            run_id=trace.run_id,
+            original_task=(
+                "Providerless replay fork; original task text omitted."
+            ),
+            workflow_type="replay-fork",
+            status=RunStatus.SUCCEEDED,
+            model="captured-offline",
+            workspace="[FORK_REPLAY_WORKSPACE]",
+            created_at=trace.created_at,
+            updated_at=trace.completed_at or trace.created_at,
+            completed_at=trace.completed_at,
+            graph_data={
+                "version": 1,
+                "fork_task_graph_sha256": manifest.task_graph_sha256,
+                "tasks": [],
+            },
+            metadata={
+                "forked_trace": True,
+                "source_trace_id": result.source_trace_id,
+                "replay_id": result.replay.session.replay_id,
+                "trace_id": trace.trace_id,
+                "comparison_id": result.comparison.comparison_id,
+                "changed_input_names": result.changed_input_names,
+                "changed_inputs_sha256": result.changed_inputs_sha256,
+                "provenance_root": manifest.integrity_root,
+                "provider_calls": result.replay.session.provider_calls,
+                "network_calls": result.replay.session.network_calls,
+            },
+            verifier_status=(
+                "passed"
+                if result.replay.verifier_result is not None
+                and result.replay.verifier_result.get("passed") is True
+                else None
+            ),
+            reviewer_status=(
+                "approved"
+                if result.replay.reviewer_result is not None
+                and result.replay.reviewer_result.get("approved") is True
+                else None
+            ),
+        )
 
     def _pending_session(self, request: ReplayRequest) -> ReplaySession:
         try:
