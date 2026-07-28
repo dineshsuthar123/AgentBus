@@ -288,3 +288,43 @@ test("comparison client posts identifiers and uses bounded result pages", async 
     /bounded/
   );
 });
+
+test("trace archive client keeps payloads in authenticated JSON bodies", async () => {
+  const requests: Array<{
+    url: string;
+    method: string;
+    body: BodyInit | null | undefined;
+  }> = [];
+  const client = new AgentBusClient(
+    "http://127.0.0.1:43123",
+    token,
+    async (input, init) => {
+      requests.push({
+        url: String(input),
+        method: init?.method ?? "GET",
+        body: init?.body
+      });
+      return Response.json({});
+    }
+  );
+
+  await client.exportTrace("trace:one", true);
+  await client.importTrace({
+    archive_base64: "YWJjZA==",
+    allow_source_content: true
+  });
+
+  assert.equal(
+    requests[0]?.url.endsWith(
+      "/api/v1/traces/trace%3Aone/export?include_source_content=true"
+    ),
+    true
+  );
+  assert.equal(requests[0]?.url.includes("YWJjZA"), false);
+  assert.equal(requests[1]?.url.endsWith("/api/v1/traces/import"), true);
+  assert.equal(requests[1]?.method, "POST");
+  assert.deepEqual(JSON.parse(String(requests[1]?.body)), {
+    archive_base64: "YWJjZA==",
+    allow_source_content: true
+  });
+});

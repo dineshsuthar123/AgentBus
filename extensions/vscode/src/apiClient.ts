@@ -28,6 +28,9 @@ import type {
   RunSummary,
   SchedulerResponse,
   TaskListResponse,
+  TraceArchiveExportResponse,
+  TraceArchiveImportRequest,
+  TraceArchiveImportResponse,
   TraceResponse,
   TraceSpanDetailResponse,
   TraceSpanListResponse,
@@ -257,6 +260,24 @@ export class AgentBusClient {
         comparisonId
       )}?after=${after}&limit=${limit}`
     );
+  }
+
+  public exportTrace(
+    traceId: string,
+    includeSourceContent = false
+  ): Promise<TraceArchiveExportResponse> {
+    return this.request(
+      "GET",
+      `/api/v1/traces/${safeSegment(
+        traceId
+      )}/export?include_source_content=${includeSourceContent ? "true" : "false"}`
+    );
+  }
+
+  public importTrace(
+    body: TraceArchiveImportRequest
+  ): Promise<TraceArchiveImportResponse> {
+    return this.request("POST", "/api/v1/traces/import", body);
   }
 
   public scheduler(runId: string): Promise<SchedulerResponse> {

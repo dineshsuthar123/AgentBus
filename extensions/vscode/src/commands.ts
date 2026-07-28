@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import type { AgentBusClient } from "./apiClient";
+import { AgentBusApiError, type AgentBusClient } from "./apiClient";
 import { formatApprovalConfirmation } from "./approvalPresentation";
 import { toolArtifactUri } from "./artifactDocuments";
 import { validateToolArtifact } from "./artifactPresentation";
@@ -20,6 +20,8 @@ import type {
   RunAcceptedResponse,
   RunCreateRequest,
   RunSummary,
+  TraceArchiveExportResponse,
+  TraceArchiveImportResponse,
   TraceSpanSummary,
   ToolInvocationSummary
 } from "./generated/protocol";
@@ -41,6 +43,13 @@ import {
   type ValidatedForkInputs
 } from "./replayPresentation";
 import { spanUri } from "./traceDocuments";
+import {
+  archiveSha256,
+  decodeTraceArchive,
+  encodeTraceArchive,
+  TRACE_ARCHIVE_EXTENSION,
+  validateTraceArchiveFileName
+} from "./traceArchive";
 import {
   canonicalWorkspacePath,
   ensureWorkspaceTrust,
@@ -114,6 +123,12 @@ export class CommandController implements vscode.Disposable {
       this.replayFromCheckpoint(request)
     );
     command("agentbus.forkRun", (request) => this.forkRun(request));
+    command("agentbus.exportTrace", (request) =>
+      this.exportTrace(request)
+    );
+    command("agentbus.importTrace", (request) =>
+      this.importTrace(request)
+    );
     command("agentbus.cancelReplay", (replay) =>
       this.cancelReplay(replay)
     );
@@ -465,6 +480,176 @@ export class CommandController implements vscode.Disposable {
       changed_inputs: inputs.changedInputs,
       live_provider_consent: false
     });
+  }
+
+  private async exportTrace(
+    raw?: unknown
+  ): Promise<TraceArchiveExportResponse | undefined> {
+    const request = commandRecord(raw);
+    const run = await this.resolveRun(request?.runId ?? raw);
+    if (!run) return undefined;
+    let includeSourceContent =
+      typeof request?.includeSourceContent === "boolean"
+        ? request.includeSourceContent
+        : undefined;
+    if (includeSourceContent === undefined) {
+      includeSourceContent =
+        (
+          await vscode.window.showQuickPick(
+            [
+              {
+                label: "Sanitized archive",
+                description: "Recommended; excludes source-content objects.",
+                value: false
+              },
+              {
+                label: "Include source content",
+                description: "Requires explicit consent and careful handling.",
+                value: true
+              }
+            ],
+            { title: "Export AgentBus Trace" }
+          )
+        )?.value;
+    }
+    if (includeSourceContent === undefined) return undefined;
+    if (
+      includeSourceContent &&
+      typeof request?.includeSourceContent !== "boolean"
+    ) {
+      const consent = await vscode.window.showWarningMessage(
+        "This trace archive may include sanitized source-code content. Treat it as sensitive.",
+        { modal: true },
+        "Include Source Content"
+      );
+      if (consent !== "Include Source Content") return undefined;
+    }
+    const trace = await (await this.client()).trace(run.run_id);
+    const destination = await this.traceExportDestination(
+      trace.trace_id,
+      request?.destination
+    );
+    if (!destination) return undefined;
+    const exported = await (await this.client()).exportTrace(
+      trace.trace_id,
+      includeSourceContent
+    );
+    if (
+      exported.trace_id !== trace.trace_id ||
+      exported.run_id !== run.run_id
+    ) {
+      throw new Error("AgentBus trace export identity did not match the request.");
+    }
+    if (exported.source_content_included && !includeSourceContent) {
+      throw new Error(
+        "AgentBus refused an unexpected source-content archive response."
+      );
+    }
+    const bytes = decodeTraceArchive(
+      exported.archive_base64,
+      exported.archive_sha256
+    );
+    await vscode.workspace.fs.writeFile(destination, bytes);
+    void vscode.window.showInformationMessage(
+      `Exported trace ${trace.trace_id} to ${archiveFileLabel(destination)}.`
+    );
+    return exported;
+  }
+
+  private async importTrace(
+    raw?: unknown
+  ): Promise<TraceArchiveImportResponse | undefined> {
+    const request = commandRecord(raw);
+    const source = await this.traceImportSource(request?.source);
+    if (!source) return undefined;
+    const bytes = await vscode.workspace.fs.readFile(source);
+    const archiveBase64 = encodeTraceArchive(bytes);
+    const explicitConsent =
+      typeof request?.allowSourceContent === "boolean";
+    let allowSourceContent = request?.allowSourceContent === true;
+    let imported: TraceArchiveImportResponse;
+    try {
+      imported = await (await this.client()).importTrace({
+        archive_base64: archiveBase64,
+        allow_source_content: allowSourceContent
+      });
+    } catch (error) {
+      if (
+        !(error instanceof AgentBusApiError && error.status === 403) ||
+        allowSourceContent ||
+        explicitConsent
+      ) {
+        throw error;
+      }
+      const consent = await vscode.window.showWarningMessage(
+        "This archive contains sanitized source content. Import validates and stores it but does not execute or replay it.",
+        { modal: true },
+        "Import Source Content"
+      );
+      if (consent !== "Import Source Content") return undefined;
+      allowSourceContent = true;
+      imported = await (await this.client()).importTrace({
+        archive_base64: archiveBase64,
+        allow_source_content: true
+      });
+    }
+    if (
+      imported.archive_sha256 !== archiveSha256(bytes) ||
+      imported.replay_started !== false
+    ) {
+      throw new Error(
+        "AgentBus trace import integrity or no-execution confirmation failed."
+      );
+    }
+    await this.refresh();
+    void vscode.window.showInformationMessage(
+      `Imported trace ${imported.trace_id}. Replay was not started.`
+    );
+    return imported;
+  }
+
+  private async traceExportDestination(
+    traceId: string,
+    raw: unknown
+  ): Promise<vscode.Uri | undefined> {
+    if (typeof raw === "string") {
+      validateTraceArchiveFileName(raw);
+      return vscode.Uri.file(raw);
+    }
+    const folder = vscode.workspace.workspaceFolders?.[0]?.uri;
+    const destination = await vscode.window.showSaveDialog({
+      title: "Export AgentBus Trace",
+      defaultUri: folder
+        ? vscode.Uri.joinPath(
+            folder,
+            `${traceId}${TRACE_ARCHIVE_EXTENSION}`
+          )
+        : undefined,
+      filters: {
+        "AgentBus Trace Archive": ["agentbus-trace"]
+      }
+    });
+    if (destination) validateTraceArchiveFileName(destination.fsPath);
+    return destination;
+  }
+
+  private async traceImportSource(raw: unknown): Promise<vscode.Uri | undefined> {
+    if (typeof raw === "string") {
+      validateTraceArchiveFileName(raw);
+      return vscode.Uri.file(raw);
+    }
+    const selected = await vscode.window.showOpenDialog({
+      title: "Import AgentBus Trace",
+      canSelectFiles: true,
+      canSelectFolders: false,
+      canSelectMany: false,
+      filters: {
+        "AgentBus Trace Archive": ["agentbus-trace"]
+      }
+    });
+    const source = selected?.[0];
+    if (source) validateTraceArchiveFileName(source.fsPath);
+    return source;
   }
 
   private async prepareOfflineReplay(runId: string): Promise<boolean> {
@@ -1092,4 +1277,8 @@ function commandRecord(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function archiveFileLabel(uri: vscode.Uri): string {
+  return decodeURIComponent(uri.path.split("/").pop() ?? "trace archive");
 }

@@ -92,6 +92,14 @@
         "title": "AgentBus: Fork Run"
       },
       {
+        "command": "agentbus.exportTrace",
+        "title": "AgentBus: Export Trace"
+      },
+      {
+        "command": "agentbus.importTrace",
+        "title": "AgentBus: Import Trace"
+      },
+      {
         "command": "agentbus.cancelReplay",
         "title": "AgentBus: Cancel Replay"
       },
@@ -270,6 +278,11 @@
           "command": "agentbus.forkRun",
           "when": "viewItem == agentbusRunTerminal",
           "group": "navigation@3"
+        },
+        {
+          "command": "agentbus.exportTrace",
+          "when": "viewItem == agentbusRunTerminal",
+          "group": "navigation@4"
         },
         {
           "command": "agentbus.approveAction",
