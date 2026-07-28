@@ -14,6 +14,7 @@ import type {
   McpServerCheckResponse,
   McpServerListResponse,
   ProviderListResponse,
+  ProvenanceResponse,
   ReplayAcceptedResponse,
   ReplayCancelResponse,
   ReplayCreateRequest,
@@ -192,6 +193,13 @@ export class AgentBusClient {
       `/api/v1/runs/${safeSegment(
         runId
       )}/replayability?after=${after}&limit=${limit}`
+    );
+  }
+
+  public provenance(runId: string): Promise<ProvenanceResponse> {
+    return this.request(
+      "GET",
+      `/api/v1/runs/${safeSegment(runId)}/provenance`
     );
   }
 

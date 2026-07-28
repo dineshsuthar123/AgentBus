@@ -11,6 +11,7 @@ import {
 import { RunStore } from "./runStore";
 import { ReplayDocumentProvider } from "./replayDocuments";
 import { ReplayPlanDocumentProvider } from "./replayPlanDocuments";
+import { ProvenanceDocumentProvider } from "./provenanceDocuments";
 import { ToolArtifactDocumentProvider } from "./artifactDocuments";
 import { McpServerDocumentProvider } from "./mcpDocuments";
 import { SpanDocumentProvider } from "./traceDocuments";
@@ -121,6 +122,10 @@ export function activate(context: vscode.ExtensionContext): AgentBusExtensionApi
     vscode.workspace.registerTextDocumentContentProvider(
       "agentbus-replay-plan",
       new ReplayPlanDocumentProvider(client)
+    ),
+    vscode.workspace.registerTextDocumentContentProvider(
+      "agentbus-provenance",
+      new ProvenanceDocumentProvider(client)
     ),
     vscode.workspace.registerTextDocumentContentProvider(
       "agentbus-comparison",

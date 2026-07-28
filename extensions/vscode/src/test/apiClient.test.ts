@@ -158,6 +158,7 @@ test("trace client routes encode identifiers and bound span pages", async () => 
   await client.trace("run one");
   await client.traceSpans("run one", 12, 25);
   await client.traceSpan("run one", "span:provider");
+  await client.provenance("run one");
 
   assert.equal(
     requests[0]?.endsWith("/api/v1/runs/run%20one/trace"),
@@ -173,6 +174,10 @@ test("trace client routes encode identifiers and bound span pages", async () => 
     requests[2]?.endsWith(
       "/api/v1/runs/run%20one/trace/spans/span%3Aprovider"
     ),
+    true
+  );
+  assert.equal(
+    requests[3]?.endsWith("/api/v1/runs/run%20one/provenance"),
     true
   );
   assert.throws(() => client.traceSpans("run", 0, 501), /bounded/);

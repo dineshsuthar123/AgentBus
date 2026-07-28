@@ -32,6 +32,7 @@ import { mcpServerUri } from "./mcpDocuments";
 import { formatMcpServerCheck } from "./mcpPresentation";
 import { replayUri } from "./replayDocuments";
 import { replayPlanUri } from "./replayPlanDocuments";
+import { provenanceUri } from "./provenanceDocuments";
 import {
   FORK_INPUT_NAMES,
   isTerminalReplayStatus,
@@ -128,6 +129,9 @@ export class CommandController implements vscode.Disposable {
     );
     command("agentbus.importTrace", (request) =>
       this.importTrace(request)
+    );
+    command("agentbus.openProvenanceManifest", (run) =>
+      this.openProvenanceManifest(run)
     );
     command("agentbus.cancelReplay", (replay) =>
       this.cancelReplay(replay)
@@ -606,6 +610,15 @@ export class CommandController implements vscode.Disposable {
       `Imported trace ${imported.trace_id}. Replay was not started.`
     );
     return imported;
+  }
+
+  private async openProvenanceManifest(raw?: unknown): Promise<void> {
+    const run = await this.resolveRun(raw);
+    if (!run) return;
+    const document = await vscode.workspace.openTextDocument(
+      provenanceUri(run.run_id)
+    );
+    await vscode.window.showTextDocument(document, { preview: true });
   }
 
   private async traceExportDestination(
