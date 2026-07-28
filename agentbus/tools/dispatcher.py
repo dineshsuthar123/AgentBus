@@ -559,15 +559,28 @@ class ToolDispatcher:
             invocation.invocation_id,
         )
         decision = persisted.policy_decision
-        output = (
-            self.runtime_trace.capture_json_output(
-                span,
-                "tool.policy-decision",
-                safe_protocol_dict(decision),
-            )
-            if decision is not None
-            else None
-        )
+        output = None
+        if decision is not None and self.runtime_trace.object_store is not None:
+            try:
+                from agentbus.replay.tools import (
+                    sanitize_replay_policy_decision,
+                )
+
+                captured_decision = sanitize_replay_policy_decision(
+                    self.runtime_trace.object_store,
+                    invocation=invocation,
+                    policy_decision=decision,
+                )
+                output = self.runtime_trace.capture_json_output(
+                    span,
+                    "tool.policy-decision",
+                    safe_protocol_dict(captured_decision),
+                )
+            except Exception as exc:
+                self.runtime_trace.recording_failed(
+                    "tool_policy_capture",
+                    exc,
+                )
         policy_references = (
             [_trace_reference("policy", invocation.invocation_id)]
             if decision is not None

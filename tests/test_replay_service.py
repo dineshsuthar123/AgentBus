@@ -1,16 +1,28 @@
+import sys
 from pathlib import Path
 
 import pytest
 
 from agentbus.config import AgentBusConfig
-from agentbus.execution.models import RunRecord
+from agentbus.execution.models import RunRecord, TaskSpec
 from agentbus.execution.state_store import StateStore
+from agentbus.policy import ToolPolicyEngine
 from agentbus.replay import (
     ForkRequest,
     ReplayRequest,
     ReplaySessionStatus,
+    ReplaySpanAction,
+    ToolReplayPlanner,
 )
 from agentbus.replay.service import TraceReplayService
+from agentbus.sandbox.platform import ExecutableCatalog
+from agentbus.tools import builtin_tool_registry
+from agentbus.tools.capabilities import derive_required_capabilities
+from agentbus.tools.dispatcher import ToolDispatcher
+from agentbus.tools.protocol import (
+    ToolInvocation,
+    ToolInvocationContext,
+)
 from agentbus.trace import (
     ReplayMode,
     RuntimeTrace,
@@ -77,6 +89,88 @@ def _record_run(
     return trace, manifest
 
 
+def _record_tool_run(
+    config: AgentBusConfig,
+    store: StateStore,
+    run_id: str,
+):
+    task_id = "task-tool"
+    store.create_run_with_tasks(
+        RunRecord(
+            run_id=run_id,
+            original_task="Replay one managed mutation",
+            model="deterministic",
+            workspace=str(config.workspace_path),
+            graph_data={"version": 1, "tasks": []},
+        ),
+        [
+            TaskSpec(
+                task_id=task_id,
+                title="Create a replay fixture",
+                description="Exercise traced tool policy replay.",
+            )
+        ],
+    )
+    runtime = RuntimeTrace.open(
+        store,
+        run_id,
+        object_root=config.trace_store_path,
+        workspace=config.workspace_path,
+    )
+    registry = builtin_tool_registry(
+        workspace=config.workspace_path,
+        executable_catalog=ExecutableCatalog({"python": sys.executable}),
+    )
+    dispatcher = ToolDispatcher(
+        registry,
+        store,
+        runtime_trace=runtime,
+    )
+    descriptor = registry.descriptor("filesystem.create")
+    provisional = ToolInvocation(
+        invocation_id="tool-service-1",
+        run_id=run_id,
+        task_id=task_id,
+        tool_name=descriptor.name,
+        tool_version=descriptor.version,
+        arguments={
+            "path": "replay-created.txt",
+            "content": "captured once\n",
+        },
+        requested_capabilities=descriptor.capabilities,
+        context=ToolInvocationContext(
+            workspace_identity=str(config.workspace_path),
+            worktree_identity=str(config.workspace_path),
+            caller_role="coder",
+            workspace_trusted=True,
+            provider_consented=True,
+        ),
+    )
+    invocation = ToolInvocation.model_validate(
+        provisional.model_dump(mode="python")
+        | {
+            "requested_capabilities": derive_required_capabilities(
+                provisional,
+                descriptor,
+            )
+        }
+    )
+    with runtime.scope(runtime.root_context):
+        response = dispatcher.dispatch(invocation)
+    assert response.result is not None
+    trace = runtime.finish(status=TraceStatus.SUCCEEDED)
+    assert trace is not None
+    seal_run_provenance(
+        trace,
+        state_store=store,
+        object_store=runtime.object_store,
+        configuration={"provider": "deterministic"},
+        task_graph={"version": 1, "tasks": []},
+        final_repository_tree_sha256="d" * 64,
+    )
+    return trace, config.workspace_path / "replay-created.txt"
+
+
 def test_service_verifies_replays_and_persists_terminal_session(
     tmp_path,
 ) -> None:
@@ -104,6 +198,66 @@ def test_service_verifies_replays_and_persists_terminal_session(
     assert result.session.provider_calls == 0
     assert result.session.network_calls == 0
     assert store.get_replay_result(request.replay_id) == result
+
+
+def test_service_replays_managed_tool_through_current_policy_once(
+    tmp_path,
+) -> None:
+    config, store, _ = _service(tmp_path)
+    trace, created = _record_tool_run(config, store, "run-tool-policy")
+    created.unlink()
+    policy_calls = []
+
+    class CountingPolicy(ToolPolicyEngine):
+        def evaluate(self, invocation, descriptor, *, approval=None):
+            policy_calls.append((invocation, descriptor))
+            return super().evaluate(
+                invocation,
+                descriptor,
+                approval=approval,
+            )
+
+    service = TraceReplayService(
+        config,
+        state_store=store,
+        tool_replay_planner=ToolReplayPlanner(CountingPolicy()),
+    )
+    result = service.replay(
+        trace.run_id,
+        ReplayRequest(
+            replay_id="replay-tool-policy",
+            source_trace_id=trace.trace_id,
+            source_run_id=trace.run_id,
+            mode=ReplayMode.OFFLINE,
+        ),
+    )
+
+    assert result.session.status == ReplaySessionStatus.SUCCEEDED
+    assert len(policy_calls) == 1
+    assert policy_calls[0][0].context.provider_consented is True
+    assert created.exists() is False
+    source_by_id = {span.span_id: span for span in trace.spans}
+    replay_by_id = {
+        span_result.span_id: span_result
+        for span_result in result.session.span_results
+    }
+    tool_span = next(
+        span
+        for span in trace.spans
+        if span.span_type == TraceSpanType.TOOL_INVOCATION
+    )
+    policy_span = next(
+        span
+        for span in trace.spans
+        if span.span_type == TraceSpanType.TOOL_POLICY
+    )
+    assert replay_by_id[tool_span.span_id].action == ReplaySpanAction.SIMULATED
+    assert replay_by_id[policy_span.span_id].action == ReplaySpanAction.REPLAYED
+    assert replay_by_id[policy_span.span_id].output_sha256 in {
+        reference.sha256
+        for reference in source_by_id[policy_span.span_id].output_references
+    }
+    assert result.session.policy_drift == []
 
 
 def test_service_partial_replay_uses_owned_isolation_and_persists_it(

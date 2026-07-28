@@ -466,8 +466,13 @@ class ReplayEngine:
                 drift=drift,
             )
         if strategy == ToolReplayStrategy.REJECT:
+            reason = (
+                assessment.reasons[0]
+                if assessment is not None
+                else "No safe replay strategy is available."
+            )
             raise ReplayIncompatibleError(
-                f"Tool span '{span.span_id}' is not safe to replay."
+                f"Managed tool '{span.name}' is not safe to replay: {reason}"
             )
         workspace = self._isolated_workspace(request)
         if self.tool_executor is None:

@@ -92,3 +92,22 @@ def test_home_paths_with_spaces_are_fully_redacted() -> None:
 
     assert windows.value == PRIVATE_PATH
     assert posix.value == PRIVATE_PATH
+
+
+def test_explicit_private_root_matches_alternate_path_separators(
+    tmp_path: Path,
+) -> None:
+    root = str((tmp_path / "private-worktree").resolve())
+    alternate = (
+        root.replace("\\", "/")
+        if "\\" in root
+        else root.replace("/", "\\")
+    )
+
+    document = sanitize_text(
+        alternate + "/artifact.txt",
+        private_roots=[root],
+    )
+
+    assert document.value.startswith(PRIVATE_PATH)
+    assert "private-worktree" not in document.value

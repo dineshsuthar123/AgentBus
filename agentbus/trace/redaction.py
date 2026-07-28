@@ -94,12 +94,21 @@ def sanitize_document(
         raise ValueError("max_text_chars must be positive")
     if max_collection_items < 1 or max_nodes < 1 or max_depth < 1:
         raise ValueError("trace redaction bounds must be positive")
+    resolved_roots = {
+        str(Path(root).expanduser().resolve())
+        for root in private_roots
+        if str(root).strip()
+    }
     roots = tuple(
         sorted(
             {
-                str(Path(root).expanduser().resolve())
-                for root in private_roots
-                if str(root).strip()
+                variant
+                for root in resolved_roots
+                for variant in {
+                    root,
+                    root.replace("\\", "/"),
+                    root.replace("/", "\\"),
+                }
             },
             key=len,
             reverse=True,

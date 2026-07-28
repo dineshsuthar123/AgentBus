@@ -8,6 +8,7 @@ from agentbus.replay import (
     capture_tool_envelope,
     load_tool_envelope,
 )
+from agentbus.tools.capabilities import derive_required_capabilities
 from agentbus.tools.protocol import (
     CapabilityScope,
     ToolCapability,
@@ -28,10 +29,14 @@ from agentbus.trace import ContentAddressedStore
 NOW = datetime(2026, 1, 2, tzinfo=timezone.utc)
 
 
-def _capability(name=ToolCapabilityName.FILESYSTEM_READ):
+def _capability(
+    name=ToolCapabilityName.FILESYSTEM_READ,
+    *,
+    root="workspace",
+):
     return ToolCapability(
         name=name,
-        scope=CapabilityScope(roots=("workspace",)),
+        scope=CapabilityScope(roots=(root,)),
     )
 
 
@@ -54,7 +59,7 @@ def _descriptor(*capabilities, version=ToolVersion(major=1)):
 
 
 def _invocation(descriptor):
-    return ToolInvocation(
+    provisional = ToolInvocation(
         invocation_id="tool-1",
         run_id="run-1",
         task_id="step-1",
@@ -67,8 +72,17 @@ def _invocation(descriptor):
             worktree_identity="C:/Users/Alice/private/source",
             caller_role="coder",
             workspace_trusted=True,
+            provider_consented=True,
         ),
         requested_at=NOW,
+    )
+    return provisional.model_copy(
+        update={
+            "requested_capabilities": derive_required_capabilities(
+                provisional,
+                descriptor,
+            )
+        }
     )
 
 
@@ -87,12 +101,20 @@ def _decision(invocation, outcome=ToolPolicyOutcome.ALLOW):
 
 
 def test_tool_envelope_is_sanitized_and_round_trips(tmp_path: Path) -> None:
+    private_worktree = "D:/private-agentbus-worktrees/run-1"
     store = ContentAddressedStore(
         tmp_path / "objects",
         private_roots=["C:/Users/Alice/private/source"],
     )
-    descriptor = _descriptor()
+    descriptor = _descriptor(_capability(root=private_worktree))
     invocation = _invocation(descriptor)
+    invocation = invocation.model_copy(
+        update={
+            "context": invocation.context.model_copy(
+                update={"worktree_identity": private_worktree}
+            )
+        }
+    )
     reference = capture_tool_envelope(
         store,
         descriptor=descriptor,
@@ -106,7 +128,11 @@ def test_tool_envelope_is_sanitized_and_round_trips(tmp_path: Path) -> None:
     envelope = load_tool_envelope(store, reference.sha256)
 
     assert b"C:/Users/Alice/private/source" not in payload
+    assert private_worktree.encode() not in payload
     assert envelope.invocation.arguments == {"path": "workspace/app.py"}
+    assert envelope.descriptor.capabilities[0].scope.roots == (
+        "[PRIVATE_PATH]",
+    )
 
 
 def test_current_policy_is_evaluated_and_safe_read_can_rerun() -> None:
@@ -134,10 +160,49 @@ def test_current_policy_is_evaluated_and_safe_read_can_rerun() -> None:
     )
 
     assert len(calls) == 1
-    assert calls[0].context.provider_consented is False
+    assert calls[0].context.provider_consented is True
+    assert (
+        calls[0].context.workspace_identity
+        == "[ISOLATED_REPLAY_WORKSPACE]"
+    )
     assert assessment.current_outcome == ToolPolicyOutcome.ALLOW
+    assert assessment.current_decision is not None
+    assert (
+        assessment.current_decision.evaluated_at
+        == envelope.policy_decision.evaluated_at
+    )
+    assert assessment.current_decision.model_dump(
+        exclude={"evaluated_at"}
+    ) == _decision(calls[0]).model_dump(exclude={"evaluated_at"})
     assert assessment.strategy == ToolReplayStrategy.RERUN_SANDBOX
     assert assessment.fresh_authorization_required is False
+
+
+def test_providerless_offline_replay_simulates_stable_mutation() -> None:
+    descriptor = _descriptor(
+        _capability(ToolCapabilityName.FILESYSTEM_WRITE)
+    ).model_copy(
+        update={
+            "name": "filesystem.write",
+            "description": "Write a file",
+        }
+    )
+    invocation = _invocation(descriptor)
+    from agentbus.replay.tools import CapturedToolEnvelope
+
+    envelope = CapturedToolEnvelope(
+        descriptor=descriptor,
+        invocation=invocation,
+        policy_decision=_decision(invocation),
+    )
+
+    assessment = ToolReplayPlanner().assess(
+        envelope,
+        descriptor,
+        mode=ReplayMode.OFFLINE,
+    )
+
+    assert assessment.strategy == ToolReplayStrategy.SIMULATE_MUTATION
 
 
 def test_expanded_capabilities_require_fresh_authorization() -> None:

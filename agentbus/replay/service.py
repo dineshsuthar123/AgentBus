@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from pydantic import Field
 
@@ -29,6 +30,7 @@ from agentbus.replay.classification import (
 )
 from agentbus.replay.comparison import RunComparison, compare_traces
 from agentbus.replay.engine import ReplayEngine
+from agentbus.replay.errors import ReplayIncompatibleError
 from agentbus.replay.fixtures import (
     CapturedRegressionFixture,
     FixtureAssertionReport,
@@ -44,6 +46,13 @@ from agentbus.replay.session import (
     ReplaySession,
     ReplaySessionStatus,
 )
+from agentbus.replay.tools import (
+    TOOL_ENVELOPE_MEDIA_TYPE,
+    CapturedToolEnvelope,
+    ToolReplayAssessment,
+    ToolReplayPlanner,
+    load_tool_envelope,
+)
 from agentbus.trace.archive import (
     ImportedTraceArchive,
     TraceArchiveExporter,
@@ -56,6 +65,9 @@ from agentbus.trace.models import (
     Trace,
     TraceIdentifier,
     TraceModel,
+    TraceOutput,
+    TraceSpan,
+    TraceSpanType,
     TraceStatus,
     utc_now,
 )
@@ -73,6 +85,14 @@ from agentbus.trace.retention import (
     TraceRetentionPolicy,
 )
 from agentbus.trace.storage import ContentAddressedStore
+from agentbus.tools.descriptors import descriptor_map
+from agentbus.tools.protocol import (
+    ToolDescriptor,
+    safe_protocol_dict,
+)
+
+
+_REPLAY_PROCESS_EXECUTABLES = ("git", "pytest", "python")
 
 
 class TraceVerificationReport(TraceModel):
@@ -100,6 +120,8 @@ class TraceReplayService:
         state_store: StateStore | None = None,
         object_store: ContentAddressedStore | None = None,
         cancelled: Callable[[], bool] | None = None,
+        tool_replay_planner: ToolReplayPlanner | None = None,
+        tool_descriptors: Mapping[str, ToolDescriptor] | None = None,
     ) -> None:
         self.config = config
         self.state_store = state_store or StateStore(
@@ -110,6 +132,18 @@ class TraceReplayService:
             private_roots=[config.workspace_path],
         )
         self.cancelled = cancelled
+        self.tool_replay_planner = tool_replay_planner or ToolReplayPlanner()
+        current_descriptors = (
+            dict(tool_descriptors)
+            if tool_descriptors is not None
+            else descriptor_map(
+                workspace=config.workspace_path,
+                process_executables=_REPLAY_PROCESS_EXECUTABLES,
+            )
+        )
+        self.tool_descriptors = _validated_tool_descriptors(
+            current_descriptors
+        )
 
     def resolve_trace(self, identifier: str) -> Trace:
         try:
@@ -295,10 +329,10 @@ class TraceReplayService:
             source_run_id=imported.trace.run_id,
             mode=mode,
         )
-        replay = ReplayEngine(
-            self.object_store,
-            cancelled=self.cancelled,
-        ).replay(imported.trace, request)
+        replay = self._engine(imported.trace, request).replay(
+            imported.trace,
+            request,
+        )
         fixture_report = None
         if fixture is not None:
             fixture_report = evaluate_fixture_assertions(
@@ -319,10 +353,6 @@ class TraceReplayService:
         request: ForkRequest,
     ) -> ForkResult:
         trace = self.resolve_trace(identifier)
-        engine = ReplayEngine(
-            self.object_store,
-            cancelled=self.cancelled,
-        )
         persisted_request = ReplayRequest(
             replay_id=request.replay_id,
             source_trace_id=request.source_trace_id,
@@ -332,6 +362,7 @@ class TraceReplayService:
             changed_inputs=request.changed_inputs,
             live_provider_consent=request.live_provider_consent,
         )
+        engine = self._engine(trace, persisted_request)
         pending = self._pending_session(persisted_request)
         try:
             result = ForkManager(
@@ -623,8 +654,18 @@ class TraceReplayService:
                 self.state_store,
                 repository_root=source_workspace,
             )
+        policy_context = _ReplayToolPolicyContext(
+            trace,
+            self.object_store,
+            _CachedToolReplayPlanner(self.tool_replay_planner),
+            self.tool_descriptors,
+            request=request,
+        )
         return ReplayEngine(
             self.object_store,
+            policy_evaluator=policy_context.evaluate,
+            tool_replay_planner=policy_context.planner,
+            tool_descriptors=self.tool_descriptors,
             checkpoint_manager=checkpoint_manager,
             isolation_manager=isolation_manager,
             source_workspace=source_workspace,
@@ -772,6 +813,154 @@ class TraceReplayService:
             active_replay_trace_ids=self._active_replay_trace_ids(),
         )
         return set(current.protected_hashes)
+
+
+class _CachedToolReplayPlanner:
+    def __init__(self, planner: ToolReplayPlanner) -> None:
+        self._planner = planner
+        self._assessments: dict[
+            tuple[str, int, str, str, str],
+            ToolReplayAssessment,
+        ] = {}
+
+    def assess(
+        self,
+        envelope: CapturedToolEnvelope,
+        current_descriptor: ToolDescriptor,
+        *,
+        mode: ReplayMode,
+        isolated_workspace: str | Path = "[ISOLATED_REPLAY_WORKSPACE]",
+    ) -> ToolReplayAssessment:
+        descriptor_sha256 = hashlib.sha256(
+            canonical_json_bytes(
+                current_descriptor.model_dump(mode="json")
+            )
+        ).hexdigest()
+        key = (
+            envelope.invocation.invocation_id,
+            envelope.invocation.invocation_revision,
+            mode.value,
+            str(isolated_workspace),
+            descriptor_sha256,
+        )
+        assessment = self._assessments.get(key)
+        if assessment is None:
+            assessment = self._planner.assess(
+                envelope,
+                current_descriptor,
+                mode=mode,
+                isolated_workspace=isolated_workspace,
+            )
+            self._assessments[key] = assessment
+        return assessment
+
+
+class _ReplayToolPolicyContext:
+    def __init__(
+        self,
+        trace: Trace,
+        object_store: ContentAddressedStore,
+        planner: _CachedToolReplayPlanner,
+        descriptors: Mapping[str, ToolDescriptor],
+        *,
+        request: ReplayRequest,
+    ) -> None:
+        self.object_store = object_store
+        self.planner = planner
+        self.descriptors = descriptors
+        self.request = request
+        self._by_parent_span: dict[str, tuple[TraceOutput, ...]] = {}
+        self._by_invocation: dict[str, list[TraceOutput]] = {}
+        for span in trace.spans:
+            if span.span_type != TraceSpanType.TOOL_INVOCATION:
+                continue
+            references = tuple(
+                reference
+                for reference in span.output_references
+                if reference.media_type == TOOL_ENVELOPE_MEDIA_TYPE
+            )
+            if not references:
+                continue
+            self._by_parent_span[span.span_id] = references
+            if span.invocation_id is not None:
+                self._by_invocation.setdefault(
+                    span.invocation_id,
+                    [],
+                ).extend(references)
+
+    def evaluate(
+        self,
+        span: TraceSpan,
+        _loaded_inputs: list[Any],
+    ) -> dict[str, Any]:
+        reference = self._reference_for(span)
+        envelope = load_tool_envelope(
+            self.object_store,
+            reference.sha256,
+        )
+        if (
+            span.invocation_id is None
+            or envelope.invocation.invocation_id != span.invocation_id
+        ):
+            raise ReplayIncompatibleError(
+                "Captured tool policy does not match its invocation."
+            )
+        revision = span.attributes.get("invocation_revision")
+        if (
+            revision is not None
+            and envelope.invocation.invocation_revision != revision
+        ):
+            raise ReplayIncompatibleError(
+                "Captured tool policy revision does not match its invocation."
+            )
+        descriptor = self.descriptors.get(envelope.descriptor.name)
+        if descriptor is None:
+            raise ReplayIncompatibleError(
+                "Current tool descriptor is unavailable for policy replay."
+            )
+        assessment = self.planner.assess(
+            envelope,
+            descriptor,
+            mode=self.request.mode,
+            isolated_workspace=(
+                self.request.isolated_workspace
+                or "[ISOLATED_REPLAY_WORKSPACE]"
+            ),
+        )
+        if assessment.current_decision is None:
+            raise ReplayIncompatibleError(
+                "Current tool policy could not validate the captured invocation."
+            )
+        return safe_protocol_dict(assessment.current_decision)
+
+    def _reference_for(self, span: TraceSpan) -> TraceOutput:
+        references = (
+            self._by_parent_span.get(span.parent_span_id or "")
+            or tuple(
+                self._by_invocation.get(span.invocation_id or "", ())
+            )
+        )
+        unique = {
+            reference.sha256: reference for reference in references
+        }
+        if len(unique) != 1:
+            raise ReplayIncompatibleError(
+                "Policy replay requires one matching captured tool envelope."
+            )
+        return next(iter(unique.values()))
+
+
+def _validated_tool_descriptors(
+    descriptors: Mapping[str, ToolDescriptor],
+) -> dict[str, ToolDescriptor]:
+    validated: dict[str, ToolDescriptor] = {}
+    for name, descriptor in descriptors.items():
+        if descriptor.name != name:
+            raise ValueError(
+                "Replay tool descriptor mapping key must match its name."
+            )
+        validated[name] = descriptor.model_copy(deep=True)
+    return validated
 
 
 __all__ = [

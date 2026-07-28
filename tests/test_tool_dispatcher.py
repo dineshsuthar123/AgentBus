@@ -108,6 +108,9 @@ def test_dispatcher_records_replayable_tool_and_policy_spans(
         runtime_trace.object_store,
         tool_span.output_references[0].sha256,
     )
+    captured_policy = runtime_trace.object_store.get_json(
+        policy_span.output_references[0].sha256
+    )
 
     assert response.result is not None
     assert policy_span.parent_span_id == tool_span.span_id
@@ -117,6 +120,7 @@ def test_dispatcher_records_replayable_tool_and_policy_spans(
     assert tool_span.output_references
     assert tool_span.attributes["tool_effect"] == "filesystem_mutation"
     assert envelope.result.status == ToolInvocationStatus.SUCCEEDED
+    assert captured_policy == envelope.policy_decision.model_dump(mode="json")
     assert str(tmp_path) not in runtime_trace.object_store.get(
         tool_span.output_references[0].sha256
     ).data.decode()

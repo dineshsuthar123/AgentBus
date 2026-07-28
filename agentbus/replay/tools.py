@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +16,9 @@ from agentbus.replay.session import ToolReplayStrategy
 from agentbus.trace.models import ReplayMode, TraceModel, TraceOutput
 from agentbus.trace.redaction import sanitize_document
 from agentbus.trace.storage import ContentAddressedStore
+from agentbus.tools.capabilities import derive_required_capabilities
 from agentbus.tools.protocol import (
+    ToolCapability,
     ToolCapabilityName,
     ToolApprovalRequest,
     ToolDescriptor,
@@ -89,6 +92,7 @@ class ToolReplayAssessment(TraceModel):
     strategy: ToolReplayStrategy
     historical_outcome: ToolPolicyOutcome
     current_outcome: ToolPolicyOutcome | None = None
+    current_decision: ToolPolicyDecision | None = None
     descriptor_drift: bool = False
     capability_drift: bool = False
     policy_drift: bool = False
@@ -108,25 +112,34 @@ def capture_tool_envelope(
     result: ToolResult | None = None,
     approval: ToolApprovalGrant | None = None,
 ) -> TraceOutput:
+    private_roots = _invocation_private_roots(invocation)
     safe_descriptor = ToolDescriptor.model_validate(
-        _sanitize_protocol_model(store, descriptor)
+        _sanitize_protocol_model(
+            store,
+            descriptor,
+            private_roots=private_roots,
+        )
     )
     safe_invocation = ToolInvocation.model_validate(
-        _sanitize_protocol_model(store, invocation)
+        _sanitize_protocol_model(
+            store,
+            invocation,
+            private_roots=private_roots,
+        )
     )
-    decision_payload = _sanitize_protocol_model(store, policy_decision)
-    decision_payload.update(
-        {
-            "capability_fingerprint": capability_fingerprint(
-                safe_invocation.requested_capabilities
-            ),
-            "arguments_sha256": sha256_json(safe_invocation.arguments),
-        }
+    safe_decision = _sanitize_policy_decision(
+        store,
+        safe_invocation,
+        policy_decision,
+        private_roots=private_roots,
     )
-    safe_decision = ToolPolicyDecision.model_validate(decision_payload)
     safe_result = None
     if result is not None:
-        result_payload = _sanitize_protocol_model(store, result)
+        result_payload = _sanitize_protocol_model(
+            store,
+            result,
+            private_roots=private_roots,
+        )
         result_payload["policy_decision"] = safe_decision.model_dump(mode="json")
         safe_result = ToolResult.model_validate(result_payload)
     safe_approval = (
@@ -135,6 +148,7 @@ def capture_tool_envelope(
             approval,
             invocation=safe_invocation,
             decision=safe_decision,
+            private_roots=private_roots,
         )
         if approval is not None
         else None
@@ -159,13 +173,60 @@ def capture_tool_envelope(
     )
 
 
+def sanitize_replay_policy_decision(
+    store: ContentAddressedStore,
+    *,
+    invocation: ToolInvocation,
+    policy_decision: ToolPolicyDecision,
+) -> ToolPolicyDecision:
+    private_roots = _invocation_private_roots(invocation)
+    safe_invocation = ToolInvocation.model_validate(
+        _sanitize_protocol_model(
+            store,
+            invocation,
+            private_roots=private_roots,
+        )
+    )
+    return _sanitize_policy_decision(
+        store,
+        safe_invocation,
+        policy_decision,
+        private_roots=private_roots,
+    )
+
+
+def _sanitize_policy_decision(
+    store: ContentAddressedStore,
+    safe_invocation: ToolInvocation,
+    policy_decision: ToolPolicyDecision,
+    *,
+    private_roots: tuple[str, ...],
+) -> ToolPolicyDecision:
+    decision_payload = _sanitize_protocol_model(
+        store,
+        policy_decision,
+        private_roots=private_roots,
+    )
+    decision_payload.update(
+        {
+            "capability_fingerprint": capability_fingerprint(
+                safe_invocation.requested_capabilities
+            ),
+            "arguments_sha256": sha256_json(safe_invocation.arguments),
+        }
+    )
+    return ToolPolicyDecision.model_validate(decision_payload)
+
+
 def _sanitize_protocol_model(
     store: ContentAddressedStore,
     value: Any,
+    *,
+    private_roots: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     sanitized = sanitize_document(
         safe_protocol_dict(value),
-        private_roots=store.private_roots,
+        private_roots=(*store.private_roots, *private_roots),
     ).value
     if not isinstance(sanitized, dict):
         raise ValueError("sanitized tool protocol value must remain an object")
@@ -178,8 +239,13 @@ def _sanitize_approval(
     *,
     invocation: ToolInvocation,
     decision: ToolPolicyDecision,
+    private_roots: tuple[str, ...],
 ) -> ToolApprovalGrant:
-    request_payload = _sanitize_protocol_model(store, approval.request)
+    request_payload = _sanitize_protocol_model(
+        store,
+        approval.request,
+        private_roots=private_roots,
+    )
     request_payload.update(
         {
             "requested_capabilities": [
@@ -201,7 +267,11 @@ def _sanitize_approval(
         }
     )
     request = ToolApprovalRequest.model_validate(request_payload)
-    approval_payload = _sanitize_protocol_model(store, approval)
+    approval_payload = _sanitize_protocol_model(
+        store,
+        approval,
+        private_roots=private_roots,
+    )
     approval_payload.update(
         {
             "request": request.model_dump(mode="json"),
@@ -209,6 +279,15 @@ def _sanitize_approval(
         }
     )
     return ToolApprovalGrant.model_validate(approval_payload)
+
+
+def _invocation_private_roots(
+    invocation: ToolInvocation,
+) -> tuple[str, ...]:
+    return (
+        invocation.context.workspace_identity,
+        invocation.context.worktree_identity,
+    )
 
 
 def load_tool_envelope(
@@ -252,35 +331,62 @@ class ToolReplayPlanner:
             or envelope.descriptor.output_schema
             != current_descriptor.output_schema
         )
-        historical_capabilities = {
-            item.model_dump_json()
-            for item in envelope.invocation.requested_capabilities
-        }
-        current_capabilities = {
-            item.model_dump_json() for item in current_descriptor.capabilities
-        }
-        capability_drift = historical_capabilities != current_capabilities
-        expanded_capabilities = bool(
-            current_capabilities - historical_capabilities
+        private_roots = _descriptor_private_roots(current_descriptor)
+        policy_workspace = _policy_workspace_identity(
+            current_descriptor,
+            fallback=isolated_workspace,
         )
         replay_invocation = envelope.invocation.model_copy(
             update={
                 "tool_version": current_descriptor.version,
                 "protocol_version": current_descriptor.protocol_version,
                 "context": ToolInvocationContext(
-                    workspace_identity=str(isolated_workspace),
-                    worktree_identity=str(isolated_workspace),
+                    workspace_identity=policy_workspace,
+                    worktree_identity=policy_workspace,
                     caller_role=envelope.invocation.context.caller_role,
                     workspace_trusted=True,
-                    provider_consented=False,
+                    provider_consented=(
+                        envelope.invocation.context.provider_consented
+                    ),
                     policy_context=envelope.invocation.context.policy_context,
                 ),
             }
         )
+        historical_capabilities = {
+            item.model_dump_json()
+            for item in envelope.invocation.requested_capabilities
+        }
+        capability_drift = False
+        expanded_capabilities = False
         try:
+            current_required = derive_required_capabilities(
+                replay_invocation,
+                current_descriptor,
+            )
+            safe_current_required = _sanitize_capabilities(
+                current_required,
+                private_roots=private_roots,
+            )
+            current_capabilities = {
+                item.model_dump_json() for item in safe_current_required
+            }
+            capability_drift = historical_capabilities != current_capabilities
+            expanded_capabilities = bool(
+                current_capabilities - historical_capabilities
+            )
+            replay_invocation = replay_invocation.model_copy(
+                update={"requested_capabilities": current_required}
+            )
             current = self.policy_engine.evaluate(
                 replay_invocation,
                 current_descriptor,
+            )
+            current = _sanitize_current_policy_decision(
+                current,
+                replay_invocation,
+                safe_current_required,
+                private_roots=private_roots,
+                evaluated_at=historical.evaluated_at,
             )
         except Exception as exc:
             return ToolReplayAssessment(
@@ -319,6 +425,7 @@ class ToolReplayPlanner:
             strategy=strategy,
             historical_outcome=historical.outcome,
             current_outcome=current.outcome,
+            current_decision=current,
             descriptor_drift=descriptor_drift,
             capability_drift=capability_drift,
             policy_drift=policy_drift,
@@ -326,6 +433,89 @@ class ToolReplayPlanner:
             fresh_authorization_required=fresh_authorization,
             reasons=reasons,
         )
+
+
+def _descriptor_private_roots(
+    descriptor: ToolDescriptor,
+) -> tuple[str, ...]:
+    candidates = {
+        value
+        for capability in descriptor.capabilities
+        for value in (
+            *capability.scope.roots,
+            *capability.scope.working_directories,
+        )
+    }
+    return tuple(
+        sorted(
+            (
+                value
+                for value in candidates
+                if Path(value).expanduser().is_absolute()
+            ),
+            key=len,
+            reverse=True,
+        )
+    )
+
+
+def _policy_workspace_identity(
+    descriptor: ToolDescriptor,
+    *,
+    fallback: str | Path,
+) -> str:
+    for capability in descriptor.capabilities:
+        for value in (
+            *capability.scope.working_directories,
+            *capability.scope.roots,
+        ):
+            if Path(value).expanduser().is_absolute():
+                return value
+    return str(fallback)
+
+
+def _sanitize_capabilities(
+    capabilities: tuple[ToolCapability, ...],
+    *,
+    private_roots: tuple[str, ...],
+) -> tuple[ToolCapability, ...]:
+    return tuple(
+        ToolCapability.model_validate(
+            sanitize_document(
+                capability.model_dump(mode="json"),
+                private_roots=private_roots,
+            ).value
+        )
+        for capability in capabilities
+    )
+
+
+def _sanitize_current_policy_decision(
+    decision: ToolPolicyDecision,
+    invocation: ToolInvocation,
+    safe_capabilities: tuple[ToolCapability, ...],
+    *,
+    private_roots: tuple[str, ...],
+    evaluated_at: datetime,
+) -> ToolPolicyDecision:
+    payload = sanitize_document(
+        safe_protocol_dict(decision),
+        private_roots=private_roots,
+    ).value
+    safe_arguments = sanitize_document(
+        invocation.arguments,
+        private_roots=private_roots,
+    ).value
+    payload.update(
+        {
+            "capability_fingerprint": capability_fingerprint(
+                safe_capabilities
+            ),
+            "arguments_sha256": sha256_json(safe_arguments),
+            "evaluated_at": evaluated_at,
+        }
+    )
+    return ToolPolicyDecision.model_validate(payload)
 
 
 def _strategy(
@@ -352,22 +542,22 @@ def _strategy(
             True,
             ["Current descriptor expands capabilities and requires fresh authorization."],
         )
-    if policy_drift and current.outcome == ToolPolicyOutcome.REQUIRE_APPROVAL:
-        return (
-            ToolReplayStrategy.REJECT,
-            True,
-            ["Current policy newly requires approval for this behavior."],
-        )
     capabilities = {
         capability.name for capability in envelope.invocation.requested_capabilities
     }
     external = bool(capabilities & _EXTERNAL_CAPABILITIES)
     mutating = bool(capabilities & _MUTATING_CAPABILITIES)
-    if mode == ReplayMode.SIMULATE and mutating:
+    if mode in {ReplayMode.OFFLINE, ReplayMode.SIMULATE} and mutating:
         return (
             ToolReplayStrategy.SIMULATE_MUTATION,
             False,
-            ["Mutation is simulated in replay mode."],
+            ["Mutation is simulated in providerless replay mode."],
+        )
+    if policy_drift and current.outcome == ToolPolicyOutcome.REQUIRE_APPROVAL:
+        return (
+            ToolReplayStrategy.REJECT,
+            True,
+            ["Current policy newly requires approval for this behavior."],
         )
     if external:
         if envelope.result is not None:
@@ -444,4 +634,5 @@ __all__ = [
     "ToolReplayPlanner",
     "capture_tool_envelope",
     "load_tool_envelope",
+    "sanitize_replay_policy_decision",
 ]

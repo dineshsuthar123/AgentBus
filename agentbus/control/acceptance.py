@@ -1781,7 +1781,11 @@ def _assert_replayed_span_contracts(
         item["span_id"]: item for item in replay["span_results"]
     }
     for source in spans:
-        if source["span_type"] not in {"verifier", "reviewer"}:
+        if source["span_type"] not in {
+            "tool_policy",
+            "verifier",
+            "reviewer",
+        }:
             continue
         result = results_by_span[source["span_id"]]
         detail = _request(
