@@ -22,3 +22,12 @@ test("redaction removes absolute personal home paths", () => {
   assert.equal((output.match(/\[PRIVATE_PATH\]/g) ?? []).length, 3);
   assert.doesNotMatch(output, /Alice Smith|\/home\/alice|\/Users\/alice/);
 });
+
+test("redaction removes quoted JSON secret fields", () => {
+  const output = redactText(
+    '{"authorization": "private-token", "api_key":"private-key"}'
+  );
+
+  assert.doesNotMatch(output, /private-token|private-key/);
+  assert.equal((output.match(/\[REDACTED\]/g) ?? []).length, 2);
+});

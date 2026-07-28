@@ -1,6 +1,6 @@
 const bearerPattern = /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi;
 const secretPattern =
-  /\b(api[_-]?key|authorization|password|secret|token)\s*[:=]\s*([^\s,;]+)/gi;
+  /\b(api[_-]?key|authorization|password|secret|token)\b["']?\s*[:=]\s*["']?([^\s,;}"']+)/gi;
 const queryPattern = /(https?:\/\/[^\s?#]+)[?#][^\s]+/gi;
 const windowsHomePattern =
   /(?:[A-Z]:[\\/](?:Users|Documents and Settings)[\\/][^\\/\r\n"';,]+(?:[\\/][^\r\n"';,]*)?)/gi;
