@@ -1,5 +1,3 @@
-import threading
-
 import pytest
 
 from agentbus.config import AgentBusConfig
@@ -612,12 +610,14 @@ def test_cancellation_during_final_review_preserves_successful_task_history(
     registry = CancellationRegistry(store)
     token = CancellationToken()
     registry.register("final-review-cancel", token)
-    review_started = threading.Event()
-    cancellation_observed = threading.Event()
-    release_review = threading.Event()
+    engine = DurableExecutionEngine(
+        store,
+        cancellation_registry=registry,
+    )
+    cancellation_reports = []
     git_repository = FakeGitRepository()
 
-    class BlockingFinalReviewer(FakeReviewer):
+    class CancellingFinalReviewer(FakeReviewer):
         def review(self, user_task, plan, git_diff, test_output=None):
             with token.operation(
                 "deterministic.generate_json",
@@ -625,10 +625,13 @@ def test_cancellation_during_final_review_preserves_successful_task_history(
                 interruptible=True,
                 provider="deterministic",
             ):
-                review_started.set()
-                assert token.wait(timeout_seconds=5)
-                cancellation_observed.set()
-                assert release_review.wait(timeout=5)
+                assert token.snapshot().active_operations
+                cancellation_reports.append(
+                    engine.request_cancellation(
+                        "final-review-cancel",
+                        "stop final review",
+                    )
+                )
                 token.checkpoint(
                     "provider:deterministic",
                     stage="final-review",
@@ -642,7 +645,7 @@ def test_cancellation_during_final_review_preserves_successful_task_history(
         planner=FakePlanner(one_step),
         coder=FakeCoder(),
         verifier=FakeVerifier(),
-        reviewer=BlockingFinalReviewer(),
+        reviewer=CancellingFinalReviewer(),
         git_repository=git_repository,
         pr_client=FakePRClient(),
         state_store=store,
@@ -654,27 +657,12 @@ def test_cancellation_during_final_review_preserves_successful_task_history(
         "Create calculator",
         run_id="final-review-cancel",
     )
-    reports = []
-    thread = threading.Thread(
-        target=lambda: reports.append(runner.run_durable(run_id))
-    )
-    thread.start()
-    assert review_started.wait(timeout=5)
+    report = runner.run_durable(run_id)
 
-    requested = DurableExecutionEngine(
-        store,
-        cancellation_registry=registry,
-    ).request_cancellation(run_id, "stop final review")
-    assert cancellation_observed.wait(timeout=5)
-
-    assert requested.status == RunStatus.WAITING_FOR_REVIEW
+    assert cancellation_reports[0].status == RunStatus.WAITING_FOR_REVIEW
     assert store.get_task(run_id, "step-1").status == TaskStatus.SUCCEEDED
-    release_review.set()
-    thread.join(timeout=5)
-
-    assert thread.is_alive() is False
-    assert reports[0].status == RunStatus.CANCELLED
-    assert reports[0].successful_tasks == ["step-1"]
+    assert report.status == RunStatus.CANCELLED
+    assert report.successful_tasks == ["step-1"]
     assert store.list_attempts(run_id, "step-1")[0].status.value == "succeeded"
     assert git_repository.commits == []
     assert store.get_run(run_id).commit_identifier is None
