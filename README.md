@@ -48,6 +48,36 @@ See [Managed Tool Runtime](docs/tool-runtime.md),
 [MCP Integration](docs/mcp-integration.md), and
 [ADR 0009](docs/adr/0009-capability-tool-runtime.md).
 
+## Deterministic Replay And Provenance
+
+AgentBus v0.4 records hierarchical execution traces with sanitized
+content-addressed objects and tamper-evident provenance roots. Completed runs
+can be inspected, verified, replayed without providers, resumed from a
+checkpoint in isolation, forked with changed inputs, compared structurally,
+exported as bounded `.agentbus-trace` archives, or captured as regression
+fixtures.
+
+```powershell
+agentbus trace inspect <run-id> --json
+agentbus trace verify <run-id> --json
+agentbus replay <run-id> --mode offline --json
+agentbus replay <run-id> --mode offline --from <checkpoint-id> --json
+agentbus compare <left-run-or-trace> <right-run-or-trace> --json
+```
+
+Offline replay substitutes captured provider and MCP envelopes and records
+zero provider/network calls. It never silently uses Azure or Ollama and never
+mutates the source repository. Uncontrolled external systems, host scheduling,
+and uncaptured side effects are reported as partial, observational, or
+non-replayable rather than claimed as exact.
+
+See [Execution Tracing](docs/execution-tracing.md),
+[Deterministic Replay](docs/deterministic-replay.md),
+[Run Provenance](docs/run-provenance.md),
+[Trace Archives](docs/trace-archives.md),
+[Regression Fixtures](docs/regression-fixtures.md), and
+[ADR 0010](docs/adr/0010-deterministic-replay-and-provenance.md).
+
 ## Quick Start
 
 Install from a source checkout with standard Python packaging:

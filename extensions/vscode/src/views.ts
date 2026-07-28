@@ -1,15 +1,38 @@
 import * as vscode from "vscode";
-import type { AgentBusClient } from "./apiClient";
+import { AgentBusApiError, type AgentBusClient } from "./apiClient";
 import type {
   ApprovalSummary,
+  ComparisonResponse,
   McpServerSummary,
   ProviderSummary,
+  ReplaySessionResponse,
   RunSummary,
   TaskSummary,
+  TraceSpanSummary,
   ToolInvocationSummary,
   WorktreeSummary
 } from "./generated/protocol";
+import type { ComparisonStore } from "./comparisonStore";
+import {
+  COMPARISON_GROUPS,
+  comparisonDescription,
+  comparisonSpans,
+  comparisonTooltip,
+  type ComparisonGroupKey
+} from "./comparisonPresentation";
 import type { RunStore } from "./runStore";
+import {
+  REPLAY_GROUPS,
+  replayDescription,
+  replayGroup,
+  replayTooltip,
+  type ReplayGroupKey
+} from "./replayPresentation";
+import {
+  spanDescription,
+  spanTooltip,
+  timelineChildren
+} from "./tracePresentation";
 import { formatApprovalTooltip } from "./approvalPresentation";
 import { formatMcpServerTooltip } from "./mcpPresentation";
 import {
@@ -129,6 +152,68 @@ export class TasksProvider extends RefreshableProvider {
     }
     const response = await (await this.client()).tasks(runId);
     return response.tasks.map(taskItem);
+  }
+}
+
+export class ExecutionTimelineProvider extends RefreshableProvider {
+  private cachedRunId: string | undefined;
+  private cachedSpans: TraceSpanSummary[] | undefined;
+  private cachedTruncated = false;
+
+  public constructor(
+    private readonly client: () => Promise<AgentBusClient>,
+    private readonly selection: RunSelection
+  ) {
+    super();
+  }
+
+  public override refresh(): void {
+    this.cachedRunId = undefined;
+    this.cachedSpans = undefined;
+    this.cachedTruncated = false;
+    super.refresh();
+  }
+
+  public async getChildren(element?: AgentBusItem): Promise<AgentBusItem[]> {
+    const runId = this.selection.get();
+    if (!runId) {
+      return [messageItem("Select a run to inspect its execution timeline.")];
+    }
+    const spans = await this.load(runId);
+    if (!spans) {
+      return [messageItem("This run does not have a recorded trace yet.")];
+    }
+    const parent = element?.value as TraceSpanSummary | undefined;
+    const children = timelineChildren(spans, parent?.span_id).map((span) =>
+      traceSpanItem(span, spans)
+    );
+    if (!element && this.cachedTruncated) {
+      children.push(messageItem("Showing the first 500 trace spans."));
+    }
+    if (!element && children.length === 0) {
+      return [messageItem("The recorded trace does not contain spans.")];
+    }
+    return children;
+  }
+
+  private async load(runId: string): Promise<TraceSpanSummary[] | undefined> {
+    if (this.cachedRunId === runId && this.cachedSpans) {
+      return this.cachedSpans;
+    }
+    try {
+      const response = await (await this.client()).traceSpans(runId, 0, 500);
+      this.cachedRunId = runId;
+      this.cachedSpans = response.spans;
+      this.cachedTruncated = response.truncated ?? false;
+      return this.cachedSpans;
+    } catch (error) {
+      if (error instanceof AgentBusApiError && error.status === 404) {
+        this.cachedRunId = runId;
+        this.cachedSpans = [];
+        return undefined;
+      }
+      throw error;
+    }
   }
 }
 
@@ -267,6 +352,140 @@ export class ProvidersProvider extends RefreshableProvider {
   }
 }
 
+interface ReplayGroupValue {
+  kind: "replay-group";
+  key: ReplayGroupKey;
+}
+
+export class ReplaySessionsProvider extends RefreshableProvider {
+  private cached: ReplaySessionResponse[] | undefined;
+  private truncated = false;
+
+  public constructor(private readonly client: () => Promise<AgentBusClient>) {
+    super();
+  }
+
+  public override refresh(): void {
+    this.cached = undefined;
+    this.truncated = false;
+    super.refresh();
+  }
+
+  public async getChildren(element?: AgentBusItem): Promise<AgentBusItem[]> {
+    const sessions = await this.load();
+    if (element) {
+      const group = element.value as ReplayGroupValue;
+      if (group?.kind !== "replay-group") return [];
+      return sessions
+        .filter((session) => replayGroup(session.status) === group.key)
+        .map(replaySessionItem);
+    }
+    const groups = REPLAY_GROUPS.map(({ key, label }) => {
+      const count = sessions.filter(
+        (session) => replayGroup(session.status) === key
+      ).length;
+      const item = new AgentBusItem(
+        `${label} (${count})`,
+        key === "active"
+          ? vscode.TreeItemCollapsibleState.Expanded
+          : vscode.TreeItemCollapsibleState.Collapsed,
+        { kind: "replay-group", key } satisfies ReplayGroupValue
+      );
+      item.contextValue = "agentbusReplayGroup";
+      item.iconPath = new vscode.ThemeIcon(iconForStatus(key));
+      return item;
+    });
+    if (this.truncated) {
+      groups.push(messageItem("Showing the first 500 replay sessions."));
+    }
+    return groups;
+  }
+
+  private async load(): Promise<ReplaySessionResponse[]> {
+    if (!this.cached) {
+      const response = await (await this.client()).listReplays(
+        undefined,
+        undefined,
+        500
+      );
+      this.cached = response.replays;
+      this.truncated = response.truncated ?? false;
+    }
+    return this.cached;
+  }
+}
+
+type ComparisonTreeValue =
+  | {
+      kind: "comparison";
+      comparison: ComparisonResponse;
+    }
+  | {
+      kind: "comparison-group";
+      comparison: ComparisonResponse;
+      key: ComparisonGroupKey;
+    };
+
+export class ComparisonsProvider extends RefreshableProvider {
+  public constructor(
+    private readonly client: () => Promise<AgentBusClient>,
+    private readonly store: ComparisonStore
+  ) {
+    super();
+  }
+
+  public async getChildren(element?: AgentBusItem): Promise<AgentBusItem[]> {
+    if (!element) {
+      const comparisons = await this.store.load(await this.client());
+      if (comparisons.length === 0) {
+        return [messageItem("Compare two traced runs to inspect drift.")];
+      }
+      return comparisons.map(comparisonItem);
+    }
+    const value = element.value as ComparisonTreeValue;
+    if (value?.kind === "comparison") {
+      return COMPARISON_GROUPS.map(({ key, label }) => {
+        const count = comparisonSpans(value.comparison, key).length;
+        const item = new AgentBusItem(
+          `${label} (${count})`,
+          count
+            ? vscode.TreeItemCollapsibleState.Collapsed
+            : vscode.TreeItemCollapsibleState.None,
+          {
+            kind: "comparison-group",
+            comparison: value.comparison,
+            key
+          } satisfies ComparisonTreeValue
+        );
+        item.contextValue = "agentbusComparisonGroup";
+        item.iconPath = new vscode.ThemeIcon(comparisonGroupIcon(key));
+        return item;
+      });
+    }
+    if (value?.kind === "comparison-group") {
+      return comparisonSpans(value.comparison, value.key).map((span) => {
+        const item = new AgentBusItem(
+          span.semantic_key,
+          vscode.TreeItemCollapsibleState.None,
+          value
+        );
+        item.description = (span.categories ?? []).join(", ") || "unchanged";
+        item.contextValue = "agentbusComparisonSpan";
+        item.iconPath = new vscode.ThemeIcon(
+          span.unchanged ? "pass-filled" : "diff"
+        );
+        item.command = {
+          command: "agentbus.showComparison",
+          title: "Show Comparison",
+          arguments: [comparisonItem(value.comparison)]
+        };
+        return item;
+      });
+    }
+    return [];
+  }
+}
+
 function runItem(run: RunSummary): AgentBusItem {
   const item = new AgentBusItem(
     run.original_task,
@@ -320,6 +539,30 @@ function taskItem(task: TaskSummary): AgentBusItem {
   );
   item.iconPath = new vscode.ThemeIcon(iconForStatus(task.status));
   item.contextValue = "agentbusTask";
+  return item;
+}
+
+function traceSpanItem(
+  span: TraceSpanSummary,
+  spans: readonly TraceSpanSummary[]
+): AgentBusItem {
+  const hasChildren = timelineChildren(spans, span.span_id).length > 0;
+  const item = new AgentBusItem(
+    span.name,
+    hasChildren
+      ? vscode.TreeItemCollapsibleState.Collapsed
+      : vscode.TreeItemCollapsibleState.None,
+    span
+  );
+  item.description = spanDescription(span);
+  item.tooltip = new vscode.MarkdownString(spanTooltip(span));
+  item.iconPath = new vscode.ThemeIcon(iconForTraceSpan(span));
+  item.contextValue = "agentbusTraceSpan";
+  item.command = {
+    command: "agentbus.showSpan",
+    title: "Show Span",
+    arguments: [item]
+  };
   return item;
 }
 
@@ -424,6 +667,52 @@ function providerItem(provider: ProviderSummary): AgentBusItem {
   return item;
 }
 
+function replaySessionItem(session: ReplaySessionResponse): AgentBusItem {
+  const item = new AgentBusItem(
+    session.replay_id,
+    vscode.TreeItemCollapsibleState.None,
+    session
+  );
+  item.description = replayDescription(session);
+  item.tooltip = new vscode.MarkdownString(replayTooltip(session));
+  item.iconPath = new vscode.ThemeIcon(iconForStatus(session.status));
+  item.contextValue = ["pending", "running"].includes(session.status)
+    ? "agentbusReplayCancellable"
+    : "agentbusReplayTerminal";
+  item.command = {
+    command: "agentbus.showReplaySession",
+    title: "Show Replay Session",
+    arguments: [item]
+  };
+  return item;
+}
+
+function comparisonItem(comparison: ComparisonResponse): AgentBusItem {
+  const item = new AgentBusItem(
+    comparison.comparison_id,
+    vscode.TreeItemCollapsibleState.Collapsed,
+    { kind: "comparison", comparison } satisfies ComparisonTreeValue
+  );
+  item.description = comparisonDescription(comparison);
+  item.tooltip = new vscode.MarkdownString(
+    comparisonTooltip(comparison)
+  );
+  item.iconPath = new vscode.ThemeIcon(
+    comparison.categories?.includes("regression")
+      ? "error"
+      : comparison.summary.changed_spans
+        ? "diff"
+        : "pass-filled"
+  );
+  item.contextValue = "agentbusComparison";
+  item.command = {
+    command: "agentbus.showComparison",
+    title: "Show Comparison",
+    arguments: [item]
+  };
+  return item;
+}
+
 function mcpServerItem(server: McpServerSummary): AgentBusItem {
   const item = new AgentBusItem(
     server.server_id,
@@ -487,4 +776,34 @@ function iconForStatus(status: string): string {
     return "shield";
   }
   return "sync~spin";
+}
+
+function iconForTraceSpan(span: TraceSpanSummary): string {
+  if (span.status === "failed") return "error";
+  if (span.status === "cancelled" || span.status === "interrupted") {
+    return "circle-slash";
+  }
+  if (span.status === "succeeded") {
+    if (span.span_type === "tool_invocation") return "tools";
+    if (span.span_type === "approval_wait") return "shield";
+    if (span.span_type === "provider_request") return "cloud-upload";
+    if (span.span_type === "provider_response") return "cloud-download";
+    if (span.span_type === "verifier") return "verified";
+    if (span.span_type === "reviewer") return "comment-discussion";
+    if (span.span_type === "integration") return "git-merge";
+    if (span.span_type === "cleanup") return "trash";
+    return "pass-filled";
+  }
+  return "sync~spin";
+}
+
+function comparisonGroupIcon(group: ComparisonGroupKey): string {
+  if (group === "unchanged") return "pass-filled";
+  if (group === "regression") return "error";
+  if (group === "expected") return "diff-ignored";
+  if (group === "policy_drift") return "shield";
+  if (group === "model_drift") return "hubot";
+  if (group === "tool_drift") return "tools";
+  if (group === "environment_drift") return "server-environment";
+  return "diff";
 }

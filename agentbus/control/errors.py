@@ -41,6 +41,11 @@ class ControlPlaneConflictError(ControlPlaneError):
     status_code = 409
 
 
+class ControlPlanePayloadTooLargeError(ControlPlaneError):
+    code = "payload_too_large"
+    status_code = 413
+
+
 class ControlPlaneForbiddenError(ControlPlaneError):
     code = "forbidden"
     status_code = 403

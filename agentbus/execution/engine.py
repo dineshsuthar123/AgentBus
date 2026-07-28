@@ -27,6 +27,7 @@ from agentbus.execution.models import (
 from agentbus.execution.retry import FailureClassifier, RetryController
 from agentbus.execution.state_store import StateStore
 from agentbus.execution.task_graph import TaskGraph
+from agentbus.trace import RuntimeTrace
 
 
 class DurableExecutionError(RuntimeError):
@@ -55,6 +56,7 @@ class DurableExecutionEngine:
         crash_hook: CrashHook | None = None,
         cancellation: CancellationToken | None = None,
         cancellation_registry: CancellationRegistry | None = None,
+        runtime_trace: RuntimeTrace | None = None,
     ):
         self.store = state_store
         self.task_executor = task_executor
@@ -67,6 +69,7 @@ class DurableExecutionEngine:
         )
         self._explicit_cancellation = cancellation
         self._explicit_cancellation_run_id: str | None = None
+        self.runtime_trace = runtime_trace
 
     def close(self) -> None:
         close = getattr(self.task_executor, "close", None)
@@ -262,6 +265,8 @@ class DurableExecutionEngine:
             )
 
         self._persist_execution_result(attempt, task_record, result)
+        if result.succeeded:
+            self._checkpoint_completed_task(attempt, task_record, result)
         if cancellation.is_requested:
             if result.succeeded:
                 cancellation.record_task_completed_after_request(
@@ -330,6 +335,11 @@ class DurableExecutionEngine:
                 RunStatus.RUNNING,
                 event_type="durable_run_approval_received",
             )
+        self._checkpoint_approval(
+            run_id,
+            task_id,
+            ApprovalOutcome.APPROVED,
+        )
         return self.get_report(run_id)
 
     def reject_task(
@@ -373,6 +383,11 @@ class DurableExecutionEngine:
                 f"High-risk task '{task_id}' was rejected"
                 + (f": {reason}" if reason else "."),
             )
+        self._checkpoint_approval(
+            run_id,
+            task_id,
+            ApprovalOutcome.REJECTED,
+        )
         return self.get_report(run_id)
 
     def cancel_run(
@@ -728,6 +743,66 @@ class DurableExecutionEngine:
                 "attempt_number": attempt.attempt_number,
                 "error_category": category.value,
                 "retry_exhausted": decision.exhausted,
+            },
+        )
+
+    def _checkpoint_completed_task(
+        self,
+        attempt: TaskAttempt,
+        task_record: TaskRecord,
+        result: TaskExecutionResult,
+    ) -> None:
+        if self.runtime_trace is None:
+            return
+        snapshot = self.store.load_snapshot(attempt.run_id)
+        completed = sorted(
+            task.task_id
+            for task in snapshot.tasks
+            if task.status
+            in {
+                TaskStatus.SUCCEEDED,
+                TaskStatus.INTEGRATION_PENDING,
+            }
+        )
+        self.runtime_trace.replay_checkpoint(
+            "task_completed",
+            f"task-completed-{task_record.task_id}",
+            task_id=task_record.task_id,
+            completed_task_ids=completed,
+            required_task_ids=task_record.spec.dependency_ids,
+            durable_state={
+                "attempt_id": attempt.attempt_id,
+                "attempt_number": attempt.attempt_number,
+                "task_status": self.store.get_task(
+                    attempt.run_id,
+                    task_record.task_id,
+                ).status.value,
+                "changed_files": result.changed_files,
+            },
+        )
+
+    def _checkpoint_approval(
+        self,
+        run_id: str,
+        task_id: str,
+        outcome: ApprovalOutcome,
+    ) -> None:
+        if self.runtime_trace is None:
+            return
+        snapshot = self.store.load_snapshot(run_id)
+        completed = sorted(
+            task.task_id
+            for task in snapshot.tasks
+            if task.status == TaskStatus.SUCCEEDED
+        )
+        self.runtime_trace.replay_checkpoint(
+            "approval_decided",
+            f"approval-{outcome.value}-{task_id}",
+            task_id=task_id,
+            completed_task_ids=completed,
+            durable_state={
+                "decision": outcome.value,
+                "task_status": self.store.get_task(run_id, task_id).status.value,
             },
         )
 

@@ -4,6 +4,8 @@ import type {
   ApprovalListResponse,
   CancelResponse,
   ChangeListResponse,
+  ComparisonCreateRequest,
+  ComparisonResponse,
   DiffResponse,
   DoctorResponse,
   ErrorResponse,
@@ -12,7 +14,16 @@ import type {
   McpServerCheckResponse,
   McpServerListResponse,
   ProviderListResponse,
+  ProvenanceResponse,
+  RegressionFixtureCaptureRequest,
+  RegressionFixtureCaptureResponse,
+  ReplayAcceptedResponse,
+  ReplayCancelResponse,
+  ReplayCreateRequest,
+  ReplayListResponse,
+  ReplaySessionResponse,
   ResumeResponse,
+  RunReplayabilityResponse,
   RunAcceptedResponse,
   RunCreateRequest,
   RunListResponse,
@@ -20,6 +31,12 @@ import type {
   RunSummary,
   SchedulerResponse,
   TaskListResponse,
+  TraceArchiveExportResponse,
+  TraceArchiveImportRequest,
+  TraceArchiveImportResponse,
+  TraceResponse,
+  TraceSpanDetailResponse,
+  TraceSpanListResponse,
   ToolAuditListResponse,
   ToolDescriptorDetail,
   ToolInvocationCancelResponse,
@@ -135,6 +152,153 @@ export class AgentBusClient {
 
   public tasks(runId: string): Promise<TaskListResponse> {
     return this.request("GET", `/api/v1/runs/${safeSegment(runId)}/tasks`);
+  }
+
+  public trace(runId: string): Promise<TraceResponse> {
+    return this.request("GET", `/api/v1/runs/${safeSegment(runId)}/trace`);
+  }
+
+  public traceSpans(
+    runId: string,
+    after = 0,
+    limit = 500
+  ): Promise<TraceSpanListResponse> {
+    validatePage(after, limit);
+    return this.request(
+      "GET",
+      `/api/v1/runs/${safeSegment(
+        runId
+      )}/trace/spans?after=${after}&limit=${limit}`
+    );
+  }
+
+  public traceSpan(
+    runId: string,
+    spanId: string
+  ): Promise<TraceSpanDetailResponse> {
+    return this.request(
+      "GET",
+      `/api/v1/runs/${safeSegment(
+        runId
+      )}/trace/spans/${safeSegment(spanId)}`
+    );
+  }
+
+  public replayability(
+    runId: string,
+    after = 0,
+    limit = 500
+  ): Promise<RunReplayabilityResponse> {
+    validatePage(after, limit);
+    return this.request(
+      "GET",
+      `/api/v1/runs/${safeSegment(
+        runId
+      )}/replayability?after=${after}&limit=${limit}`
+    );
+  }
+
+  public provenance(runId: string): Promise<ProvenanceResponse> {
+    return this.request(
+      "GET",
+      `/api/v1/runs/${safeSegment(runId)}/provenance`
+    );
+  }
+
+  public createReplay(
+    runId: string,
+    body: ReplayCreateRequest
+  ): Promise<ReplayAcceptedResponse> {
+    return this.request(
+      "POST",
+      `/api/v1/runs/${safeSegment(runId)}/replays`,
+      body
+    );
+  }
+
+  public listReplays(
+    sourceTraceId?: string,
+    status?: string,
+    limit = 500
+  ): Promise<ReplayListResponse> {
+    validatePage(0, limit);
+    if (status && !REPLAY_STATUSES.has(status)) {
+      throw new Error("AgentBus replay status filter is invalid.");
+    }
+    const query = new URLSearchParams({ limit: String(limit) });
+    if (sourceTraceId) query.set("source_trace_id", sourceTraceId);
+    if (status) query.set("status", status);
+    return this.request("GET", `/api/v1/replays?${query.toString()}`);
+  }
+
+  public replay(replayId: string): Promise<ReplaySessionResponse> {
+    return this.request(
+      "GET",
+      `/api/v1/replays/${safeSegment(replayId)}`
+    );
+  }
+
+  public cancelReplay(replayId: string): Promise<ReplayCancelResponse> {
+    return this.request(
+      "POST",
+      `/api/v1/replays/${safeSegment(replayId)}/cancel`
+    );
+  }
+
+  public createComparison(
+    body: ComparisonCreateRequest,
+    after = 0,
+    limit = 500
+  ): Promise<ComparisonResponse> {
+    validatePage(after, limit);
+    return this.request(
+      "POST",
+      `/api/v1/comparisons?after=${after}&limit=${limit}`,
+      body
+    );
+  }
+
+  public comparison(
+    comparisonId: string,
+    after = 0,
+    limit = 500
+  ): Promise<ComparisonResponse> {
+    validatePage(after, limit);
+    return this.request(
+      "GET",
+      `/api/v1/comparisons/${safeSegment(
+        comparisonId
+      )}?after=${after}&limit=${limit}`
+    );
+  }
+
+  public exportTrace(
+    traceId: string,
+    includeSourceContent = false
+  ): Promise<TraceArchiveExportResponse> {
+    return this.request(
+      "GET",
+      `/api/v1/traces/${safeSegment(
+        traceId
+      )}/export?include_source_content=${includeSourceContent ? "true" : "false"}`
+    );
+  }
+
+  public importTrace(
+    body: TraceArchiveImportRequest
+  ): Promise<TraceArchiveImportResponse> {
+    return this.request("POST", "/api/v1/traces/import", body);
+  }
+
+  public captureRegressionFixture(
+    runId: string,
+    body: RegressionFixtureCaptureRequest
+  ): Promise<RegressionFixtureCaptureResponse> {
+    return this.request(
+      "POST",
+      `/api/v1/runs/${safeSegment(runId)}/fixtures`,
+      body
+    );
   }
 
   public scheduler(runId: string): Promise<SchedulerResponse> {
@@ -348,3 +512,13 @@ function validatePage(after: number, limit: number): void {
     throw new Error("AgentBus pagination is outside the bounded range.");
   }
 }
+
+const REPLAY_STATUSES = new Set([
+  "pending",
+  "running",
+  "succeeded",
+  "failed",
+  "cancelled",
+  "incompatible",
+  "awaiting_input"
+]);

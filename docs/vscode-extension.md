@@ -7,11 +7,52 @@ The extension discovers compatible daemons from the metadata-only registry,
 retrieves known tokens from SecretStorage, or launches `agentbus serve --port 0
 --json-ready`. It validates daemon identity and protocol version before use.
 
-Native views show runs, task state, approvals, tool invocations, worktrees,
-provider readiness, and configured MCP servers. Commands submit single,
-multi-agent, durable, or parallel tasks; resume and cancel runs; decide
-approvals; inspect and cancel tools; open reports and artifacts; inspect policy;
-check MCP servers; and display native before/after diffs.
+Native views show runs, task state, execution timelines, replay sessions,
+structured comparisons, approvals, tool invocations, worktrees, provider
+readiness, and configured MCP servers. Commands submit single, multi-agent,
+durable, or parallel tasks; resume and cancel runs; decide approvals; inspect
+and cancel tools; open reports and artifacts; inspect policy; check MCP
+servers; display native before/after diffs; and perform providerless
+time-travel debugging.
+
+## Timeline and deterministic replay
+
+The AgentBus Timeline orders run, task, provider, parse, policy, tool,
+approval, verifier, reviewer, integration, cancellation, and cleanup spans by
+their persisted deterministic sequence. **AgentBus: Show Span** opens a
+read-only bounded document containing identities, hashes, safe attribute keys,
+resource usage, and artifact metadata. It never renders prompts, provider
+payload values, credentials, or arbitrary attributes.
+
+Replay commands are:
+
+- **AgentBus: Replay Run Offline**
+- **AgentBus: Replay from Checkpoint**
+- **AgentBus: Fork Run**
+- **AgentBus: Cancel Replay**
+- **AgentBus: Compare Runs**
+- **AgentBus: Export Trace**
+- **AgentBus: Import Trace**
+- **AgentBus: Capture Regression Fixture**
+- **AgentBus: Open Provenance Manifest**
+
+Before replay, the extension opens a plan showing mode, replayability, missing
+hashes, substitutions, isolation requirements, policy implications, and
+expected side effects. Offline commands always send
+`live_provider_consent=false`. Mutating replay work never uses the source
+repository.
+
+Replay Sessions groups active, succeeded, failed, cancelled, incompatible, and
+awaiting-input sessions. Terminal fork sessions expose their derived trace and
+comparison IDs. Comparisons group expected changes, regressions, policy,
+model, tool, environment, and other drift. Native structured diffs contain
+only identities, categories, summaries, and hashes.
+
+Export and fixture capture verify decoded size, canonical base64, SHA-256,
+source consent, and run/trace identity before writing. Importing source content
+uses a modal confirmation and never starts replay. Provenance documents show
+integrity roots, runtime fingerprints, replayability, tools, protocols, and
+bounded run outcomes.
 
 ## Tool invocations and approvals
 
@@ -77,11 +118,15 @@ a new authenticated loopback daemon, reconnects, and reloads persisted runs.
 
 `npm run test:integration` launches VS Code Electron against a temporary Git
 repository and the real local daemon. It completes a deterministic managed-tool
-run, observes SSE and invocation transitions, approves and resumes an exact
-tool call, opens safe artifacts and commit-backed native diffs, cancels an
-active managed process and provider run, checks MCP diagnostics, and verifies
-daemon restart recovery. The harness requires the daemon registry to be empty
-at shutdown and every MCP fixture start marker to have a matching stop marker.
+run, opens timeline provider and tool spans, replays offline, replays from a
+checkpoint, forks a changed budget, opens comparison and provenance documents,
+exports and imports a trace, rejects a deliberately corrupted archive,
+captures a fixture, observes replay state, and verifies replay recovery after
+daemon restart. It also approves and resumes an exact tool call, opens safe
+artifacts and commit-backed native diffs, cancels an active managed process and
+provider run, and checks MCP diagnostics. The harness requires the daemon
+registry to be empty at shutdown, every MCP fixture start marker to have a
+matching stop marker, and every source-bearing test archive to be removed.
 Provider credentials are removed from the test child environment.
 
 Execution, resume, approval, and Git actions require VS Code Workspace Trust.

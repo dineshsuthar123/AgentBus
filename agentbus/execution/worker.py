@@ -24,6 +24,7 @@ from agentbus.execution.models import (
 from agentbus.execution.state_store import StateStore, StateStoreError
 from agentbus.git.repository import GitRepository, GitRepositoryError
 from agentbus.models.errors import ModelCancellationError
+from agentbus.trace import RuntimeTrace
 from agentbus.worktrees.manager import GitWorktreeManager
 from agentbus.worktrees.models import TaskCommitRecord, WorktreeRecord, WorktreeStatus
 
@@ -69,6 +70,7 @@ class LocalTaskWorker:
         heartbeat_seconds: float = 30,
         cancellation: CancellationToken | threading.Event | None = None,
         crash_hook: WorkerCrashHook | None = None,
+        runtime_trace: RuntimeTrace | None = None,
     ):
         if heartbeat_seconds <= 0:
             raise ValueError("heartbeat_seconds must be greater than zero")
@@ -80,6 +82,7 @@ class LocalTaskWorker:
         self.heartbeat_seconds = heartbeat_seconds
         self.cancellation = cancellation or threading.Event()
         self.crash_hook = crash_hook
+        self.runtime_trace = runtime_trace
 
     def execute(
         self,
@@ -245,6 +248,13 @@ class LocalTaskWorker:
                     status=WorktreeStatus.COMPLETED,
                     result_commit=commit_sha,
                     event_type="worktree_completed",
+                )
+                self._checkpoint_completed_task(
+                    run,
+                    task,
+                    attempt.attempt_id,
+                    result,
+                    commit_sha,
                 )
                 self.store.record_event(
                     run.run_id,
@@ -608,6 +618,45 @@ class LocalTaskWorker:
 
     def _is_cancelled(self) -> bool:
         return self.cancellation.is_set()
+
+    def _checkpoint_completed_task(
+        self,
+        run: RunRecord,
+        task: TaskRecord,
+        attempt_id: str,
+        result: TaskExecutionResult,
+        commit_sha: str,
+    ) -> None:
+        if self.runtime_trace is None:
+            return
+        snapshot = self.store.load_snapshot(run.run_id)
+        completed = sorted(
+            item.task_id
+            for item in snapshot.tasks
+            if item.status
+            in {
+                TaskStatus.SUCCEEDED,
+                TaskStatus.INTEGRATION_PENDING,
+            }
+        )
+        self.runtime_trace.replay_checkpoint(
+            "task_completed",
+            f"task-completed-{task.task_id}",
+            task_id=task.task_id,
+            completed_task_ids=completed,
+            required_task_ids=task.spec.dependency_ids,
+            durable_state={
+                "attempt_id": attempt_id,
+                "worker_id": self.worker_id,
+                "task_commit": commit_sha,
+                "changed_files": result.changed_files,
+                "task_status": self.store.get_task(
+                    run.run_id,
+                    task.task_id,
+                ).status.value,
+            },
+            base_commit=commit_sha,
+        )
 
     def _release_lease(self, lease: WorkerLease) -> None:
         try:

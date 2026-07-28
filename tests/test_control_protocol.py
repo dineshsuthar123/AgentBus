@@ -4,7 +4,9 @@ import json
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
+from agentbus.control.models import ReplayCreateRequest
 from agentbus.control.protocol import (
     build_json_schema,
     build_openapi,
@@ -50,6 +52,81 @@ def test_cancellation_lifecycle_is_backward_compatible_protocol_extension() -> N
         "resume_eligible",
         "terminal_reason",
     } <= lifecycle.keys()
+
+
+def test_trace_and_replay_models_are_bounded_protocol_extensions() -> None:
+    definitions = build_json_schema()["$defs"]
+
+    assert {
+        "TraceResponse",
+        "TraceSpanListResponse",
+        "TraceSpanDetailResponse",
+        "ProvenanceResponse",
+        "RunReplayabilityResponse",
+        "ReplayCreateRequest",
+        "ReplaySessionResponse",
+        "ComparisonResponse",
+        "RegressionFixtureCaptureRequest",
+        "RegressionFixtureCaptureResponse",
+        "TraceArchiveImportRequest",
+        "TraceArchiveExportResponse",
+    } <= definitions.keys()
+    assert (
+        definitions["TraceSpanListResponse"]["properties"]["spans"]["maxItems"]
+        == 500
+    )
+    replay_properties = definitions["ReplaySessionResponse"]["properties"]
+    assert "isolated_workspace" not in replay_properties
+    assert "result_trace_id" in replay_properties
+    assert "comparison_id" in replay_properties
+    assert replay_properties["isolation_scope"]["anyOf"][0]["const"] == (
+        "daemon_managed_temporary_workspace"
+    )
+    assert "isolated" in replay_properties
+    assert (
+        definitions["TraceArchiveImportRequest"]["properties"]["archive_base64"][
+            "maxLength"
+        ]
+        == 900_000
+    )
+    assert (
+        definitions["RegressionFixtureCaptureResponse"]["properties"][
+            "archive_base64"
+        ]["maxLength"]
+        == 900_000
+    )
+
+
+def test_replay_protocol_requires_explicit_consistent_mode() -> None:
+    with pytest.raises(ValidationError, match="mode"):
+        ReplayCreateRequest.model_validate({})
+    with pytest.raises(ValidationError, match="choose either"):
+        ReplayCreateRequest(
+            mode="offline",
+            from_span_id="span-1",
+            from_checkpoint_id="checkpoint-1",
+        )
+    with pytest.raises(ValidationError, match="fork=true"):
+        ReplayCreateRequest(
+            mode="offline",
+            changed_inputs={"task": "changed"},
+        )
+    with pytest.raises(ValidationError, match="at least one"):
+        ReplayCreateRequest(mode="offline", fork=True)
+    with pytest.raises(ValidationError, match="live_provider_consent"):
+        ReplayCreateRequest(
+            mode="offline",
+            fork=True,
+            changed_inputs={"model_route": {"provider": "azure"}},
+        )
+
+    consented = ReplayCreateRequest(
+        mode="offline",
+        fork=True,
+        changed_inputs={"model_route": {"provider": "azure"}},
+        live_provider_consent=True,
+    )
+    assert consented.live_provider_consent is True
 
 
 def test_committed_protocol_artifacts_are_fresh() -> None:

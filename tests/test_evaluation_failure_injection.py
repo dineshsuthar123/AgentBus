@@ -65,7 +65,10 @@ def test_coder_transport_failure_retries_and_recovers(tmp_path):
 def test_provider_fallback_is_attributed_in_metrics(tmp_path):
     case = calculator_case(FailureInjectionKind.PROVIDER_FALLBACK)
 
-    run = injected_runner(tmp_path, case).run("injection-suite")
+    run = injected_runner(tmp_path, case).run(
+        "injection-suite",
+        variant_id="single-fake",
+    )
 
     assert run.passed is True, failure_messages(run)
     assert run.case_results[0].metrics.provider.fallbacks >= 1

@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from functools import wraps
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import TYPE_CHECKING, Any, Callable, Iterator
 
 from agentbus.execution.cancellation import (
     CancellationOperation,
@@ -76,6 +76,15 @@ from agentbus.tools.records import (
     safe_tool_audit_record,
     tool_audit_scope_sha256,
 )
+from agentbus.trace.models import (
+    Trace,
+    TraceCheckpoint,
+    TraceEvent,
+    TraceSpan,
+    TraceSpanType,
+    TraceStatus,
+)
+from agentbus.trace.version import TRACE_SCHEMA_NAME, TRACE_SCHEMA_VERSION
 from agentbus.worktrees.models import (
     IntegrationRecord,
     MergeStatus,
@@ -84,6 +93,16 @@ from agentbus.worktrees.models import (
     WorktreeRecord,
     WorktreeStatus,
 )
+
+if TYPE_CHECKING:
+    from agentbus.replay.comparison import RunComparison
+    from agentbus.replay.session import (
+        ReplayRequest,
+        ReplayResult,
+        ReplaySession,
+        ReplaySessionStatus,
+    )
+    from agentbus.trace.provenance import ProvenanceManifest
 
 
 class StateStoreError(RuntimeError):
@@ -122,7 +141,40 @@ class InvalidToolInvocationTransition(StateStoreError):
     pass
 
 
+class TraceRecordNotFoundError(StateStoreError):
+    pass
+
+
+class TraceRecordConflictError(StateStoreError):
+    pass
+
+
+class ProvenanceRecordNotFoundError(StateStoreError):
+    pass
+
+
+class ProvenanceRecordConflictError(StateStoreError):
+    pass
+
+
+class ReplaySessionNotFoundError(StateStoreError):
+    pass
+
+
+class ReplaySessionConflictError(StateStoreError):
+    pass
+
+
+class ComparisonRecordNotFoundError(StateStoreError):
+    pass
+
+
+class ComparisonRecordConflictError(StateStoreError):
+    pass
+
+
 _MAX_TEXT_CHARS = 20_000
+_PRIVATE_REPLAY_WORKSPACE = "[ISOLATED_REPLAY_WORKSPACE]"
 
 
 def _domain_decode(description: str) -> Callable:
@@ -983,6 +1035,1201 @@ class StateStore:
                 event_type,
                 payload or {},
             )
+
+    def import_trace_records(
+        self,
+        run: RunRecord,
+        trace: Trace,
+        manifest: ProvenanceManifest,
+    ) -> Trace:
+        """Atomically catalog one externally validated trace archive."""
+        return self._catalog_terminal_trace(
+            run,
+            trace,
+            manifest,
+            event_type="trace_archive_imported",
+            event_payload={
+                "trace_id": trace.trace_id,
+                "provenance_root": manifest.integrity_root,
+            },
+        )
+
+    def record_fork_trace(
+        self,
+        run: RunRecord,
+        trace: Trace,
+        manifest: ProvenanceManifest,
+        comparison: RunComparison,
+        *,
+        source_trace_id: str,
+        replay_id: str,
+        changed_input_names: list[str],
+    ) -> Trace:
+        """Atomically catalog a providerless fork and its comparison."""
+        if (
+            comparison.left_trace_id != source_trace_id
+            or comparison.right_trace_id != trace.trace_id
+        ):
+            raise TraceRecordConflictError(
+                "Fork comparison identities do not match the derived trace."
+            )
+        return self._catalog_terminal_trace(
+            run,
+            trace,
+            manifest,
+            event_type="replay_fork_recorded",
+            event_payload={
+                "trace_id": trace.trace_id,
+                "source_trace_id": source_trace_id,
+                "replay_id": replay_id,
+                "comparison_id": comparison.comparison_id,
+                "changed_input_names": changed_input_names,
+                "provenance_root": manifest.integrity_root,
+            },
+            comparison=comparison,
+        )
+
+    def _catalog_terminal_trace(
+        self,
+        run: RunRecord,
+        trace: Trace,
+        manifest: ProvenanceManifest,
+        *,
+        event_type: str,
+        event_payload: dict[str, Any],
+        comparison: RunComparison | None = None,
+    ) -> Trace:
+        from agentbus.trace.provenance import verify_provenance_core
+
+        if (
+            run.run_id != trace.run_id
+            or manifest.run_id != trace.run_id
+            or manifest.trace_id != trace.trace_id
+        ):
+            raise TraceRecordConflictError(
+                "Cataloged run, trace, and provenance identities do not match."
+            )
+        if trace.completed_at is None:
+            raise TraceRecordConflictError(
+                "Only terminal execution traces can be cataloged."
+            )
+        verify_provenance_core(manifest, trace)
+        now = _timestamp(utc_now())
+        with self._write_transaction() as connection:
+            if connection.execute(
+                "SELECT run_id FROM runs WHERE run_id = ?",
+                (run.run_id,),
+            ).fetchone():
+                raise TraceRecordConflictError(
+                    f"Run '{run.run_id}' already exists."
+                )
+            if connection.execute(
+                "SELECT trace_id FROM traces WHERE trace_id = ?",
+                (trace.trace_id,),
+            ).fetchone():
+                raise TraceRecordConflictError(
+                    f"Trace '{trace.trace_id}' already exists."
+                )
+
+            self._insert_run(connection, run)
+            self._insert_event(
+                connection,
+                run.run_id,
+                None,
+                "durable_run_created",
+                {
+                    "workflow_type": run.workflow_type,
+                    "status": run.status.value,
+                },
+            )
+            connection.execute(
+                """
+                INSERT INTO traces(
+                    trace_id, run_id, schema_name, schema_version,
+                    root_span_id, status, created_at, completed_at,
+                    links_json, replay_json, attributes_json, finalized,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+                """,
+                (
+                    trace.trace_id,
+                    trace.run_id,
+                    trace.schema_name,
+                    trace.schema_version,
+                    trace.root_span_id,
+                    trace.status.value,
+                    _timestamp(trace.created_at),
+                    _timestamp(trace.completed_at),
+                    _dump_json(
+                        [
+                            link.model_dump(mode="json")
+                            for link in trace.links
+                        ]
+                    ),
+                    (
+                        _dump_json(trace.replay.model_dump(mode="json"))
+                        if trace.replay is not None
+                        else None
+                    ),
+                    _dump_json(trace.attributes),
+                    now,
+                ),
+            )
+            for span in trace.spans:
+                connection.execute(
+                    """
+                    INSERT INTO trace_spans(
+                        trace_id, span_id, run_id, task_id, parent_span_id,
+                        span_type, sequence, status, started_at, ended_at,
+                        span_json, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        span.trace_id,
+                        span.span_id,
+                        span.run_id,
+                        span.task_id,
+                        span.parent_span_id,
+                        span.span_type.value,
+                        span.sequence,
+                        span.status.value,
+                        _timestamp(span.started_at),
+                        _timestamp(span.ended_at),
+                        _dump_json(span.model_dump(mode="json")),
+                        now,
+                    ),
+                )
+            for event in trace.events:
+                connection.execute(
+                    """
+                    INSERT INTO trace_events(
+                        trace_id, event_id, run_id, span_id, sequence,
+                        event_type, timestamp, event_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        event.trace_id,
+                        event.event_id,
+                        event.run_id,
+                        event.span_id,
+                        event.sequence,
+                        event.event_type,
+                        _timestamp(event.timestamp),
+                        _dump_json(event.model_dump(mode="json")),
+                    ),
+                )
+            for checkpoint in trace.checkpoints:
+                connection.execute(
+                    """
+                    INSERT INTO trace_checkpoints(
+                        trace_id, checkpoint_id, run_id, span_id, sequence,
+                        replayable, created_at, checkpoint_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        checkpoint.trace_id,
+                        checkpoint.checkpoint_id,
+                        checkpoint.run_id,
+                        checkpoint.span_id,
+                        checkpoint.sequence,
+                        int(checkpoint.replayable),
+                        _timestamp(checkpoint.created_at),
+                        _dump_json(checkpoint.model_dump(mode="json")),
+                    ),
+                )
+            _validate_persisted_trace_members(connection, trace)
+            connection.execute(
+                """
+                INSERT INTO provenance_manifests(
+                    trace_id, run_id, integrity_root, manifest_json, created_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    manifest.trace_id,
+                    manifest.run_id,
+                    manifest.integrity_root,
+                    _dump_json(manifest.model_dump(mode="json")),
+                    _timestamp(manifest.generated_at),
+                ),
+            )
+            if comparison is not None:
+                self._require_trace_row(
+                    connection,
+                    comparison.left_trace_id,
+                )
+                self._require_trace_row(
+                    connection,
+                    comparison.right_trace_id,
+                )
+                connection.execute(
+                    """
+                    INSERT INTO trace_comparisons(
+                        comparison_id, left_trace_id, right_trace_id,
+                        comparison_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        comparison.comparison_id,
+                        comparison.left_trace_id,
+                        comparison.right_trace_id,
+                        _dump_json(comparison.model_dump(mode="json")),
+                        _timestamp(comparison.created_at),
+                    ),
+                )
+            self._insert_event(
+                connection,
+                run.run_id,
+                None,
+                event_type,
+                event_payload,
+            )
+        return self.get_trace(trace.trace_id)
+
+    def record_trace_span(self, span: TraceSpan) -> TraceSpan:
+        """Persist a start or one terminal update for a trace span."""
+        payload_json = _dump_json(span.model_dump(mode="json"))
+        with self._write_transaction() as connection:
+            self._require_run_row(connection, span.run_id)
+            trace_row = connection.execute(
+                "SELECT * FROM traces WHERE trace_id = ?",
+                (span.trace_id,),
+            ).fetchone()
+            if trace_row is None:
+                if (
+                    span.span_type != TraceSpanType.RUN
+                    or span.parent_span_id is not None
+                ):
+                    raise TraceRecordConflictError(
+                        "The first persisted span must be a parentless run span."
+                    )
+                run_trace = connection.execute(
+                    "SELECT trace_id FROM traces WHERE run_id = ?",
+                    (span.run_id,),
+                ).fetchone()
+                if run_trace is not None:
+                    raise TraceRecordConflictError(
+                        f"Run '{span.run_id}' already has execution trace "
+                        f"'{run_trace['trace_id']}'."
+                    )
+                connection.execute(
+                    """
+                    INSERT INTO traces(
+                        trace_id, run_id, schema_name, schema_version,
+                        root_span_id, status, created_at, completed_at,
+                        links_json, replay_json, attributes_json, finalized,
+                        updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 0, ?)
+                    """,
+                    (
+                        span.trace_id,
+                        span.run_id,
+                        TRACE_SCHEMA_NAME,
+                        TRACE_SCHEMA_VERSION,
+                        span.span_id,
+                        span.status.value,
+                        _timestamp(span.started_at),
+                        _timestamp(span.ended_at),
+                        "[]",
+                        "{}",
+                        _timestamp(utc_now()),
+                    ),
+                )
+                trace_row = connection.execute(
+                    "SELECT * FROM traces WHERE trace_id = ?",
+                    (span.trace_id,),
+                ).fetchone()
+            self._validate_trace_identity(trace_row, span.trace_id, span.run_id)
+            existing_row = connection.execute(
+                """
+                SELECT * FROM trace_spans
+                WHERE trace_id = ? AND span_id = ?
+                """,
+                (span.trace_id, span.span_id),
+            ).fetchone()
+            if existing_row is None:
+                if span.parent_span_id is not None:
+                    parent = connection.execute(
+                        """
+                        SELECT span_id FROM trace_spans
+                        WHERE trace_id = ? AND span_id = ?
+                        """,
+                        (span.trace_id, span.parent_span_id),
+                    ).fetchone()
+                    if parent is None:
+                        raise TraceRecordConflictError(
+                            f"Trace span '{span.span_id}' has an unknown parent."
+                        )
+                _require_available_trace_sequence(
+                    connection,
+                    span.trace_id,
+                    span.sequence,
+                )
+                connection.execute(
+                    """
+                    INSERT INTO trace_spans(
+                        trace_id, span_id, run_id, task_id, parent_span_id,
+                        span_type, sequence, status, started_at, ended_at,
+                        span_json, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        span.trace_id,
+                        span.span_id,
+                        span.run_id,
+                        span.task_id,
+                        span.parent_span_id,
+                        span.span_type.value,
+                        span.sequence,
+                        span.status.value,
+                        _timestamp(span.started_at),
+                        _timestamp(span.ended_at),
+                        payload_json,
+                        _timestamp(utc_now()),
+                    ),
+                )
+            elif existing_row["span_json"] != payload_json:
+                previous = TraceSpan.model_validate(
+                    _load_json(existing_row["span_json"], "trace span")
+                )
+                if previous.status not in {
+                    TraceStatus.PENDING,
+                    TraceStatus.RUNNING,
+                }:
+                    raise TraceRecordConflictError(
+                        f"Terminal trace span '{span.span_id}' is immutable."
+                    )
+                _validate_trace_span_update(previous, span)
+                connection.execute(
+                    """
+                    UPDATE trace_spans
+                    SET status = ?, ended_at = ?, span_json = ?, updated_at = ?
+                    WHERE trace_id = ? AND span_id = ?
+                    """,
+                    (
+                        span.status.value,
+                        _timestamp(span.ended_at),
+                        payload_json,
+                        _timestamp(utc_now()),
+                        span.trace_id,
+                        span.span_id,
+                    ),
+                )
+            if span.span_id == trace_row["root_span_id"]:
+                connection.execute(
+                    """
+                    UPDATE traces
+                    SET status = ?, completed_at = ?, updated_at = ?
+                    WHERE trace_id = ?
+                    """,
+                    (
+                        span.status.value,
+                        _timestamp(span.ended_at),
+                        _timestamp(utc_now()),
+                        span.trace_id,
+                    ),
+                )
+        return span
+
+    def record_trace_event(self, event: TraceEvent) -> TraceEvent:
+        payload_json = _dump_json(event.model_dump(mode="json"))
+        with self._write_transaction() as connection:
+            trace_row = self._require_trace_row(connection, event.trace_id)
+            self._validate_trace_identity(
+                trace_row,
+                event.trace_id,
+                event.run_id,
+            )
+            if event.span_id is not None:
+                span_row = connection.execute(
+                    """
+                    SELECT span_id FROM trace_spans
+                    WHERE trace_id = ? AND span_id = ?
+                    """,
+                    (event.trace_id, event.span_id),
+                ).fetchone()
+                if span_row is None:
+                    raise TraceRecordConflictError(
+                        f"Trace event '{event.event_id}' has an unknown span."
+                    )
+            existing = connection.execute(
+                """
+                SELECT event_json FROM trace_events
+                WHERE trace_id = ? AND event_id = ?
+                """,
+                (event.trace_id, event.event_id),
+            ).fetchone()
+            if existing is not None:
+                if existing["event_json"] != payload_json:
+                    raise TraceRecordConflictError(
+                        f"Trace event '{event.event_id}' is immutable."
+                    )
+                return event
+            _require_available_trace_sequence(
+                connection,
+                event.trace_id,
+                event.sequence,
+            )
+            connection.execute(
+                """
+                INSERT INTO trace_events(
+                    trace_id, event_id, run_id, span_id, sequence,
+                    event_type, timestamp, event_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event.trace_id,
+                    event.event_id,
+                    event.run_id,
+                    event.span_id,
+                    event.sequence,
+                    event.event_type,
+                    _timestamp(event.timestamp),
+                    payload_json,
+                ),
+            )
+        return event
+
+    def record_trace_checkpoint(
+        self,
+        checkpoint: TraceCheckpoint,
+    ) -> TraceCheckpoint:
+        payload_json = _dump_json(checkpoint.model_dump(mode="json"))
+        with self._write_transaction() as connection:
+            trace_row = self._require_trace_row(connection, checkpoint.trace_id)
+            self._validate_trace_identity(
+                trace_row,
+                checkpoint.trace_id,
+                checkpoint.run_id,
+            )
+            span_row = connection.execute(
+                """
+                SELECT span_id FROM trace_spans
+                WHERE trace_id = ? AND span_id = ?
+                """,
+                (checkpoint.trace_id, checkpoint.span_id),
+            ).fetchone()
+            if span_row is None:
+                raise TraceRecordConflictError(
+                    f"Trace checkpoint '{checkpoint.checkpoint_id}' "
+                    "has an unknown span."
+                )
+            existing = connection.execute(
+                """
+                SELECT checkpoint_json FROM trace_checkpoints
+                WHERE trace_id = ? AND checkpoint_id = ?
+                """,
+                (checkpoint.trace_id, checkpoint.checkpoint_id),
+            ).fetchone()
+            if existing is not None:
+                if existing["checkpoint_json"] != payload_json:
+                    raise TraceRecordConflictError(
+                        f"Trace checkpoint '{checkpoint.checkpoint_id}' is immutable."
+                    )
+                return checkpoint
+            _require_available_trace_sequence(
+                connection,
+                checkpoint.trace_id,
+                checkpoint.sequence,
+            )
+            connection.execute(
+                """
+                INSERT INTO trace_checkpoints(
+                    trace_id, checkpoint_id, run_id, span_id, sequence,
+                    replayable, created_at, checkpoint_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    checkpoint.trace_id,
+                    checkpoint.checkpoint_id,
+                    checkpoint.run_id,
+                    checkpoint.span_id,
+                    checkpoint.sequence,
+                    int(checkpoint.replayable),
+                    _timestamp(checkpoint.created_at),
+                    payload_json,
+                ),
+            )
+        return checkpoint
+
+    def finalize_trace(self, trace: Trace) -> Trace:
+        """Seal trace metadata after all terminal items are persisted."""
+        links_json = _dump_json(
+            [link.model_dump(mode="json") for link in trace.links]
+        )
+        replay_json = (
+            _dump_json(trace.replay.model_dump(mode="json"))
+            if trace.replay is not None
+            else None
+        )
+        attributes_json = _dump_json(trace.attributes)
+        with self._write_transaction() as connection:
+            row = self._require_trace_row(connection, trace.trace_id)
+            self._validate_trace_identity(row, trace.trace_id, trace.run_id)
+            if row["root_span_id"] != trace.root_span_id:
+                raise TraceRecordConflictError(
+                    "Final trace root does not match durable trace state."
+                )
+            _validate_persisted_trace_members(connection, trace)
+            expected = (
+                trace.status.value,
+                _timestamp(trace.completed_at),
+                links_json,
+                replay_json,
+                attributes_json,
+            )
+            current = (
+                row["status"],
+                row["completed_at"],
+                row["links_json"],
+                row["replay_json"],
+                row["attributes_json"],
+            )
+            if bool(row["finalized"]):
+                if current != expected:
+                    raise TraceRecordConflictError(
+                        f"Finalized trace '{trace.trace_id}' is immutable."
+                    )
+                return trace
+            connection.execute(
+                """
+                UPDATE traces
+                SET status = ?, completed_at = ?, links_json = ?,
+                    replay_json = ?, attributes_json = ?, finalized = 1,
+                    updated_at = ?
+                WHERE trace_id = ?
+                """,
+                (*expected, _timestamp(utc_now()), trace.trace_id),
+            )
+        return trace
+
+    @_domain_decode("execution trace")
+    def get_trace(self, trace_id: str) -> Trace:
+        _require_id(trace_id, "trace")
+        with self._connection() as connection:
+            row = self._require_trace_row(connection, trace_id)
+            span_rows = connection.execute(
+                """
+                SELECT span_json FROM trace_spans
+                WHERE trace_id = ? ORDER BY sequence
+                """,
+                (trace_id,),
+            ).fetchall()
+            event_rows = connection.execute(
+                """
+                SELECT event_json FROM trace_events
+                WHERE trace_id = ? ORDER BY sequence
+                """,
+                (trace_id,),
+            ).fetchall()
+            checkpoint_rows = connection.execute(
+                """
+                SELECT checkpoint_json FROM trace_checkpoints
+                WHERE trace_id = ? ORDER BY sequence
+                """,
+                (trace_id,),
+            ).fetchall()
+        return Trace(
+            schema_name=row["schema_name"],
+            schema_version=row["schema_version"],
+            trace_id=row["trace_id"],
+            run_id=row["run_id"],
+            root_span_id=row["root_span_id"],
+            status=row["status"],
+            created_at=_parse_timestamp(row["created_at"]),
+            completed_at=_parse_timestamp(row["completed_at"]),
+            spans=[
+                TraceSpan.model_validate(
+                    _load_json(item["span_json"], "trace span")
+                )
+                for item in span_rows
+            ],
+            events=[
+                TraceEvent.model_validate(
+                    _load_json(item["event_json"], "trace event")
+                )
+                for item in event_rows
+            ],
+            checkpoints=[
+                TraceCheckpoint.model_validate(
+                    _load_json(item["checkpoint_json"], "trace checkpoint")
+                )
+                for item in checkpoint_rows
+            ],
+            links=_load_json(row["links_json"], "trace links"),
+            replay=(
+                _load_json(row["replay_json"], "trace replay metadata")
+                if row["replay_json"] is not None
+                else None
+            ),
+            attributes=_load_json(row["attributes_json"], "trace attributes"),
+        )
+
+    def get_run_trace(self, run_id: str) -> Trace:
+        return self.get_trace(self.get_run_trace_id(run_id))
+
+    def get_run_trace_id(self, run_id: str) -> str:
+        _require_id(run_id, "run")
+        with self._connection() as connection:
+            self._require_run_row(connection, run_id)
+            row = connection.execute(
+                "SELECT trace_id FROM traces WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+        if row is None:
+            raise TraceRecordNotFoundError(
+                f"Run '{run_id}' does not have an execution trace."
+            )
+        return str(row["trace_id"])
+
+    def find_run_trace(self, run_id: str) -> Trace | None:
+        try:
+            return self.get_run_trace(run_id)
+        except TraceRecordNotFoundError:
+            return None
+
+    @_domain_decode("execution traces")
+    def list_traces(
+        self,
+        *,
+        status: TraceStatus | None = None,
+        limit: int = 100,
+    ) -> list[Trace]:
+        if limit < 1 or limit > 1_000:
+            raise StateStoreError(
+                "Trace page limit must be between 1 and 1000."
+            )
+        where = " WHERE status = ?" if status is not None else ""
+        parameters: list[object] = (
+            [status.value, limit] if status is not None else [limit]
+        )
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT trace_id FROM traces"
+                + where
+                + " ORDER BY created_at DESC, trace_id DESC LIMIT ?",
+                parameters,
+            ).fetchall()
+        return [self.get_trace(row["trace_id"]) for row in rows]
+
+    def count_traces(self) -> int:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS trace_count FROM traces"
+            ).fetchone()
+        return int(row["trace_count"])
+
+    @_domain_decode("trace span")
+    def get_trace_span(self, trace_id: str, span_id: str) -> TraceSpan:
+        _require_id(trace_id, "trace")
+        _require_id(span_id, "trace span")
+        with self._connection() as connection:
+            self._require_trace_row(connection, trace_id)
+            row = connection.execute(
+                """
+                SELECT span_json FROM trace_spans
+                WHERE trace_id = ? AND span_id = ?
+                """,
+                (trace_id, span_id),
+            ).fetchone()
+        if row is None:
+            raise TraceRecordNotFoundError(
+                f"Trace span '{span_id}' was not found in trace '{trace_id}'."
+            )
+        return TraceSpan.model_validate(
+            _load_json(row["span_json"], "trace span")
+        )
+
+    @_domain_decode("trace spans")
+    def list_trace_spans(
+        self,
+        trace_id: str,
+        *,
+        after_sequence: int = 0,
+        limit: int = 1_000,
+    ) -> list[TraceSpan]:
+        _validate_trace_page(after_sequence, limit)
+        with self._connection() as connection:
+            self._require_trace_row(connection, trace_id)
+            rows = connection.execute(
+                """
+                SELECT span_json FROM trace_spans
+                WHERE trace_id = ? AND sequence > ?
+                ORDER BY sequence LIMIT ?
+                """,
+                (trace_id, after_sequence, limit),
+            ).fetchall()
+        return [
+            TraceSpan.model_validate(_load_json(row["span_json"], "trace span"))
+            for row in rows
+        ]
+
+    @_domain_decode("trace events")
+    def list_trace_events(
+        self,
+        trace_id: str,
+        *,
+        after_sequence: int = 0,
+        limit: int = 1_000,
+    ) -> list[TraceEvent]:
+        _validate_trace_page(after_sequence, limit)
+        with self._connection() as connection:
+            self._require_trace_row(connection, trace_id)
+            rows = connection.execute(
+                """
+                SELECT event_json FROM trace_events
+                WHERE trace_id = ? AND sequence > ?
+                ORDER BY sequence LIMIT ?
+                """,
+                (trace_id, after_sequence, limit),
+            ).fetchall()
+        return [
+            TraceEvent.model_validate(_load_json(row["event_json"], "trace event"))
+            for row in rows
+        ]
+
+    def next_trace_sequence(self, trace_id: str) -> int:
+        with self._connection() as connection:
+            self._require_trace_row(connection, trace_id)
+            row = connection.execute(
+                """
+                SELECT MAX(sequence) AS maximum_sequence
+                FROM (
+                    SELECT sequence FROM trace_spans WHERE trace_id = ?
+                    UNION ALL
+                    SELECT sequence FROM trace_events WHERE trace_id = ?
+                    UNION ALL
+                    SELECT sequence FROM trace_checkpoints WHERE trace_id = ?
+                )
+                """,
+                (trace_id, trace_id, trace_id),
+            ).fetchone()
+        maximum = row["maximum_sequence"]
+        return 1 if maximum is None else int(maximum) + 1
+
+    def record_provenance_manifest(
+        self,
+        manifest: ProvenanceManifest,
+    ) -> ProvenanceManifest:
+        payload_json = _dump_json(manifest.model_dump(mode="json"))
+        with self._write_transaction() as connection:
+            trace_row = self._require_trace_row(connection, manifest.trace_id)
+            self._validate_trace_identity(
+                trace_row,
+                manifest.trace_id,
+                manifest.run_id,
+            )
+            if not bool(trace_row["finalized"]):
+                raise ProvenanceRecordConflictError(
+                    "Provenance can only seal a finalized execution trace."
+                )
+            existing = connection.execute(
+                """
+                SELECT * FROM provenance_manifests
+                WHERE trace_id = ?
+                """,
+                (manifest.trace_id,),
+            ).fetchone()
+            if existing is not None:
+                if (
+                    existing["manifest_json"] != payload_json
+                    or existing["integrity_root"] != manifest.integrity_root
+                    or existing["run_id"] != manifest.run_id
+                ):
+                    raise ProvenanceRecordConflictError(
+                        f"Provenance for trace '{manifest.trace_id}' is immutable."
+                    )
+                return manifest
+            run_match = connection.execute(
+                """
+                SELECT trace_id FROM provenance_manifests
+                WHERE run_id = ?
+                """,
+                (manifest.run_id,),
+            ).fetchone()
+            if run_match is not None:
+                raise ProvenanceRecordConflictError(
+                    f"Run '{manifest.run_id}' already has provenance."
+                )
+            connection.execute(
+                """
+                INSERT INTO provenance_manifests(
+                    trace_id, run_id, integrity_root, manifest_json, created_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    manifest.trace_id,
+                    manifest.run_id,
+                    manifest.integrity_root,
+                    payload_json,
+                    _timestamp(manifest.generated_at),
+                ),
+            )
+        return manifest
+
+    @_domain_decode("provenance manifest")
+    def get_provenance_manifest(
+        self,
+        trace_id: str,
+    ) -> ProvenanceManifest:
+        from agentbus.trace.provenance import ProvenanceManifest
+
+        _require_id(trace_id, "trace")
+        with self._connection() as connection:
+            self._require_trace_row(connection, trace_id)
+            row = connection.execute(
+                """
+                SELECT * FROM provenance_manifests
+                WHERE trace_id = ?
+                """,
+                (trace_id,),
+            ).fetchone()
+        if row is None:
+            raise ProvenanceRecordNotFoundError(
+                f"Trace '{trace_id}' does not have a provenance manifest."
+            )
+        manifest = ProvenanceManifest.model_validate(
+            _load_json(row["manifest_json"], "provenance manifest")
+        )
+        _validate_provenance_row(row, manifest)
+        return manifest
+
+    def get_run_provenance_manifest(
+        self,
+        run_id: str,
+    ) -> ProvenanceManifest:
+        _require_id(run_id, "run")
+        with self._connection() as connection:
+            self._require_run_row(connection, run_id)
+            row = connection.execute(
+                """
+                SELECT trace_id FROM provenance_manifests
+                WHERE run_id = ?
+                """,
+                (run_id,),
+            ).fetchone()
+        if row is None:
+            raise ProvenanceRecordNotFoundError(
+                f"Run '{run_id}' does not have a provenance manifest."
+            )
+        return self.get_provenance_manifest(row["trace_id"])
+
+    def find_run_provenance_manifest(
+        self,
+        run_id: str,
+    ) -> ProvenanceManifest | None:
+        try:
+            return self.get_run_provenance_manifest(run_id)
+        except ProvenanceRecordNotFoundError:
+            return None
+
+    def create_replay_session(
+        self,
+        request: ReplayRequest,
+    ) -> ReplaySession:
+        from agentbus.replay.session import ReplaySession
+
+        session = ReplaySession(
+            replay_id=request.replay_id,
+            source_trace_id=request.source_trace_id,
+            source_run_id=request.source_run_id,
+            mode=request.mode,
+            from_span_id=request.from_span_id,
+            from_checkpoint_id=request.from_checkpoint_id,
+            fork=request.fork,
+            changed_input_names=sorted(request.changed_inputs),
+            isolated_workspace=(
+                _PRIVATE_REPLAY_WORKSPACE
+                if request.isolated_workspace is not None
+                else None
+            ),
+        )
+        return self.record_replay_session(request, session)
+
+    def record_replay_session(
+        self,
+        request: ReplayRequest,
+        session: ReplaySession,
+        *,
+        result: ReplayResult | None = None,
+    ) -> ReplaySession:
+        safe_request, safe_session, safe_result = _safe_replay_records(
+            request,
+            session,
+            result,
+        )
+        _validate_replay_binding(safe_request, safe_session, safe_result)
+        request_json = _dump_json(safe_request.model_dump(mode="json"))
+        session_json = _dump_json(safe_session.model_dump(mode="json"))
+        result_json = (
+            _dump_json(safe_result.model_dump(mode="json"))
+            if safe_result is not None
+            else None
+        )
+        now = _timestamp(utc_now())
+        with self._write_transaction() as connection:
+            trace_row = self._require_trace_row(
+                connection,
+                safe_session.source_trace_id,
+            )
+            self._validate_trace_identity(
+                trace_row,
+                safe_session.source_trace_id,
+                safe_session.source_run_id,
+            )
+            existing = connection.execute(
+                """
+                SELECT * FROM replay_sessions
+                WHERE replay_id = ?
+                """,
+                (safe_session.replay_id,),
+            ).fetchone()
+            if existing is None:
+                connection.execute(
+                    """
+                    INSERT INTO replay_sessions(
+                        replay_id, source_trace_id, source_run_id, mode, status,
+                        request_json, session_json, result_json, revision,
+                        created_at, started_at, completed_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+                    """,
+                    (
+                        safe_session.replay_id,
+                        safe_session.source_trace_id,
+                        safe_session.source_run_id,
+                        safe_session.mode.value,
+                        safe_session.status.value,
+                        request_json,
+                        session_json,
+                        result_json,
+                        _timestamp(safe_session.created_at),
+                        _timestamp(safe_session.started_at),
+                        _timestamp(safe_session.completed_at),
+                        now,
+                    ),
+                )
+                return safe_session
+            if existing["request_json"] != request_json:
+                raise ReplaySessionConflictError(
+                    f"Replay request '{safe_session.replay_id}' is immutable."
+                )
+            if (
+                existing["session_json"] == session_json
+                and existing["result_json"] == result_json
+            ):
+                return safe_session
+            previous = _replay_session_from_row(existing)
+            _validate_replay_session_update(previous, safe_session)
+            connection.execute(
+                """
+                UPDATE replay_sessions
+                SET status = ?, session_json = ?, result_json = ?,
+                    revision = revision + 1, started_at = ?,
+                    completed_at = ?, updated_at = ?
+                WHERE replay_id = ?
+                """,
+                (
+                    safe_session.status.value,
+                    session_json,
+                    result_json,
+                    _timestamp(safe_session.started_at),
+                    _timestamp(safe_session.completed_at),
+                    now,
+                    safe_session.replay_id,
+                ),
+            )
+        return safe_session
+
+    @_domain_decode("replay session")
+    def get_replay_session(self, replay_id: str) -> ReplaySession:
+        _require_id(replay_id, "replay")
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM replay_sessions WHERE replay_id = ?",
+                (replay_id,),
+            ).fetchone()
+        if row is None:
+            raise ReplaySessionNotFoundError(
+                f"Replay session '{replay_id}' was not found."
+            )
+        return _replay_session_from_row(row)
+
+    @_domain_decode("replay request")
+    def get_replay_request(self, replay_id: str) -> ReplayRequest:
+        from agentbus.replay.session import ReplayRequest
+
+        _require_id(replay_id, "replay")
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT request_json FROM replay_sessions WHERE replay_id = ?",
+                (replay_id,),
+            ).fetchone()
+        if row is None:
+            raise ReplaySessionNotFoundError(
+                f"Replay session '{replay_id}' was not found."
+            )
+        return ReplayRequest.model_validate(
+            _load_json(row["request_json"], "replay request")
+        )
+
+    @_domain_decode("replay result")
+    def get_replay_result(self, replay_id: str) -> ReplayResult | None:
+        from agentbus.replay.session import ReplayResult
+
+        _require_id(replay_id, "replay")
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT result_json FROM replay_sessions WHERE replay_id = ?",
+                (replay_id,),
+            ).fetchone()
+        if row is None:
+            raise ReplaySessionNotFoundError(
+                f"Replay session '{replay_id}' was not found."
+            )
+        if row["result_json"] is None:
+            return None
+        return ReplayResult.model_validate(
+            _load_json(row["result_json"], "replay result")
+        )
+
+    @_domain_decode("replay sessions")
+    def list_replay_sessions(
+        self,
+        *,
+        source_trace_id: str | None = None,
+        status: ReplaySessionStatus | None = None,
+        limit: int = 100,
+    ) -> list[ReplaySession]:
+        if source_trace_id is not None:
+            _require_id(source_trace_id, "source trace")
+        if limit < 1 or limit > 1_000:
+            raise StateStoreError(
+                "Replay session page limit must be between 1 and 1000."
+            )
+        clauses: list[str] = []
+        parameters: list[object] = []
+        if source_trace_id is not None:
+            clauses.append("source_trace_id = ?")
+            parameters.append(source_trace_id)
+        if status is not None:
+            clauses.append("status = ?")
+            parameters.append(status.value)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        parameters.append(limit)
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT * FROM replay_sessions"
+                + where
+                + " ORDER BY created_at DESC, replay_id DESC LIMIT ?",
+                parameters,
+            ).fetchall()
+        return [_replay_session_from_row(row) for row in rows]
+
+    def record_trace_comparison(
+        self,
+        comparison: RunComparison,
+    ) -> RunComparison:
+        payload_json = _dump_json(comparison.model_dump(mode="json"))
+        with self._write_transaction() as connection:
+            self._require_trace_row(connection, comparison.left_trace_id)
+            self._require_trace_row(connection, comparison.right_trace_id)
+            existing = connection.execute(
+                """
+                SELECT * FROM trace_comparisons
+                WHERE comparison_id = ?
+                """,
+                (comparison.comparison_id,),
+            ).fetchone()
+            if existing is not None:
+                if (
+                    existing["comparison_json"] != payload_json
+                    or existing["left_trace_id"] != comparison.left_trace_id
+                    or existing["right_trace_id"] != comparison.right_trace_id
+                ):
+                    raise ComparisonRecordConflictError(
+                        f"Comparison '{comparison.comparison_id}' is immutable."
+                    )
+                return comparison
+            connection.execute(
+                """
+                INSERT INTO trace_comparisons(
+                    comparison_id, left_trace_id, right_trace_id,
+                    comparison_json, created_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    comparison.comparison_id,
+                    comparison.left_trace_id,
+                    comparison.right_trace_id,
+                    payload_json,
+                    _timestamp(comparison.created_at),
+                ),
+            )
+        return comparison
+
+    @_domain_decode("trace comparison")
+    def get_trace_comparison(
+        self,
+        comparison_id: str,
+    ) -> RunComparison:
+        from agentbus.replay.comparison import RunComparison
+
+        _require_id(comparison_id, "comparison")
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM trace_comparisons
+                WHERE comparison_id = ?
+                """,
+                (comparison_id,),
+            ).fetchone()
+        if row is None:
+            raise ComparisonRecordNotFoundError(
+                f"Comparison '{comparison_id}' was not found."
+            )
+        comparison = RunComparison.model_validate(
+            _load_json(row["comparison_json"], "trace comparison")
+        )
+        _validate_comparison_row(row, comparison)
+        return comparison
+
+    @_domain_decode("trace comparisons")
+    def list_trace_comparisons(
+        self,
+        *,
+        trace_id: str | None = None,
+        limit: int = 100,
+    ) -> list[RunComparison]:
+        from agentbus.replay.comparison import RunComparison
+
+        if trace_id is not None:
+            _require_id(trace_id, "trace")
+        if limit < 1 or limit > 1_000:
+            raise StateStoreError(
+                "Comparison page limit must be between 1 and 1000."
+            )
+        where = (
+            " WHERE left_trace_id = ? OR right_trace_id = ?"
+            if trace_id is not None
+            else ""
+        )
+        parameters: list[object] = (
+            [trace_id, trace_id, limit]
+            if trace_id is not None
+            else [limit]
+        )
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT comparison_json FROM trace_comparisons"
+                + where
+                + " ORDER BY created_at DESC, comparison_id DESC LIMIT ?",
+                parameters,
+            ).fetchall()
+        return [
+            RunComparison.model_validate(
+                _load_json(row["comparison_json"], "trace comparison")
+            )
+            for row in rows
+        ]
 
     def record_tool_invocation(
         self,
@@ -2867,6 +4114,32 @@ class StateStore:
         return row
 
     @staticmethod
+    def _require_trace_row(
+        connection: sqlite3.Connection,
+        trace_id: str,
+    ) -> sqlite3.Row:
+        row = connection.execute(
+            "SELECT * FROM traces WHERE trace_id = ?",
+            (trace_id,),
+        ).fetchone()
+        if row is None:
+            raise TraceRecordNotFoundError(
+                f"Execution trace '{trace_id}' was not found."
+            )
+        return row
+
+    @staticmethod
+    def _validate_trace_identity(
+        row: sqlite3.Row,
+        trace_id: str,
+        run_id: str,
+    ) -> None:
+        if row["trace_id"] != trace_id or row["run_id"] != run_id:
+            raise TraceRecordConflictError(
+                "Trace identity does not match durable run state."
+            )
+
+    @staticmethod
     def _require_task_row(
         connection: sqlite3.Connection, run_id: str, task_id: str
     ) -> sqlite3.Row:
@@ -3226,6 +4499,234 @@ class StateStore:
         )
 
 
+def _validate_provenance_row(
+    row: sqlite3.Row,
+    manifest: ProvenanceManifest,
+) -> None:
+    if (
+        manifest.trace_id != row["trace_id"]
+        or manifest.run_id != row["run_id"]
+        or manifest.integrity_root != row["integrity_root"]
+        or _timestamp(manifest.generated_at) != row["created_at"]
+    ):
+        raise ValueError(
+            "provenance manifest columns do not match the stored payload"
+        )
+
+
+def _safe_replay_records(
+    request: ReplayRequest,
+    session: ReplaySession,
+    result: ReplayResult | None,
+) -> tuple[ReplayRequest, ReplaySession, ReplayResult | None]:
+    from agentbus.replay.session import ReplayRequest, ReplayResult, ReplaySession
+
+    safe_request = ReplayRequest.model_validate(
+        request.model_copy(
+            update={
+                "isolated_workspace": (
+                    _PRIVATE_REPLAY_WORKSPACE
+                    if request.isolated_workspace is not None
+                    else None
+                )
+            }
+        ).model_dump()
+    )
+    safe_session = ReplaySession.model_validate(
+        session.model_copy(
+            update={
+                "isolated_workspace": (
+                    _PRIVATE_REPLAY_WORKSPACE
+                    if session.isolated_workspace is not None
+                    else None
+                )
+            }
+        ).model_dump()
+    )
+    safe_result = None
+    if result is not None:
+        safe_result = ReplayResult.model_validate(
+            result.model_copy(update={"session": safe_session}).model_dump()
+        )
+    return safe_request, safe_session, safe_result
+
+
+def _validate_replay_binding(
+    request: ReplayRequest,
+    session: ReplaySession,
+    result: ReplayResult | None,
+) -> None:
+    from agentbus.replay.session import ReplaySessionStatus
+
+    expected = (
+        request.replay_id,
+        request.source_trace_id,
+        request.source_run_id,
+        request.mode,
+        request.from_span_id,
+        request.from_checkpoint_id,
+        request.fork,
+        sorted(request.changed_inputs),
+    )
+    actual = (
+        session.replay_id,
+        session.source_trace_id,
+        session.source_run_id,
+        session.mode,
+        session.from_span_id,
+        session.from_checkpoint_id,
+        session.fork,
+        session.changed_input_names,
+    )
+    if actual != expected:
+        raise ReplaySessionConflictError(
+            "Replay session identity does not match its request."
+        )
+    terminal = {
+        ReplaySessionStatus.SUCCEEDED,
+        ReplaySessionStatus.FAILED,
+        ReplaySessionStatus.CANCELLED,
+        ReplaySessionStatus.INCOMPATIBLE,
+        ReplaySessionStatus.AWAITING_INPUT,
+    }
+    if session.status == ReplaySessionStatus.PENDING:
+        if session.started_at is not None or session.completed_at is not None:
+            raise ReplaySessionConflictError(
+                "A pending replay session cannot have lifecycle timestamps."
+            )
+    elif session.status == ReplaySessionStatus.RUNNING:
+        if session.started_at is None or session.completed_at is not None:
+            raise ReplaySessionConflictError(
+                "A running replay session requires only a start timestamp."
+            )
+    elif session.status in terminal and session.completed_at is None:
+        raise ReplaySessionConflictError(
+            "A terminal replay session requires a completion timestamp."
+        )
+    if result is not None:
+        if session.status not in terminal or result.session != session:
+            raise ReplaySessionConflictError(
+                "A replay result must match a terminal replay session."
+            )
+
+
+def _replay_session_from_row(row: sqlite3.Row) -> ReplaySession:
+    from agentbus.replay.session import ReplaySession
+
+    session = ReplaySession.model_validate(
+        _load_json(row["session_json"], "replay session")
+    )
+    if (
+        session.replay_id != row["replay_id"]
+        or session.source_trace_id != row["source_trace_id"]
+        or session.source_run_id != row["source_run_id"]
+        or session.mode.value != row["mode"]
+        or session.status.value != row["status"]
+        or _timestamp(session.created_at) != row["created_at"]
+        or _timestamp(session.started_at) != row["started_at"]
+        or _timestamp(session.completed_at) != row["completed_at"]
+        or int(row["revision"]) < 1
+    ):
+        raise ValueError(
+            "replay session columns do not match the stored payload"
+        )
+    return session
+
+
+def _validate_replay_session_update(
+    previous: ReplaySession,
+    current: ReplaySession,
+) -> None:
+    from agentbus.replay.session import ReplaySessionStatus
+
+    terminal = {
+        ReplaySessionStatus.SUCCEEDED,
+        ReplaySessionStatus.FAILED,
+        ReplaySessionStatus.CANCELLED,
+        ReplaySessionStatus.INCOMPATIBLE,
+        ReplaySessionStatus.AWAITING_INPUT,
+    }
+    if previous.status in terminal:
+        raise ReplaySessionConflictError(
+            f"Terminal replay session '{current.replay_id}' is immutable."
+        )
+    identity_fields = (
+        "replay_id",
+        "source_trace_id",
+        "source_run_id",
+        "mode",
+        "created_at",
+        "from_span_id",
+        "from_checkpoint_id",
+        "fork",
+        "changed_input_names",
+        "isolated_workspace",
+    )
+    if any(
+        getattr(previous, field) != getattr(current, field)
+        for field in identity_fields
+    ):
+        raise ReplaySessionConflictError(
+            f"Replay session '{current.replay_id}' changed immutable fields."
+        )
+    for field in ("result_trace_id", "comparison_id"):
+        previous_value = getattr(previous, field)
+        current_value = getattr(current, field)
+        if previous_value is not None and previous_value != current_value:
+            raise ReplaySessionConflictError(
+                f"Replay session '{current.replay_id}' changed its "
+                f"{field.replace('_', ' ')}."
+            )
+    if previous.status == ReplaySessionStatus.RUNNING and (
+        current.status == ReplaySessionStatus.PENDING
+    ):
+        raise ReplaySessionConflictError(
+            "A running replay session cannot return to pending."
+        )
+    if (
+        previous.started_at is not None
+        and current.started_at != previous.started_at
+    ):
+        raise ReplaySessionConflictError(
+            "A replay session start timestamp is immutable."
+        )
+    if not _is_prefix(previous.span_results, current.span_results):
+        raise ReplaySessionConflictError(
+            "Recorded replay span results cannot be rewritten."
+        )
+    for field in ("substitutions", "policy_drift"):
+        if not _is_prefix(getattr(previous, field), getattr(current, field)):
+            raise ReplaySessionConflictError(
+                f"Recorded replay {field.replace('_', ' ')} cannot be rewritten."
+            )
+    if (
+        current.provider_calls < previous.provider_calls
+        or current.network_calls < previous.network_calls
+    ):
+        raise ReplaySessionConflictError(
+            "Replay side-effect counters cannot decrease."
+        )
+
+
+def _is_prefix(previous: list[Any], current: list[Any]) -> bool:
+    return previous == current[: len(previous)]
+
+
+def _validate_comparison_row(
+    row: sqlite3.Row,
+    comparison: RunComparison,
+) -> None:
+    if (
+        comparison.comparison_id != row["comparison_id"]
+        or comparison.left_trace_id != row["left_trace_id"]
+        or comparison.right_trace_id != row["right_trace_id"]
+        or _timestamp(comparison.created_at) != row["created_at"]
+    ):
+        raise ValueError(
+            "trace comparison columns do not match the stored payload"
+        )
+
+
 def _cancellation_events(
     previous: CancellationState | None,
     current: CancellationState,
@@ -3334,6 +4835,105 @@ def _cancellation_events(
             )
         )
     return events
+
+
+def _validate_trace_span_update(previous: TraceSpan, current: TraceSpan) -> None:
+    identity_fields = (
+        "trace_id",
+        "span_id",
+        "parent_span_id",
+        "run_id",
+        "task_id",
+        "worker_id",
+        "invocation_id",
+        "span_type",
+        "name",
+        "sequence",
+        "started_at",
+    )
+    if any(
+        getattr(previous, field) != getattr(current, field)
+        for field in identity_fields
+    ):
+        raise TraceRecordConflictError(
+            f"Trace span '{current.span_id}' changed immutable identity fields."
+        )
+    if current.status in {TraceStatus.PENDING, TraceStatus.RUNNING}:
+        raise TraceRecordConflictError(
+            f"Running trace span '{current.span_id}' cannot be rewritten."
+        )
+
+
+def _validate_persisted_trace_members(
+    connection: sqlite3.Connection,
+    trace: Trace,
+) -> None:
+    expected = {
+        "span": {item.span_id for item in trace.spans},
+        "event": {item.event_id for item in trace.events},
+        "checkpoint": {item.checkpoint_id for item in trace.checkpoints},
+    }
+    actual = {
+        "span": {
+            row["span_id"]
+            for row in connection.execute(
+                "SELECT span_id FROM trace_spans WHERE trace_id = ?",
+                (trace.trace_id,),
+            )
+        },
+        "event": {
+            row["event_id"]
+            for row in connection.execute(
+                "SELECT event_id FROM trace_events WHERE trace_id = ?",
+                (trace.trace_id,),
+            )
+        },
+        "checkpoint": {
+            row["checkpoint_id"]
+            for row in connection.execute(
+                "SELECT checkpoint_id FROM trace_checkpoints WHERE trace_id = ?",
+                (trace.trace_id,),
+            )
+        },
+    }
+    for item_type in expected:
+        if actual[item_type] != expected[item_type]:
+            raise TraceRecordConflictError(
+                f"Final trace {item_type} membership does not match durable state."
+            )
+
+
+def _require_available_trace_sequence(
+    connection: sqlite3.Connection,
+    trace_id: str,
+    sequence: int,
+) -> None:
+    row = connection.execute(
+        """
+        SELECT item_type FROM (
+            SELECT 'span' AS item_type FROM trace_spans
+                WHERE trace_id = ? AND sequence = ?
+            UNION ALL
+            SELECT 'event' AS item_type FROM trace_events
+                WHERE trace_id = ? AND sequence = ?
+            UNION ALL
+            SELECT 'checkpoint' AS item_type FROM trace_checkpoints
+                WHERE trace_id = ? AND sequence = ?
+        ) LIMIT 1
+        """,
+        (trace_id, sequence, trace_id, sequence, trace_id, sequence),
+    ).fetchone()
+    if row is not None:
+        raise TraceRecordConflictError(
+            f"Trace sequence {sequence} is already used by a {row['item_type']}."
+        )
+
+
+def _validate_trace_page(after_sequence: int, limit: int) -> None:
+    if after_sequence < 0:
+        raise StateStoreError("Trace sequence cursor must not be negative.")
+    if limit < 1 or limit > 5_000:
+        raise StateStoreError("Trace page limit must be between 1 and 5000.")
 
 
 def _timestamp(value: datetime | None) -> str | None:

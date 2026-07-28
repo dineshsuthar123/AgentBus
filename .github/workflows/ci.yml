@@ -87,6 +87,61 @@ jobs:
       - name: Check patch whitespace
         run: git diff --check
 
+  replay-integrity:
+    name: Replay integrity / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install offline replay dependencies
+        run: python -m pip install -e ".[dev,ide]"
+      - name: Verify trace models and deterministic recording
+        run: >-
+          python -m pytest
+          tests/test_trace_models.py
+          tests/test_trace_context.py
+          tests/test_trace_recorder.py
+          tests/test_trace_runtime.py
+          tests/test_trace_persistence.py
+          tests/test_trace_state_records.py
+      - name: Verify snapshot and provenance integrity
+        run: >-
+          python -m pytest
+          tests/test_trace_storage.py
+          tests/test_trace_redaction.py
+          tests/test_trace_provenance.py
+          tests/test_trace_sealing.py
+          tests/test_trace_retention.py
+      - name: Verify archive and regression fixture security
+        run: >-
+          python -m pytest
+          tests/test_trace_archive_export.py
+          tests/test_trace_archive_import.py
+          tests/test_regression_fixtures.py
+      - name: Verify replay checkpoints policy drift and comparisons
+        run: >-
+          python -m pytest
+          tests/test_replay_classification.py
+          tests/test_replay_engine.py
+          tests/test_replay_checkpoints.py
+          tests/test_replay_tools.py
+          tests/test_replay_forks.py
+          tests/test_replay_comparison.py
+          tests/test_replay_service.py
+          tests/test_control_replay_supervisor.py
+      - name: Verify cross-platform environment path and line-ending drift
+        run: python -m pytest tests/test_replay_nondeterminism.py
+      - name: Check patch whitespace
+        run: git diff --check
+
   vscode:
     name: VS Code extension
     runs-on: ubuntu-latest
@@ -119,7 +174,7 @@ jobs:
       - name: Run extension unit tests
         working-directory: extensions/vscode
         run: npm test
-      - name: Run real tool-enabled VS Code lifecycle integration
+      - name: Run real replay-enabled VS Code Electron integration
         working-directory: extensions/vscode
         run: xvfb-run -a npm run test:integration
       - name: Package VSIX without publishing

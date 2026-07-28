@@ -1,6 +1,6 @@
 # Local Control Plane
 
-AgentBus v0.3 keeps a thin FastAPI adapter over the existing orchestrator,
+AgentBus v0.4 keeps a thin FastAPI adapter over the existing orchestrator,
 StateStore, approval engine, lease service, worktree manager, and GitRepository.
 It does not implement a second scheduler or execution database.
 
@@ -77,6 +77,52 @@ server. It shares daemon authentication and path validation but does not expose
 arbitrary files, process execution, SQLite, approval decisions, commit, push,
 PR creation, or live provider calls. See [MCP Integration](mcp-integration.md).
 
+## Trace and replay
+
+Bounded trace inspection is available at:
+
+- `GET /api/v1/runs/{run_id}/trace`
+- `GET /api/v1/runs/{run_id}/trace/spans`
+- `GET /api/v1/runs/{run_id}/trace/spans/{span_id}`
+- `GET /api/v1/runs/{run_id}/provenance`
+- `GET /api/v1/runs/{run_id}/replayability`
+
+Span and replayability lists use bounded sequence pagination. Responses expose
+safe identities, hashes, counts, classifications, and diagnostic summaries.
+They do not expose unrestricted trace blobs, raw SQLite, prompts, credentials,
+provider payload values, or private replay paths.
+
+Managed providerless replay and comparison routes are:
+
+- `POST /api/v1/runs/{run_id}/replays`
+- `GET /api/v1/replays`
+- `GET /api/v1/replays/{replay_id}`
+- `POST /api/v1/replays/{replay_id}/cancel`
+- `POST /api/v1/comparisons`
+- `GET /api/v1/comparisons/{comparison_id}`
+
+Replay creation requires an explicit mode. Offline replay sends no live
+provider consent and records provider and network call counts. Checkpoint
+replay exposes only the stable
+`daemon_managed_temporary_workspace` isolation label. Fork replay persists a
+new trace and provenance manifest plus an automatic structured comparison.
+Terminal sessions and comparisons survive daemon restart.
+
+Archive and fixture routes are:
+
+- `GET /api/v1/traces/{trace_id}/export`
+- `POST /api/v1/traces/import`
+- `POST /api/v1/runs/{run_id}/fixtures`
+
+The HTTP transport validates canonical base64, SHA-256, identity, and a
+650,000-byte decoded limit. Source-like export, import, and fixture capture
+require explicit consent. Import and capture always return
+`replay_started: false`; execution is a separate action.
+
+See [Execution Tracing](execution-tracing.md),
+[Deterministic Replay](deterministic-replay.md), and
+[Trace Archives](trace-archives.md).
+
 ## Cooperative cancellation
 
 `POST /api/v1/runs/{run_id}/cancel` is idempotent. It records intent before
@@ -120,6 +166,9 @@ environment and creates temporary Git repositories. It exercises a complete
 deterministic durable run, managed write and audit, exact tool approval and
 resume, traversal and credential denial, process timeout, process-tree
 cancellation, bounded output and budget failure, local MCP discovery and
-invocation, provider cancellation, SSE replay, reports, changes, and diffs. It
-verifies every started MCP fixture session is stopped and makes no external
-network or paid provider call.
+invocation, provider cancellation, SSE replay, reports, changes, and diffs.
+It also verifies hierarchical traces, provenance, full and checkpoint replay,
+fork comparison, blob tamper detection, archive export and isolated import,
+fixture capture and execution, cooperative replay cancellation, and
+provider/network call counts. It verifies every started MCP fixture session is
+stopped and makes no external network or paid provider call.

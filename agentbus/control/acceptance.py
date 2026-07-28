@@ -1,18 +1,26 @@
 from __future__ import annotations
 
+import base64
 import hashlib
+import io
 import json
 import subprocess
 import sys
 import tempfile
 import time
+import zipfile
 from pathlib import Path
 from typing import Any
 
 import requests
 
+from agentbus.config import AgentBusConfig
 from agentbus.execution.state_store import RunNotFoundError, StateStore
+from agentbus.replay.service import TraceReplayService
+from agentbus.replay.session import ReplayRequest, ReplaySessionStatus
 from agentbus.security.redaction import safe_child_environment
+from agentbus.trace.errors import TraceIntegrityError
+from agentbus.trace.models import ReplayMode
 
 _TERMINAL_STATUSES = {"succeeded", "failed", "cancelled"}
 _SUCCESS_EVENT = "integration_commit_published"
@@ -28,6 +36,7 @@ def main() -> int:
         root = Path(temporary)
         workspace = _initialize_repository(root / "repo")
         state_path = root / "state.db"
+        runs_dir = root / "runs"
         registry = root / "daemons.json"
         mcp_fixture = (
             Path(__file__).resolve().parents[2]
@@ -45,7 +54,7 @@ def main() -> int:
         process = _launch_daemon(
             workspace=workspace,
             state_path=state_path,
-            runs_dir=root / "runs",
+            runs_dir=runs_dir,
             registry=registry,
             mcp_fixture=mcp_fixture,
             mcp_lifecycle_dir=mcp_lifecycle_dir,
@@ -163,11 +172,11 @@ def main() -> int:
             ).json()
             observed_payloads.append(approved)
             assert approved["approval"]["state"] == "approved"
-            resumed = _request(
-                "POST",
-                f"{base}/api/v1/runs/{approval_run}/resume",
-                headers=headers,
-            ).json()
+            resumed = _resume_run(
+                base,
+                headers,
+                approval_run,
+            )
             assert resumed["resumed"] is True
             approval_summary = _wait_for_terminal_run(base, headers, approval_run)
             assert approval_summary["status"] == "succeeded"
@@ -346,11 +355,11 @@ def main() -> int:
             ).json()
             observed_payloads.append(mcp_approved)
             assert mcp_approved["approval"]["state"] == "approved"
-            mcp_resumed = _request(
-                "POST",
-                f"{base}/api/v1/runs/{mcp_run}/resume",
-                headers=headers,
-            ).json()
+            mcp_resumed = _resume_run(
+                base,
+                headers,
+                mcp_run,
+            )
             assert mcp_resumed["resumed"] is True
             mcp_summary = _wait_for_terminal_run(base, headers, mcp_run)
             assert mcp_summary["status"] == "succeeded"
@@ -428,6 +437,21 @@ def main() -> int:
 
             mcp_cleanup = _wait_for_mcp_cleanup(mcp_lifecycle_dir)
             observed_payloads.append(mcp_cleanup)
+            observed_payloads.extend(
+                _assert_trace_replay_lifecycle(
+                    base,
+                    headers,
+                    workspace=workspace,
+                    state_path=state_path,
+                    runs_dir=runs_dir,
+                    run_id=tool_run,
+                    root=root,
+                    token=token,
+                    mcp_fixture=mcp_fixture,
+                    mcp_environment_marker=mcp_environment_marker,
+                )
+            )
+            print("acceptance: deterministic replay lifecycle passed", flush=True)
 
             serialized = json.dumps(observed_payloads, sort_keys=True)
             assert token not in serialized
@@ -435,6 +459,10 @@ def main() -> int:
             assert traversal_marker not in serialized
             assert mcp_environment_marker not in serialized
             assert str(mcp_fixture) not in serialized
+            assert (
+                json.dumps(str(mcp_fixture))[1:-1]
+                not in serialized
+            )
             assert _MCP_ECHO_MARKER not in serialized
             assert token not in registry.read_text(encoding="utf-8")
             assert process.wait(timeout=30) == 0
@@ -546,32 +574,88 @@ def _submit_run(
     latency_roles: list[str],
     parallel: bool = True,
     commit_changes: bool = True,
+    clock=time.monotonic,
+    sleeper=time.sleep,
+    ownership_timeout_seconds: float = 30,
 ) -> str:
-    response = _request(
-        "POST",
-        f"{base}/api/v1/runs",
-        headers=headers,
-        json={
-            "task": task,
-            "workspace": str(workspace),
-            "provider": "deterministic",
-            "workflow": "multi",
-            "durable": True,
-            "parallel": parallel,
-            "max_workers": 1,
-            "commit_changes": commit_changes,
-            "keep_worktrees": True,
-            "retry_limit": 1,
-            "deterministic": {
-                "profile": profile,
-                "latency_seconds": latency_seconds,
-                "latency_roles": latency_roles,
-            },
+    request = {
+        "task": task,
+        "workspace": str(workspace),
+        "provider": "deterministic",
+        "workflow": "multi",
+        "durable": True,
+        "parallel": parallel,
+        "max_workers": 1,
+        "commit_changes": commit_changes,
+        "keep_worktrees": True,
+        "retry_limit": 1,
+        "deterministic": {
+            "profile": profile,
+            "latency_seconds": latency_seconds,
+            "latency_roles": latency_roles,
         },
-    ).json()
-    assert response["status"] == "pending"
-    assert Path(response["workspace"]).resolve() == workspace
-    return str(response["run_id"])
+    }
+    deadline = clock() + ownership_timeout_seconds
+    while True:
+        response = requests.post(
+            f"{base}/api/v1/runs",
+            headers=headers,
+            json=request,
+            timeout=15,
+        )
+        if response.status_code != 409:
+            response.raise_for_status()
+            accepted = response.json()
+            assert accepted["status"] == "pending"
+            assert Path(accepted["workspace"]).resolve() == workspace
+            return str(accepted["run_id"])
+        payload = response.json()
+        message = str(payload.get("error", {}).get("message", ""))
+        if not message.startswith(
+            "Workspace already has an active AgentBus run:"
+        ):
+            response.raise_for_status()
+        if clock() >= deadline:
+            raise TimeoutError(
+                "The previous run did not release its workspace ownership."
+            )
+        sleeper(0.02)
+
+
+def _resume_run(
+    base: str,
+    headers: dict[str, str],
+    run_id: str,
+    *,
+    clock=time.monotonic,
+    sleeper=time.sleep,
+    ownership_timeout_seconds: float = 30,
+) -> dict[str, Any]:
+    deadline = clock() + ownership_timeout_seconds
+    while True:
+        try:
+            response = requests.post(
+                f"{base}/api/v1/runs/{run_id}/resume",
+                headers=headers,
+                timeout=15,
+            )
+        except requests.ConnectionError:
+            if clock() >= deadline:
+                raise
+            sleeper(0.05)
+            continue
+        if response.status_code != 409:
+            response.raise_for_status()
+            return response.json()
+        payload = response.json()
+        message = str(payload.get("error", {}).get("message", ""))
+        if message != "The run already has an active owner.":
+            response.raise_for_status()
+        if clock() >= deadline:
+            raise TimeoutError(
+                "The previous run operation did not release its active owner."
+            )
+        sleeper(0.02)
 
 
 def _wait_for_terminal_run(
@@ -597,6 +681,38 @@ def _wait_for_terminal_run(
             return summary
         time.sleep(0.05)
     raise TimeoutError(f"Run {run_id} did not reach a terminal state.")
+
+
+def _wait_for_terminal_replay(
+    base: str,
+    headers: dict[str, str],
+    replay_id: str,
+    *,
+    timeout_seconds: float = 30,
+) -> dict[str, Any]:
+    terminal = {
+        ReplaySessionStatus.SUCCEEDED.value,
+        ReplaySessionStatus.FAILED.value,
+        ReplaySessionStatus.CANCELLED.value,
+        ReplaySessionStatus.INCOMPATIBLE.value,
+        ReplaySessionStatus.AWAITING_INPUT.value,
+    }
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        response = requests.get(
+            f"{base}/api/v1/replays/{replay_id}",
+            headers=headers,
+            timeout=10,
+        )
+        if response.status_code == 404:
+            time.sleep(0.02)
+            continue
+        response.raise_for_status()
+        replay = response.json()
+        if replay["status"] in terminal:
+            return replay
+        time.sleep(0.02)
+    raise TimeoutError(f"Replay {replay_id} did not reach a terminal state.")
 
 
 def _wait_for_pending_tool_approval(
@@ -1324,6 +1440,641 @@ def _assert_mcp_invocation(
     return [listed, detail, audit, report]
 
 
+def _assert_trace_replay_lifecycle(
+    base: str,
+    headers: dict[str, str],
+    *,
+    workspace: Path,
+    state_path: Path,
+    runs_dir: Path,
+    run_id: str,
+    root: Path,
+    token: str,
+    mcp_fixture: Path,
+    mcp_environment_marker: str,
+) -> list[Any]:
+    observed: list[Any] = []
+    trace = _request(
+        "GET",
+        f"{base}/api/v1/runs/{run_id}/trace",
+        headers=headers,
+    ).json()
+    assert trace["status"] == "succeeded"
+    assert trace["completed_at"] is not None
+    assert trace["span_count"] > 0
+    assert trace["checkpoint_count"] > 0
+    trace_id = str(trace["trace_id"])
+
+    span_page = _request(
+        "GET",
+        f"{base}/api/v1/runs/{run_id}/trace/spans",
+        headers=headers,
+        params={"limit": 500},
+    ).json()
+    assert span_page["truncated"] is False
+    spans = span_page["spans"]
+    span_types = {item["span_type"] for item in spans}
+    required_span_types = {
+        "model_parse",
+        "tool_policy",
+        "tool_invocation",
+        "verifier",
+        "reviewer",
+    }
+    assert required_span_types <= span_types
+
+    provenance = _request(
+        "GET",
+        f"{base}/api/v1/runs/{run_id}/provenance",
+        headers=headers,
+    ).json()
+    assert provenance["trace_id"] == trace_id
+    assert provenance["run_id"] == run_id
+    assert len(provenance["integrity_root"]) == 64
+    replayability = _request(
+        "GET",
+        f"{base}/api/v1/runs/{run_id}/replayability",
+        headers=headers,
+        params={"limit": 500},
+    ).json()
+    assert replayability["trace_id"] == trace_id
+    assert replayability["replayable_offline"] is True
+    assert replayability["missing_input_hashes"] == []
+    assert replayability["truncated"] is False
+
+    config = AgentBusConfig(
+        workspace_dir=str(workspace),
+        state_db=str(state_path),
+        runs_dir=str(runs_dir),
+    )
+    store = StateStore(state_path)
+    service = TraceReplayService(config, state_store=store)
+    verified = service.verify(run_id)
+    assert verified.valid is True
+    assert verified.provenance_root == provenance["integrity_root"]
+
+    report_before = _request(
+        "GET",
+        f"{base}/api/v1/runs/{run_id}/report",
+        headers=headers,
+    ).json()
+    diff_before = _request(
+        "GET",
+        f"{base}/api/v1/runs/{run_id}/diff",
+        headers=headers,
+    ).json()
+    head_before = _git_output(workspace, "rev-parse", "HEAD")
+    status_before = _git_output(workspace, "status", "--short")
+
+    accepted = _request(
+        "POST",
+        f"{base}/api/v1/runs/{run_id}/replays",
+        headers=headers,
+        json={"mode": "offline"},
+    ).json()
+    assert accepted["source_trace_id"] == trace_id
+    replay = _wait_for_terminal_replay(
+        base,
+        headers,
+        accepted["replay_id"],
+    )
+    _assert_providerless_replay(replay, isolated=False)
+    _assert_replayed_span_contracts(base, headers, run_id, spans, replay)
+
+    report_after = _request(
+        "GET",
+        f"{base}/api/v1/runs/{run_id}/report",
+        headers=headers,
+    ).json()
+    diff_after = _request(
+        "GET",
+        f"{base}/api/v1/runs/{run_id}/diff",
+        headers=headers,
+    ).json()
+    assert report_after == report_before
+    assert diff_after == diff_before
+    assert _git_output(workspace, "rev-parse", "HEAD") == head_before
+    assert _git_output(workspace, "status", "--short") == status_before
+
+    checkpoint = next(
+        (
+            item
+            for item in trace["checkpoints"]
+            if item["replayable"] and item["label"] == "task-graph-persisted"
+        ),
+        next(
+            item for item in trace["checkpoints"] if item["replayable"]
+        ),
+    )
+    checkpoint_accepted = _request(
+        "POST",
+        f"{base}/api/v1/runs/{run_id}/replays",
+        headers=headers,
+        json={
+            "mode": "offline",
+            "from_checkpoint_id": checkpoint["checkpoint_id"],
+        },
+    ).json()
+    checkpoint_replay = _wait_for_terminal_replay(
+        base,
+        headers,
+        checkpoint_accepted["replay_id"],
+    )
+    _assert_providerless_replay(checkpoint_replay, isolated=True)
+    assert (
+        checkpoint_replay["from_checkpoint_id"]
+        == checkpoint["checkpoint_id"]
+    )
+
+    fork_accepted = _request(
+        "POST",
+        f"{base}/api/v1/runs/{run_id}/replays",
+        headers=headers,
+        json={
+            "mode": "offline",
+            "fork": True,
+            "changed_inputs": {
+                "resource_budgets": {"invocations_per_run": 64}
+            },
+            "live_provider_consent": False,
+        },
+    ).json()
+    fork_replay = _wait_for_terminal_replay(
+        base,
+        headers,
+        fork_accepted["replay_id"],
+    )
+    _assert_providerless_replay(fork_replay, isolated=False)
+    assert fork_replay["fork"] is True
+    assert fork_replay["changed_input_names"] == ["resource_budgets"]
+    assert fork_replay["result_trace_id"]
+    assert fork_replay["comparison_id"]
+
+    comparison = _request(
+        "GET",
+        f"{base}/api/v1/comparisons/{fork_replay['comparison_id']}",
+        headers=headers,
+        params={"limit": 500},
+    ).json()
+    _assert_expected_fork_comparison(
+        comparison,
+        source_trace_id=trace_id,
+        result_trace_id=fork_replay["result_trace_id"],
+        source_provenance_root=provenance["integrity_root"],
+    )
+    explicit_comparison = _request(
+        "POST",
+        f"{base}/api/v1/comparisons",
+        headers=headers,
+        params={"limit": 500},
+        json={
+            "left": trace_id,
+            "right": fork_replay["result_trace_id"],
+        },
+    ).json()
+    assert explicit_comparison["comparison_id"] == comparison["comparison_id"]
+    assert explicit_comparison["summary"] == comparison["summary"]
+
+    fork_trace = store.get_trace(fork_replay["result_trace_id"])
+    fork_trace_response = _request(
+        "GET",
+        f"{base}/api/v1/runs/{fork_trace.run_id}/trace",
+        headers=headers,
+    ).json()
+    assert fork_trace_response["source_trace_id"] == trace_id
+    assert fork_trace_response["providerless"] is True
+    fork_provenance = _request(
+        "GET",
+        f"{base}/api/v1/runs/{fork_trace.run_id}/provenance",
+        headers=headers,
+    ).json()
+    assert (
+        fork_provenance["integrity_root"]
+        == comparison["right_provenance_root"]
+    )
+
+    export_payload = _request(
+        "GET",
+        f"{base}/api/v1/traces/{trace_id}/export",
+        headers=headers,
+        params={"include_source_content": True},
+    ).json()
+    archive_bytes = _decode_control_archive(export_payload)
+    assert export_payload["trace_id"] == trace_id
+    assert export_payload["source_content_included"] is True
+    _assert_archive_excludes_private_values(
+        archive_bytes,
+        token,
+        str(workspace),
+        str(mcp_fixture),
+        mcp_environment_marker,
+    )
+
+    fixture_denied = _request_expect_status(
+        "POST",
+        f"{base}/api/v1/runs/{run_id}/fixtures",
+        403,
+        headers=headers,
+        json={},
+    ).json()
+    fixture_payload = _request(
+        "POST",
+        f"{base}/api/v1/runs/{run_id}/fixtures",
+        headers=headers,
+        json={"include_source_content": True},
+    ).json()
+    fixture_bytes = _decode_control_archive(fixture_payload)
+    assert fixture_payload["trace_id"] == trace_id
+    assert fixture_payload["source_content_included"] is True
+    assert fixture_payload["source_warning"]
+    assert fixture_payload["license_warning"]
+    assert fixture_payload["assertions_validated"] is True
+    assert fixture_payload["replay_started"] is False
+    _assert_archive_excludes_private_values(
+        fixture_bytes,
+        token,
+        str(workspace),
+        str(mcp_fixture),
+        mcp_environment_marker,
+    )
+
+    cancelled_replay = _assert_cooperative_replay_cancellation(
+        config,
+        store,
+        trace_id=trace_id,
+        run_id=run_id,
+    )
+    cancelled_api = _request(
+        "GET",
+        f"{base}/api/v1/replays/{cancelled_replay['replay_id']}",
+        headers=headers,
+    ).json()
+    assert cancelled_api["status"] == ReplaySessionStatus.CANCELLED.value
+
+    listed_replays = _request(
+        "GET",
+        f"{base}/api/v1/replays",
+        headers=headers,
+        params={"source_trace_id": trace_id, "limit": 500},
+    ).json()
+    assert listed_replays["truncated"] is False
+    assert all(
+        item["status"]
+        in {
+            ReplaySessionStatus.SUCCEEDED.value,
+            ReplaySessionStatus.CANCELLED.value,
+        }
+        for item in listed_replays["replays"]
+    )
+    assert _git_output(workspace, "rev-parse", "HEAD") == head_before
+    assert _git_output(workspace, "status", "--short") == status_before
+
+    _assert_trace_blob_tamper_detected(service, store, run_id)
+    fixture_execution = _execute_regression_fixture(
+        root,
+        fixture_bytes,
+    )
+    imported_observed = _assert_isolated_archive_import(
+        root,
+        archive_base64=export_payload["archive_base64"],
+        expected_trace_id=trace_id,
+        expected_provenance_root=provenance["integrity_root"],
+        mcp_fixture=mcp_fixture,
+    )
+
+    observed.extend(
+        [
+            trace,
+            span_page,
+            provenance,
+            replayability,
+            verified.model_dump(mode="json"),
+            report_before,
+            diff_before,
+            accepted,
+            replay,
+            checkpoint_accepted,
+            checkpoint_replay,
+            fork_accepted,
+            fork_replay,
+            comparison,
+            explicit_comparison,
+            fork_trace_response,
+            fork_provenance,
+            _without_archive(export_payload),
+            fixture_denied,
+            _without_archive(fixture_payload),
+            cancelled_replay,
+            cancelled_api,
+            listed_replays,
+            fixture_execution,
+            *imported_observed,
+        ]
+    )
+    return observed
+
+
+def _assert_providerless_replay(
+    replay: dict[str, Any],
+    *,
+    isolated: bool,
+) -> None:
+    assert replay["status"] == ReplaySessionStatus.SUCCEEDED.value, replay
+    assert replay["provider_calls"] == 0
+    assert replay["network_calls"] == 0
+    assert replay["missing_inputs"] == []
+    assert replay["isolated"] is isolated
+    assert "isolated_workspace" not in replay
+    if isolated:
+        assert (
+            replay["isolation_scope"]
+            == "daemon_managed_temporary_workspace"
+        )
+    else:
+        assert replay["isolation_scope"] is None
+
+
+def _assert_replayed_span_contracts(
+    base: str,
+    headers: dict[str, str],
+    run_id: str,
+    spans: list[dict[str, Any]],
+    replay: dict[str, Any],
+) -> None:
+    assert replay["span_results_truncated"] is False
+    by_span_id = {item["span_id"]: item for item in spans}
+    actions_by_type: dict[str, set[str]] = {}
+    for result in replay["span_results"]:
+        source = by_span_id[result["span_id"]]
+        actions_by_type.setdefault(source["span_type"], set()).add(
+            result["action"]
+        )
+        assert result["succeeded"] is True
+    for span_type in {"model_parse", "tool_policy", "verifier", "reviewer"}:
+        assert actions_by_type[span_type] == {"replayed"}
+    assert actions_by_type["tool_invocation"] <= {"reused", "simulated"}
+    assert actions_by_type["tool_invocation"]
+    assert replay["policy_drift"] == []
+
+    results_by_span = {
+        item["span_id"]: item for item in replay["span_results"]
+    }
+    for source in spans:
+        if source["span_type"] not in {
+            "tool_policy",
+            "verifier",
+            "reviewer",
+        }:
+            continue
+        result = results_by_span[source["span_id"]]
+        detail = _request(
+            "GET",
+            (
+                f"{base}/api/v1/runs/{run_id}/trace/spans/"
+                f"{source['span_id']}"
+            ),
+            headers=headers,
+        ).json()
+        output_hashes = {item["sha256"] for item in detail["outputs"]}
+        assert result["output_sha256"] in output_hashes
+
+
+def _assert_expected_fork_comparison(
+    comparison: dict[str, Any],
+    *,
+    source_trace_id: str,
+    result_trace_id: str,
+    source_provenance_root: str,
+) -> None:
+    assert comparison["left_trace_id"] == source_trace_id
+    assert comparison["right_trace_id"] == result_trace_id
+    assert comparison["left_provenance_root"] == source_provenance_root
+    assert comparison["right_provenance_root"] != source_provenance_root
+    assert comparison["summary"]["provenance_root_changed"] is True
+    changed = sum(
+        comparison["summary"][name]
+        for name in ("changed_spans", "added_spans", "removed_spans")
+    )
+    assert changed > 0
+    assert "expected" in comparison["categories"]
+    assert comparison["truncated"] is False
+
+
+def _assert_cooperative_replay_cancellation(
+    config: AgentBusConfig,
+    store: StateStore,
+    *,
+    trace_id: str,
+    run_id: str,
+) -> dict[str, Any]:
+    checks = 0
+
+    def cancelled() -> bool:
+        nonlocal checks
+        checks += 1
+        return checks >= 3
+
+    replay_id = "acceptance-cancelled-replay"
+    service = TraceReplayService(
+        config,
+        state_store=store,
+        cancelled=cancelled,
+    )
+    result = service.replay(
+        trace_id,
+        ReplayRequest(
+            replay_id=replay_id,
+            source_trace_id=trace_id,
+            source_run_id=run_id,
+            mode=ReplayMode.OFFLINE,
+        ),
+    )
+    assert result.session.status == ReplaySessionStatus.CANCELLED
+    assert result.session.provider_calls == 0
+    assert result.session.network_calls == 0
+    assert len(result.session.span_results) == 2
+    return result.session.model_dump(mode="json")
+
+
+def _assert_trace_blob_tamper_detected(
+    service: TraceReplayService,
+    store: StateStore,
+    run_id: str,
+) -> None:
+    manifest = store.get_run_provenance_manifest(run_id)
+    digest = next(
+        item.identifier
+        for item in manifest.integrity_entries
+        if item.kind == "blob"
+    )
+    blob_path = service.object_store.blob_directory / digest[:2] / digest
+    original = blob_path.read_bytes()
+    detected = False
+    try:
+        blob_path.write_bytes(original + b"\0tampered")
+        try:
+            service.verify(run_id)
+        except TraceIntegrityError:
+            detected = True
+    finally:
+        blob_path.write_bytes(original)
+    assert detected is True
+    assert service.verify(run_id).valid is True
+
+
+def _execute_regression_fixture(
+    root: Path,
+    fixture_bytes: bytes,
+) -> dict[str, Any]:
+    fixture_root = root / "fixture-runtime"
+    workspace = fixture_root / "workspace"
+    workspace.mkdir(parents=True)
+    fixture_path = fixture_root / "captured.agentbus-trace"
+    fixture_path.write_bytes(fixture_bytes)
+    config = AgentBusConfig(
+        workspace_dir=str(workspace),
+        state_db=str(fixture_root / "state.db"),
+        runs_dir=str(fixture_root / "runs"),
+    )
+    result = TraceReplayService(config).replay_archive(
+        fixture_path,
+        allow_source_content=True,
+    )
+    assert result.replay.session.status == ReplaySessionStatus.SUCCEEDED
+    assert result.replay.session.provider_calls == 0
+    assert result.replay.session.network_calls == 0
+    assert result.fixture_assertions is not None
+    assert result.fixture_assertions.passed is True
+    assert result.fixture_assertions.failures == []
+    return {
+        "trace_id": result.imported.trace.trace_id,
+        "run_id": result.imported.trace.run_id,
+        "status": result.replay.session.status.value,
+        "provider_calls": result.replay.session.provider_calls,
+        "network_calls": result.replay.session.network_calls,
+        "fixture_assertions": result.fixture_assertions.model_dump(
+            mode="json"
+        ),
+    }
+
+
+def _assert_isolated_archive_import(
+    root: Path,
+    *,
+    archive_base64: str,
+    expected_trace_id: str,
+    expected_provenance_root: str,
+    mcp_fixture: Path,
+) -> list[Any]:
+    workspace = _initialize_repository(root / "import-repo")
+    state_path = root / "import-state.db"
+    runs_dir = root / "import-runs"
+    registry = root / "import-daemons.json"
+    lifecycle_dir = root / "import-mcp-lifecycle"
+    lifecycle_dir.mkdir()
+    environment_marker = "acceptance-import-mcp-private-marker"
+    process = _launch_daemon(
+        workspace=workspace,
+        state_path=state_path,
+        runs_dir=runs_dir,
+        registry=registry,
+        mcp_fixture=mcp_fixture,
+        mcp_lifecycle_dir=lifecycle_dir,
+        mcp_environment_marker=environment_marker,
+    )
+    daemon_token = ""
+    try:
+        handshake = _read_handshake(process)
+        daemon_token = handshake["bearer_token"]
+        base = f"http://127.0.0.1:{handshake['port']}"
+        headers = {"Authorization": f"Bearer {daemon_token}"}
+        denied = _request_expect_status(
+            "POST",
+            f"{base}/api/v1/traces/import",
+            403,
+            headers=headers,
+            json={
+                "archive_base64": archive_base64,
+                "allow_source_content": False,
+            },
+        ).json()
+        imported = _request(
+            "POST",
+            f"{base}/api/v1/traces/import",
+            headers=headers,
+            json={
+                "archive_base64": archive_base64,
+                "allow_source_content": True,
+            },
+        ).json()
+        assert imported["trace_id"] == expected_trace_id
+        assert imported["provenance_root"] == expected_provenance_root
+        assert imported["replay_started"] is False
+
+        accepted = _request(
+            "POST",
+            f"{base}/api/v1/runs/{imported['run_id']}/replays",
+            headers=headers,
+            json={"mode": "offline"},
+        ).json()
+        replay = _wait_for_terminal_replay(
+            base,
+            headers,
+            accepted["replay_id"],
+        )
+        _assert_providerless_replay(replay, isolated=False)
+        imported_trace = _request(
+            "GET",
+            f"{base}/api/v1/runs/{imported['run_id']}/trace",
+            headers=headers,
+        ).json()
+        assert imported_trace["trace_id"] == expected_trace_id
+
+        assert process.wait(timeout=30) == 0
+        assert process.stderr is not None
+        stderr = process.stderr.read()
+        assert daemon_token not in stderr
+        assert environment_marker not in stderr
+        registry_payload = json.loads(registry.read_text(encoding="utf-8"))
+        assert registry_payload["daemons"] == []
+        return [denied, imported, accepted, replay, imported_trace]
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            process.wait(timeout=10)
+
+
+def _decode_control_archive(payload: dict[str, Any]) -> bytes:
+    archive = base64.b64decode(payload["archive_base64"], validate=True)
+    assert 0 < len(archive) <= 650_000
+    assert base64.b64encode(archive).decode("ascii") == payload["archive_base64"]
+    assert hashlib.sha256(archive).hexdigest() == payload["archive_sha256"]
+    return archive
+
+
+def _without_archive(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in payload.items()
+        if key != "archive_base64"
+    }
+
+
+def _assert_archive_excludes_private_values(
+    archive: bytes,
+    *values: str,
+) -> None:
+    with zipfile.ZipFile(io.BytesIO(archive), mode="r") as bundle:
+        content = b"\n".join(bundle.read(name) for name in bundle.namelist())
+    for value in values:
+        encodings = {
+            value,
+            value.replace("\\", "/"),
+            json.dumps(value)[1:-1],
+        }
+        assert all(item.encode("utf-8") not in content for item in encodings)
+
+
 def _wait_for_mcp_cleanup(
     lifecycle_dir: Path,
     *,
@@ -1365,6 +2116,41 @@ def _request(method: str, url: str, **kwargs):
             if time.monotonic() >= deadline:
                 raise
             time.sleep(0.05)
+
+
+def _request_expect_status(
+    method: str,
+    url: str,
+    expected_status: int,
+    **kwargs,
+):
+    deadline = time.monotonic() + 5
+    while True:
+        try:
+            response = requests.request(method, url, timeout=15, **kwargs)
+            if response.status_code != expected_status:
+                raise AssertionError(
+                    f"Expected HTTP {expected_status}, "
+                    f"received HTTP {response.status_code}."
+                )
+            return response
+        except requests.ConnectionError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.05)
+
+
+def _git_output(workspace: Path, *arguments: str) -> str:
+    result = subprocess.run(
+        ["git", *arguments],
+        cwd=workspace,
+        capture_output=True,
+        text=True,
+        shell=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip())
+    return result.stdout.strip()
 
 
 def _git(workspace: Path, *arguments: str) -> None:

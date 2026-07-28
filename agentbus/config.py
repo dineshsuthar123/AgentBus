@@ -584,6 +584,11 @@ class AgentBusConfig:
             return database
         return Path(self.state_dir).expanduser() / database
 
+    @property
+    def trace_store_path(self) -> Path:
+        database = self.state_database_path
+        return database.parent / "trace-objects"
+
 
 def _env_text(name: str) -> str | None:
     raw = os.getenv(name)

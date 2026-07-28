@@ -28,6 +28,7 @@ async function main(): Promise<void> {
   const runsPath = join(stagingRoot, "agentbus-vscode-runs");
   const worktreesPath = join(stagingRoot, "agentbus-vscode-worktrees");
   const mcpLifecyclePath = join(stagingRoot, "agentbus-vscode-mcp-lifecycle");
+  const artifactPath = join(stagingRoot, "agentbus-vscode-artifacts");
   const mcpFixturePath = resolve(
     repositoryRoot,
     "tests",
@@ -51,9 +52,11 @@ async function main(): Promise<void> {
     `${statePath}-wal`,
     runsPath,
     worktreesPath,
-    mcpLifecyclePath
+    mcpLifecyclePath,
+    artifactPath
   ]);
   await mkdir(mcpLifecyclePath, { recursive: true });
+  await mkdir(artifactPath, { recursive: true });
   await writeDaemonConfig({
     configPath,
     workspacePath,
@@ -92,7 +95,8 @@ async function main(): Promise<void> {
         AGENTBUS_E2E_CONFIG: configPath,
         AGENTBUS_E2E_MCP_MARKER: mcpPrivateMarker,
         AGENTBUS_E2E_REGISTRY: registryPath,
-        AGENTBUS_E2E_WORKSPACE: workspacePath
+        AGENTBUS_E2E_WORKSPACE: workspacePath,
+        AGENTBUS_E2E_ARTIFACT_ROOT: artifactPath
       },
       launchArgs: [
         workspacePath,
@@ -120,7 +124,8 @@ async function main(): Promise<void> {
       const cleanupPaths = [
         extensionDevelopmentPath,
         userDataPath,
-        extensionsPath
+        extensionsPath,
+        artifactPath
       ];
       if (runtimeCleanupVerified) {
         cleanupPaths.push(

@@ -1,18 +1,32 @@
 import * as vscode from "vscode";
-import type { AgentBusClient } from "./apiClient";
+import { AgentBusApiError, type AgentBusClient } from "./apiClient";
 import { formatApprovalConfirmation } from "./approvalPresentation";
 import { toolArtifactUri } from "./artifactDocuments";
 import { validateToolArtifact } from "./artifactPresentation";
 import type { DaemonManager } from "./daemonManager";
 import { changeUri, reportUri } from "./documents";
+import {
+  comparisonSideUri,
+  comparisonUri
+} from "./comparisonDocuments";
+import type { ComparisonStore } from "./comparisonStore";
 import { toolInvocationUri, toolPolicyUri } from "./toolDocuments";
 import type {
   ApprovalSummary,
   CancelResponse,
+  ComparisonResponse,
   McpServerSummary,
+  RegressionFixtureCaptureResponse,
+  ReplayAcceptedResponse,
+  ReplayCancelResponse,
+  ReplayCreateRequest,
+  ReplaySessionResponse,
   RunAcceptedResponse,
   RunCreateRequest,
   RunSummary,
+  TraceArchiveExportResponse,
+  TraceArchiveImportResponse,
+  TraceSpanSummary,
   ToolInvocationSummary
 } from "./generated/protocol";
 import { ReconnectingSseClient } from "./sse";
@@ -20,6 +34,28 @@ import type { RunStore } from "./runStore";
 import { safeError } from "./redaction";
 import { mcpServerUri } from "./mcpDocuments";
 import { formatMcpServerCheck } from "./mcpPresentation";
+import { replayUri } from "./replayDocuments";
+import { replayPlanUri } from "./replayPlanDocuments";
+import { provenanceUri } from "./provenanceDocuments";
+import {
+  FORK_INPUT_NAMES,
+  isTerminalReplayStatus,
+  offlineReplayBlockReason,
+  parseForkInput,
+  replayableCheckpoints,
+  validateForkInputs,
+  type ForkInputName,
+  type ValidatedForkInputs
+} from "./replayPresentation";
+import { spanUri } from "./traceDocuments";
+import {
+  archiveSha256,
+  decodeRegressionFixtureArchive,
+  decodeTraceArchive,
+  encodeTraceArchive,
+  TRACE_ARCHIVE_EXTENSION,
+  validateTraceArchiveFileName
+} from "./traceArchive";
 import {
   canonicalWorkspacePath,
   ensureWorkspaceTrust,
@@ -34,6 +70,7 @@ import {
 } from "./cancellation";
 import {
   canCancelTool,
+  isSafeControlId,
   toolCancellationDetail
 } from "./toolPresentation";
 
@@ -44,12 +81,14 @@ export interface Refreshers {
 export class CommandController implements vscode.Disposable {
   private readonly disposables: vscode.Disposable[] = [];
   private readonly cancellationsInFlight = new Set<string>();
+  private readonly replayMonitors = new Map<string, AbortController>();
   private stream: ReconnectingSseClient | undefined;
 
   public constructor(
     private readonly daemon: DaemonManager,
     private readonly store: RunStore,
     private readonly selection: RunSelection,
+    private readonly comparisons: ComparisonStore,
     private readonly refreshers: Refreshers[],
     private readonly output: vscode.OutputChannel,
     private readonly status: vscode.StatusBarItem
@@ -72,6 +111,45 @@ export class CommandController implements vscode.Disposable {
     );
     command("agentbus.refresh", () => this.refresh());
     command("agentbus.showRun", (item) => this.showRun(item));
+    command("agentbus.showExecutionTimeline", () => this.showTimeline());
+    command("agentbus.showSpan", (item) => this.showSpan(item));
+    command("agentbus.showReplaySession", (item) =>
+      this.showReplaySession(item)
+    );
+    command("agentbus.compareRuns", (left, right) =>
+      this.compareRuns(left, right)
+    );
+    command("agentbus.showComparison", (item) =>
+      this.showComparison(item)
+    );
+    command("agentbus.openStructuredReplayDifferences", (item) =>
+      this.openStructuredReplayDifferences(item)
+    );
+    command("agentbus.compareRunReports", (left, right) =>
+      this.compareRunReports(left, right)
+    );
+    command("agentbus.replayRunOffline", (run) =>
+      this.replayRunOffline(run)
+    );
+    command("agentbus.replayFromCheckpoint", (request) =>
+      this.replayFromCheckpoint(request)
+    );
+    command("agentbus.forkRun", (request) => this.forkRun(request));
+    command("agentbus.exportTrace", (request) =>
+      this.exportTrace(request)
+    );
+    command("agentbus.importTrace", (request) =>
+      this.importTrace(request)
+    );
+    command("agentbus.captureRegressionFixture", (request) =>
+      this.captureRegressionFixture(request)
+    );
+    command("agentbus.openProvenanceManifest", (run) =>
+      this.openProvenanceManifest(run)
+    );
+    command("agentbus.cancelReplay", (replay) =>
+      this.cancelReplay(replay)
+    );
     command("agentbus.resumeRun", () => this.resume());
     command("agentbus.cancelRun", () => this.cancel());
     command("agentbus.openRunReport", () => this.openReport());
@@ -102,6 +180,10 @@ export class CommandController implements vscode.Disposable {
 
   public dispose(): void {
     this.stream?.stop();
+    for (const controller of this.replayMonitors.values()) {
+      controller.abort();
+    }
+    this.replayMonitors.clear();
     for (const item of this.disposables) item.dispose();
   }
 
@@ -242,6 +324,693 @@ export class CommandController implements vscode.Disposable {
     this.selection.set(run.run_id);
     this.refreshViews();
     await vscode.commands.executeCommand("agentbus.openRunReport");
+  }
+
+  private async showTimeline(): Promise<void> {
+    const run = await this.chooseRun();
+    if (!run) return;
+    this.selection.set(run.run_id);
+    this.refreshViews();
+    await vscode.commands.executeCommand("agentbus.timeline.focus");
+  }
+
+  private async showSpan(raw?: unknown): Promise<void> {
+    const item = raw as AgentBusItem | undefined;
+    let span = item?.value as TraceSpanSummary | undefined;
+    let runId = span?.run_id;
+    if (!span) {
+      const run = await this.chooseRun();
+      if (!run) return;
+      runId = run.run_id;
+      const response = await (await this.client()).traceSpans(runId, 0, 500);
+      span = (
+        await vscode.window.showQuickPick(
+          response.spans.map((value) => ({
+            label: value.name,
+            description: `#${value.sequence} ${value.span_type} | ${value.status}`,
+            value
+          })),
+          { title: "Show AgentBus Span" }
+        )
+      )?.value;
+    }
+    if (!span || !runId) return;
+    const document = await vscode.workspace.openTextDocument(
+      spanUri(runId, span.span_id)
+    );
+    await vscode.window.showTextDocument(document, { preview: true });
+  }
+
+  private async showReplaySession(raw?: unknown): Promise<void> {
+    const item = raw as AgentBusItem | undefined;
+    let replay = item?.value as ReplaySessionResponse | undefined;
+    if (!replay) {
+      const response = await (await this.client()).listReplays(
+        undefined,
+        undefined,
+        500
+      );
+      replay = (
+        await vscode.window.showQuickPick(
+          response.replays.map((value) => ({
+            label: value.replay_id,
+            description: `${value.mode} | ${value.status}`,
+            value
+          })),
+          { title: "Show AgentBus Replay Session" }
+        )
+      )?.value;
+    }
+    if (!replay) return;
+    const document = await vscode.workspace.openTextDocument(
+      replayUri(replay.replay_id)
+    );
+    await vscode.window.showTextDocument(document, { preview: true });
+  }
+
+  private async replayRunOffline(
+    raw?: unknown
+  ): Promise<ReplayAcceptedResponse | undefined> {
+    const run = await this.resolveRun(raw);
+    if (!run) return undefined;
+    if (!(await this.prepareOfflineReplay(run.run_id))) return undefined;
+    return this.submitReplay(run.run_id, {
+      mode: "offline",
+      live_provider_consent: false
+    });
+  }
+
+  private async replayFromCheckpoint(
+    raw?: unknown
+  ): Promise<ReplayAcceptedResponse | undefined> {
+    const request = commandRecord(raw);
+    const run = await this.resolveRun(request?.runId ?? raw);
+    if (!run) return undefined;
+    const trace = await (await this.client()).trace(run.run_id);
+    const checkpoints = replayableCheckpoints(trace.checkpoints ?? []);
+    if (checkpoints.length === 0) {
+      void vscode.window.showInformationMessage(
+        "This trace has no replayable checkpoints."
+      );
+      return undefined;
+    }
+    const requestedId =
+      typeof request?.checkpointId === "string"
+        ? request.checkpointId
+        : undefined;
+    let checkpoint = requestedId
+      ? checkpoints.find((value) => value.checkpoint_id === requestedId)
+      : undefined;
+    if (requestedId && !checkpoint) {
+      throw new Error(
+        "The requested checkpoint is not replayable for this trace."
+      );
+    }
+    checkpoint ??= (
+      await vscode.window.showQuickPick(
+        checkpoints.map((value) => ({
+          label: value.label,
+          description: `#${value.sequence} | ${value.checkpoint_id}`,
+          value
+        })),
+        { title: "Replay AgentBus from Checkpoint" }
+      )
+    )?.value;
+    if (!checkpoint) return undefined;
+    if (!(await this.prepareOfflineReplay(run.run_id))) return undefined;
+    void vscode.window.showInformationMessage(
+      `Replay will start from checkpoint ${checkpoint.label} (${checkpoint.checkpoint_id}).`
+    );
+    return this.submitReplay(run.run_id, {
+      mode: "offline",
+      from_checkpoint_id: checkpoint.checkpoint_id,
+      live_provider_consent: false
+    });
+  }
+
+  private async forkRun(
+    raw?: unknown
+  ): Promise<ReplayAcceptedResponse | undefined> {
+    const request = commandRecord(raw);
+    const run = await this.resolveRun(request?.runId ?? raw);
+    if (!run) return undefined;
+    let inputs: ValidatedForkInputs;
+    if (isRecord(request?.changedInputs)) {
+      inputs = validateForkInputs(request.changedInputs);
+    } else {
+      const name = await vscode.window.showQuickPick(
+        FORK_INPUT_NAMES.map((value) => ({
+          label: value,
+          value
+        })),
+        { title: "Select Fork Input" }
+      );
+      if (!name) return undefined;
+      const json = await vscode.window.showInputBox({
+        title: `Fork Input: ${name.value}`,
+        prompt: "Enter the replacement value as JSON",
+        value: "null",
+        validateInput: (value) => {
+          try {
+            parseForkInput(name.value as ForkInputName, value);
+            return undefined;
+          } catch (error) {
+            return safeError(error);
+          }
+        }
+      });
+      if (json === undefined) return undefined;
+      inputs = parseForkInput(name.value as ForkInputName, json);
+    }
+    if (inputs.liveProviderRequested) {
+      void vscode.window.showErrorMessage(
+        "VS Code fork replay does not enable live Azure or Ollama routes. No provider request was sent."
+      );
+      return undefined;
+    }
+    if (!(await this.prepareOfflineReplay(run.run_id))) return undefined;
+    void vscode.window.showInformationMessage(
+      `Fork replay will change: ${inputs.changedInputNames.join(", ")}. Changed values are not displayed.`
+    );
+    return this.submitReplay(run.run_id, {
+      mode: "offline",
+      fork: true,
+      changed_inputs: inputs.changedInputs,
+      live_provider_consent: false
+    });
+  }
+
+  private async exportTrace(
+    raw?: unknown
+  ): Promise<TraceArchiveExportResponse | undefined> {
+    const request = commandRecord(raw);
+    const run = await this.resolveRun(request?.runId ?? raw);
+    if (!run) return undefined;
+    let includeSourceContent =
+      typeof request?.includeSourceContent === "boolean"
+        ? request.includeSourceContent
+        : undefined;
+    if (includeSourceContent === undefined) {
+      includeSourceContent =
+        (
+          await vscode.window.showQuickPick(
+            [
+              {
+                label: "Sanitized archive",
+                description: "Recommended; excludes source-content objects.",
+                value: false
+              },
+              {
+                label: "Include source content",
+                description: "Requires explicit consent and careful handling.",
+                value: true
+              }
+            ],
+            { title: "Export AgentBus Trace" }
+          )
+        )?.value;
+    }
+    if (includeSourceContent === undefined) return undefined;
+    if (
+      includeSourceContent &&
+      typeof request?.includeSourceContent !== "boolean"
+    ) {
+      const consent = await vscode.window.showWarningMessage(
+        "This trace archive may include sanitized source-code content. Treat it as sensitive.",
+        { modal: true },
+        "Include Source Content"
+      );
+      if (consent !== "Include Source Content") return undefined;
+    }
+    const trace = await (await this.client()).trace(run.run_id);
+    const destination = await this.traceExportDestination(
+      trace.trace_id,
+      request?.destination
+    );
+    if (!destination) return undefined;
+    const exported = await (await this.client()).exportTrace(
+      trace.trace_id,
+      includeSourceContent
+    );
+    if (
+      exported.trace_id !== trace.trace_id ||
+      exported.run_id !== run.run_id
+    ) {
+      throw new Error("AgentBus trace export identity did not match the request.");
+    }
+    if (exported.source_content_included && !includeSourceContent) {
+      throw new Error(
+        "AgentBus refused an unexpected source-content archive response."
+      );
+    }
+    const bytes = decodeTraceArchive(
+      exported.archive_base64,
+      exported.archive_sha256
+    );
+    await vscode.workspace.fs.writeFile(destination, bytes);
+    void vscode.window.showInformationMessage(
+      `Exported trace ${trace.trace_id} to ${archiveFileLabel(destination)}.`
+    );
+    return exported;
+  }
+
+  private async importTrace(
+    raw?: unknown
+  ): Promise<TraceArchiveImportResponse | undefined> {
+    const request = commandRecord(raw);
+    const source = await this.traceImportSource(request?.source);
+    if (!source) return undefined;
+    const bytes = await vscode.workspace.fs.readFile(source);
+    const archiveBase64 = encodeTraceArchive(bytes);
+    const explicitConsent =
+      typeof request?.allowSourceContent === "boolean";
+    let allowSourceContent = request?.allowSourceContent === true;
+    let imported: TraceArchiveImportResponse;
+    try {
+      imported = await (await this.client()).importTrace({
+        archive_base64: archiveBase64,
+        allow_source_content: allowSourceContent
+      });
+    } catch (error) {
+      if (
+        !(error instanceof AgentBusApiError && error.status === 403) ||
+        allowSourceContent ||
+        explicitConsent
+      ) {
+        throw error;
+      }
+      const consent = await vscode.window.showWarningMessage(
+        "This archive contains sanitized source content. Import validates and stores it but does not execute or replay it.",
+        { modal: true },
+        "Import Source Content"
+      );
+      if (consent !== "Import Source Content") return undefined;
+      allowSourceContent = true;
+      imported = await (await this.client()).importTrace({
+        archive_base64: archiveBase64,
+        allow_source_content: true
+      });
+    }
+    if (
+      imported.archive_sha256 !== archiveSha256(bytes) ||
+      imported.replay_started !== false
+    ) {
+      throw new Error(
+        "AgentBus trace import integrity or no-execution confirmation failed."
+      );
+    }
+    await this.refresh();
+    void vscode.window.showInformationMessage(
+      `Imported trace ${imported.trace_id}. Replay was not started.`
+    );
+    return imported;
+  }
+
+  private async captureRegressionFixture(
+    raw?: unknown
+  ): Promise<RegressionFixtureCaptureResponse | undefined> {
+    const request = commandRecord(raw);
+    const run = await this.resolveRun(request?.runId ?? raw);
+    if (!run) return undefined;
+    const trace = await (await this.client()).trace(run.run_id);
+    const explicitConsent =
+      typeof request?.includeSourceContent === "boolean";
+    let includeSourceContent = request?.includeSourceContent === true;
+    let captured: RegressionFixtureCaptureResponse;
+    try {
+      captured = await (await this.client()).captureRegressionFixture(
+        run.run_id,
+        { include_source_content: includeSourceContent }
+      );
+    } catch (error) {
+      if (
+        !(error instanceof AgentBusApiError && error.status === 403) ||
+        includeSourceContent ||
+        explicitConsent
+      ) {
+        throw error;
+      }
+      const consent = await vscode.window.showWarningMessage(
+        "This portable fixture requires sanitized source-like content. Review its origin and license before sharing it. Capture does not start replay.",
+        { modal: true },
+        "Capture Source Content"
+      );
+      if (consent !== "Capture Source Content") return undefined;
+      includeSourceContent = true;
+      captured = await (await this.client()).captureRegressionFixture(
+        run.run_id,
+        { include_source_content: true }
+      );
+    }
+    const bytes = decodeRegressionFixtureArchive(
+      captured,
+      run.run_id,
+      trace.trace_id,
+      includeSourceContent
+    );
+    const destination = await this.fixtureDestination(
+      trace.trace_id,
+      request?.destination
+    );
+    if (!destination) return undefined;
+    await vscode.workspace.fs.writeFile(destination, bytes);
+    const sourceNotice = captured.source_content_included
+      ? " Sanitized source content is included; review origin and license before sharing."
+      : "";
+    void vscode.window.showInformationMessage(
+      `Captured regression fixture to ${archiveFileLabel(destination)}. Replay was not started.${sourceNotice}`
+    );
+    return captured;
+  }
+
+  private async openProvenanceManifest(raw?: unknown): Promise<void> {
+    const run = await this.resolveRun(raw);
+    if (!run) return;
+    const document = await vscode.workspace.openTextDocument(
+      provenanceUri(run.run_id)
+    );
+    await vscode.window.showTextDocument(document, { preview: true });
+  }
+
+  private async traceExportDestination(
+    traceId: string,
+    raw: unknown
+  ): Promise<vscode.Uri | undefined> {
+    if (typeof raw === "string") {
+      validateTraceArchiveFileName(raw);
+      return vscode.Uri.file(raw);
+    }
+    const folder = vscode.workspace.workspaceFolders?.[0]?.uri;
+    const destination = await vscode.window.showSaveDialog({
+      title: "Export AgentBus Trace",
+      defaultUri: folder
+        ? vscode.Uri.joinPath(
+            folder,
+            `${traceId}${TRACE_ARCHIVE_EXTENSION}`
+          )
+        : undefined,
+      filters: {
+        "AgentBus Trace Archive": ["agentbus-trace"]
+      }
+    });
+    if (destination) validateTraceArchiveFileName(destination.fsPath);
+    return destination;
+  }
+
+  private async traceImportSource(raw: unknown): Promise<vscode.Uri | undefined> {
+    if (typeof raw === "string") {
+      validateTraceArchiveFileName(raw);
+      return vscode.Uri.file(raw);
+    }
+    const selected = await vscode.window.showOpenDialog({
+      title: "Import AgentBus Trace",
+      canSelectFiles: true,
+      canSelectFolders: false,
+      canSelectMany: false,
+      filters: {
+        "AgentBus Trace Archive": ["agentbus-trace"]
+      }
+    });
+    const source = selected?.[0];
+    if (source) validateTraceArchiveFileName(source.fsPath);
+    return source;
+  }
+
+  private async fixtureDestination(
+    traceId: string,
+    raw: unknown
+  ): Promise<vscode.Uri | undefined> {
+    if (typeof raw === "string") {
+      validateTraceArchiveFileName(raw);
+      return vscode.Uri.file(raw);
+    }
+    const folder = vscode.workspace.workspaceFolders?.[0]?.uri;
+    const destination = await vscode.window.showSaveDialog({
+      title: "Capture AgentBus Regression Fixture",
+      defaultUri: folder
+        ? vscode.Uri.joinPath(
+            folder,
+            `${traceId}.regression${TRACE_ARCHIVE_EXTENSION}`
+          )
+        : undefined,
+      filters: {
+        "AgentBus Regression Fixture": ["agentbus-trace"]
+      }
+    });
+    if (destination) validateTraceArchiveFileName(destination.fsPath);
+    return destination;
+  }
+
+  private async prepareOfflineReplay(runId: string): Promise<boolean> {
+    const client = await this.client();
+    const replayability = await client.replayability(runId, 0, 500);
+    const document = await vscode.workspace.openTextDocument(
+      replayPlanUri(runId, "offline")
+    );
+    await vscode.window.showTextDocument(document, { preview: true });
+    const blocked = offlineReplayBlockReason(replayability);
+    if (!blocked) return true;
+    void vscode.window.showWarningMessage(blocked);
+    return false;
+  }
+
+  private async submitReplay(
+    runId: string,
+    request: ReplayCreateRequest
+  ): Promise<ReplayAcceptedResponse> {
+    const accepted = await (await this.client()).createReplay(runId, request);
+    this.refreshViews();
+    await vscode.commands.executeCommand("agentbus.replays.focus");
+    void vscode.window.showInformationMessage(
+      `Offline replay ${accepted.replay_id} started. The source repository will not be mutated.`
+    );
+    this.startReplayMonitor(accepted.replay_id);
+    return accepted;
+  }
+
+  private async cancelReplay(
+    raw?: unknown
+  ): Promise<ReplayCancelResponse | undefined> {
+    const item = raw as AgentBusItem | undefined;
+    let replay = item?.value as ReplaySessionResponse | undefined;
+    if (typeof raw === "string") {
+      replay = await (await this.client()).replay(raw);
+    }
+    if (!replay) {
+      const response = await (await this.client()).listReplays(
+        undefined,
+        undefined,
+        500
+      );
+      replay = (
+        await vscode.window.showQuickPick(
+          response.replays
+            .filter((value) => !isTerminalReplayStatus(value.status))
+            .map((value) => ({
+              label: value.replay_id,
+              description: `${value.mode} | ${value.status}`,
+              value
+            })),
+          { title: "Cancel AgentBus Replay" }
+        )
+      )?.value;
+    }
+    if (!replay || isTerminalReplayStatus(replay.status)) return undefined;
+    const cancelled = await (await this.client()).cancelReplay(
+      replay.replay_id
+    );
+    this.refreshViews();
+    return cancelled;
+  }
+
+  private startReplayMonitor(replayId: string): void {
+    if (this.replayMonitors.has(replayId)) return;
+    const controller = new AbortController();
+    this.replayMonitors.set(replayId, controller);
+    void this.monitorReplay(replayId, controller.signal)
+      .catch((error: unknown) => {
+        this.output.appendLine(
+          `Replay ${replayId} monitor: ${safeError(error)}`
+        );
+      })
+      .finally(() => {
+        if (this.replayMonitors.get(replayId) === controller) {
+          this.replayMonitors.delete(replayId);
+        }
+      });
+  }
+
+  private async monitorReplay(
+    replayId: string,
+    signal: AbortSignal
+  ): Promise<void> {
+    const deadline = Date.now() + 300_000;
+    let delayMilliseconds = 100;
+    while (!signal.aborted && Date.now() < deadline) {
+      await abortableDelay(delayMilliseconds, signal);
+      if (signal.aborted) return;
+      const replay = await (await this.client()).replay(replayId);
+      this.refreshViews();
+      if (isTerminalReplayStatus(replay.status)) {
+        if (replay.comparison_id) {
+          const comparison = await (await this.client()).comparison(
+            replay.comparison_id,
+            0,
+            500
+          );
+          await this.comparisons.upsert(comparison);
+          this.refreshViews();
+        }
+        const message = `AgentBus replay ${replayId} ${replay.status}.`;
+        if (replay.status === "succeeded") {
+          void vscode.window.showInformationMessage(message);
+        } else {
+          void vscode.window.showWarningMessage(message);
+        }
+        return;
+      }
+      delayMilliseconds = Math.min(delayMilliseconds * 2, 1_000);
+    }
+    if (!signal.aborted) {
+      this.output.appendLine(
+        `Replay ${replayId} monitor reached its bounded deadline.`
+      );
+    }
+  }
+
+  private async compareRuns(
+    leftRaw?: unknown,
+    rightRaw?: unknown
+  ): Promise<ComparisonResponse | undefined> {
+    const left = await this.chooseComparisonTarget(
+      "Select Left AgentBus Run",
+      leftRaw
+    );
+    if (!left) return undefined;
+    const right = await this.chooseComparisonTarget(
+      "Select Right AgentBus Run",
+      rightRaw,
+      left
+    );
+    if (!right) return undefined;
+    const comparison = await (await this.client()).createComparison(
+      { left, right },
+      0,
+      500
+    );
+    await this.comparisons.upsert(comparison);
+    this.refreshViews();
+    await this.openComparison(comparison.comparison_id);
+    return comparison;
+  }
+
+  private async showComparison(raw?: unknown): Promise<void> {
+    const comparison = await this.resolveComparison(raw);
+    if (!comparison) return;
+    await this.openComparison(comparison.comparison_id);
+  }
+
+  private async openStructuredReplayDifferences(
+    raw?: unknown
+  ): Promise<void> {
+    const comparison = await this.resolveComparison(raw);
+    if (!comparison) return;
+    await vscode.commands.executeCommand(
+      "vscode.diff",
+      comparisonSideUri(comparison.comparison_id, "left"),
+      comparisonSideUri(comparison.comparison_id, "right"),
+      `AgentBus ${comparison.comparison_id} (hashes only)`
+    );
+  }
+
+  private async compareRunReports(
+    leftRaw?: unknown,
+    rightRaw?: unknown
+  ): Promise<void> {
+    const left = await this.chooseComparisonTarget(
+      "Select Left AgentBus Report",
+      leftRaw
+    );
+    if (!left) return;
+    const right = await this.chooseComparisonTarget(
+      "Select Right AgentBus Report",
+      rightRaw,
+      left
+    );
+    if (!right) return;
+    await vscode.commands.executeCommand(
+      "vscode.diff",
+      reportUri(left),
+      reportUri(right),
+      "AgentBus Run Reports"
+    );
+  }
+
+  private async resolveComparison(
+    raw?: unknown
+  ): Promise<ComparisonResponse | undefined> {
+    const item = raw as AgentBusItem | undefined;
+    const treeValue = item?.value as
+      | { comparison?: ComparisonResponse }
+      | undefined;
+    let comparison = treeValue?.comparison;
+    if (!comparison) {
+      const loaded = await this.comparisons.load(await this.client());
+      comparison = (
+        await vscode.window.showQuickPick(
+          loaded.map((value) => ({
+            label: value.comparison_id,
+            description: `${value.summary.changed_spans} changed span(s)`,
+            value
+          })),
+          { title: "Show AgentBus Comparison" }
+        )
+      )?.value;
+    }
+    return comparison;
+  }
+
+  private async openComparison(comparisonId: string): Promise<void> {
+    const document = await vscode.workspace.openTextDocument(
+      comparisonUri(comparisonId)
+    );
+    await vscode.window.showTextDocument(document, { preview: true });
+  }
+
+  private async chooseComparisonTarget(
+    title: string,
+    raw?: unknown,
+    excluded?: string
+  ): Promise<string | undefined> {
+    if (typeof raw === "string") {
+      if (!isSafeControlId(raw) || raw === excluded) {
+        throw new Error("AgentBus comparison identifiers must be safe and distinct.");
+      }
+      return raw;
+    }
+    return (
+      await vscode.window.showQuickPick(
+        this.store
+          .runs()
+          .filter((run) => run.run_id !== excluded)
+          .map((run) => ({
+            label: run.original_task,
+            description: `${run.status} | ${run.run_id}`,
+            value: run.run_id
+          })),
+        { title }
+      )
+    )?.value;
+  }
+
+  private async resolveRun(raw?: unknown): Promise<RunSummary | undefined> {
+    if (typeof raw === "string") {
+      const cached = this.store.run(raw);
+      return cached ?? (await (await this.client()).run(raw));
+    }
+    const item = raw as AgentBusItem | undefined;
+    const value = item?.value as RunSummary | undefined;
+    return value?.run_id ? value : this.chooseRun();
   }
 
   private async resume(): Promise<void> {
@@ -640,4 +1409,37 @@ export class CommandController implements vscode.Disposable {
     await this.daemon.stop();
     this.status.text = "$(debug-disconnect) AgentBus offline";
   }
+}
+
+function abortableDelay(
+  milliseconds: number,
+  signal: AbortSignal
+): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, milliseconds);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function commandRecord(
+  value: unknown
+): Record<string, unknown> | undefined {
+  return isRecord(value) ? value : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function archiveFileLabel(uri: vscode.Uri): string {
+  return decodeURIComponent(uri.path.split("/").pop() ?? "trace archive");
 }

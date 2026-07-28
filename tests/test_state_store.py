@@ -12,6 +12,7 @@ from agentbus.execution.models import (
     TaskSpec,
     TaskStatus,
 )
+from agentbus.execution.schema import SCHEMA_VERSION
 from agentbus.execution.state_store import (
     RunNotFoundError,
     StateStore,
@@ -44,7 +45,7 @@ def make_task(task_id="step-1", maximum_attempts=2):
 def test_schema_initializes_and_enables_foreign_keys(tmp_path):
     store = StateStore(tmp_path / "state.db")
 
-    assert store.schema_version == 4
+    assert store.schema_version == SCHEMA_VERSION
     with store._connection() as connection:
         assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
 

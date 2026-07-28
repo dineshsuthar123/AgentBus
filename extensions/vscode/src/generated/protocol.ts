@@ -114,6 +114,46 @@ export interface ChangeSummary {
   "task_id"?: string | null;
 }
 
+export interface ComparisonCreateRequest {
+  "left": string;
+  "right": string;
+}
+
+export interface ComparisonDifferenceResponse {
+  "field": string;
+  "left_sha256"?: string | null;
+  "right_sha256"?: string | null;
+  "category": string;
+  "summary": string;
+}
+
+export interface ComparisonResponse {
+  "comparison_id": string;
+  "left_trace_id": string;
+  "right_trace_id": string;
+  "created_at": string;
+  "summary": ComparisonSummaryResponse;
+  "categories"?: Array<string>;
+  "left_status": string;
+  "right_status": string;
+  "left_provenance_root"?: string | null;
+  "right_provenance_root"?: string | null;
+  "spans": Array<SpanComparisonResponse>;
+  "after"?: number;
+  "next_after"?: number;
+  "truncated"?: boolean;
+}
+
+export interface ComparisonSummaryResponse {
+  "unchanged_spans": number;
+  "changed_spans": number;
+  "added_spans": number;
+  "removed_spans": number;
+  "category_counts"?: Record<string, number>;
+  "final_status_changed"?: boolean;
+  "provenance_root_changed"?: boolean;
+}
+
 export interface DaemonRegistryEntry {
   "daemon_id": string;
   "pid": number;
@@ -239,6 +279,51 @@ export interface McpServerSummary {
   "request_timeout_seconds": number;
 }
 
+export interface ProvenanceProviderRouteSummary {
+  "role": string;
+  "provider": string;
+  "model_identifier": string;
+  "deployment_identifier"?: string | null;
+}
+
+export interface ProvenanceResponse {
+  "trace_id": string;
+  "run_id": string;
+  "generated_at": string;
+  "schema_version": number;
+  "trace_schema_version": number;
+  "agentbus_version": string;
+  "operating_system": string;
+  "python_version": string;
+  "node_version"?: string | null;
+  "vscode_version"?: string | null;
+  "configuration_fingerprint": string;
+  "provider_routes": Array<ProvenanceProviderRouteSummary>;
+  "tool_descriptors": Array<ProvenanceToolSummary>;
+  "tool_descriptors_truncated"?: boolean;
+  "policy_version": string;
+  "policy_sha256": string;
+  "protocol_hashes"?: Record<string, string>;
+  "input_object_count": number;
+  "output_object_count": number;
+  "generated_artifact_count": number;
+  "integrity_object_count": number;
+  "task_graph_sha256": string;
+  "event_count": number;
+  "final_repository_tree_sha256"?: string | null;
+  "replayability": string;
+  "replayability_reasons"?: Array<string>;
+  "integrity_algorithm": string;
+  "integrity_root": string;
+}
+
+export interface ProvenanceToolSummary {
+  "name": string;
+  "version": string;
+  "protocol_version": string;
+  "descriptor_sha256": string;
+}
+
 export interface ProviderCheckRequest {
   "provider": "ollama" | "azure" | "deterministic";
   "live_consent"?: boolean;
@@ -267,6 +352,113 @@ export interface ReadyHandshake {
   "registry_path": string;
   "bearer_token": string;
   "token_delivery"?: "parent_process_stdout";
+}
+
+export interface RegressionFixtureCaptureRequest {
+  "include_source_content"?: boolean;
+}
+
+export interface RegressionFixtureCaptureResponse {
+  "trace_id": string;
+  "run_id": string;
+  "provenance_root": string;
+  "archive_sha256": string;
+  "archive_base64": string;
+  "source_content_included"?: boolean;
+  "source_warning"?: string | null;
+  "license_warning"?: string | null;
+  "replay_command": string;
+  "assertions_validated"?: true;
+  "replay_started"?: false;
+}
+
+export interface ReplayAcceptedResponse {
+  "replay_id": string;
+  "source_trace_id": string;
+  "source_run_id": string;
+  "mode": string;
+  "status": string;
+  "created_at": string;
+  "started_at"?: string | null;
+  "completed_at"?: string | null;
+  "from_span_id"?: string | null;
+  "from_checkpoint_id"?: string | null;
+  "fork"?: boolean;
+  "changed_input_names"?: Array<string>;
+  "result_trace_id"?: string | null;
+  "comparison_id"?: string | null;
+  "isolated"?: boolean;
+  "isolation_scope"?: "daemon_managed_temporary_workspace" | null;
+  "span_results"?: Array<ReplaySpanResultResponse>;
+  "span_results_truncated"?: boolean;
+  "diagnostics_truncated"?: boolean;
+  "substitutions"?: Array<string>;
+  "missing_inputs"?: Array<string>;
+  "policy_drift"?: Array<string>;
+  "failure_category"?: string | null;
+  "failure_message"?: string | null;
+  "provider_calls"?: number;
+  "network_calls"?: number;
+}
+
+export interface ReplayCancelResponse {
+  "replay_id": string;
+  "status": string;
+  "cancellation_requested": boolean;
+}
+
+export interface ReplayCreateRequest {
+  "mode": "strict" | "offline" | "verify" | "simulate";
+  "from_span_id"?: string | null;
+  "from_checkpoint_id"?: string | null;
+  "fork"?: boolean;
+  "changed_inputs"?: Record<string, unknown>;
+  "tool_strategies"?: Record<string, "reuse_captured" | "rerun_sandbox" | "simulate_mutation" | "reject">;
+  "live_provider_consent"?: boolean;
+}
+
+export interface ReplayListResponse {
+  "replays": Array<ReplaySessionResponse>;
+  "total": number;
+  "truncated"?: boolean;
+}
+
+export interface ReplaySessionResponse {
+  "replay_id": string;
+  "source_trace_id": string;
+  "source_run_id": string;
+  "mode": string;
+  "status": string;
+  "created_at": string;
+  "started_at"?: string | null;
+  "completed_at"?: string | null;
+  "from_span_id"?: string | null;
+  "from_checkpoint_id"?: string | null;
+  "fork"?: boolean;
+  "changed_input_names"?: Array<string>;
+  "result_trace_id"?: string | null;
+  "comparison_id"?: string | null;
+  "isolated"?: boolean;
+  "isolation_scope"?: "daemon_managed_temporary_workspace" | null;
+  "span_results"?: Array<ReplaySpanResultResponse>;
+  "span_results_truncated"?: boolean;
+  "diagnostics_truncated"?: boolean;
+  "substitutions"?: Array<string>;
+  "missing_inputs"?: Array<string>;
+  "policy_drift"?: Array<string>;
+  "failure_category"?: string | null;
+  "failure_message"?: string | null;
+  "provider_calls"?: number;
+  "network_calls"?: number;
+}
+
+export interface ReplaySpanResultResponse {
+  "span_id": string;
+  "action": string;
+  "succeeded": boolean;
+  "summary": string;
+  "output_sha256"?: string | null;
+  "drift"?: Array<string>;
 }
 
 export interface ResumeResponse {
@@ -320,6 +512,21 @@ export interface RunListResponse {
   "total": number;
 }
 
+export interface RunReplayabilityResponse {
+  "trace_id": string;
+  "run_id": string;
+  "level": string;
+  "replayable_offline": boolean;
+  "reasons"?: Array<string>;
+  "missing_input_hashes"?: Array<string>;
+  "missing_inputs_truncated"?: boolean;
+  "live_provider_consent_required"?: boolean;
+  "spans": Array<SpanReplayabilityResponse>;
+  "after_sequence"?: number;
+  "next_sequence"?: number;
+  "truncated"?: boolean;
+}
+
 export interface RunReportResponse {
   "run_id": string;
   "status": string;
@@ -354,6 +561,27 @@ export interface SchedulerResponse {
   "integration_order"?: Array<string>;
   "integration_conflicts"?: Array<Record<string, unknown>>;
   "cancellation"?: CancellationLifecycle;
+}
+
+export interface SpanComparisonResponse {
+  "semantic_key": string;
+  "left_span_id"?: string | null;
+  "right_span_id"?: string | null;
+  "unchanged": boolean;
+  "categories"?: Array<string>;
+  "differences"?: Array<ComparisonDifferenceResponse>;
+}
+
+export interface SpanReplayabilityResponse {
+  "span_id": string;
+  "span_type": string;
+  "level": string;
+  "reasons": Array<string>;
+  "required_input_count": number;
+  "missing_input_hashes"?: Array<string>;
+  "substitution_kinds"?: Array<string>;
+  "requires_isolated_workspace"?: boolean;
+  "live_provider_consent_required"?: boolean;
 }
 
 export interface TaskListResponse {
@@ -681,6 +909,148 @@ export interface ToolVersion {
   "major": number;
   "minor"?: number;
   "patch"?: number;
+}
+
+export interface TraceArchiveExportResponse {
+  "trace_id": string;
+  "run_id": string;
+  "provenance_root": string;
+  "archive_sha256": string;
+  "archive_base64": string;
+  "source_content_included"?: boolean;
+}
+
+export interface TraceArchiveImportRequest {
+  "archive_base64": string;
+  "allow_source_content"?: boolean;
+}
+
+export interface TraceArchiveImportResponse {
+  "trace_id": string;
+  "run_id": string;
+  "provenance_root": string;
+  "archive_sha256": string;
+  "objects_imported": boolean;
+  "replay_started"?: false;
+}
+
+export interface TraceArtifactSummary {
+  "artifact_id": string;
+  "artifact_type": string;
+  "identifier": string;
+  "sha256"?: string | null;
+  "byte_length"?: number | null;
+  "media_type"?: string | null;
+}
+
+export interface TraceCheckpointSummary {
+  "checkpoint_id": string;
+  "span_id": string;
+  "sequence": number;
+  "label": string;
+  "replayable": boolean;
+  "created_at": string;
+}
+
+export interface TraceFailureSummary {
+  "category": string;
+  "message": string;
+  "retryable"?: boolean;
+}
+
+export interface TraceLinkSummary {
+  "link_type": string;
+  "trace_id": string;
+  "span_id"?: string | null;
+}
+
+export interface TraceResponse {
+  "trace_id": string;
+  "run_id": string;
+  "root_span_id": string;
+  "schema_version": number;
+  "status": string;
+  "created_at": string;
+  "completed_at"?: string | null;
+  "span_count": number;
+  "event_count": number;
+  "checkpoint_count": number;
+  "link_count"?: number;
+  "checkpoints"?: Array<TraceCheckpointSummary>;
+  "checkpoints_truncated"?: boolean;
+  "replay_id"?: string | null;
+  "source_trace_id"?: string | null;
+  "replay_mode"?: string | null;
+  "providerless"?: boolean | null;
+}
+
+export interface TraceSpanDetailResponse {
+  "trace_id": string;
+  "span_id": string;
+  "parent_span_id"?: string | null;
+  "run_id": string;
+  "task_id"?: string | null;
+  "worker_id"?: string | null;
+  "invocation_id"?: string | null;
+  "span_type": string;
+  "name": string;
+  "sequence": number;
+  "started_at": string;
+  "ended_at"?: string | null;
+  "status": string;
+  "input_count"?: number;
+  "output_count"?: number;
+  "artifact_count"?: number;
+  "failure"?: TraceFailureSummary | null;
+  "inputs"?: Array<TraceValueReferenceSummary>;
+  "outputs"?: Array<TraceValueReferenceSummary>;
+  "policy_decision_references"?: Array<string>;
+  "approval_references"?: Array<string>;
+  "artifacts"?: Array<TraceArtifactSummary>;
+  "links"?: Array<TraceLinkSummary>;
+  "cancellation_state"?: Record<string, unknown>;
+  "resource_usage"?: Record<string, unknown>;
+  "attributes"?: Record<string, unknown>;
+}
+
+export interface TraceSpanListResponse {
+  "trace_id": string;
+  "run_id": string;
+  "spans": Array<TraceSpanSummary>;
+  "after_sequence"?: number;
+  "next_sequence"?: number;
+  "truncated"?: boolean;
+}
+
+export interface TraceSpanSummary {
+  "trace_id": string;
+  "span_id": string;
+  "parent_span_id"?: string | null;
+  "run_id": string;
+  "task_id"?: string | null;
+  "worker_id"?: string | null;
+  "invocation_id"?: string | null;
+  "span_type": string;
+  "name": string;
+  "sequence": number;
+  "started_at": string;
+  "ended_at"?: string | null;
+  "status": string;
+  "input_count"?: number;
+  "output_count"?: number;
+  "artifact_count"?: number;
+  "failure"?: TraceFailureSummary | null;
+}
+
+export interface TraceValueReferenceSummary {
+  "reference_id": string;
+  "name": string;
+  "sha256": string;
+  "media_type": string;
+  "byte_length": number;
+  "redacted"?: boolean;
+  "required_for_replay"?: boolean | null;
+  "replayable"?: boolean | null;
 }
 
 export interface UsageResponse {

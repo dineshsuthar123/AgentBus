@@ -4,6 +4,8 @@ import pytest
 
 from agentbus.config import AgentBusConfig
 from agentbus.execution.cancellation import CancellationToken
+from agentbus.execution.models import RunRecord
+from agentbus.execution.state_store import StateStore
 from agentbus.memory.run_log import RunLogger
 from agentbus.models.base import ModelProvider
 from agentbus.models.errors import (
@@ -26,6 +28,8 @@ from agentbus.models.router import (
     model_request_context,
 )
 from agentbus.models.types import ModelResult, ModelRole, ModelUsage
+from agentbus.replay.substitutions import CapturedModelEnvelope
+from agentbus.trace import RuntimeTrace, TraceSpanType, TraceStatus
 
 
 class FakeProvider:
@@ -86,6 +90,29 @@ def router_with(config, azure, ollama=None, **kwargs):
         builders["ollama"] = lambda route: ollama
     factory = ModelProviderFactory(config, builders=builders)
     return ModelRouter(config, provider_factory=factory, **kwargs)
+
+
+def runtime_trace(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    store = StateStore(tmp_path / "state.db")
+    store.create_run(
+        RunRecord(
+            run_id="run-1",
+            original_task="Trace model routing",
+            model="fake",
+            workspace=str(workspace),
+        )
+    )
+    return (
+        RuntimeTrace.open(
+            store,
+            "run-1",
+            object_root=tmp_path / "objects",
+            workspace=workspace,
+        ),
+        store,
+    )
 
 
 def test_role_routing_uses_specific_then_default_deployments():
@@ -158,6 +185,93 @@ def test_transient_failure_retries_with_deterministic_backoff():
     assert actual.retry_count == 2
     assert sleeps == [0.5, 1.0]
     assert len(fake.calls) == 3
+
+
+def test_model_router_records_prompt_safe_replay_envelope(tmp_path):
+    config = azure_config(model_max_retries=0)
+    fake = FakeProvider(
+        "azure",
+        "planner-deployment",
+        [result(model="planner-deployment")],
+    )
+    trace_runtime, store = runtime_trace(tmp_path)
+    router = router_with(
+        config,
+        fake,
+        runtime_trace=trace_runtime,
+    )
+    prompt = "private source prompt token=do-not-store"
+
+    with trace_runtime.scope(trace_runtime.root_context):
+        with model_request_context(run_id="run-1", task_id="step-1"):
+            actual = router.generate_json(ModelRole.PLANNER, prompt)
+    trace_runtime.finish(status=TraceStatus.SUCCEEDED)
+    trace = store.get_run_trace("run-1")
+    request = next(
+        span
+        for span in trace.spans
+        if span.span_type == TraceSpanType.PROVIDER_REQUEST
+    )
+    response = next(
+        span
+        for span in trace.spans
+        if span.span_type == TraceSpanType.PROVIDER_RESPONSE
+    )
+    reference = response.output_references[0]
+    envelope = CapturedModelEnvelope.model_validate(
+        trace_runtime.object_store.get_json(reference.sha256)
+    )
+
+    assert actual.value == {"ok": True}
+    assert response.parent_span_id == request.span_id
+    assert request.task_id is None
+    assert request.attributes["prompt_sha256"]
+    assert prompt not in request.model_dump_json()
+    assert prompt.encode() not in trace_runtime.object_store.get(reference.sha256).data
+    assert envelope.value == {"ok": True}
+    assert envelope.request_fingerprint == request.attributes["prompt_sha256"]
+
+
+def test_routed_model_records_structured_parse_after_provider_response(tmp_path):
+    config = azure_config(model_max_retries=0)
+    fake = FakeProvider(
+        "azure",
+        "coder-deployment",
+        [result(model="coder-deployment")],
+    )
+    trace_runtime, store = runtime_trace(tmp_path)
+    routed = router_with(
+        config,
+        fake,
+        runtime_trace=trace_runtime,
+    ).for_role(ModelRole.CODER)
+
+    with trace_runtime.scope(trace_runtime.root_context):
+        value = routed.generate_json("bounded prompt")
+    trace_runtime.finish(status=TraceStatus.SUCCEEDED)
+    trace = store.get_run_trace("run-1")
+    provider_response = next(
+        span
+        for span in trace.spans
+        if span.span_type == TraceSpanType.PROVIDER_RESPONSE
+    )
+    parsed = next(
+        span
+        for span in trace.spans
+        if span.span_type == TraceSpanType.MODEL_PARSE
+    )
+
+    assert value == {"ok": True}
+    assert provider_response.sequence < parsed.sequence
+    assert parsed.status == TraceStatus.SUCCEEDED
+    assert parsed.input_references
+    assert parsed.output_references
+    assert (
+        trace_runtime.object_store.get_json(
+            parsed.input_references[0].sha256
+        )
+        == {"ok": True}
+    )
 
 
 def test_retry_after_is_honored_and_capped():

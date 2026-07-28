@@ -12,6 +12,7 @@ from agentbus.mcp import McpImportSession, McpServerConfig
 from agentbus.mcp import import_mcp_server as import_configured_mcp_server
 from agentbus.policy import ToolApprovalGrant, ToolPolicyEngine
 from agentbus.sandbox.platform import ExecutableCatalog
+from agentbus.trace import RuntimeTrace
 from agentbus.tools.adapters import builtin_tool_registry
 from agentbus.tools.budget import ToolBudgetLedger
 from agentbus.tools.capabilities import derive_required_capabilities
@@ -40,6 +41,7 @@ class ManagedToolRuntime:
         policy_engine: ToolPolicyEngine | None = None,
         budget_ledger: ToolBudgetLedger | None = None,
         source_environment: Mapping[str, str] | None = None,
+        runtime_trace: RuntimeTrace | None = None,
     ) -> None:
         self.workspace = _canonical_directory(workspace, "workspace")
         self.worktree = _canonical_directory(worktree, "worktree")
@@ -67,6 +69,7 @@ class ManagedToolRuntime:
             state_store,
             policy_engine=policy_engine,
             budget_ledger=budget_ledger,
+            runtime_trace=runtime_trace,
         )
         dispatcher_holder["dispatcher"] = self.dispatcher
 
@@ -296,6 +299,7 @@ def build_managed_tool_runtime(
     source_environment: Mapping[str, str] | None = None,
     mcp_server_configs: tuple[McpServerConfig, ...] = (),
     mcp_run_id: str | None = None,
+    runtime_trace: RuntimeTrace | None = None,
 ) -> ManagedToolRuntime:
     catalog = executable_catalog
     if catalog is None:
@@ -318,6 +322,7 @@ def build_managed_tool_runtime(
         policy_engine=policy_engine,
         budget_ledger=budget_ledger,
         source_environment=source_environment,
+        runtime_trace=runtime_trace,
     )
     try:
         for server in mcp_server_configs:

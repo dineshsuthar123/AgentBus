@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import subprocess
@@ -465,6 +466,50 @@ class GitRepository:
                 snapshot[relative] = "deleted"
         return snapshot
 
+    def repository_state_sha256(self) -> str:
+        """Fingerprint HEAD and contained changes without retaining source content."""
+        entries = [
+            entry for entry in self._status_entries() if not entry.ignored
+        ]
+        resolver = ContainedPathResolver(self.validate_workspace())
+        changes: list[dict[str, str | bool]] = []
+        for entry in sorted(entries, key=lambda item: (item.path, item.status)):
+            record: dict[str, str | bool] = {
+                "path_sha256": hashlib.sha256(
+                    entry.path.encode("utf-8")
+                ).hexdigest(),
+                "status": entry.status,
+                "tracked": entry.tracked,
+            }
+            try:
+                resolved = resolver.resolve(
+                    entry.path,
+                    allow_protected=True,
+                    reject_any_link=True,
+                )
+                if not resolved.exists:
+                    record["content"] = "deleted"
+                elif resolved.lexical_path.is_file():
+                    record["content_sha256"] = _sha256_file(
+                        resolved.lexical_path
+                    )
+                else:
+                    record["content"] = "non-file"
+            except FileSystemSecurityError:
+                record["content"] = "unsafe-link-or-path"
+            changes.append(record)
+        encoded = json.dumps(
+            {
+                "head_commit": self.head_commit(short=False),
+                "changes": changes,
+            },
+            allow_nan=False,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
     def changed_since(self, snapshot: dict[str, str]) -> list[str]:
         current = self.worktree_snapshot()
         return sorted(
@@ -800,3 +845,16 @@ def _truncate_with_marker(value: str, maximum: int, marker: str) -> str:
 
 def _redact_git_output(value: str) -> str:
     return redact_text(value, max_chars=max(len(value) * 4, 1)) or ""
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as handle:
+            while chunk := handle.read(1024 * 1024):
+                digest.update(chunk)
+    except OSError as exc:
+        raise GitRepositoryError(
+            "Unable to fingerprint a contained repository file."
+        ) from exc
+    return digest.hexdigest()

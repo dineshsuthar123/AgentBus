@@ -143,3 +143,204 @@ test("tool and MCP client routes are encoded bounded and command-free", async ()
   assert.throws(() => client.toolInvocations("run", -1, 10), /bounded/);
   assert.throws(() => client.toolAudit("run", 0, 501), /bounded/);
 });
+
+test("trace client routes encode identifiers and bound span pages", async () => {
+  const requests: string[] = [];
+  const client = new AgentBusClient(
+    "http://127.0.0.1:43123",
+    token,
+    async (input) => {
+      requests.push(String(input));
+      return Response.json({});
+    }
+  );
+
+  await client.trace("run one");
+  await client.traceSpans("run one", 12, 25);
+  await client.traceSpan("run one", "span:provider");
+  await client.provenance("run one");
+
+  assert.equal(
+    requests[0]?.endsWith("/api/v1/runs/run%20one/trace"),
+    true
+  );
+  assert.equal(
+    requests[1]?.endsWith(
+      "/api/v1/runs/run%20one/trace/spans?after=12&limit=25"
+    ),
+    true
+  );
+  assert.equal(
+    requests[2]?.endsWith(
+      "/api/v1/runs/run%20one/trace/spans/span%3Aprovider"
+    ),
+    true
+  );
+  assert.equal(
+    requests[3]?.endsWith("/api/v1/runs/run%20one/provenance"),
+    true
+  );
+  assert.throws(() => client.traceSpans("run", 0, 501), /bounded/);
+});
+
+test("replay client routes are explicit bounded and command-free", async () => {
+  const requests: Array<{
+    url: string;
+    method: string;
+    body: BodyInit | null | undefined;
+  }> = [];
+  const client = new AgentBusClient(
+    "http://127.0.0.1:43123",
+    token,
+    async (input, init) => {
+      requests.push({
+        url: String(input),
+        method: init?.method ?? "GET",
+        body: init?.body
+      });
+      return Response.json({});
+    }
+  );
+
+  await client.replayability("run one", 4, 20);
+  await client.createReplay("run one", { mode: "offline" });
+  await client.listReplays("trace one", "running", 25);
+  await client.replay("replay:one");
+  await client.cancelReplay("replay:one");
+
+  assert.equal(
+    requests[0]?.url.endsWith(
+      "/api/v1/runs/run%20one/replayability?after=4&limit=20"
+    ),
+    true
+  );
+  assert.equal(
+    requests[1]?.url.endsWith("/api/v1/runs/run%20one/replays"),
+    true
+  );
+  assert.equal(requests[1]?.method, "POST");
+  assert.deepEqual(JSON.parse(String(requests[1]?.body)), {
+    mode: "offline"
+  });
+  assert.equal(
+    requests[2]?.url.endsWith(
+      "/api/v1/replays?limit=25&source_trace_id=trace+one&status=running"
+    ),
+    true
+  );
+  assert.equal(
+    requests[3]?.url.endsWith("/api/v1/replays/replay%3Aone"),
+    true
+  );
+  assert.equal(
+    requests[4]?.url.endsWith("/api/v1/replays/replay%3Aone/cancel"),
+    true
+  );
+  assert.equal(requests[4]?.method, "POST");
+  assert.throws(
+    () => client.listReplays(undefined, "unknown", 10),
+    /status filter/
+  );
+  assert.throws(
+    () => client.listReplays(undefined, undefined, 501),
+    /bounded/
+  );
+});
+
+test("comparison client posts identifiers and uses bounded result pages", async () => {
+  const requests: Array<{
+    url: string;
+    method: string;
+    body: BodyInit | null | undefined;
+  }> = [];
+  const client = new AgentBusClient(
+    "http://127.0.0.1:43123",
+    token,
+    async (input, init) => {
+      requests.push({
+        url: String(input),
+        method: init?.method ?? "GET",
+        body: init?.body
+      });
+      return Response.json({});
+    }
+  );
+
+  await client.createComparison(
+    { left: "run-left", right: "run-right" },
+    7,
+    25
+  );
+  await client.comparison("comparison:one", 9, 30);
+
+  assert.equal(
+    requests[0]?.url.endsWith("/api/v1/comparisons?after=7&limit=25"),
+    true
+  );
+  assert.equal(requests[0]?.method, "POST");
+  assert.deepEqual(JSON.parse(String(requests[0]?.body)), {
+    left: "run-left",
+    right: "run-right"
+  });
+  assert.equal(
+    requests[1]?.url.endsWith(
+      "/api/v1/comparisons/comparison%3Aone?after=9&limit=30"
+    ),
+    true
+  );
+  assert.throws(
+    () => client.comparison("comparison", 0, 501),
+    /bounded/
+  );
+});
+
+test("trace archive client keeps payloads in authenticated JSON bodies", async () => {
+  const requests: Array<{
+    url: string;
+    method: string;
+    body: BodyInit | null | undefined;
+  }> = [];
+  const client = new AgentBusClient(
+    "http://127.0.0.1:43123",
+    token,
+    async (input, init) => {
+      requests.push({
+        url: String(input),
+        method: init?.method ?? "GET",
+        body: init?.body
+      });
+      return Response.json({});
+    }
+  );
+
+  await client.exportTrace("trace:one", true);
+  await client.importTrace({
+    archive_base64: "YWJjZA==",
+    allow_source_content: true
+  });
+  await client.captureRegressionFixture("run:one", {
+    include_source_content: false
+  });
+
+  assert.equal(
+    requests[0]?.url.endsWith(
+      "/api/v1/traces/trace%3Aone/export?include_source_content=true"
+    ),
+    true
+  );
+  assert.equal(requests[0]?.url.includes("YWJjZA"), false);
+  assert.equal(requests[1]?.url.endsWith("/api/v1/traces/import"), true);
+  assert.equal(requests[1]?.method, "POST");
+  assert.deepEqual(JSON.parse(String(requests[1]?.body)), {
+    archive_base64: "YWJjZA==",
+    allow_source_content: true
+  });
+  assert.equal(
+    requests[2]?.url.endsWith("/api/v1/runs/run%3Aone/fixtures"),
+    true
+  );
+  assert.equal(requests[2]?.method, "POST");
+  assert.deepEqual(JSON.parse(String(requests[2]?.body)), {
+    include_source_content: false
+  });
+});

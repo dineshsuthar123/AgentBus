@@ -102,6 +102,21 @@ class GitWorktreeManager:
             worker_id=worker_id,
         )
 
+    def create_replay_worktree(
+        self,
+        run_id: str,
+        replay_id: str,
+        base_commit: str,
+    ) -> WorktreeRecord:
+        """Create a fresh isolated worktree for one replay session."""
+        return self._create(
+            run_id=run_id,
+            task_id=None,
+            base_commit=base_commit,
+            purpose=WorktreePurpose.REPLAY,
+            worker_id=replay_id,
+        )
+
     def recover(self, worktree_id: str) -> WorktreeRecord:
         try:
             record = self.store.get_worktree(worktree_id)
@@ -208,7 +223,14 @@ class GitWorktreeManager:
             cwd=self.repository_root,
         )
         worktree_id = uuid.uuid4().hex
-        safe_task = self._safe_component(task_id or "integration")
+        safe_task = self._safe_component(
+            task_id
+            or (
+                "integration"
+                if purpose == WorktreePurpose.INTEGRATION
+                else "replay"
+            )
+        )
         path = (
             self.worktree_root
             / self._safe_component(run_id)
@@ -302,6 +324,8 @@ class GitWorktreeManager:
         run = self._safe_component(run_id)
         if purpose == WorktreePurpose.INTEGRATION:
             return f"agentbus/run/{run}/integration-{worktree_id[:8]}"
+        if purpose == WorktreePurpose.REPLAY:
+            return f"agentbus/run/{run}/replay-{worktree_id[:8]}"
         task = self._safe_component(task_id or "task")
         return f"agentbus/run/{run}/task/{task}-{worktree_id[:8]}"
 

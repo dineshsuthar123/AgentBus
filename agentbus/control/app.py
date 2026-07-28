@@ -37,6 +37,8 @@ from agentbus.control.models import (
     ApprovalListResponse,
     CancelResponse,
     ChangeListResponse,
+    ComparisonCreateRequest,
+    ComparisonResponse,
     DiffResponse,
     DoctorResponse,
     ErrorBody,
@@ -49,15 +51,30 @@ from agentbus.control.models import (
     ProviderCheckRequest,
     ProviderListResponse,
     ProviderSummary,
+    ProvenanceResponse,
+    RegressionFixtureCaptureRequest,
+    RegressionFixtureCaptureResponse,
+    ReplayAcceptedResponse,
+    ReplayCancelResponse,
+    ReplayCreateRequest,
+    ReplayListResponse,
+    ReplaySessionResponse,
     ResumeResponse,
     RunAcceptedResponse,
     RunActionRequest,
     RunCreateRequest,
     RunListResponse,
+    RunReplayabilityResponse,
     RunReportResponse,
     RunSummary,
     SchedulerResponse,
     TaskListResponse,
+    TraceArchiveExportResponse,
+    TraceArchiveImportRequest,
+    TraceArchiveImportResponse,
+    TraceResponse,
+    TraceSpanDetailResponse,
+    TraceSpanListResponse,
     ToolAuditListResponse,
     ToolDescriptorDetail,
     ToolInvocationCancelRequest,
@@ -73,12 +90,14 @@ from agentbus.control.models import (
     WorkspaceValidationResponse,
     WorktreeListResponse,
 )
+from agentbus.control.replay_supervisor import BackgroundReplaySupervisor
 from agentbus.control.services import ControlQueryService
 from agentbus.control.supervisor import BackgroundRunSupervisor
 from agentbus.execution.models import ApprovalOutcome
 from agentbus.execution.state_store import StateStoreError
 from agentbus.git.repository import GitRepositoryError
 from agentbus.mcp.server import AgentBusMcpServer
+from agentbus.replay.session import ReplaySessionStatus
 from agentbus.security.redaction import sanitize_json
 from agentbus.tools.descriptors import builtin_descriptors
 
@@ -100,8 +119,12 @@ def create_app(
     query_service: ControlQueryService,
     supervisor: BackgroundRunSupervisor,
     context: ControlAppContext,
+    replay_supervisor: BackgroundReplaySupervisor | None = None,
     shutdown_supervisor: bool = True,
 ):
+    replay_supervisor = replay_supervisor or BackgroundReplaySupervisor(
+        query_service
+    )
     authenticator = BearerAuthenticator(token)
     event_reader = ControlEventReader(query_service.store)
     mcp_server = AgentBusMcpServer(
@@ -117,6 +140,7 @@ def create_app(
     async def lifespan(_app):
         yield
         if shutdown_supervisor:
+            replay_supervisor.shutdown(wait=True)
             supervisor.shutdown(wait=True)
 
     app = FastAPI(
@@ -138,6 +162,7 @@ def create_app(
     app.state.control_context = context
     app.state.query_service = query_service
     app.state.supervisor = supervisor
+    app.state.replay_supervisor = replay_supervisor
     app.state.mcp_server = mcp_server
     app.state.last_activity = time.monotonic()
 
@@ -247,6 +272,13 @@ def create_app(
                 "tool-cancellation",
                 "mcp",
                 "mcp-diagnostics",
+                "execution-traces",
+                "run-provenance",
+                "replayability",
+                "managed-offline-replay",
+                "trace-comparison",
+                "trace-archives",
+                "regression-fixtures",
             ],
         )
 
@@ -356,6 +388,169 @@ def create_app(
     @app.get(f"{API_PREFIX}/runs/{{run_id}}", response_model=RunSummary)
     async def get_run(run_id: str) -> RunSummary:
         return query_service.run_summary(query_service.get_run(run_id))
+
+    @app.get(
+        f"{API_PREFIX}/runs/{{run_id}}/trace",
+        response_model=TraceResponse,
+    )
+    async def run_trace(run_id: str) -> TraceResponse:
+        return query_service.trace(run_id)
+
+    @app.get(
+        f"{API_PREFIX}/runs/{{run_id}}/trace/spans",
+        response_model=TraceSpanListResponse,
+    )
+    async def run_trace_spans(
+        run_id: str,
+        after: int = Query(default=0, ge=0),
+        limit: int = Query(default=100, ge=1, le=500),
+    ) -> TraceSpanListResponse:
+        return query_service.trace_spans(
+            run_id,
+            after_sequence=after,
+            limit=limit,
+        )
+
+    @app.get(
+        f"{API_PREFIX}/runs/{{run_id}}/trace/spans/{{span_id}}",
+        response_model=TraceSpanDetailResponse,
+    )
+    async def run_trace_span(
+        run_id: str,
+        span_id: str,
+    ) -> TraceSpanDetailResponse:
+        return query_service.trace_span(run_id, span_id)
+
+    @app.get(
+        f"{API_PREFIX}/runs/{{run_id}}/provenance",
+        response_model=ProvenanceResponse,
+    )
+    async def run_provenance(run_id: str) -> ProvenanceResponse:
+        return query_service.provenance(run_id)
+
+    @app.get(
+        f"{API_PREFIX}/runs/{{run_id}}/replayability",
+        response_model=RunReplayabilityResponse,
+    )
+    async def run_replayability(
+        run_id: str,
+        after: int = Query(default=0, ge=0),
+        limit: int = Query(default=100, ge=1, le=500),
+    ) -> RunReplayabilityResponse:
+        return query_service.replayability(
+            run_id,
+            after_sequence=after,
+            limit=limit,
+        )
+
+    @app.post(
+        f"{API_PREFIX}/runs/{{run_id}}/replays",
+        response_model=ReplayAcceptedResponse,
+        status_code=202,
+    )
+    async def create_replay(
+        run_id: str,
+        request: ReplayCreateRequest,
+    ) -> ReplayAcceptedResponse:
+        return replay_supervisor.submit(run_id, request)
+
+    @app.get(f"{API_PREFIX}/replays", response_model=ReplayListResponse)
+    async def list_replays(
+        source_trace_id: str | None = None,
+        status: str | None = Query(
+            default=None,
+            pattern=(
+                "^(pending|running|succeeded|failed|cancelled|"
+                "incompatible|awaiting_input)$"
+            ),
+        ),
+        limit: int = Query(default=100, ge=1, le=500),
+    ) -> ReplayListResponse:
+        return query_service.replays(
+            source_trace_id=source_trace_id,
+            status=ReplaySessionStatus(status) if status is not None else None,
+            limit=limit,
+        )
+
+    @app.get(
+        f"{API_PREFIX}/replays/{{replay_id}}",
+        response_model=ReplaySessionResponse,
+    )
+    async def get_replay(replay_id: str) -> ReplaySessionResponse:
+        return query_service.replay(replay_id)
+
+    @app.post(
+        f"{API_PREFIX}/replays/{{replay_id}}/cancel",
+        response_model=ReplayCancelResponse,
+    )
+    async def cancel_replay(replay_id: str) -> ReplayCancelResponse:
+        return replay_supervisor.cancel(replay_id)
+
+    @app.post(
+        f"{API_PREFIX}/comparisons",
+        response_model=ComparisonResponse,
+        status_code=201,
+    )
+    async def create_comparison(
+        request: ComparisonCreateRequest,
+        after: int = Query(default=0, ge=0),
+        limit: int = Query(default=100, ge=1, le=500),
+    ) -> ComparisonResponse:
+        return query_service.compare(
+            request.left,
+            request.right,
+            after=after,
+            limit=limit,
+        )
+
+    @app.get(
+        f"{API_PREFIX}/comparisons/{{comparison_id}}",
+        response_model=ComparisonResponse,
+    )
+    async def get_comparison(
+        comparison_id: str,
+        after: int = Query(default=0, ge=0),
+        limit: int = Query(default=100, ge=1, le=500),
+    ) -> ComparisonResponse:
+        return query_service.comparison(
+            comparison_id,
+            after=after,
+            limit=limit,
+        )
+
+    @app.post(
+        f"{API_PREFIX}/traces/import",
+        response_model=TraceArchiveImportResponse,
+        status_code=201,
+    )
+    async def import_trace(
+        request: TraceArchiveImportRequest,
+    ) -> TraceArchiveImportResponse:
+        return query_service.import_trace_archive(request)
+
+    @app.get(
+        f"{API_PREFIX}/traces/{{trace_id}}/export",
+        response_model=TraceArchiveExportResponse,
+    )
+    async def export_trace(
+        trace_id: str,
+        include_source_content: bool = False,
+    ) -> TraceArchiveExportResponse:
+        return query_service.export_trace_archive(
+            trace_id,
+            include_source_content=include_source_content,
+        )
+
+    @app.post(
+        f"{API_PREFIX}/runs/{{run_id}}/fixtures",
+        response_model=RegressionFixtureCaptureResponse,
+        status_code=201,
+    )
+    async def capture_regression_fixture(
+        run_id: str,
+        request: RegressionFixtureCaptureRequest,
+    ) -> RegressionFixtureCaptureResponse:
+        return query_service.capture_regression_fixture(run_id, request)
 
     @app.post(f"{API_PREFIX}/runs/{{run_id}}/resume", response_model=ResumeResponse)
     async def resume_run(run_id: str) -> ResumeResponse:

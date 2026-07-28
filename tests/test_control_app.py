@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 import hashlib
+import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,9 +21,13 @@ from agentbus.control.services import ControlQueryService
 from agentbus.execution.models import RunRecord, TaskSpec
 from agentbus.execution.state_store import StateStore
 from agentbus.mcp import McpServerConfig, mcp_server_capabilities
+from agentbus.replay import ReplayMode, ReplaySession
 from agentbus.sandbox.platform import ExecutableCatalog
 from agentbus.tools.protocol import ToolCapabilityName
 from agentbus.tools.runtime import build_managed_tool_runtime
+from agentbus.trace import RuntimeTrace, TraceSpanType, TraceStatus
+from agentbus.trace.redaction import canonical_json_bytes
+from agentbus.trace.sealing import seal_run_provenance
 
 TOKEN = "test-control-token-that-is-at-least-thirty-two-bytes"
 MCP_FIXTURE = Path(__file__).parent / "fixtures" / "mcp" / "fake_server.py"
@@ -68,24 +74,27 @@ def _client(
     *,
     mcp_server_configs: tuple[McpServerConfig, ...] = (),
     mcp_executable_catalog: ExecutableCatalog | None = None,
+    seed_run: bool = True,
 ) -> tuple[TestClient, StubSupervisor]:
+    tmp_path.mkdir(parents=True, exist_ok=True)
     store = StateStore(tmp_path / "state.db")
-    store.create_run_with_tasks(
-        RunRecord(
-            run_id="run-1",
-            original_task="Inspect me",
-            workflow_type="multi",
-            model="fake",
-            workspace=str(tmp_path),
-        ),
-        [
-            TaskSpec(
-                task_id="task-1",
-                title="Inspect tools",
-                description="Exercise control tool APIs",
-            )
-        ],
-    )
+    if seed_run:
+        store.create_run_with_tasks(
+            RunRecord(
+                run_id="run-1",
+                original_task="Inspect me",
+                workflow_type="multi",
+                model="fake",
+                workspace=str(tmp_path),
+            ),
+            [
+                TaskSpec(
+                    task_id="task-1",
+                    title="Inspect tools",
+                    description="Exercise control tool APIs",
+                )
+            ],
+        )
     config = AgentBusConfig(
         workspace_dir=str(tmp_path),
         state_db=str(tmp_path / "state.db"),
@@ -114,6 +123,112 @@ def _client(
 
 def _auth() -> dict[str, str]:
     return {"Authorization": f"Bearer {TOKEN}"}
+
+
+def _record_control_trace(
+    client: TestClient,
+    *,
+    run_id: str = "run-1",
+    marker: str = "primary",
+    include_source_object: bool = False,
+):
+    query = client.app.state.query_service
+    if run_id != "run-1":
+        query.store.create_run(
+            RunRecord(
+                run_id=run_id,
+                original_task="Compare me",
+                workflow_type="multi",
+                model="fake",
+                workspace=str(query.config.workspace_path),
+                graph_data={"version": 1, "tasks": []},
+            )
+        )
+    runtime = RuntimeTrace.open(
+        query.store,
+        run_id,
+        object_root=query.config.trace_store_path,
+        workspace=query.config.workspace_path,
+    )
+    with runtime.scope(runtime.root_context):
+        if include_source_object:
+            provider_span = runtime.start_span(
+                TraceSpanType.PROVIDER_RESPONSE,
+                "captured source response",
+                attributes={
+                    "provider": "deterministic",
+                    "model": "control-fixture",
+                    "role": "coder",
+                },
+            )
+            captured_value = {"code": "result = 42"}
+            metadata = runtime.object_store.put_json(
+                {
+                    "envelope_version": 1,
+                    "request_id": "control-source-output",
+                    "role": "coder",
+                    "provider": "deterministic",
+                    "model": "control-fixture",
+                    "value": captured_value,
+                    "value_sha256": hashlib.sha256(
+                        canonical_json_bytes(captured_value)
+                    ).hexdigest(),
+                    "request_fingerprint": "a" * 64,
+                    "finish_status": "stop",
+                },
+                producing_span_id=provider_span.span_id,
+                media_type=(
+                    "application/vnd.agentbus.model-envelope+json"
+                ),
+            )
+            output = runtime.object_store.reference_output(
+                metadata,
+                reference_id="control-source-output",
+                name="model.response",
+            )
+            runtime.finish_span(
+                provider_span,
+                output_references=[output],
+            )
+        runtime.call(
+            TraceSpanType.VERIFIER,
+            "control verifier",
+            lambda: {
+                "passed": True,
+                "exit_code": 0,
+                "marker": marker,
+            },
+            attributes={
+                "workspace": str(query.config.workspace_path),
+                "authorization": "Bearer control-private-token",
+            },
+            capture="json",
+        )
+        runtime.checkpoint(
+            "verified",
+            {"completed": ["task-1"]},
+        )
+        runtime.call(
+            TraceSpanType.REVIEWER,
+            "control reviewer",
+            lambda: {
+                "approved": True,
+                "issues": [],
+                "marker": marker,
+            },
+            capture="json",
+        )
+    trace = runtime.finish(status=TraceStatus.SUCCEEDED)
+    assert trace is not None
+    manifest = seal_run_provenance(
+        trace,
+        state_store=query.store,
+        object_store=runtime.object_store,
+        configuration={"provider": "deterministic"},
+        task_graph={"version": 1, "tasks": ["task-1"]},
+        final_repository_tree_sha256="c" * 64,
+    )
+    return trace, manifest
 
 
 def test_health_is_minimal_and_unauthenticated(tmp_path: Path) -> None:
@@ -244,7 +359,387 @@ def test_openapi_uses_versioned_routes_and_stable_error_schema(
 
     assert "/api/v1/runs" in schema["paths"]
     assert "/api/v1/events" in schema["paths"]
+    assert "/api/v1/runs/{run_id}/trace" in schema["paths"]
+    assert "/api/v1/runs/{run_id}/trace/spans" in schema["paths"]
+    assert "/api/v1/runs/{run_id}/provenance" in schema["paths"]
+    assert "/api/v1/runs/{run_id}/replayability" in schema["paths"]
+    assert "/api/v1/runs/{run_id}/replays" in schema["paths"]
+    assert "/api/v1/replays" in schema["paths"]
+    assert "/api/v1/replays/{replay_id}/cancel" in schema["paths"]
+    assert "/api/v1/comparisons" in schema["paths"]
+    assert "/api/v1/comparisons/{comparison_id}" in schema["paths"]
+    assert "/api/v1/traces/import" in schema["paths"]
+    assert "/api/v1/traces/{trace_id}/export" in schema["paths"]
     assert "ErrorResponse" in schema["components"]["schemas"]
+
+
+def test_trace_inspection_is_authenticated_bounded_and_private(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    client, _ = _client(tmp_path)
+    trace, manifest = _record_control_trace(client)
+
+    assert client.get("/api/v1/runs/run-1/trace").status_code == 403
+
+    summary = client.get(
+        "/api/v1/runs/run-1/trace",
+        headers=_auth(),
+    )
+    first_page = client.get(
+        "/api/v1/runs/run-1/trace/spans?limit=1",
+        headers=_auth(),
+    )
+    assert summary.status_code == 200
+    assert summary.json()["trace_id"] == trace.trace_id
+    assert summary.json()["checkpoint_count"] == 1
+    assert summary.json()["checkpoints"][0]["label"] == "verified"
+    assert "workspace" not in summary.json()
+    assert first_page.status_code == 200
+    assert first_page.json()["truncated"] is True
+    assert len(first_page.json()["spans"]) == 1
+
+    query = client.app.state.query_service
+    with monkeypatch.context() as scoped:
+        scoped.setattr(
+            query.store,
+            "get_run_trace",
+            lambda _run_id: (_ for _ in ()).throw(
+                AssertionError(
+                    "bounded span reads must not materialize the trace"
+                )
+            ),
+        )
+        next_page = client.get(
+            "/api/v1/runs/run-1/trace/spans",
+            params={"after": first_page.json()["next_sequence"], "limit": 2},
+            headers=_auth(),
+        )
+    assert next_page.status_code == 200
+    assert all(
+        span["sequence"] > first_page.json()["next_sequence"]
+        for span in next_page.json()["spans"]
+    )
+
+    verifier = next(
+        span
+        for span in trace.spans
+        if span.span_type == TraceSpanType.VERIFIER
+    )
+    detail = client.get(
+        f"/api/v1/runs/run-1/trace/spans/{verifier.span_id}",
+        headers=_auth(),
+    )
+    detail_text = json.dumps(detail.json(), sort_keys=True)
+    assert detail.status_code == 200
+    assert str(tmp_path) not in detail_text
+    assert "control-private-token" not in detail_text
+    assert detail.json()["outputs"][0]["sha256"]
+
+    provenance = client.get(
+        "/api/v1/runs/run-1/provenance",
+        headers=_auth(),
+    )
+    assert provenance.status_code == 200
+    assert provenance.json()["integrity_root"] == manifest.integrity_root
+    assert "integrity_entries" not in provenance.json()
+    assert "input_object_hashes" not in provenance.json()
+
+    replayability = client.get(
+        "/api/v1/runs/run-1/replayability?limit=1",
+        headers=_auth(),
+    )
+    assert replayability.status_code == 200
+    assert replayability.json()["trace_id"] == trace.trace_id
+    assert len(replayability.json()["spans"]) == 1
+    assert replayability.json()["truncated"] is True
+
+
+def test_trace_inspection_returns_safe_not_found_and_validates_page_bounds(
+    tmp_path: Path,
+) -> None:
+    client, _ = _client(tmp_path)
+
+    missing = client.get(
+        "/api/v1/runs/run-1/trace",
+        headers=_auth(),
+    )
+    oversized = client.get(
+        "/api/v1/runs/run-1/trace/spans?limit=501",
+        headers=_auth(),
+    )
+
+    assert missing.status_code == 404
+    assert missing.json()["error"]["code"] == "not_found"
+    assert "SQLite" not in missing.text
+    assert oversized.status_code == 422
+
+
+def test_managed_replay_api_requires_mode_and_runs_offline(
+    tmp_path: Path,
+) -> None:
+    client, _ = _client(tmp_path)
+    trace, _manifest = _record_control_trace(client)
+    replay_supervisor = client.app.state.replay_supervisor
+    try:
+        missing_mode = client.post(
+            "/api/v1/runs/run-1/replays",
+            headers=_auth(),
+            json={},
+        )
+        accepted = client.post(
+            "/api/v1/runs/run-1/replays",
+            headers=_auth(),
+            json={"mode": "offline"},
+        )
+        assert accepted.status_code == 202
+        replay_id = accepted.json()["replay_id"]
+        terminal = replay_supervisor.wait(replay_id, timeout=5)
+        inspected = client.get(
+            f"/api/v1/replays/{replay_id}",
+            headers=_auth(),
+        )
+        listed = client.get(
+            "/api/v1/replays",
+            params={"source_trace_id": trace.trace_id, "limit": 1},
+            headers=_auth(),
+        )
+        cancelled = client.post(
+            f"/api/v1/replays/{replay_id}/cancel",
+            headers=_auth(),
+        )
+    finally:
+        replay_supervisor.shutdown()
+
+    assert missing_mode.status_code == 422
+    assert terminal.status == "succeeded", (
+        terminal.failure_category,
+        terminal.failure_message,
+    )
+    assert inspected.status_code == 200
+    assert inspected.json()["provider_calls"] == 0
+    assert inspected.json()["network_calls"] == 0
+    assert inspected.json()["isolation_scope"] is None
+    assert "isolated_workspace" not in inspected.json()
+    assert "isolated_workspace" not in inspected.json()
+    assert listed.status_code == 200
+    assert listed.json()["replays"][0]["replay_id"] == replay_id
+    assert cancelled.json()["cancellation_requested"] is False
+
+
+def test_replay_response_exposes_isolation_scope_without_private_path(
+    tmp_path: Path,
+) -> None:
+    client, _ = _client(tmp_path)
+    response = client.app.state.query_service.replay_session_response(
+        ReplaySession(
+            replay_id="replay-isolated",
+            source_trace_id="trace-isolated",
+            source_run_id="run-1",
+            mode=ReplayMode.OFFLINE,
+            isolated_workspace=str(tmp_path / "private-replay-worktree"),
+        )
+    )
+
+    assert response.isolated is True
+    assert response.isolation_scope == "daemon_managed_temporary_workspace"
+    assert "isolated_workspace" not in response.model_dump(mode="json")
+    assert str(tmp_path) not in response.model_dump_json()
+
+
+def test_comparison_api_returns_bounded_hash_only_differences(
+    tmp_path: Path,
+) -> None:
+    client, _ = _client(tmp_path)
+    left, _ = _record_control_trace(client, marker="left-private-value")
+    right, _ = _record_control_trace(
+        client,
+        run_id="run-compare-right",
+        marker="right-private-value",
+    )
+
+    unauthenticated = client.post(
+        "/api/v1/comparisons",
+        json={"left": left.trace_id, "right": right.trace_id},
+    )
+    created = client.post(
+        "/api/v1/comparisons?limit=1",
+        headers=_auth(),
+        json={"left": left.run_id, "right": right.trace_id},
+    )
+
+    assert unauthenticated.status_code == 403
+    assert created.status_code == 201
+    payload = created.json()
+    assert payload["left_trace_id"] == left.trace_id
+    assert payload["right_trace_id"] == right.trace_id
+    assert payload["truncated"] is True
+    assert len(payload["spans"]) == 1
+    assert "left-private-value" not in created.text
+    assert "right-private-value" not in created.text
+
+    comparison_id = payload["comparison_id"]
+    continued = client.get(
+        f"/api/v1/comparisons/{comparison_id}",
+        params={"after": payload["next_after"], "limit": 2},
+        headers=_auth(),
+    )
+    missing = client.get(
+        "/api/v1/comparisons/missing",
+        headers=_auth(),
+    )
+
+    assert continued.status_code == 200
+    assert continued.json()["after"] == payload["next_after"]
+    assert missing.status_code == 404
+    assert missing.json()["error"]["code"] == "not_found"
+
+
+def test_trace_archive_api_imports_then_replays_in_isolated_state(
+    tmp_path: Path,
+) -> None:
+    source_client, _ = _client(tmp_path / "source")
+    trace, _manifest = _record_control_trace(
+        source_client,
+        include_source_object=True,
+    )
+    destination_client, _ = _client(
+        tmp_path / "destination",
+        seed_run=False,
+    )
+    source_replays = source_client.app.state.replay_supervisor
+    destination_replays = destination_client.app.state.replay_supervisor
+    try:
+        exported = source_client.get(
+            f"/api/v1/traces/{trace.trace_id}/export",
+            params={"include_source_content": "true"},
+            headers=_auth(),
+        )
+        assert exported.status_code == 200
+        archive_base64 = exported.json()["archive_base64"]
+        archive_bytes = base64.b64decode(archive_base64, validate=True)
+        assert str(tmp_path).encode() not in archive_bytes
+        assert b"control-private-token" not in archive_bytes
+
+        denied = destination_client.post(
+            "/api/v1/traces/import",
+            headers=_auth(),
+            json={"archive_base64": archive_base64},
+        )
+        imported = destination_client.post(
+            "/api/v1/traces/import",
+            headers=_auth(),
+            json={
+                "archive_base64": archive_base64,
+                "allow_source_content": True,
+            },
+        )
+        assert denied.status_code == 403
+        assert imported.status_code == 201
+        assert imported.json()["trace_id"] == trace.trace_id
+        assert imported.json()["replay_started"] is False
+
+        imported_run = (
+            destination_client.app.state.query_service.get_run(trace.run_id)
+        )
+        assert imported_run.workspace == "[IMPORTED_TRACE_WORKSPACE]"
+
+        accepted = destination_client.post(
+            f"/api/v1/runs/{trace.run_id}/replays",
+            headers=_auth(),
+            json={"mode": "offline"},
+        )
+        assert accepted.status_code == 202
+        terminal = destination_replays.wait(
+            accepted.json()["replay_id"],
+            timeout=5,
+        )
+    finally:
+        source_replays.shutdown()
+        destination_replays.shutdown()
+
+    assert terminal.status == "succeeded", (
+        terminal.failure_category,
+        terminal.failure_message,
+    )
+    assert terminal.provider_calls == 0
+    assert terminal.network_calls == 0
+
+
+def test_trace_archive_api_rejects_invalid_and_oversized_payloads(
+    tmp_path: Path,
+) -> None:
+    client, _ = _client(tmp_path, seed_run=False)
+    invalid = client.post(
+        "/api/v1/traces/import",
+        headers=_auth(),
+        json={"archive_base64": "not-base64!"},
+    )
+    oversized = client.post(
+        "/api/v1/traces/import",
+        headers=_auth(),
+        json={
+            "archive_base64": base64.b64encode(
+                b"x" * 650_001
+            ).decode("ascii")
+        },
+    )
+    missing = client.get(
+        "/api/v1/traces/missing/export",
+        headers=_auth(),
+    )
+
+    assert invalid.status_code == 400
+    assert invalid.json()["error"]["code"] == "control_plane_error"
+    assert oversized.status_code == 413
+    assert oversized.json()["error"]["code"] == "payload_too_large"
+    assert missing.status_code == 404
+
+
+def test_regression_fixture_api_requires_source_consent_and_stays_offline(
+    tmp_path: Path,
+) -> None:
+    client, _ = _client(tmp_path)
+    trace, _manifest = _record_control_trace(
+        client,
+        include_source_object=True,
+    )
+    replays = client.app.state.replay_supervisor
+    try:
+        denied = client.post(
+            f"/api/v1/runs/{trace.run_id}/fixtures",
+            headers=_auth(),
+            json={},
+        )
+        captured = client.post(
+            f"/api/v1/runs/{trace.run_id}/fixtures",
+            headers=_auth(),
+            json={"include_source_content": True},
+        )
+    finally:
+        replays.shutdown()
+
+    assert denied.status_code == 403
+    assert denied.json()["error"]["code"] == "forbidden"
+    assert captured.status_code == 201
+    payload = captured.json()
+    archive_bytes = base64.b64decode(
+        payload["archive_base64"],
+        validate=True,
+    )
+    assert payload["trace_id"] == trace.trace_id
+    assert payload["run_id"] == trace.run_id
+    assert payload["archive_sha256"] == hashlib.sha256(
+        archive_bytes
+    ).hexdigest()
+    assert payload["source_content_included"] is True
+    assert payload["source_warning"]
+    assert payload["license_warning"]
+    assert payload["assertions_validated"] is True
+    assert payload["replay_started"] is False
+    assert "--allow-source-content" in payload["replay_command"]
+    assert str(tmp_path).encode() not in archive_bytes
+    assert b"control-private-token" not in archive_bytes
 
 
 def test_tool_registry_and_policy_endpoints_are_bounded_and_diagnostic_only(
