@@ -7,6 +7,7 @@ from agentbus.evaluation.suites import builtin_suites
 def test_core_offline_limits_do_not_depend_on_shared_runner_timing():
     suite = builtin_suites()["core-offline"]
 
+    assert all(case.timeout_seconds == 180 for case in suite.cases)
     assert all(
         "max_elapsed_seconds" not in case.metadata["limits"]
         for case in suite.cases

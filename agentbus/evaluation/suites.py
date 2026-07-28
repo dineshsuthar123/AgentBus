@@ -353,6 +353,10 @@ def core_offline_suite() -> EvaluationSuite:
             tags={"core", "approval", "safety"},
         ),
     ]
+    cases = [
+        case.model_copy(update={"timeout_seconds": 180.0})
+        for case in cases
+    ]
     return EvaluationSuite(
         suite_id="core-offline",
         title="AgentBus deterministic offline core",

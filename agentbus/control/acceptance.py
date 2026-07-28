@@ -574,6 +574,9 @@ def _submit_run(
     latency_roles: list[str],
     parallel: bool = True,
     commit_changes: bool = True,
+    clock=time.monotonic,
+    sleeper=time.sleep,
+    ownership_timeout_seconds: float = 30,
 ) -> str:
     request = {
         "task": task,
@@ -592,7 +595,7 @@ def _submit_run(
             "latency_roles": latency_roles,
         },
     }
-    deadline = time.monotonic() + 5
+    deadline = clock() + ownership_timeout_seconds
     while True:
         response = requests.post(
             f"{base}/api/v1/runs",
@@ -612,11 +615,11 @@ def _submit_run(
             "Workspace already has an active AgentBus run:"
         ):
             response.raise_for_status()
-        if time.monotonic() >= deadline:
+        if clock() >= deadline:
             raise TimeoutError(
                 "The previous run did not release its workspace ownership."
             )
-        time.sleep(0.02)
+        sleeper(0.02)
 
 
 def _resume_run(
@@ -626,8 +629,9 @@ def _resume_run(
     *,
     clock=time.monotonic,
     sleeper=time.sleep,
+    ownership_timeout_seconds: float = 30,
 ) -> dict[str, Any]:
-    deadline = clock() + 5
+    deadline = clock() + ownership_timeout_seconds
     while True:
         try:
             response = requests.post(

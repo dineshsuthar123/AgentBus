@@ -1,7 +1,7 @@
 import pytest
 import requests
 
-from agentbus.control.acceptance import _resume_run
+from agentbus.control.acceptance import _resume_run, _submit_run
 
 
 class StubResponse:
@@ -78,3 +78,52 @@ def test_resume_does_not_retry_an_unrelated_conflict(monkeypatch):
             clock=lambda: 0,
             sleeper=lambda _: pytest.fail("unrelated conflicts must not be retried"),
         )
+
+
+def test_submit_waits_for_transient_workspace_owner_release(
+    monkeypatch,
+    tmp_path,
+):
+    workspace = tmp_path.resolve()
+    responses = iter(
+        [
+            StubResponse(
+                409,
+                {
+                    "error": {
+                        "message": (
+                            "Workspace already has an active AgentBus run: run-0"
+                        ),
+                    }
+                },
+            ),
+            StubResponse(
+                202,
+                {
+                    "run_id": "run-1",
+                    "status": "pending",
+                    "workspace": str(workspace),
+                },
+            ),
+        ]
+    )
+    sleeps = []
+    monkeypatch.setattr(
+        "agentbus.control.acceptance.requests.post",
+        lambda *args, **kwargs: next(responses),
+    )
+
+    run_id = _submit_run(
+        "http://127.0.0.1:43123",
+        {"Authorization": "Bearer test"},
+        workspace,
+        task="test task",
+        profile="successful-edit",
+        latency_seconds=0,
+        latency_roles=[],
+        clock=lambda: 0,
+        sleeper=sleeps.append,
+    )
+
+    assert run_id == "run-1"
+    assert sleeps == [0.02]
