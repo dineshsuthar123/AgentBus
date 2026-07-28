@@ -172,11 +172,11 @@ def main() -> int:
             ).json()
             observed_payloads.append(approved)
             assert approved["approval"]["state"] == "approved"
-            resumed = _request(
-                "POST",
-                f"{base}/api/v1/runs/{approval_run}/resume",
-                headers=headers,
-            ).json()
+            resumed = _resume_run(
+                base,
+                headers,
+                approval_run,
+            )
             assert resumed["resumed"] is True
             approval_summary = _wait_for_terminal_run(base, headers, approval_run)
             assert approval_summary["status"] == "succeeded"
@@ -355,11 +355,11 @@ def main() -> int:
             ).json()
             observed_payloads.append(mcp_approved)
             assert mcp_approved["approval"]["state"] == "approved"
-            mcp_resumed = _request(
-                "POST",
-                f"{base}/api/v1/runs/{mcp_run}/resume",
-                headers=headers,
-            ).json()
+            mcp_resumed = _resume_run(
+                base,
+                headers,
+                mcp_run,
+            )
             assert mcp_resumed["resumed"] is True
             mcp_summary = _wait_for_terminal_run(base, headers, mcp_run)
             assert mcp_summary["status"] == "succeeded"
@@ -617,6 +617,41 @@ def _submit_run(
                 "The previous run did not release its workspace ownership."
             )
         time.sleep(0.02)
+
+
+def _resume_run(
+    base: str,
+    headers: dict[str, str],
+    run_id: str,
+    *,
+    clock=time.monotonic,
+    sleeper=time.sleep,
+) -> dict[str, Any]:
+    deadline = clock() + 5
+    while True:
+        try:
+            response = requests.post(
+                f"{base}/api/v1/runs/{run_id}/resume",
+                headers=headers,
+                timeout=15,
+            )
+        except requests.ConnectionError:
+            if clock() >= deadline:
+                raise
+            sleeper(0.05)
+            continue
+        if response.status_code != 409:
+            response.raise_for_status()
+            return response.json()
+        payload = response.json()
+        message = str(payload.get("error", {}).get("message", ""))
+        if message != "The run already has an active owner.":
+            response.raise_for_status()
+        if clock() >= deadline:
+            raise TimeoutError(
+                "The previous run operation did not release its active owner."
+            )
+        sleeper(0.02)
 
 
 def _wait_for_terminal_run(
