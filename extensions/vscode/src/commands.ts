@@ -13,6 +13,8 @@ import type {
   CancelResponse,
   ComparisonResponse,
   McpServerSummary,
+  ReplayAcceptedResponse,
+  ReplayCancelResponse,
   ReplaySessionResponse,
   RunAcceptedResponse,
   RunCreateRequest,
@@ -26,6 +28,11 @@ import { safeError } from "./redaction";
 import { mcpServerUri } from "./mcpDocuments";
 import { formatMcpServerCheck } from "./mcpPresentation";
 import { replayUri } from "./replayDocuments";
+import { replayPlanUri } from "./replayPlanDocuments";
+import {
+  isTerminalReplayStatus,
+  offlineReplayBlockReason
+} from "./replayPresentation";
 import { spanUri } from "./traceDocuments";
 import {
   canonicalWorkspacePath,
@@ -52,6 +59,7 @@ export interface Refreshers {
 export class CommandController implements vscode.Disposable {
   private readonly disposables: vscode.Disposable[] = [];
   private readonly cancellationsInFlight = new Set<string>();
+  private readonly replayMonitors = new Map<string, AbortController>();
   private stream: ReconnectingSseClient | undefined;
 
   public constructor(
@@ -92,6 +100,12 @@ export class CommandController implements vscode.Disposable {
     command("agentbus.showComparison", (item) =>
       this.showComparison(item)
     );
+    command("agentbus.replayRunOffline", (run) =>
+      this.replayRunOffline(run)
+    );
+    command("agentbus.cancelReplay", (replay) =>
+      this.cancelReplay(replay)
+    );
     command("agentbus.resumeRun", () => this.resume());
     command("agentbus.cancelRun", () => this.cancel());
     command("agentbus.openRunReport", () => this.openReport());
@@ -122,6 +136,10 @@ export class CommandController implements vscode.Disposable {
 
   public dispose(): void {
     this.stream?.stop();
+    for (const controller of this.replayMonitors.values()) {
+      controller.abort();
+    }
+    this.replayMonitors.clear();
     for (const item of this.disposables) item.dispose();
   }
 
@@ -326,6 +344,116 @@ export class CommandController implements vscode.Disposable {
     await vscode.window.showTextDocument(document, { preview: true });
   }
 
+  private async replayRunOffline(
+    raw?: unknown
+  ): Promise<ReplayAcceptedResponse | undefined> {
+    const run = await this.resolveRun(raw);
+    if (!run) return undefined;
+    const client = await this.client();
+    const replayability = await client.replayability(run.run_id, 0, 500);
+    const document = await vscode.workspace.openTextDocument(
+      replayPlanUri(run.run_id, "offline")
+    );
+    await vscode.window.showTextDocument(document, { preview: true });
+    const blocked = offlineReplayBlockReason(replayability);
+    if (blocked) {
+      void vscode.window.showWarningMessage(blocked);
+      return undefined;
+    }
+    const accepted = await client.createReplay(run.run_id, {
+      mode: "offline",
+      live_provider_consent: false
+    });
+    this.refreshViews();
+    await vscode.commands.executeCommand("agentbus.replays.focus");
+    void vscode.window.showInformationMessage(
+      `Offline replay ${accepted.replay_id} started. The source repository will not be mutated.`
+    );
+    this.startReplayMonitor(accepted.replay_id);
+    return accepted;
+  }
+
+  private async cancelReplay(
+    raw?: unknown
+  ): Promise<ReplayCancelResponse | undefined> {
+    const item = raw as AgentBusItem | undefined;
+    let replay = item?.value as ReplaySessionResponse | undefined;
+    if (typeof raw === "string") {
+      replay = await (await this.client()).replay(raw);
+    }
+    if (!replay) {
+      const response = await (await this.client()).listReplays(
+        undefined,
+        undefined,
+        500
+      );
+      replay = (
+        await vscode.window.showQuickPick(
+          response.replays
+            .filter((value) => !isTerminalReplayStatus(value.status))
+            .map((value) => ({
+              label: value.replay_id,
+              description: `${value.mode} | ${value.status}`,
+              value
+            })),
+          { title: "Cancel AgentBus Replay" }
+        )
+      )?.value;
+    }
+    if (!replay || isTerminalReplayStatus(replay.status)) return undefined;
+    const cancelled = await (await this.client()).cancelReplay(
+      replay.replay_id
+    );
+    this.refreshViews();
+    return cancelled;
+  }
+
+  private startReplayMonitor(replayId: string): void {
+    if (this.replayMonitors.has(replayId)) return;
+    const controller = new AbortController();
+    this.replayMonitors.set(replayId, controller);
+    void this.monitorReplay(replayId, controller.signal)
+      .catch((error: unknown) => {
+        this.output.appendLine(
+          `Replay ${replayId} monitor: ${safeError(error)}`
+        );
+      })
+      .finally(() => {
+        if (this.replayMonitors.get(replayId) === controller) {
+          this.replayMonitors.delete(replayId);
+        }
+      });
+  }
+
+  private async monitorReplay(
+    replayId: string,
+    signal: AbortSignal
+  ): Promise<void> {
+    const deadline = Date.now() + 300_000;
+    let delayMilliseconds = 100;
+    while (!signal.aborted && Date.now() < deadline) {
+      await abortableDelay(delayMilliseconds, signal);
+      if (signal.aborted) return;
+      const replay = await (await this.client()).replay(replayId);
+      this.refreshViews();
+      if (isTerminalReplayStatus(replay.status)) {
+        const message = `AgentBus replay ${replayId} ${replay.status}.`;
+        if (replay.status === "succeeded") {
+          void vscode.window.showInformationMessage(message);
+        } else {
+          void vscode.window.showWarningMessage(message);
+        }
+        return;
+      }
+      delayMilliseconds = Math.min(delayMilliseconds * 2, 1_000);
+    }
+    if (!signal.aborted) {
+      this.output.appendLine(
+        `Replay ${replayId} monitor reached its bounded deadline.`
+      );
+    }
+  }
+
   private async compareRuns(
     leftRaw?: unknown,
     rightRaw?: unknown
@@ -406,6 +534,16 @@ export class CommandController implements vscode.Disposable {
         { title }
       )
     )?.value;
+  }
+
+  private async resolveRun(raw?: unknown): Promise<RunSummary | undefined> {
+    if (typeof raw === "string") {
+      const cached = this.store.run(raw);
+      return cached ?? (await (await this.client()).run(raw));
+    }
+    const item = raw as AgentBusItem | undefined;
+    const value = item?.value as RunSummary | undefined;
+    return value?.run_id ? value : this.chooseRun();
   }
 
   private async resume(): Promise<void> {
@@ -804,4 +942,23 @@ export class CommandController implements vscode.Disposable {
     await this.daemon.stop();
     this.status.text = "$(debug-disconnect) AgentBus offline";
   }
+}
+
+function abortableDelay(
+  milliseconds: number,
+  signal: AbortSignal
+): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, milliseconds);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 }

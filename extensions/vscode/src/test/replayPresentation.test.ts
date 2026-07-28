@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { ReplaySessionResponse } from "../generated/protocol";
 import {
+  formatReplayabilityDocument,
   formatReplayDocument,
+  isTerminalReplayStatus,
+  offlineReplayBlockReason,
   REPLAY_GROUPS,
   replayGroup
 } from "../replayPresentation";
@@ -62,4 +65,53 @@ test("replay document exposes safe state and hashes without raw summaries", () =
   assert.match(rendered, new RegExp("a{64}"));
   assert.match(rendered, /policy\\-version/);
   assert.doesNotMatch(rendered, /private-value/);
+});
+
+test("offline replay plan explains substitutions isolation and blockers", () => {
+  const replayability = {
+    trace_id: "trace-1",
+    run_id: "run-1",
+    level: "partially_replayable",
+    replayable_offline: false,
+    reasons: ["Captured model response is missing."],
+    missing_input_hashes: ["b".repeat(64)],
+    live_provider_consent_required: true,
+    spans: [
+      {
+        span_id: "span-1",
+        span_type: "tool_invocation",
+        level: "partially_replayable",
+        reasons: ["Mutation requires isolation."],
+        required_input_count: 1,
+        substitution_kinds: ["captured_tool_result"],
+        requires_isolated_workspace: true
+      },
+      {
+        span_id: "span-2",
+        span_type: "provider_response",
+        level: "non_replayable",
+        reasons: ["Input unavailable."],
+        required_input_count: 1,
+        missing_input_hashes: ["b".repeat(64)],
+        live_provider_consent_required: true
+      }
+    ]
+  };
+
+  const rendered = formatReplayabilityDocument(
+    replayability,
+    "offline"
+  );
+
+  assert.match(rendered, /Mode \| offline/);
+  assert.match(rendered, /captured\\_tool\\_result/);
+  assert.match(rendered, /daemon\\_managed\\_temporary\\_workspace/);
+  assert.match(rendered, /Live\\-provider consent required \| true/);
+  assert.match(rendered, new RegExp("b{64}"));
+  assert.match(
+    offlineReplayBlockReason(replayability) ?? "",
+    /not replayable in offline mode/
+  );
+  assert.equal(isTerminalReplayStatus("succeeded"), true);
+  assert.equal(isTerminalReplayStatus("running"), false);
 });

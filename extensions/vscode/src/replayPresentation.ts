@@ -1,4 +1,7 @@
-import type { ReplaySessionResponse } from "./generated/protocol";
+import type {
+  ReplaySessionResponse,
+  RunReplayabilityResponse
+} from "./generated/protocol";
 import { redactText } from "./redaction";
 import { escapeMarkdown } from "./toolPresentation";
 
@@ -46,6 +49,7 @@ export function replayTooltip(session: ReplaySessionResponse): string {
     `Source trace: \`${markdown(session.source_trace_id)}\``,
     `Checkpoint: \`${markdown(session.from_checkpoint_id ?? "beginning")}\``,
     `Isolated: \`${session.isolated ?? false}\``,
+    `Isolation scope: \`${markdown(session.isolation_scope ?? "not required")}\``,
     `Provider calls: \`${session.provider_calls ?? 0}\``,
     `Network calls: \`${session.network_calls ?? 0}\``
   ].join("\n");
@@ -72,6 +76,7 @@ export function formatReplayDocument(
       ["From checkpoint", session.from_checkpoint_id ?? "beginning"],
       ["Fork", session.fork ?? false],
       ["Isolated", session.isolated ?? false],
+      ["Isolation scope", session.isolation_scope ?? "not required"],
       ["Provider calls", session.provider_calls ?? 0],
       ["Network calls", session.network_calls ?? 0]
     ]),
@@ -113,6 +118,115 @@ export function formatReplayDocument(
     ""
   ];
   return redactText(lines.join("\n"), 100_000);
+}
+
+export function formatReplayabilityDocument(
+  replayability: RunReplayabilityResponse,
+  mode: "strict" | "offline" | "verify" | "simulate"
+): string {
+  const isolated = replayability.spans.some(
+    (span) => span.requires_isolated_workspace
+  );
+  const replayable = replayability.spans.filter(
+    (span) => span.level !== "non_replayable"
+  ).length;
+  const blocked = replayability.spans.length - replayable;
+  const lines = [
+    `# AgentBus Replay Plan ${markdown(replayability.run_id)}`,
+    "",
+    "## Selection",
+    "",
+    table([
+      ["Mode", mode],
+      ["Trace", replayability.trace_id],
+      ["Replayability", replayability.level],
+      ["Replayable offline", replayability.replayable_offline],
+      [
+        "Live-provider consent required",
+        replayability.live_provider_consent_required ?? false
+      ],
+      ["Replayable spans", replayable],
+      ["Non-replayable spans", blocked],
+      [
+        "Isolation location",
+        isolated
+          ? "daemon_managed_temporary_workspace"
+          : "not required"
+      ]
+    ]),
+    "",
+    "## Expected Side Effects",
+    "",
+    "- The source repository is never mutated by offline replay.",
+    "- Captured provider responses are substituted; live providers and network access remain disabled.",
+    isolated
+      ? "- Replay-safe tool work is constrained to a daemon-managed temporary workspace."
+      : "- This plan does not require a replay workspace.",
+    "- Mutating tool results are reused or simulated unless an explicit safe strategy says otherwise.",
+    "- Current policy is evaluated and any policy drift is recorded in the replay session.",
+    "",
+    "## Missing Inputs",
+    "",
+    replayability.missing_input_hashes?.length
+      ? replayability.missing_input_hashes
+          .map((hash) => `- \`${markdown(hash)}\``)
+          .join("\n")
+      : "_None._",
+    "",
+    "## Trace Reasons",
+    "",
+    replayability.reasons?.length
+      ? replayability.reasons
+          .map((reason) => `- ${markdown(reason)}`)
+          .join("\n")
+      : "_None._",
+    "",
+    "## Span Replayability",
+    "",
+    replayability.spans.length
+      ? [
+          "| Span | Type | Level | Substitutions | Isolated | Live consent | Reasons |",
+          "| --- | --- | --- | --- | --- | --- | --- |",
+          ...replayability.spans.map(
+            (span) =>
+              `| \`${markdown(span.span_id)}\` | ${markdown(span.span_type)} | ${markdown(span.level)} | ${markdown((span.substitution_kinds ?? []).join(", ") || "none")} | ${span.requires_isolated_workspace ?? false} | ${span.live_provider_consent_required ?? false} | ${markdown(span.reasons.join("; ") || "none")} |`
+          )
+        ].join("\n")
+      : "_No span classifications were returned._",
+    "",
+    replayability.truncated
+      ? "_Span replayability was truncated by the control plane._"
+      : "",
+    "",
+    "_This plan never includes captured payload values, prompts, credentials, or private paths._",
+    ""
+  ];
+  return redactText(lines.join("\n"), 100_000);
+}
+
+export function offlineReplayBlockReason(
+  replayability: RunReplayabilityResponse
+): string | undefined {
+  if (replayability.replayable_offline) return undefined;
+  const reasons = (replayability.reasons ?? []).slice(0, 5);
+  const missing = replayability.missing_input_hashes?.length ?? 0;
+  return [
+    "This trace is not replayable in offline mode.",
+    ...reasons,
+    missing ? `${missing} required captured input(s) are unavailable.` : ""
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+export function isTerminalReplayStatus(status: string): boolean {
+  return [
+    "succeeded",
+    "failed",
+    "cancelled",
+    "incompatible",
+    "awaiting_input"
+  ].includes(status);
 }
 
 function table(rows: ReadonlyArray<readonly [string, unknown]>): string {

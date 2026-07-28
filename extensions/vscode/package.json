@@ -80,6 +80,14 @@
         "title": "AgentBus: Show Comparison"
       },
       {
+        "command": "agentbus.replayRunOffline",
+        "title": "AgentBus: Replay Run Offline"
+      },
+      {
+        "command": "agentbus.cancelReplay",
+        "title": "AgentBus: Cancel Replay"
+      },
+      {
         "command": "agentbus.openRunReport",
         "title": "AgentBus: Open Run Report"
       },
@@ -226,6 +234,11 @@
           "group": "inline"
         },
         {
+          "command": "agentbus.cancelReplay",
+          "when": "viewItem == agentbusReplayCancellable",
+          "group": "inline@2"
+        },
+        {
           "command": "agentbus.showComparison",
           "when": "viewItem == agentbusComparison || viewItem == agentbusComparisonSpan",
           "group": "inline"
@@ -234,6 +247,11 @@
           "command": "agentbus.cancelRun",
           "when": "viewItem == agentbusRunCancellable",
           "group": "inline@2"
+        },
+        {
+          "command": "agentbus.replayRunOffline",
+          "when": "viewItem == agentbusRunTerminal",
+          "group": "navigation"
         },
         {
           "command": "agentbus.approveAction",
