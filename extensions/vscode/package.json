@@ -80,6 +80,14 @@
         "title": "AgentBus: Show Comparison"
       },
       {
+        "command": "agentbus.openStructuredReplayDifferences",
+        "title": "AgentBus: Open Structured Replay Differences"
+      },
+      {
+        "command": "agentbus.compareRunReports",
+        "title": "AgentBus: Compare Run Reports"
+      },
+      {
         "command": "agentbus.replayRunOffline",
         "title": "AgentBus: Replay Run Offline"
       },
@@ -262,6 +270,11 @@
           "command": "agentbus.showComparison",
           "when": "viewItem == agentbusComparison || viewItem == agentbusComparisonSpan",
           "group": "inline"
+        },
+        {
+          "command": "agentbus.openStructuredReplayDifferences",
+          "when": "viewItem == agentbusComparison || viewItem == agentbusComparisonSpan",
+          "group": "navigation"
         },
         {
           "command": "agentbus.cancelRun",

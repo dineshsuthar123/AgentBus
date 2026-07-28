@@ -138,6 +138,46 @@ export function formatComparisonDocument(
   return redactText(lines.join("\n"), 100_000);
 }
 
+export function formatComparisonSide(
+  comparison: ComparisonResponse,
+  side: "left" | "right"
+): string {
+  const document = {
+    comparison_id: comparison.comparison_id,
+    side,
+    trace_id:
+      side === "left"
+        ? comparison.left_trace_id
+        : comparison.right_trace_id,
+    status:
+      side === "left"
+        ? comparison.left_status
+        : comparison.right_status,
+    provenance_root:
+      side === "left"
+        ? comparison.left_provenance_root
+        : comparison.right_provenance_root,
+    spans: comparison.spans.map((span) => ({
+      semantic_key: span.semantic_key,
+      span_id:
+        side === "left" ? span.left_span_id : span.right_span_id,
+      unchanged: span.unchanged,
+      categories: span.categories ?? [],
+      fields: (span.differences ?? []).map((difference) => ({
+        field: difference.field,
+        category: difference.category,
+        summary: difference.summary,
+        sha256:
+          side === "left"
+            ? difference.left_sha256
+            : difference.right_sha256
+      }))
+    })),
+    truncated: comparison.truncated ?? false
+  };
+  return redactText(JSON.stringify(document, null, 2), 100_000);
+}
+
 function table(rows: ReadonlyArray<readonly [string, unknown]>): string {
   return [
     "| Field | Value |",

@@ -1,6 +1,9 @@
 import * as vscode from "vscode";
 import { CommandController } from "./commands";
-import { ComparisonDocumentProvider } from "./comparisonDocuments";
+import {
+  ComparisonDocumentProvider,
+  ComparisonSideDocumentProvider
+} from "./comparisonDocuments";
 import { ComparisonStore } from "./comparisonStore";
 import type { AgentBusClient } from "./apiClient";
 import { DaemonManager } from "./daemonManager";
@@ -130,6 +133,10 @@ export function activate(context: vscode.ExtensionContext): AgentBusExtensionApi
     vscode.workspace.registerTextDocumentContentProvider(
       "agentbus-comparison",
       new ComparisonDocumentProvider(client)
+    ),
+    vscode.workspace.registerTextDocumentContentProvider(
+      "agentbus-comparison-side",
+      new ComparisonSideDocumentProvider(client)
     )
   );
   const controller = new CommandController(

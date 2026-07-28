@@ -4,7 +4,8 @@ import type { ComparisonResponse } from "../generated/protocol";
 import {
   COMPARISON_GROUPS,
   comparisonSpans,
-  formatComparisonDocument
+  formatComparisonDocument,
+  formatComparisonSide
 } from "../comparisonPresentation";
 
 const comparison: ComparisonResponse = {
@@ -97,4 +98,16 @@ test("comparison document renders hashes and never compared values", () => {
   assert.match(rendered, new RegExp("b{64}"));
   assert.match(rendered, /Policy Drift/);
   assert.doesNotMatch(rendered, /private-value/);
+});
+
+test("native comparison sides contain hashes and no compared payloads", () => {
+  const left = formatComparisonSide(comparison, "left");
+  const right = formatComparisonSide(comparison, "right");
+
+  assert.equal(JSON.parse(left).trace_id, "trace-left");
+  assert.equal(JSON.parse(right).trace_id, "trace-right");
+  assert.match(left, new RegExp("a{64}"));
+  assert.match(right, new RegExp("b{64}"));
+  assert.doesNotMatch(left, /private-value/);
+  assert.doesNotMatch(right, /private-value/);
 });

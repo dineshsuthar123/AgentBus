@@ -5,7 +5,10 @@ import { toolArtifactUri } from "./artifactDocuments";
 import { validateToolArtifact } from "./artifactPresentation";
 import type { DaemonManager } from "./daemonManager";
 import { changeUri, reportUri } from "./documents";
-import { comparisonUri } from "./comparisonDocuments";
+import {
+  comparisonSideUri,
+  comparisonUri
+} from "./comparisonDocuments";
 import type { ComparisonStore } from "./comparisonStore";
 import { toolInvocationUri, toolPolicyUri } from "./toolDocuments";
 import type {
@@ -116,6 +119,12 @@ export class CommandController implements vscode.Disposable {
     );
     command("agentbus.showComparison", (item) =>
       this.showComparison(item)
+    );
+    command("agentbus.openStructuredReplayDifferences", (item) =>
+      this.openStructuredReplayDifferences(item)
+    );
+    command("agentbus.compareRunReports", (left, right) =>
+      this.compareRunReports(left, right)
     );
     command("agentbus.replayRunOffline", (run) =>
       this.replayRunOffline(run)
@@ -800,6 +809,50 @@ export class CommandController implements vscode.Disposable {
   }
 
   private async showComparison(raw?: unknown): Promise<void> {
+    const comparison = await this.resolveComparison(raw);
+    if (!comparison) return;
+    await this.openComparison(comparison.comparison_id);
+  }
+
+  private async openStructuredReplayDifferences(
+    raw?: unknown
+  ): Promise<void> {
+    const comparison = await this.resolveComparison(raw);
+    if (!comparison) return;
+    await vscode.commands.executeCommand(
+      "vscode.diff",
+      comparisonSideUri(comparison.comparison_id, "left"),
+      comparisonSideUri(comparison.comparison_id, "right"),
+      `AgentBus ${comparison.comparison_id} (hashes only)`
+    );
+  }
+
+  private async compareRunReports(
+    leftRaw?: unknown,
+    rightRaw?: unknown
+  ): Promise<void> {
+    const left = await this.chooseComparisonTarget(
+      "Select Left AgentBus Report",
+      leftRaw
+    );
+    if (!left) return;
+    const right = await this.chooseComparisonTarget(
+      "Select Right AgentBus Report",
+      rightRaw,
+      left
+    );
+    if (!right) return;
+    await vscode.commands.executeCommand(
+      "vscode.diff",
+      reportUri(left),
+      reportUri(right),
+      "AgentBus Run Reports"
+    );
+  }
+
+  private async resolveComparison(
+    raw?: unknown
+  ): Promise<ComparisonResponse | undefined> {
     const item = raw as AgentBusItem | undefined;
     const treeValue = item?.value as
       | { comparison?: ComparisonResponse }
@@ -818,8 +871,7 @@ export class CommandController implements vscode.Disposable {
         )
       )?.value;
     }
-    if (!comparison) return;
-    await this.openComparison(comparison.comparison_id);
+    return comparison;
   }
 
   private async openComparison(comparisonId: string): Promise<void> {
