@@ -29,12 +29,17 @@ class RegressionFixtureError(ReplayError):
     """Raised when a regression fixture is invalid or cannot be captured."""
 
 
+class RegressionFixtureConsentRequiredError(RegressionFixtureError):
+    """Raised when fixture capture requires explicit source-content consent."""
+
+
 class RegressionFixtureAssertionError(RegressionFixtureError):
     """Raised when fixture assertions contradict captured evidence."""
 
 
 __all__ = [
     "RegressionFixtureAssertionError",
+    "RegressionFixtureConsentRequiredError",
     "RegressionFixtureError",
     "ReplayCancelledError",
     "ReplayConsentRequiredError",

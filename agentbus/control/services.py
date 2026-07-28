@@ -43,6 +43,8 @@ from agentbus.control.models import (
     ProvenanceResponse,
     ProvenanceToolSummary,
     ProviderSummary,
+    RegressionFixtureCaptureRequest,
+    RegressionFixtureCaptureResponse,
     ReplayListResponse,
     ReplaySessionResponse,
     ReplaySpanResultResponse,
@@ -124,6 +126,10 @@ from agentbus.policy import ToolApprovalDisposition, ToolPolicyEngine
 from agentbus.policy.defaults import DEFAULT_TOOL_POLICY
 from agentbus.repo.artifact_policy import ArtifactCategory
 from agentbus.replay.comparison import RunComparison
+from agentbus.replay.errors import (
+    RegressionFixtureConsentRequiredError,
+    RegressionFixtureError,
+)
 from agentbus.replay.service import TraceReplayService
 from agentbus.replay.session import ReplaySession, ReplaySessionStatus
 from agentbus.sandbox.platform import ExecutableCatalog
@@ -1303,6 +1309,58 @@ class ControlQueryService:
             archive_sha256=hashlib.sha256(archive_bytes).hexdigest(),
             archive_base64=base64.b64encode(archive_bytes).decode("ascii"),
             source_content_included=manifest.source_content_included,
+        )
+
+    def capture_regression_fixture(
+        self,
+        run_id: str,
+        request: RegressionFixtureCaptureRequest,
+    ) -> RegressionFixtureCaptureResponse:
+        try:
+            with tempfile.TemporaryDirectory(
+                prefix="agentbus-regression-fixture-"
+            ) as temporary:
+                destination = Path(temporary) / "fixture.agentbus-trace"
+                captured = self._trace_replay().capture_fixture(
+                    run_id,
+                    destination,
+                    include_source_content=request.include_source_content,
+                )
+                archive_bytes = destination.read_bytes()
+        except (
+            RunNotFoundError,
+            TraceRecordNotFoundError,
+            ProvenanceRecordNotFoundError,
+        ) as exc:
+            raise ControlPlaneNotFoundError(
+                "The requested run cannot be captured as a fixture."
+            ) from exc
+        except RegressionFixtureConsentRequiredError as exc:
+            raise ControlPlaneForbiddenError(
+                "Regression fixture source content requires explicit consent."
+            ) from exc
+        except (
+            RegressionFixtureError,
+            TraceArchiveError,
+            TraceIntegrityError,
+            TraceStorageError,
+        ) as exc:
+            raise ControlPlaneConflictError(
+                "Regression fixture capture failed safely."
+            ) from exc
+        self._ensure_control_archive_size(len(archive_bytes))
+        return RegressionFixtureCaptureResponse(
+            trace_id=captured.spec.trace_id,
+            run_id=captured.spec.run_id,
+            provenance_root=captured.spec.provenance_root,
+            archive_sha256=hashlib.sha256(archive_bytes).hexdigest(),
+            archive_base64=base64.b64encode(archive_bytes).decode("ascii"),
+            source_content_included=(
+                captured.archive.source_content_included
+            ),
+            source_warning=captured.spec.source_warning,
+            license_warning=captured.spec.license_warning,
+            replay_command=captured.spec.replay_command,
         )
 
     @staticmethod

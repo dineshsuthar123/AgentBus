@@ -696,6 +696,52 @@ def test_trace_archive_api_rejects_invalid_and_oversized_payloads(
     assert missing.status_code == 404
 
 
+def test_regression_fixture_api_requires_source_consent_and_stays_offline(
+    tmp_path: Path,
+) -> None:
+    client, _ = _client(tmp_path)
+    trace, _manifest = _record_control_trace(
+        client,
+        include_source_object=True,
+    )
+    replays = client.app.state.replay_supervisor
+    try:
+        denied = client.post(
+            f"/api/v1/runs/{trace.run_id}/fixtures",
+            headers=_auth(),
+            json={},
+        )
+        captured = client.post(
+            f"/api/v1/runs/{trace.run_id}/fixtures",
+            headers=_auth(),
+            json={"include_source_content": True},
+        )
+    finally:
+        replays.shutdown()
+
+    assert denied.status_code == 403
+    assert denied.json()["error"]["code"] == "forbidden"
+    assert captured.status_code == 201
+    payload = captured.json()
+    archive_bytes = base64.b64decode(
+        payload["archive_base64"],
+        validate=True,
+    )
+    assert payload["trace_id"] == trace.trace_id
+    assert payload["run_id"] == trace.run_id
+    assert payload["archive_sha256"] == hashlib.sha256(
+        archive_bytes
+    ).hexdigest()
+    assert payload["source_content_included"] is True
+    assert payload["source_warning"]
+    assert payload["license_warning"]
+    assert payload["assertions_validated"] is True
+    assert payload["replay_started"] is False
+    assert "--allow-source-content" in payload["replay_command"]
+    assert str(tmp_path).encode() not in archive_bytes
+    assert b"control-private-token" not in archive_bytes
+
+
 def test_tool_registry_and_policy_endpoints_are_bounded_and_diagnostic_only(
     tmp_path: Path,
 ) -> None:

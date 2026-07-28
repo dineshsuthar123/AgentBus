@@ -752,6 +752,24 @@ class TraceArchiveExportResponse(ProtocolModel):
     source_content_included: bool = False
 
 
+class RegressionFixtureCaptureRequest(ProtocolModel):
+    include_source_content: bool = False
+
+
+class RegressionFixtureCaptureResponse(ProtocolModel):
+    trace_id: str = Field(min_length=1, max_length=128)
+    run_id: str = Field(min_length=1, max_length=128)
+    provenance_root: str = Field(pattern=r"^[0-9a-f]{64}$")
+    archive_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    archive_base64: str = Field(min_length=1, max_length=900_000)
+    source_content_included: bool = False
+    source_warning: str | None = Field(default=None, max_length=512)
+    license_warning: str | None = Field(default=None, max_length=512)
+    replay_command: str = Field(min_length=1, max_length=1_024)
+    assertions_validated: Literal[True] = True
+    replay_started: Literal[False] = False
+
+
 class ApprovalSummary(ProtocolModel):
     approval_id: str
     run_id: str

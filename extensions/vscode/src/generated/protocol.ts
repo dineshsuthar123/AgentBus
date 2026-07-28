@@ -354,6 +354,24 @@ export interface ReadyHandshake {
   "token_delivery"?: "parent_process_stdout";
 }
 
+export interface RegressionFixtureCaptureRequest {
+  "include_source_content"?: boolean;
+}
+
+export interface RegressionFixtureCaptureResponse {
+  "trace_id": string;
+  "run_id": string;
+  "provenance_root": string;
+  "archive_sha256": string;
+  "archive_base64": string;
+  "source_content_included"?: boolean;
+  "source_warning"?: string | null;
+  "license_warning"?: string | null;
+  "replay_command": string;
+  "assertions_validated"?: true;
+  "replay_started"?: false;
+}
+
 export interface ReplayAcceptedResponse {
   "replay_id": string;
   "source_trace_id": string;

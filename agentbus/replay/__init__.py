@@ -7,6 +7,7 @@ from agentbus.replay.classification import (
 )
 from agentbus.replay.errors import (
     RegressionFixtureAssertionError,
+    RegressionFixtureConsentRequiredError,
     RegressionFixtureError,
     ReplayCancelledError,
     ReplayConsentRequiredError,
@@ -127,6 +128,7 @@ __all__ = [
     "ForkRequest",
     "ForkResult",
     "RegressionFixtureAssertionError",
+    "RegressionFixtureConsentRequiredError",
     "RegressionFixtureError",
     "RegressionFixtureReplay",
     "RegressionFixtureSpec",

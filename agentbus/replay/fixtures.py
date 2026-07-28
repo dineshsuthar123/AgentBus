@@ -10,6 +10,7 @@ from pydantic import Field, field_validator, model_validator
 from agentbus.replay.engine import ReplayEngine
 from agentbus.replay.errors import (
     RegressionFixtureAssertionError,
+    RegressionFixtureConsentRequiredError,
     RegressionFixtureError,
 )
 from agentbus.replay.session import (
@@ -251,7 +252,7 @@ def capture_regression_fixture(
     }
     unavailable = sorted(source_hashes & replay_hashes)
     if unavailable and not include_source_content:
-        raise RegressionFixtureError(
+        raise RegressionFixtureConsentRequiredError(
             "Fixture replay requires source-like captured content; rerun "
             "capture with explicit source-content consent."
         )

@@ -1919,6 +1919,108 @@
         "title": "ProviderSummary",
         "type": "object"
       },
+      "RegressionFixtureCaptureRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "include_source_content": {
+            "default": false,
+            "title": "Include Source Content",
+            "type": "boolean"
+          }
+        },
+        "title": "RegressionFixtureCaptureRequest",
+        "type": "object"
+      },
+      "RegressionFixtureCaptureResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "archive_base64": {
+            "maxLength": 900000,
+            "minLength": 1,
+            "title": "Archive Base64",
+            "type": "string"
+          },
+          "archive_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Archive Sha256",
+            "type": "string"
+          },
+          "assertions_validated": {
+            "const": true,
+            "default": true,
+            "title": "Assertions Validated",
+            "type": "boolean"
+          },
+          "license_warning": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "License Warning"
+          },
+          "provenance_root": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Provenance Root",
+            "type": "string"
+          },
+          "replay_command": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Replay Command",
+            "type": "string"
+          },
+          "replay_started": {
+            "const": false,
+            "default": false,
+            "title": "Replay Started",
+            "type": "boolean"
+          },
+          "run_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Run Id",
+            "type": "string"
+          },
+          "source_content_included": {
+            "default": false,
+            "title": "Source Content Included",
+            "type": "boolean"
+          },
+          "source_warning": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Warning"
+          },
+          "trace_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Trace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "trace_id",
+          "run_id",
+          "provenance_root",
+          "archive_sha256",
+          "archive_base64",
+          "replay_command"
+        ],
+        "title": "RegressionFixtureCaptureResponse",
+        "type": "object"
+      },
       "ReplayAcceptedResponse": {
         "additionalProperties": false,
         "properties": {
@@ -8865,6 +8967,115 @@
           }
         },
         "summary": "Run Events"
+      }
+    },
+    "/api/v1/runs/{run_id}/fixtures": {
+      "post": {
+        "operationId": "capture_regression_fixture_api_v1_runs__run_id__fixtures_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegressionFixtureCaptureRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegressionFixtureCaptureResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          }
+        },
+        "summary": "Capture Regression Fixture"
       }
     },
     "/api/v1/runs/{run_id}/provenance": {

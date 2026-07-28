@@ -9,6 +9,7 @@ from agentbus.models.types import ModelResult, ModelRole
 from agentbus.replay import (
     FixtureAssertions,
     RegressionFixtureAssertionError,
+    RegressionFixtureConsentRequiredError,
     RegressionFixtureError,
     RegressionFixtureSpec,
     capture_regression_fixture,
@@ -181,7 +182,10 @@ def test_source_fixture_has_warning_and_requires_import_consent(
     archive = tmp_path / "source-fixture.agentbus-trace"
 
     refused = tmp_path / "source-without-consent.agentbus-trace"
-    with pytest.raises(RegressionFixtureError, match="source-like"):
+    with pytest.raises(
+        RegressionFixtureConsentRequiredError,
+        match="source-like",
+    ):
         capture_regression_fixture(
             trace,
             provenance,

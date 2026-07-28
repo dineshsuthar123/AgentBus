@@ -66,6 +66,8 @@ def test_trace_and_replay_models_are_bounded_protocol_extensions() -> None:
         "ReplayCreateRequest",
         "ReplaySessionResponse",
         "ComparisonResponse",
+        "RegressionFixtureCaptureRequest",
+        "RegressionFixtureCaptureResponse",
         "TraceArchiveImportRequest",
         "TraceArchiveExportResponse",
     } <= definitions.keys()
@@ -83,6 +85,12 @@ def test_trace_and_replay_models_are_bounded_protocol_extensions() -> None:
         definitions["TraceArchiveImportRequest"]["properties"]["archive_base64"][
             "maxLength"
         ]
+        == 900_000
+    )
+    assert (
+        definitions["RegressionFixtureCaptureResponse"]["properties"][
+            "archive_base64"
+        ]["maxLength"]
         == 900_000
     )
 

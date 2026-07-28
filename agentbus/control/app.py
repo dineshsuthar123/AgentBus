@@ -52,6 +52,8 @@ from agentbus.control.models import (
     ProviderListResponse,
     ProviderSummary,
     ProvenanceResponse,
+    RegressionFixtureCaptureRequest,
+    RegressionFixtureCaptureResponse,
     ReplayAcceptedResponse,
     ReplayCancelResponse,
     ReplayCreateRequest,
@@ -276,6 +278,7 @@ def create_app(
                 "managed-offline-replay",
                 "trace-comparison",
                 "trace-archives",
+                "regression-fixtures",
             ],
         )
 
@@ -537,6 +540,17 @@ def create_app(
             trace_id,
             include_source_content=include_source_content,
         )
+
+    @app.post(
+        f"{API_PREFIX}/runs/{{run_id}}/fixtures",
+        response_model=RegressionFixtureCaptureResponse,
+        status_code=201,
+    )
+    async def capture_regression_fixture(
+        run_id: str,
+        request: RegressionFixtureCaptureRequest,
+    ) -> RegressionFixtureCaptureResponse:
+        return query_service.capture_regression_fixture(run_id, request)
 
     @app.post(f"{API_PREFIX}/runs/{{run_id}}/resume", response_model=ResumeResponse)
     async def resume_run(run_id: str) -> ResumeResponse:
