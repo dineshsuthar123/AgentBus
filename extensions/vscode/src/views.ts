@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { AgentBusApiError, type AgentBusClient } from "./apiClient";
 import type {
   ApprovalSummary,
+  ComparisonResponse,
   McpServerSummary,
   ProviderSummary,
   ReplaySessionResponse,
@@ -11,6 +12,14 @@ import type {
   ToolInvocationSummary,
   WorktreeSummary
 } from "./generated/protocol";
+import type { ComparisonStore } from "./comparisonStore";
+import {
+  COMPARISON_GROUPS,
+  comparisonDescription,
+  comparisonSpans,
+  comparisonTooltip,
+  type ComparisonGroupKey
+} from "./comparisonPresentation";
 import type { RunStore } from "./runStore";
 import {
   REPLAY_GROUPS,
@@ -406,6 +415,77 @@ export class ReplaySessionsProvider extends RefreshableProvider {
   }
 }
 
+type ComparisonTreeValue =
+  | {
+      kind: "comparison";
+      comparison: ComparisonResponse;
+    }
+  | {
+      kind: "comparison-group";
+      comparison: ComparisonResponse;
+      key: ComparisonGroupKey;
+    };
+
+export class ComparisonsProvider extends RefreshableProvider {
+  public constructor(
+    private readonly client: () => Promise<AgentBusClient>,
+    private readonly store: ComparisonStore
+  ) {
+    super();
+  }
+
+  public async getChildren(element?: AgentBusItem): Promise<AgentBusItem[]> {
+    if (!element) {
+      const comparisons = await this.store.load(await this.client());
+      if (comparisons.length === 0) {
+        return [messageItem("Compare two traced runs to inspect drift.")];
+      }
+      return comparisons.map(comparisonItem);
+    }
+    const value = element.value as ComparisonTreeValue;
+    if (value?.kind === "comparison") {
+      return COMPARISON_GROUPS.map(({ key, label }) => {
+        const count = comparisonSpans(value.comparison, key).length;
+        const item = new AgentBusItem(
+          `${label} (${count})`,
+          count
+            ? vscode.TreeItemCollapsibleState.Collapsed
+            : vscode.TreeItemCollapsibleState.None,
+          {
+            kind: "comparison-group",
+            comparison: value.comparison,
+            key
+          } satisfies ComparisonTreeValue
+        );
+        item.contextValue = "agentbusComparisonGroup";
+        item.iconPath = new vscode.ThemeIcon(comparisonGroupIcon(key));
+        return item;
+      });
+    }
+    if (value?.kind === "comparison-group") {
+      return comparisonSpans(value.comparison, value.key).map((span) => {
+        const item = new AgentBusItem(
+          span.semantic_key,
+          vscode.TreeItemCollapsibleState.None,
+          value
+        );
+        item.description = (span.categories ?? []).join(", ") || "unchanged";
+        item.contextValue = "agentbusComparisonSpan";
+        item.iconPath = new vscode.ThemeIcon(
+          span.unchanged ? "pass-filled" : "diff"
+        );
+        item.command = {
+          command: "agentbus.showComparison",
+          title: "Show Comparison",
+          arguments: [comparisonItem(value.comparison)]
+        };
+        return item;
+      });
+    }
+    return [];
+  }
+}
+
 function runItem(run: RunSummary): AgentBusItem {
   const item = new AgentBusItem(
     run.original_task,
@@ -607,6 +687,32 @@ function replaySessionItem(session: ReplaySessionResponse): AgentBusItem {
   return item;
 }
 
+function comparisonItem(comparison: ComparisonResponse): AgentBusItem {
+  const item = new AgentBusItem(
+    comparison.comparison_id,
+    vscode.TreeItemCollapsibleState.Collapsed,
+    { kind: "comparison", comparison } satisfies ComparisonTreeValue
+  );
+  item.description = comparisonDescription(comparison);
+  item.tooltip = new vscode.MarkdownString(
+    comparisonTooltip(comparison)
+  );
+  item.iconPath = new vscode.ThemeIcon(
+    comparison.categories?.includes("regression")
+      ? "error"
+      : comparison.summary.changed_spans
+        ? "diff"
+        : "pass-filled"
+  );
+  item.contextValue = "agentbusComparison";
+  item.command = {
+    command: "agentbus.showComparison",
+    title: "Show Comparison",
+    arguments: [item]
+  };
+  return item;
+}
+
 function mcpServerItem(server: McpServerSummary): AgentBusItem {
   const item = new AgentBusItem(
     server.server_id,
@@ -689,4 +795,15 @@ function iconForTraceSpan(span: TraceSpanSummary): string {
     return "pass-filled";
   }
   return "sync~spin";
+}
+
+function comparisonGroupIcon(group: ComparisonGroupKey): string {
+  if (group === "unchanged") return "pass-filled";
+  if (group === "regression") return "error";
+  if (group === "expected") return "diff-ignored";
+  if (group === "policy_drift") return "shield";
+  if (group === "model_drift") return "hubot";
+  if (group === "tool_drift") return "tools";
+  if (group === "environment_drift") return "server-environment";
+  return "diff";
 }

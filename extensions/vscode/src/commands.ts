@@ -5,10 +5,13 @@ import { toolArtifactUri } from "./artifactDocuments";
 import { validateToolArtifact } from "./artifactPresentation";
 import type { DaemonManager } from "./daemonManager";
 import { changeUri, reportUri } from "./documents";
+import { comparisonUri } from "./comparisonDocuments";
+import type { ComparisonStore } from "./comparisonStore";
 import { toolInvocationUri, toolPolicyUri } from "./toolDocuments";
 import type {
   ApprovalSummary,
   CancelResponse,
+  ComparisonResponse,
   McpServerSummary,
   ReplaySessionResponse,
   RunAcceptedResponse,
@@ -38,6 +41,7 @@ import {
 } from "./cancellation";
 import {
   canCancelTool,
+  isSafeControlId,
   toolCancellationDetail
 } from "./toolPresentation";
 
@@ -54,6 +58,7 @@ export class CommandController implements vscode.Disposable {
     private readonly daemon: DaemonManager,
     private readonly store: RunStore,
     private readonly selection: RunSelection,
+    private readonly comparisons: ComparisonStore,
     private readonly refreshers: Refreshers[],
     private readonly output: vscode.OutputChannel,
     private readonly status: vscode.StatusBarItem
@@ -80,6 +85,12 @@ export class CommandController implements vscode.Disposable {
     command("agentbus.showSpan", (item) => this.showSpan(item));
     command("agentbus.showReplaySession", (item) =>
       this.showReplaySession(item)
+    );
+    command("agentbus.compareRuns", (left, right) =>
+      this.compareRuns(left, right)
+    );
+    command("agentbus.showComparison", (item) =>
+      this.showComparison(item)
     );
     command("agentbus.resumeRun", () => this.resume());
     command("agentbus.cancelRun", () => this.cancel());
@@ -313,6 +324,88 @@ export class CommandController implements vscode.Disposable {
       replayUri(replay.replay_id)
     );
     await vscode.window.showTextDocument(document, { preview: true });
+  }
+
+  private async compareRuns(
+    leftRaw?: unknown,
+    rightRaw?: unknown
+  ): Promise<ComparisonResponse | undefined> {
+    const left = await this.chooseComparisonTarget(
+      "Select Left AgentBus Run",
+      leftRaw
+    );
+    if (!left) return undefined;
+    const right = await this.chooseComparisonTarget(
+      "Select Right AgentBus Run",
+      rightRaw,
+      left
+    );
+    if (!right) return undefined;
+    const comparison = await (await this.client()).createComparison(
+      { left, right },
+      0,
+      500
+    );
+    await this.comparisons.upsert(comparison);
+    this.refreshViews();
+    await this.openComparison(comparison.comparison_id);
+    return comparison;
+  }
+
+  private async showComparison(raw?: unknown): Promise<void> {
+    const item = raw as AgentBusItem | undefined;
+    const treeValue = item?.value as
+      | { comparison?: ComparisonResponse }
+      | undefined;
+    let comparison = treeValue?.comparison;
+    if (!comparison) {
+      const loaded = await this.comparisons.load(await this.client());
+      comparison = (
+        await vscode.window.showQuickPick(
+          loaded.map((value) => ({
+            label: value.comparison_id,
+            description: `${value.summary.changed_spans} changed span(s)`,
+            value
+          })),
+          { title: "Show AgentBus Comparison" }
+        )
+      )?.value;
+    }
+    if (!comparison) return;
+    await this.openComparison(comparison.comparison_id);
+  }
+
+  private async openComparison(comparisonId: string): Promise<void> {
+    const document = await vscode.workspace.openTextDocument(
+      comparisonUri(comparisonId)
+    );
+    await vscode.window.showTextDocument(document, { preview: true });
+  }
+
+  private async chooseComparisonTarget(
+    title: string,
+    raw?: unknown,
+    excluded?: string
+  ): Promise<string | undefined> {
+    if (typeof raw === "string") {
+      if (!isSafeControlId(raw) || raw === excluded) {
+        throw new Error("AgentBus comparison identifiers must be safe and distinct.");
+      }
+      return raw;
+    }
+    return (
+      await vscode.window.showQuickPick(
+        this.store
+          .runs()
+          .filter((run) => run.run_id !== excluded)
+          .map((run) => ({
+            label: run.original_task,
+            description: `${run.status} | ${run.run_id}`,
+            value: run.run_id
+          })),
+        { title }
+      )
+    )?.value;
   }
 
   private async resume(): Promise<void> {

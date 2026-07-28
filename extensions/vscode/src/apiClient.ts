@@ -4,6 +4,8 @@ import type {
   ApprovalListResponse,
   CancelResponse,
   ChangeListResponse,
+  ComparisonCreateRequest,
+  ComparisonResponse,
   DiffResponse,
   DoctorResponse,
   ErrorResponse,
@@ -227,6 +229,33 @@ export class AgentBusClient {
     return this.request(
       "POST",
       `/api/v1/replays/${safeSegment(replayId)}/cancel`
+    );
+  }
+
+  public createComparison(
+    body: ComparisonCreateRequest,
+    after = 0,
+    limit = 500
+  ): Promise<ComparisonResponse> {
+    validatePage(after, limit);
+    return this.request(
+      "POST",
+      `/api/v1/comparisons?after=${after}&limit=${limit}`,
+      body
+    );
+  }
+
+  public comparison(
+    comparisonId: string,
+    after = 0,
+    limit = 500
+  ): Promise<ComparisonResponse> {
+    validatePage(after, limit);
+    return this.request(
+      "GET",
+      `/api/v1/comparisons/${safeSegment(
+        comparisonId
+      )}?after=${after}&limit=${limit}`
     );
   }
 

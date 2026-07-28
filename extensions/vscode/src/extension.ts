@@ -1,5 +1,7 @@
 import * as vscode from "vscode";
 import { CommandController } from "./commands";
+import { ComparisonDocumentProvider } from "./comparisonDocuments";
+import { ComparisonStore } from "./comparisonStore";
 import type { AgentBusClient } from "./apiClient";
 import { DaemonManager } from "./daemonManager";
 import {
@@ -18,6 +20,7 @@ import {
 import type { EventEnvelope, RunSummary } from "./generated/protocol";
 import {
   ApprovalsProvider,
+  ComparisonsProvider,
   ExecutionTimelineProvider,
   McpServersProvider,
   ProvidersProvider,
@@ -48,6 +51,7 @@ export function activate(context: vscode.ExtensionContext): AgentBusExtensionApi
   status.show();
   const daemon = new DaemonManager(context, output);
   const store = new RunStore();
+  const comparisonStore = new ComparisonStore(context.workspaceState);
   const selection = new Selection();
   const client = async () => (await daemon.connectOrStart()).client;
   const runs = new RunsProvider(store);
@@ -58,6 +62,7 @@ export function activate(context: vscode.ExtensionContext): AgentBusExtensionApi
   const tools = new ToolInvocationsProvider(client, selection);
   const providers = new ProvidersProvider(client);
   const replays = new ReplaySessionsProvider(client);
+  const comparisons = new ComparisonsProvider(client, comparisonStore);
   const mcpServers = new McpServersProvider(client);
   context.subscriptions.push(
     output,
@@ -71,6 +76,10 @@ export function activate(context: vscode.ExtensionContext): AgentBusExtensionApi
     vscode.window.registerTreeDataProvider("agentbus.tools", tools),
     vscode.window.registerTreeDataProvider("agentbus.providers", providers),
     vscode.window.registerTreeDataProvider("agentbus.replays", replays),
+    vscode.window.registerTreeDataProvider(
+      "agentbus.comparisons",
+      comparisons
+    ),
     vscode.window.registerTreeDataProvider("agentbus.mcp", mcpServers),
     vscode.workspace.registerTextDocumentContentProvider(
       "agentbus-before",
@@ -107,12 +116,17 @@ export function activate(context: vscode.ExtensionContext): AgentBusExtensionApi
     vscode.workspace.registerTextDocumentContentProvider(
       "agentbus-replay",
       new ReplayDocumentProvider(client)
+    ),
+    vscode.workspace.registerTextDocumentContentProvider(
+      "agentbus-comparison",
+      new ComparisonDocumentProvider(client)
     )
   );
   const controller = new CommandController(
     daemon,
     store,
     selection,
+    comparisonStore,
     [
       runs,
       tasks,
@@ -122,6 +136,7 @@ export function activate(context: vscode.ExtensionContext): AgentBusExtensionApi
       tools,
       providers,
       replays,
+      comparisons,
       mcpServers
     ],
     output,

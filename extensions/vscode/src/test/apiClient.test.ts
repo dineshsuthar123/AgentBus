@@ -241,3 +241,50 @@ test("replay client routes are explicit bounded and command-free", async () => {
     /bounded/
   );
 });
+
+test("comparison client posts identifiers and uses bounded result pages", async () => {
+  const requests: Array<{
+    url: string;
+    method: string;
+    body: BodyInit | null | undefined;
+  }> = [];
+  const client = new AgentBusClient(
+    "http://127.0.0.1:43123",
+    token,
+    async (input, init) => {
+      requests.push({
+        url: String(input),
+        method: init?.method ?? "GET",
+        body: init?.body
+      });
+      return Response.json({});
+    }
+  );
+
+  await client.createComparison(
+    { left: "run-left", right: "run-right" },
+    7,
+    25
+  );
+  await client.comparison("comparison:one", 9, 30);
+
+  assert.equal(
+    requests[0]?.url.endsWith("/api/v1/comparisons?after=7&limit=25"),
+    true
+  );
+  assert.equal(requests[0]?.method, "POST");
+  assert.deepEqual(JSON.parse(String(requests[0]?.body)), {
+    left: "run-left",
+    right: "run-right"
+  });
+  assert.equal(
+    requests[1]?.url.endsWith(
+      "/api/v1/comparisons/comparison%3Aone?after=9&limit=30"
+    ),
+    true
+  );
+  assert.throws(
+    () => client.comparison("comparison", 0, 501),
+    /bounded/
+  );
+});
