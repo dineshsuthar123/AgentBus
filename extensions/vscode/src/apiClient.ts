@@ -15,6 +15,8 @@ import type {
   McpServerListResponse,
   ProviderListResponse,
   ProvenanceResponse,
+  RegressionFixtureCaptureRequest,
+  RegressionFixtureCaptureResponse,
   ReplayAcceptedResponse,
   ReplayCancelResponse,
   ReplayCreateRequest,
@@ -286,6 +288,17 @@ export class AgentBusClient {
     body: TraceArchiveImportRequest
   ): Promise<TraceArchiveImportResponse> {
     return this.request("POST", "/api/v1/traces/import", body);
+  }
+
+  public captureRegressionFixture(
+    runId: string,
+    body: RegressionFixtureCaptureRequest
+  ): Promise<RegressionFixtureCaptureResponse> {
+    return this.request(
+      "POST",
+      `/api/v1/runs/${safeSegment(runId)}/fixtures`,
+      body
+    );
   }
 
   public scheduler(runId: string): Promise<SchedulerResponse> {

@@ -318,6 +318,9 @@ test("trace archive client keeps payloads in authenticated JSON bodies", async (
     archive_base64: "YWJjZA==",
     allow_source_content: true
   });
+  await client.captureRegressionFixture("run:one", {
+    include_source_content: false
+  });
 
   assert.equal(
     requests[0]?.url.endsWith(
@@ -331,5 +334,13 @@ test("trace archive client keeps payloads in authenticated JSON bodies", async (
   assert.deepEqual(JSON.parse(String(requests[1]?.body)), {
     archive_base64: "YWJjZA==",
     allow_source_content: true
+  });
+  assert.equal(
+    requests[2]?.url.endsWith("/api/v1/runs/run%3Aone/fixtures"),
+    true
+  );
+  assert.equal(requests[2]?.method, "POST");
+  assert.deepEqual(JSON.parse(String(requests[2]?.body)), {
+    include_source_content: false
   });
 });

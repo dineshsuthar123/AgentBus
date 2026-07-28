@@ -16,6 +16,7 @@ import type {
   CancelResponse,
   ComparisonResponse,
   McpServerSummary,
+  RegressionFixtureCaptureResponse,
   ReplayAcceptedResponse,
   ReplayCancelResponse,
   ReplayCreateRequest,
@@ -49,6 +50,7 @@ import {
 import { spanUri } from "./traceDocuments";
 import {
   archiveSha256,
+  decodeRegressionFixtureArchive,
   decodeTraceArchive,
   encodeTraceArchive,
   TRACE_ARCHIVE_EXTENSION,
@@ -138,6 +140,9 @@ export class CommandController implements vscode.Disposable {
     );
     command("agentbus.importTrace", (request) =>
       this.importTrace(request)
+    );
+    command("agentbus.captureRegressionFixture", (request) =>
+      this.captureRegressionFixture(request)
     );
     command("agentbus.openProvenanceManifest", (run) =>
       this.openProvenanceManifest(run)
@@ -621,6 +626,63 @@ export class CommandController implements vscode.Disposable {
     return imported;
   }
 
+  private async captureRegressionFixture(
+    raw?: unknown
+  ): Promise<RegressionFixtureCaptureResponse | undefined> {
+    const request = commandRecord(raw);
+    const run = await this.resolveRun(request?.runId ?? raw);
+    if (!run) return undefined;
+    const trace = await (await this.client()).trace(run.run_id);
+    const explicitConsent =
+      typeof request?.includeSourceContent === "boolean";
+    let includeSourceContent = request?.includeSourceContent === true;
+    let captured: RegressionFixtureCaptureResponse;
+    try {
+      captured = await (await this.client()).captureRegressionFixture(
+        run.run_id,
+        { include_source_content: includeSourceContent }
+      );
+    } catch (error) {
+      if (
+        !(error instanceof AgentBusApiError && error.status === 403) ||
+        includeSourceContent ||
+        explicitConsent
+      ) {
+        throw error;
+      }
+      const consent = await vscode.window.showWarningMessage(
+        "This portable fixture requires sanitized source-like content. Review its origin and license before sharing it. Capture does not start replay.",
+        { modal: true },
+        "Capture Source Content"
+      );
+      if (consent !== "Capture Source Content") return undefined;
+      includeSourceContent = true;
+      captured = await (await this.client()).captureRegressionFixture(
+        run.run_id,
+        { include_source_content: true }
+      );
+    }
+    const bytes = decodeRegressionFixtureArchive(
+      captured,
+      run.run_id,
+      trace.trace_id,
+      includeSourceContent
+    );
+    const destination = await this.fixtureDestination(
+      trace.trace_id,
+      request?.destination
+    );
+    if (!destination) return undefined;
+    await vscode.workspace.fs.writeFile(destination, bytes);
+    const sourceNotice = captured.source_content_included
+      ? " Sanitized source content is included; review origin and license before sharing."
+      : "";
+    void vscode.window.showInformationMessage(
+      `Captured regression fixture to ${archiveFileLabel(destination)}. Replay was not started.${sourceNotice}`
+    );
+    return captured;
+  }
+
   private async openProvenanceManifest(raw?: unknown): Promise<void> {
     const run = await this.resolveRun(raw);
     if (!run) return;
@@ -672,6 +734,31 @@ export class CommandController implements vscode.Disposable {
     const source = selected?.[0];
     if (source) validateTraceArchiveFileName(source.fsPath);
     return source;
+  }
+
+  private async fixtureDestination(
+    traceId: string,
+    raw: unknown
+  ): Promise<vscode.Uri | undefined> {
+    if (typeof raw === "string") {
+      validateTraceArchiveFileName(raw);
+      return vscode.Uri.file(raw);
+    }
+    const folder = vscode.workspace.workspaceFolders?.[0]?.uri;
+    const destination = await vscode.window.showSaveDialog({
+      title: "Capture AgentBus Regression Fixture",
+      defaultUri: folder
+        ? vscode.Uri.joinPath(
+            folder,
+            `${traceId}.regression${TRACE_ARCHIVE_EXTENSION}`
+          )
+        : undefined,
+      filters: {
+        "AgentBus Regression Fixture": ["agentbus-trace"]
+      }
+    });
+    if (destination) validateTraceArchiveFileName(destination.fsPath);
+    return destination;
   }
 
   private async prepareOfflineReplay(runId: string): Promise<boolean> {

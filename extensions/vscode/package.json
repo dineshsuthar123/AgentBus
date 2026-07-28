@@ -108,6 +108,10 @@
         "title": "AgentBus: Import Trace"
       },
       {
+        "command": "agentbus.captureRegressionFixture",
+        "title": "AgentBus: Capture Regression Fixture"
+      },
+      {
         "command": "agentbus.openProvenanceManifest",
         "title": "AgentBus: Open Provenance Manifest"
       },
@@ -302,9 +306,14 @@
           "group": "navigation@4"
         },
         {
-          "command": "agentbus.openProvenanceManifest",
+          "command": "agentbus.captureRegressionFixture",
           "when": "viewItem == agentbusRunTerminal",
           "group": "navigation@5"
+        },
+        {
+          "command": "agentbus.openProvenanceManifest",
+          "when": "viewItem == agentbusRunTerminal",
+          "group": "navigation@6"
         },
         {
           "command": "agentbus.approveAction",

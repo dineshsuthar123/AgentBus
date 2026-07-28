@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { RegressionFixtureCaptureResponse } from "./generated/protocol";
 
 export const MAX_CONTROL_TRACE_ARCHIVE_BYTES = 650_000;
 export const TRACE_ARCHIVE_EXTENSION = ".agentbus-trace";
@@ -44,6 +45,50 @@ export function encodeTraceArchive(bytes: Uint8Array): string {
 
 export function archiveSha256(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+export function decodeRegressionFixtureArchive(
+  response: RegressionFixtureCaptureResponse,
+  expectedRunId: string,
+  expectedTraceId: string,
+  sourceContentConsented: boolean
+): Uint8Array {
+  if (
+    response.run_id !== expectedRunId ||
+    response.trace_id !== expectedTraceId
+  ) {
+    throw new Error(
+      "AgentBus regression fixture identity did not match the request."
+    );
+  }
+  if (
+    response.assertions_validated !== true ||
+    response.replay_started !== false
+  ) {
+    throw new Error(
+      "AgentBus regression fixture validation or no-replay confirmation failed."
+    );
+  }
+  if (
+    response.source_content_included === true &&
+    !sourceContentConsented
+  ) {
+    throw new Error(
+      "AgentBus refused unexpected source content in a regression fixture."
+    );
+  }
+  if (
+    response.source_content_included === true &&
+    (!response.source_warning || !response.license_warning)
+  ) {
+    throw new Error(
+      "AgentBus regression fixture omitted required source-content warnings."
+    );
+  }
+  return decodeTraceArchive(
+    response.archive_base64,
+    response.archive_sha256
+  );
 }
 
 export function validateTraceArchiveFileName(path: string): void {
