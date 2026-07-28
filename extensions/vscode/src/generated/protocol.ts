@@ -368,6 +368,7 @@ export interface ReplayAcceptedResponse {
   "fork"?: boolean;
   "changed_input_names"?: Array<string>;
   "isolated"?: boolean;
+  "isolation_scope"?: "daemon_managed_temporary_workspace" | null;
   "span_results"?: Array<ReplaySpanResultResponse>;
   "span_results_truncated"?: boolean;
   "diagnostics_truncated"?: boolean;
@@ -416,6 +417,7 @@ export interface ReplaySessionResponse {
   "fork"?: boolean;
   "changed_input_names"?: Array<string>;
   "isolated"?: boolean;
+  "isolation_scope"?: "daemon_managed_temporary_workspace" | null;
   "span_results"?: Array<ReplaySpanResultResponse>;
   "span_results_truncated"?: boolean;
   "diagnostics_truncated"?: boolean;

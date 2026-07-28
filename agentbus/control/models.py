@@ -639,6 +639,7 @@ class ReplaySessionResponse(ProtocolModel):
     fork: bool = False
     changed_input_names: list[str] = Field(default_factory=list, max_length=1024)
     isolated: bool = False
+    isolation_scope: Literal["daemon_managed_temporary_workspace"] | None = None
     span_results: list[ReplaySpanResultResponse] = Field(
         default_factory=list,
         max_length=500,

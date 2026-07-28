@@ -21,6 +21,7 @@ from agentbus.control.services import ControlQueryService
 from agentbus.execution.models import RunRecord, TaskSpec
 from agentbus.execution.state_store import StateStore
 from agentbus.mcp import McpServerConfig, mcp_server_capabilities
+from agentbus.replay import ReplayMode, ReplaySession
 from agentbus.sandbox.platform import ExecutableCatalog
 from agentbus.tools.protocol import ToolCapabilityName
 from agentbus.tools.runtime import build_managed_tool_runtime
@@ -518,10 +519,32 @@ def test_managed_replay_api_requires_mode_and_runs_offline(
     assert inspected.status_code == 200
     assert inspected.json()["provider_calls"] == 0
     assert inspected.json()["network_calls"] == 0
+    assert inspected.json()["isolation_scope"] is None
+    assert "isolated_workspace" not in inspected.json()
     assert "isolated_workspace" not in inspected.json()
     assert listed.status_code == 200
     assert listed.json()["replays"][0]["replay_id"] == replay_id
     assert cancelled.json()["cancellation_requested"] is False
+
+
+def test_replay_response_exposes_isolation_scope_without_private_path(
+    tmp_path: Path,
+) -> None:
+    client, _ = _client(tmp_path)
+    response = client.app.state.query_service.replay_session_response(
+        ReplaySession(
+            replay_id="replay-isolated",
+            source_trace_id="trace-isolated",
+            source_run_id="run-1",
+            mode=ReplayMode.OFFLINE,
+            isolated_workspace=str(tmp_path / "private-replay-worktree"),
+        )
+    )
+
+    assert response.isolated is True
+    assert response.isolation_scope == "daemon_managed_temporary_workspace"
+    assert "isolated_workspace" not in response.model_dump(mode="json")
+    assert str(tmp_path) not in response.model_dump_json()
 
 
 def test_comparison_api_returns_bounded_hash_only_differences(

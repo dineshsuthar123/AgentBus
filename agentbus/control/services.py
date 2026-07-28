@@ -1077,6 +1077,11 @@ class ControlQueryService:
             fork=session.fork,
             changed_input_names=session.changed_input_names,
             isolated=session.isolated_workspace is not None,
+            isolation_scope=(
+                "daemon_managed_temporary_workspace"
+                if session.isolated_workspace is not None
+                else None
+            ),
             span_results=[
                 ReplaySpanResultResponse(
                     span_id=item.span_id,

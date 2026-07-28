@@ -2283,6 +2283,19 @@
           "title": "Isolated",
           "type": "boolean"
         },
+        "isolation_scope": {
+          "anyOf": [
+            {
+              "const": "daemon_managed_temporary_workspace",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Isolation Scope"
+        },
         "missing_inputs": {
           "items": {
             "type": "string"
@@ -2613,6 +2626,19 @@
           "default": false,
           "title": "Isolated",
           "type": "boolean"
+        },
+        "isolation_scope": {
+          "anyOf": [
+            {
+              "const": "daemon_managed_temporary_workspace",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Isolation Scope"
         },
         "missing_inputs": {
           "items": {
