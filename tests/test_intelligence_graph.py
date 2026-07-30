@@ -6,6 +6,7 @@ import pytest
 
 from agentbus.intelligence import (
     DependencyGraphBuilder,
+    DependencyGraph,
     DependencyKind,
     GraphBuildLimits,
     IndexingResult,
@@ -46,8 +47,13 @@ def test_indexer_persists_typed_dependency_edges(
     store, result = _index(tmp_path)
 
     edges = store.list_edges(result.snapshot.snapshot_id)
+    graph = DependencyGraph.from_store(
+        store,
+        result.snapshot.snapshot_id,
+    )
 
     assert edges
+    assert graph.edges == edges
     assert result.snapshot.edge_count == len(edges)
     assert result.snapshot.graph_hash == graph_fingerprint(edges)
     call_edges = [
