@@ -20,14 +20,23 @@ from agentbus.intelligence.migrations import (
     verify_schema,
 )
 from agentbus.intelligence.models import (
+    ArchitectureBoundary,
+    DependencyEdge,
+    DependencyKind,
     DiagnosticSeverity,
     IndexDiagnostic,
     IndexSnapshot,
     IndexState,
+    Module,
+    OwnershipRule,
     Project,
     RepositoryIdentity,
     SourceFile,
     SourceLanguage,
+    Symbol,
+    SymbolKind,
+    SymbolLocation,
+    SymbolReference,
     WorkspaceIdentity,
 )
 
@@ -80,15 +89,42 @@ class IndexStore:
         *,
         projects: Iterable[Project] = (),
         files: Iterable[SourceFile] = (),
+        modules: Iterable[Module] = (),
+        symbols: Iterable[Symbol] = (),
+        references: Iterable[SymbolReference] = (),
+        edges: Iterable[DependencyEdge] = (),
+        ownership_rules: Iterable[OwnershipRule] = (),
+        architecture_boundaries: Iterable[ArchitectureBoundary] = (),
     ) -> IndexSnapshot:
         project_records = tuple(sorted(projects, key=lambda item: item.project_id))
         file_records = tuple(sorted(files, key=lambda item: item.file_id))
+        module_records = tuple(sorted(modules, key=lambda item: item.module_id))
+        symbol_records = tuple(sorted(symbols, key=lambda item: item.symbol_id))
+        reference_records = tuple(
+            sorted(references, key=lambda item: item.reference_id)
+        )
+        edge_records = tuple(sorted(edges, key=lambda item: item.edge_id))
+        ownership_records = tuple(
+            sorted(ownership_rules, key=lambda item: item.rule_id)
+        )
+        boundary_records = tuple(
+            sorted(
+                architecture_boundaries,
+                key=lambda item: item.boundary_id,
+            )
+        )
         self._validate_snapshot_bundle(
             repository,
             workspace,
             snapshot,
             project_records,
             file_records,
+            module_records,
+            symbol_records,
+            reference_records,
+            edge_records,
+            ownership_records,
+            boundary_records,
         )
 
         with self._write_transaction() as connection:
@@ -104,6 +140,12 @@ class IndexStore:
                     snapshot,
                     project_records,
                     file_records,
+                    module_records,
+                    symbol_records,
+                    reference_records,
+                    edge_records,
+                    ownership_records,
+                    boundary_records,
                 )
             else:
                 self._insert_snapshot(connection, snapshot)
@@ -116,6 +158,36 @@ class IndexStore:
                     connection,
                     snapshot.snapshot_id,
                     file_records,
+                )
+                self._insert_modules(
+                    connection,
+                    snapshot.snapshot_id,
+                    module_records,
+                )
+                self._insert_symbols(
+                    connection,
+                    snapshot.snapshot_id,
+                    symbol_records,
+                )
+                self._insert_references(
+                    connection,
+                    snapshot.snapshot_id,
+                    reference_records,
+                )
+                self._insert_edges(
+                    connection,
+                    snapshot.snapshot_id,
+                    edge_records,
+                )
+                self._insert_ownership_rules(
+                    connection,
+                    snapshot.snapshot_id,
+                    ownership_records,
+                )
+                self._insert_architecture_boundaries(
+                    connection,
+                    snapshot.snapshot_id,
+                    boundary_records,
                 )
                 self._insert_diagnostics(
                     connection,
@@ -204,6 +276,39 @@ class IndexStore:
     def list_files(self, snapshot_id: str) -> tuple[SourceFile, ...]:
         with self._connection() as connection:
             return self._files_for_snapshot(connection, snapshot_id)
+
+    def list_modules(self, snapshot_id: str) -> tuple[Module, ...]:
+        with self._connection() as connection:
+            return self._modules_for_snapshot(connection, snapshot_id)
+
+    def list_symbols(self, snapshot_id: str) -> tuple[Symbol, ...]:
+        with self._connection() as connection:
+            return self._symbols_for_snapshot(connection, snapshot_id)
+
+    def list_references(
+        self,
+        snapshot_id: str,
+    ) -> tuple[SymbolReference, ...]:
+        with self._connection() as connection:
+            return self._references_for_snapshot(connection, snapshot_id)
+
+    def list_edges(self, snapshot_id: str) -> tuple[DependencyEdge, ...]:
+        with self._connection() as connection:
+            return self._edges_for_snapshot(connection, snapshot_id)
+
+    def list_ownership_rules(
+        self,
+        snapshot_id: str,
+    ) -> tuple[OwnershipRule, ...]:
+        with self._connection() as connection:
+            return self._ownership_for_snapshot(connection, snapshot_id)
+
+    def list_architecture_boundaries(
+        self,
+        snapshot_id: str,
+    ) -> tuple[ArchitectureBoundary, ...]:
+        with self._connection() as connection:
+            return self._boundaries_for_snapshot(connection, snapshot_id)
 
     def verify(self) -> None:
         try:
@@ -500,6 +605,207 @@ class IndexStore:
             ),
         )
 
+    def _insert_modules(
+        self,
+        connection: sqlite3.Connection,
+        snapshot_id: str,
+        modules: Sequence[Module],
+    ) -> None:
+        connection.executemany(
+            """
+            INSERT INTO modules(
+                module_id, project_id, snapshot_id, name, qualified_name,
+                relative_path, language, public
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                (
+                    module.module_id,
+                    module.project_id,
+                    snapshot_id,
+                    module.name,
+                    module.qualified_name,
+                    module.relative_path,
+                    module.language.value,
+                    int(module.public),
+                )
+                for module in modules
+            ),
+        )
+
+    def _insert_symbols(
+        self,
+        connection: sqlite3.Connection,
+        snapshot_id: str,
+        symbols: Sequence[Symbol],
+    ) -> None:
+        connection.executemany(
+            """
+            INSERT INTO symbols(
+                symbol_id, file_id, project_id, module_id, snapshot_id,
+                name, qualified_name, kind, language, start_line,
+                start_column, end_line, end_column, signature, documentation,
+                parent_symbol_id, exported, is_test, endpoint, confidence,
+                attributes_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                (
+                    symbol.symbol_id,
+                    symbol.file_id,
+                    symbol.project_id,
+                    symbol.module_id,
+                    snapshot_id,
+                    symbol.name,
+                    symbol.qualified_name,
+                    symbol.kind.value,
+                    symbol.language.value,
+                    symbol.location.start_line,
+                    symbol.location.start_column,
+                    symbol.location.end_line,
+                    symbol.location.end_column,
+                    symbol.signature,
+                    symbol.documentation,
+                    symbol.parent_symbol_id,
+                    int(symbol.exported),
+                    int(symbol.test),
+                    symbol.endpoint,
+                    symbol.confidence,
+                    _json(symbol.attributes),
+                )
+                for symbol in symbols
+            ),
+        )
+
+    def _insert_references(
+        self,
+        connection: sqlite3.Connection,
+        snapshot_id: str,
+        references: Sequence[SymbolReference],
+    ) -> None:
+        connection.executemany(
+            """
+            INSERT INTO symbol_references(
+                reference_id, source_symbol_id, source_file_id,
+                target_symbol_id, snapshot_id, unresolved_target, kind,
+                relative_path, start_line, start_column, end_line, end_column,
+                confidence, explanation
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                (
+                    reference.reference_id,
+                    reference.source_symbol_id,
+                    reference.source_file_id,
+                    reference.target_symbol_id,
+                    snapshot_id,
+                    reference.unresolved_target,
+                    reference.kind.value,
+                    reference.location.relative_path,
+                    reference.location.start_line,
+                    reference.location.start_column,
+                    reference.location.end_line,
+                    reference.location.end_column,
+                    reference.confidence,
+                    reference.explanation,
+                )
+                for reference in references
+            ),
+        )
+
+    def _insert_edges(
+        self,
+        connection: sqlite3.Connection,
+        snapshot_id: str,
+        edges: Sequence[DependencyEdge],
+    ) -> None:
+        connection.executemany(
+            """
+            INSERT INTO dependency_edges(
+                edge_id, snapshot_id, kind, source_id, target_id,
+                relative_path, start_line, start_column, end_line, end_column,
+                confidence, parser_name, parser_version, explanation, resolved
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                (
+                    edge.edge_id,
+                    snapshot_id,
+                    edge.kind.value,
+                    edge.source_id,
+                    edge.target_id,
+                    edge.location.relative_path if edge.location else None,
+                    edge.location.start_line if edge.location else None,
+                    edge.location.start_column if edge.location else None,
+                    edge.location.end_line if edge.location else None,
+                    edge.location.end_column if edge.location else None,
+                    edge.confidence,
+                    edge.parser_name,
+                    edge.parser_version,
+                    edge.explanation,
+                    int(edge.resolved),
+                )
+                for edge in edges
+            ),
+        )
+
+    def _insert_ownership_rules(
+        self,
+        connection: sqlite3.Connection,
+        snapshot_id: str,
+        rules: Sequence[OwnershipRule],
+    ) -> None:
+        connection.executemany(
+            """
+            INSERT INTO ownership_rules(
+                rule_id, snapshot_id, pattern, owners_json, source_path,
+                confidence, explanation
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                (
+                    rule.rule_id,
+                    snapshot_id,
+                    rule.pattern,
+                    _json(rule.owners),
+                    rule.source_path,
+                    rule.confidence,
+                    rule.explanation,
+                )
+                for rule in rules
+            ),
+        )
+
+    def _insert_architecture_boundaries(
+        self,
+        connection: sqlite3.Connection,
+        snapshot_id: str,
+        boundaries: Sequence[ArchitectureBoundary],
+    ) -> None:
+        connection.executemany(
+            """
+            INSERT INTO architecture_boundaries(
+                boundary_id, snapshot_id, name, scope_json, boundary_type,
+                source_evidence_json, confidence, explanation,
+                forbidden_targets_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                (
+                    boundary.boundary_id,
+                    snapshot_id,
+                    boundary.name,
+                    _json(boundary.scope),
+                    boundary.boundary_type,
+                    _json(boundary.source_evidence),
+                    boundary.confidence,
+                    boundary.explanation,
+                    _json(boundary.forbidden_targets),
+                )
+                for boundary in boundaries
+            ),
+        )
+
     def _insert_diagnostics(
         self,
         connection: sqlite3.Connection,
@@ -534,6 +840,12 @@ class IndexStore:
         snapshot: IndexSnapshot,
         projects: Sequence[Project],
         files: Sequence[SourceFile],
+        modules: Sequence[Module],
+        symbols: Sequence[Symbol],
+        references: Sequence[SymbolReference],
+        edges: Sequence[DependencyEdge],
+        ownership_rules: Sequence[OwnershipRule],
+        architecture_boundaries: Sequence[ArchitectureBoundary],
     ) -> None:
         stored_row = connection.execute(
             "SELECT * FROM index_snapshots WHERE snapshot_id = ?",
@@ -552,10 +864,40 @@ class IndexStore:
             connection,
             snapshot.snapshot_id,
         )
+        stored_modules = self._modules_for_snapshot(
+            connection,
+            snapshot.snapshot_id,
+        )
+        stored_symbols = self._symbols_for_snapshot(
+            connection,
+            snapshot.snapshot_id,
+        )
+        stored_references = self._references_for_snapshot(
+            connection,
+            snapshot.snapshot_id,
+        )
+        stored_edges = self._edges_for_snapshot(
+            connection,
+            snapshot.snapshot_id,
+        )
+        stored_ownership = self._ownership_for_snapshot(
+            connection,
+            snapshot.snapshot_id,
+        )
+        stored_boundaries = self._boundaries_for_snapshot(
+            connection,
+            snapshot.snapshot_id,
+        )
         if (
             stored_snapshot != snapshot
             or stored_projects != tuple(projects)
             or stored_files != tuple(files)
+            or stored_modules != tuple(modules)
+            or stored_symbols != tuple(symbols)
+            or stored_references != tuple(references)
+            or stored_edges != tuple(edges)
+            or stored_ownership != tuple(ownership_rules)
+            or stored_boundaries != tuple(architecture_boundaries)
         ):
             raise IndexPersistenceError(
                 f"Snapshot identity conflicts with stored content: "
@@ -569,6 +911,12 @@ class IndexStore:
         snapshot: IndexSnapshot,
         projects: Sequence[Project],
         files: Sequence[SourceFile],
+        modules: Sequence[Module],
+        symbols: Sequence[Symbol],
+        references: Sequence[SymbolReference],
+        edges: Sequence[DependencyEdge],
+        ownership_rules: Sequence[OwnershipRule],
+        architecture_boundaries: Sequence[ArchitectureBoundary],
     ) -> None:
         if workspace.repository_id != repository.repository_id:
             raise IndexPersistenceError(
@@ -586,16 +934,17 @@ class IndexStore:
             raise IndexPersistenceError(
                 "Snapshot file count does not match the supplied files."
             )
-        if any(
-            count
-            for count in (
-                snapshot.symbol_count,
-                snapshot.reference_count,
-                snapshot.edge_count,
-            )
-        ):
+        if snapshot.symbol_count != len(symbols):
             raise IndexPersistenceError(
-                "This snapshot contains graph records that were not supplied."
+                "Snapshot symbol count does not match the supplied symbols."
+            )
+        if snapshot.reference_count != len(references):
+            raise IndexPersistenceError(
+                "Snapshot reference count does not match the supplied references."
+            )
+        if snapshot.edge_count != len(edges):
+            raise IndexPersistenceError(
+                "Snapshot edge count does not match the supplied edges."
             )
         project_ids = {project.project_id for project in projects}
         if len(project_ids) != len(projects):
@@ -623,6 +972,110 @@ class IndexStore:
                     f"File references a project outside its snapshot: "
                     f"{source.relative_path}."
                 )
+        self._validate_graph_records(
+            project_ids,
+            files,
+            modules,
+            symbols,
+            references,
+            edges,
+            ownership_rules,
+            architecture_boundaries,
+        )
+
+    def _validate_graph_records(
+        self,
+        project_ids: set[str],
+        files: Sequence[SourceFile],
+        modules: Sequence[Module],
+        symbols: Sequence[Symbol],
+        references: Sequence[SymbolReference],
+        edges: Sequence[DependencyEdge],
+        ownership_rules: Sequence[OwnershipRule],
+        architecture_boundaries: Sequence[ArchitectureBoundary],
+    ) -> None:
+        file_paths = {source.file_id: source.relative_path for source in files}
+        module_ids = _unique_ids(
+            (module.module_id for module in modules),
+            "module",
+        )
+        for module in modules:
+            if module.project_id not in project_ids:
+                raise IndexPersistenceError(
+                    f"Module references a project outside its snapshot: "
+                    f"{module.qualified_name}."
+                )
+
+        symbol_ids = _unique_ids(
+            (symbol.symbol_id for symbol in symbols),
+            "symbol",
+        )
+        for symbol in symbols:
+            expected_path = file_paths.get(symbol.file_id)
+            if expected_path is None:
+                raise IndexPersistenceError(
+                    f"Symbol references a file outside its snapshot: "
+                    f"{symbol.qualified_name}."
+                )
+            if symbol.location.relative_path != expected_path:
+                raise IndexPersistenceError(
+                    f"Symbol location does not match its source file: "
+                    f"{symbol.qualified_name}."
+                )
+            if symbol.project_id and symbol.project_id not in project_ids:
+                raise IndexPersistenceError(
+                    f"Symbol references a project outside its snapshot: "
+                    f"{symbol.qualified_name}."
+                )
+            if symbol.module_id and symbol.module_id not in module_ids:
+                raise IndexPersistenceError(
+                    f"Symbol references a module outside its snapshot: "
+                    f"{symbol.qualified_name}."
+                )
+            if (
+                symbol.parent_symbol_id
+                and symbol.parent_symbol_id not in symbol_ids
+            ):
+                raise IndexPersistenceError(
+                    f"Symbol references a parent outside its snapshot: "
+                    f"{symbol.qualified_name}."
+                )
+
+        _unique_ids(
+            (reference.reference_id for reference in references),
+            "reference",
+        )
+        for reference in references:
+            expected_path = file_paths.get(reference.source_file_id)
+            if expected_path is None:
+                raise IndexPersistenceError(
+                    "Reference source file is outside its snapshot."
+                )
+            if reference.location.relative_path != expected_path:
+                raise IndexPersistenceError(
+                    "Reference location does not match its source file."
+                )
+            if (
+                reference.source_symbol_id
+                and reference.source_symbol_id not in symbol_ids
+            ):
+                raise IndexPersistenceError(
+                    "Reference source symbol is outside its snapshot."
+                )
+            if (
+                reference.target_symbol_id
+                and reference.target_symbol_id not in symbol_ids
+            ):
+                raise IndexPersistenceError(
+                    "Reference target symbol is outside its snapshot."
+                )
+
+        _unique_ids((edge.edge_id for edge in edges), "edge")
+        _unique_ids((rule.rule_id for rule in ownership_rules), "ownership rule")
+        _unique_ids(
+            (boundary.boundary_id for boundary in architecture_boundaries),
+            "architecture boundary",
+        )
 
     def _snapshot_from_row(
         self,
@@ -731,6 +1184,202 @@ class IndexStore:
             for row in rows
         )
 
+    def _modules_for_snapshot(
+        self,
+        connection: sqlite3.Connection,
+        snapshot_id: str,
+    ) -> tuple[Module, ...]:
+        rows = connection.execute(
+            """
+            SELECT *
+            FROM modules
+            WHERE snapshot_id = ?
+            ORDER BY module_id
+            """,
+            (snapshot_id,),
+        ).fetchall()
+        return tuple(
+            Module(
+                module_id=row["module_id"],
+                project_id=row["project_id"],
+                name=row["name"],
+                qualified_name=row["qualified_name"],
+                relative_path=row["relative_path"],
+                language=SourceLanguage(row["language"]),
+                public=bool(row["public"]),
+            )
+            for row in rows
+        )
+
+    def _symbols_for_snapshot(
+        self,
+        connection: sqlite3.Connection,
+        snapshot_id: str,
+    ) -> tuple[Symbol, ...]:
+        rows = connection.execute(
+            """
+            SELECT symbols.*, indexed_files.relative_path AS file_relative_path
+            FROM symbols
+            JOIN indexed_files
+              ON indexed_files.snapshot_id = symbols.snapshot_id
+             AND indexed_files.file_id = symbols.file_id
+            WHERE symbols.snapshot_id = ?
+            ORDER BY symbols.symbol_id
+            """,
+            (snapshot_id,),
+        ).fetchall()
+        return tuple(
+            Symbol(
+                symbol_id=row["symbol_id"],
+                file_id=row["file_id"],
+                project_id=row["project_id"],
+                module_id=row["module_id"],
+                name=row["name"],
+                qualified_name=row["qualified_name"],
+                kind=SymbolKind(row["kind"]),
+                language=SourceLanguage(row["language"]),
+                location=SymbolLocation(
+                    relative_path=row["file_relative_path"],
+                    start_line=row["start_line"],
+                    start_column=row["start_column"],
+                    end_line=row["end_line"],
+                    end_column=row["end_column"],
+                ),
+                signature=row["signature"],
+                documentation=row["documentation"],
+                parent_symbol_id=row["parent_symbol_id"],
+                exported=bool(row["exported"]),
+                test=bool(row["is_test"]),
+                endpoint=row["endpoint"],
+                confidence=row["confidence"],
+                attributes=_load_json(row["attributes_json"]),
+            )
+            for row in rows
+        )
+
+    def _references_for_snapshot(
+        self,
+        connection: sqlite3.Connection,
+        snapshot_id: str,
+    ) -> tuple[SymbolReference, ...]:
+        rows = connection.execute(
+            """
+            SELECT *
+            FROM symbol_references
+            WHERE snapshot_id = ?
+            ORDER BY reference_id
+            """,
+            (snapshot_id,),
+        ).fetchall()
+        return tuple(
+            SymbolReference(
+                reference_id=row["reference_id"],
+                source_symbol_id=row["source_symbol_id"],
+                source_file_id=row["source_file_id"],
+                target_symbol_id=row["target_symbol_id"],
+                unresolved_target=row["unresolved_target"],
+                kind=DependencyKind(row["kind"]),
+                location=SymbolLocation(
+                    relative_path=row["relative_path"],
+                    start_line=row["start_line"],
+                    start_column=row["start_column"],
+                    end_line=row["end_line"],
+                    end_column=row["end_column"],
+                ),
+                confidence=row["confidence"],
+                explanation=row["explanation"],
+            )
+            for row in rows
+        )
+
+    def _edges_for_snapshot(
+        self,
+        connection: sqlite3.Connection,
+        snapshot_id: str,
+    ) -> tuple[DependencyEdge, ...]:
+        rows = connection.execute(
+            """
+            SELECT *
+            FROM dependency_edges
+            WHERE snapshot_id = ?
+            ORDER BY edge_id
+            """,
+            (snapshot_id,),
+        ).fetchall()
+        return tuple(
+            DependencyEdge(
+                edge_id=row["edge_id"],
+                kind=DependencyKind(row["kind"]),
+                source_id=row["source_id"],
+                target_id=row["target_id"],
+                location=_optional_location(row),
+                confidence=row["confidence"],
+                parser_name=row["parser_name"],
+                parser_version=row["parser_version"],
+                explanation=row["explanation"],
+                resolved=bool(row["resolved"]),
+            )
+            for row in rows
+        )
+
+    def _ownership_for_snapshot(
+        self,
+        connection: sqlite3.Connection,
+        snapshot_id: str,
+    ) -> tuple[OwnershipRule, ...]:
+        rows = connection.execute(
+            """
+            SELECT *
+            FROM ownership_rules
+            WHERE snapshot_id = ?
+            ORDER BY rule_id
+            """,
+            (snapshot_id,),
+        ).fetchall()
+        return tuple(
+            OwnershipRule(
+                rule_id=row["rule_id"],
+                pattern=row["pattern"],
+                owners=tuple(_load_json(row["owners_json"])),
+                source_path=row["source_path"],
+                confidence=row["confidence"],
+                explanation=row["explanation"],
+            )
+            for row in rows
+        )
+
+    def _boundaries_for_snapshot(
+        self,
+        connection: sqlite3.Connection,
+        snapshot_id: str,
+    ) -> tuple[ArchitectureBoundary, ...]:
+        rows = connection.execute(
+            """
+            SELECT *
+            FROM architecture_boundaries
+            WHERE snapshot_id = ?
+            ORDER BY boundary_id
+            """,
+            (snapshot_id,),
+        ).fetchall()
+        return tuple(
+            ArchitectureBoundary(
+                boundary_id=row["boundary_id"],
+                name=row["name"],
+                scope=tuple(_load_json(row["scope_json"])),
+                boundary_type=row["boundary_type"],
+                source_evidence=tuple(
+                    _load_json(row["source_evidence_json"])
+                ),
+                confidence=row["confidence"],
+                explanation=row["explanation"],
+                forbidden_targets=tuple(
+                    _load_json(row["forbidden_targets_json"])
+                ),
+            )
+            for row in rows
+        )
+
     @staticmethod
     def _repository_from_row(row: sqlite3.Row) -> RepositoryIdentity:
         return RepositoryIdentity(
@@ -753,6 +1402,39 @@ def _bounded_limit(value: int) -> int:
     if value < 1 or value > _MAX_LIST_LIMIT:
         raise ValueError(f"limit must be between 1 and {_MAX_LIST_LIMIT}")
     return value
+
+
+def _unique_ids(values: Iterable[str], description: str) -> set[str]:
+    records = tuple(values)
+    identities = set(records)
+    if len(identities) != len(records):
+        raise IndexPersistenceError(
+            f"Snapshot contains duplicate {description} identities."
+        )
+    return identities
+
+
+def _optional_location(row: sqlite3.Row) -> SymbolLocation | None:
+    values = (
+        row["relative_path"],
+        row["start_line"],
+        row["start_column"],
+        row["end_line"],
+        row["end_column"],
+    )
+    if all(value is None for value in values):
+        return None
+    if any(value is None for value in values):
+        raise IndexCorruptedError(
+            "Stored dependency edge contains an incomplete source location."
+        )
+    return SymbolLocation(
+        relative_path=row["relative_path"],
+        start_line=row["start_line"],
+        start_column=row["start_column"],
+        end_line=row["end_line"],
+        end_column=row["end_column"],
+    )
 
 
 def _json(value: object) -> str:

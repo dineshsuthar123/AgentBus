@@ -7,20 +7,33 @@ from pathlib import Path
 import pytest
 
 from agentbus.intelligence import (
+    ArchitectureBoundary,
+    DependencyEdge,
+    DependencyKind,
     IndexDiagnostic,
     IndexPersistenceError,
     IndexSnapshot,
     IndexState,
     IndexStore,
+    Module,
+    OwnershipRule,
     Project,
     ProjectKind,
     SourceFile,
     SourceLanguage,
+    Symbol,
+    SymbolKind,
+    SymbolLocation,
+    SymbolReference,
     content_hash,
+    edge_id,
     file_id,
+    module_id,
     project_id,
+    reference_id,
     repository_identity,
     snapshot_id,
+    symbol_id,
     workspace_identity,
 )
 from agentbus.intelligence.fingerprints import (
@@ -202,6 +215,90 @@ def test_snapshot_retry_rejects_conflicting_content(tmp_path: Path) -> None:
         )
 
 
+def test_symbol_graph_and_architecture_metadata_round_trip(
+    tmp_path: Path,
+) -> None:
+    store = IndexStore(tmp_path / "repository.sqlite3")
+    bundle = _graph_bundle()
+
+    stored = store.publish_snapshot(
+        bundle["repository"],
+        bundle["workspace"],
+        bundle["snapshot"],
+        projects=bundle["projects"],
+        files=bundle["files"],
+        modules=bundle["modules"],
+        symbols=bundle["symbols"],
+        references=bundle["references"],
+        edges=bundle["edges"],
+        ownership_rules=bundle["ownership_rules"],
+        architecture_boundaries=bundle["boundaries"],
+    )
+
+    assert stored == bundle["snapshot"]
+    assert store.list_modules(stored.snapshot_id) == tuple(
+        sorted(bundle["modules"], key=lambda item: item.module_id)
+    )
+    assert store.list_symbols(stored.snapshot_id) == tuple(
+        sorted(bundle["symbols"], key=lambda item: item.symbol_id)
+    )
+    assert store.list_references(stored.snapshot_id) == bundle["references"]
+    assert store.list_edges(stored.snapshot_id) == bundle["edges"]
+    assert store.list_ownership_rules(stored.snapshot_id) == bundle["ownership_rules"]
+    assert (
+        store.list_architecture_boundaries(stored.snapshot_id)
+        == bundle["boundaries"]
+    )
+    store.verify()
+
+
+def test_graph_reference_cannot_resolve_through_an_older_snapshot(
+    tmp_path: Path,
+) -> None:
+    store = IndexStore(tmp_path / "repository.sqlite3")
+    bundle = _graph_bundle()
+    store.publish_snapshot(
+        bundle["repository"],
+        bundle["workspace"],
+        bundle["snapshot"],
+        projects=bundle["projects"],
+        files=bundle["files"],
+        modules=bundle["modules"],
+        symbols=bundle["symbols"],
+        references=bundle["references"],
+        edges=bundle["edges"],
+        ownership_rules=bundle["ownership_rules"],
+        architecture_boundaries=bundle["boundaries"],
+    )
+    reference = bundle["references"][0]
+    retained_symbol = next(
+        symbol
+        for symbol in bundle["symbols"]
+        if symbol.symbol_id == reference.source_symbol_id
+    ).model_copy(update={"parent_symbol_id": None})
+    snapshot = bundle["snapshot"].model_copy(
+        update={
+            "snapshot_id": "snapshot_" + "9" * 64,
+            "symbol_count": 1,
+        }
+    )
+
+    with pytest.raises(IndexPersistenceError, match="target symbol"):
+        store.publish_snapshot(
+            bundle["repository"],
+            bundle["workspace"],
+            snapshot,
+            projects=bundle["projects"],
+            files=bundle["files"],
+            modules=bundle["modules"],
+            symbols=(retained_symbol,),
+            references=bundle["references"],
+            edges=bundle["edges"],
+            ownership_rules=bundle["ownership_rules"],
+            architecture_boundaries=bundle["boundaries"],
+        )
+
+
 def _bundle(
     *,
     snapshot_suffix: str = "default",
@@ -270,3 +367,159 @@ def _bundle(
         ),
     )
     return repository, workspace, snapshot, (project,), (source_file,)
+
+
+def _graph_bundle() -> dict[str, object]:
+    repository, workspace, base, projects, files = _bundle()
+    project = projects[0]
+    source = files[0]
+    module_identity = module_id(
+        project.project_id,
+        source.relative_path,
+        "agentbus.example",
+    )
+    module = Module(
+        module_id=module_identity,
+        project_id=project.project_id,
+        name="example",
+        qualified_name="agentbus.example",
+        relative_path=source.relative_path,
+        language=SourceLanguage.PYTHON,
+        public=True,
+    )
+    class_identity = symbol_id(
+        source.file_id,
+        "agentbus.example.Calculator",
+        SymbolKind.CLASS,
+    )
+    method_identity = symbol_id(
+        source.file_id,
+        "agentbus.example.Calculator.answer",
+        SymbolKind.METHOD,
+        signature="answer(self) -> int",
+    )
+    parent = Symbol(
+        symbol_id=class_identity,
+        file_id=source.file_id,
+        project_id=project.project_id,
+        module_id=module.module_id,
+        name="Calculator",
+        qualified_name="agentbus.example.Calculator",
+        kind=SymbolKind.CLASS,
+        language=SourceLanguage.PYTHON,
+        location=SymbolLocation(
+            relative_path=source.relative_path,
+            start_line=1,
+            start_column=0,
+            end_line=2,
+            end_column=13,
+        ),
+        exported=True,
+    )
+    child = Symbol(
+        symbol_id=method_identity,
+        file_id=source.file_id,
+        project_id=project.project_id,
+        module_id=module.module_id,
+        name="answer",
+        qualified_name="agentbus.example.Calculator.answer",
+        kind=SymbolKind.METHOD,
+        language=SourceLanguage.PYTHON,
+        location=SymbolLocation(
+            relative_path=source.relative_path,
+            start_line=2,
+            start_column=4,
+            end_line=2,
+            end_column=13,
+        ),
+        signature="answer(self) -> int",
+        documentation="Returns the deterministic answer.",
+        parent_symbol_id=parent.symbol_id,
+        attributes={"decorators": []},
+    )
+    location = SymbolLocation(
+        relative_path=source.relative_path,
+        start_line=2,
+        start_column=4,
+        end_line=2,
+        end_column=10,
+    )
+    reference = SymbolReference(
+        reference_id=reference_id(
+            source.file_id,
+            source.relative_path,
+            location.start_line,
+            location.start_column,
+            parent.qualified_name,
+            DependencyKind.REFERENCES.value,
+        ),
+        source_symbol_id=child.symbol_id,
+        source_file_id=source.file_id,
+        target_symbol_id=parent.symbol_id,
+        kind=DependencyKind.REFERENCES,
+        location=location,
+        explanation="Static class reference.",
+    )
+    edge = DependencyEdge(
+        edge_id=edge_id(
+            child.symbol_id,
+            parent.symbol_id,
+            DependencyKind.CALLS.value,
+            location_key=f"{source.relative_path}:2:4",
+        ),
+        kind=DependencyKind.CALLS,
+        source_id=child.symbol_id,
+        target_id=parent.symbol_id,
+        location=location,
+        confidence=0.9,
+        parser_name="python-ast",
+        parser_version="1",
+        explanation="Statically resolved call target.",
+    )
+    ownership = OwnershipRule(
+        rule_id="owner-agentbus",
+        pattern="agentbus/**",
+        owners=("@agentbus-maintainers",),
+        source_path="CODEOWNERS",
+        confidence=1,
+        explanation="Explicit CODEOWNERS rule.",
+    )
+    boundary = ArchitectureBoundary(
+        boundary_id="boundary-agentbus",
+        name="AgentBus package",
+        scope=("agentbus/*",),
+        boundary_type="security_sensitive",
+        source_evidence=("CODEOWNERS",),
+        confidence=0.8,
+        explanation="Owned package with runtime safety responsibilities.",
+    )
+    graph_hash = graph_fingerprint((edge,))
+    identity = snapshot_id(
+        repository.repository_id,
+        base.source_fingerprint,
+        parser_versions_fingerprint(base.parser_versions),
+        base.project_map_hash,
+        graph_hash,
+    )
+    snapshot = base.model_copy(
+        update={
+            "snapshot_id": identity,
+            "symbol_count": 2,
+            "reference_count": 1,
+            "edge_count": 1,
+            "graph_hash": graph_hash,
+        }
+    )
+    return {
+        "repository": repository,
+        "workspace": workspace,
+        "snapshot": snapshot,
+        "projects": projects,
+        "files": files,
+        "modules": (module,),
+        "symbols": tuple(sorted((parent, child), key=lambda item: item.symbol_id)),
+        "references": (reference,),
+        "edges": (edge,),
+        "ownership_rules": (ownership,),
+        "boundaries": (boundary,),
+    }
