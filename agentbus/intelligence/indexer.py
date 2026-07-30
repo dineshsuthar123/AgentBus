@@ -38,6 +38,7 @@ from agentbus.intelligence.invalidation import (
     InvalidationLimits,
     InvalidationPlan,
 )
+from agentbus.intelligence.languages import source_language_for_path
 from agentbus.intelligence.models import (
     DiagnosticSeverity,
     IndexDiagnostic,
@@ -61,14 +62,11 @@ from agentbus.intelligence.models import (
 from agentbus.intelligence.operations import IndexOperationLease
 from agentbus.intelligence.parsers import (
     CancellationSignal,
-    GoStaticParser,
-    JavaStaticParser,
     ParseRequest,
     ParseResult,
     ParserLimits,
     ParserRegistry,
-    PythonAstParser,
-    TypeScriptStaticParser,
+    default_parser_registry,
 )
 from agentbus.intelligence.scheduler import (
     BoundedIndexScheduler,
@@ -81,19 +79,6 @@ from agentbus.intelligence.scheduler import (
 from agentbus.intelligence.storage import IndexStore
 
 
-_LANGUAGE_BY_SUFFIX = {
-    ".cjs": SourceLanguage.JAVASCRIPT,
-    ".cts": SourceLanguage.TYPESCRIPT,
-    ".go": SourceLanguage.GO,
-    ".java": SourceLanguage.JAVA,
-    ".js": SourceLanguage.JAVASCRIPT,
-    ".jsx": SourceLanguage.JAVASCRIPT,
-    ".mjs": SourceLanguage.JAVASCRIPT,
-    ".mts": SourceLanguage.TYPESCRIPT,
-    ".py": SourceLanguage.PYTHON,
-    ".ts": SourceLanguage.TYPESCRIPT,
-    ".tsx": SourceLanguage.TYPESCRIPT,
-}
 _PROJECT_KIND_BY_LANGUAGE = {
     SourceLanguage.GO: ProjectKind.GO,
     SourceLanguage.JAVA: ProjectKind.JAVA,
@@ -187,7 +172,7 @@ class RepositoryIndexer:
                 "workspace and repository identities must refer to the same repository"
             )
         self.store = store
-        self.registry = registry or _default_registry()
+        self.registry = registry or default_parser_registry()
         self.discovery_limits = discovery_limits or DiscoveryLimits()
         self.parser_limits = parser_limits or ParserLimits(
             maximum_source_bytes=self.discovery_limits.maximum_file_bytes
@@ -390,7 +375,7 @@ class RepositoryIndexer:
         supported_files = tuple(
             item
             for item in discovery.files
-            if _source_language(item.relative_path) is not None
+            if source_language_for_path(item.relative_path) is not None
         )
         direct_batch = self.scheduler.run(
             supported_files,
@@ -814,7 +799,7 @@ class RepositoryIndexer:
         force: bool = False,
         cancellation: CancellationSignal | None = None,
     ) -> _FileIndexOutcome:
-        language = _source_language(discovered.relative_path)
+        language = source_language_for_path(discovered.relative_path)
         if language is None:
             raise ValueError("unsupported source file reached the indexer")
         project = _project_for_path(
@@ -937,17 +922,6 @@ class RepositoryIndexer:
             operation_id=operation_id,
             progress_sink=progress_sink,
         )
-
-
-def _default_registry() -> ParserRegistry:
-    return ParserRegistry(
-        (
-            PythonAstParser(),
-            TypeScriptStaticParser(),
-            JavaStaticParser(),
-            GoStaticParser(),
-        )
-    )
 
 
 def _configuration_fingerprint(
@@ -1383,10 +1357,6 @@ def _resolve_target(
         if len(identities) == 1:
             return identities[0]
     return None
-
-
-def _source_language(relative_path: str) -> SourceLanguage | None:
-    return _LANGUAGE_BY_SUFFIX.get(PurePosixPath(relative_path).suffix.lower())
 
 
 def _project_for_path(

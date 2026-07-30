@@ -19,6 +19,10 @@ from agentbus.intelligence.fingerprints import (
     parser_versions_fingerprint,
     project_map_fingerprint,
 )
+from agentbus.intelligence.freshness import (
+    FreshnessLimits,
+    IndexFreshnessChecker,
+)
 from agentbus.intelligence.identities import (
     context_plan_id,
     edge_id,
@@ -42,6 +46,10 @@ from agentbus.intelligence.invalidation import (
     InvalidationLimits,
     InvalidationPlan,
     InvalidationReason,
+)
+from agentbus.intelligence.languages import (
+    SOURCE_LANGUAGE_BY_SUFFIX,
+    source_language_for_path,
 )
 from agentbus.intelligence.models import (
     ArchitectureBoundary,
@@ -108,6 +116,7 @@ __all__ = [
     "DependencyInvalidator",
     "DependencyKind",
     "DiagnosticSeverity",
+    "FreshnessLimits",
     "ImpactRequest",
     "ImpactResult",
     "ImpactRisk",
@@ -116,6 +125,7 @@ __all__ = [
     "IndexBusyError",
     "IndexCorruptedError",
     "IndexDiagnostic",
+    "IndexFreshnessChecker",
     "IndexOperation",
     "IndexOperationKind",
     "IndexOperationLease",
@@ -157,8 +167,10 @@ __all__ = [
     "SearchResult",
     "ScheduledBatch",
     "ScheduledItem",
+    "SOURCE_LANGUAGE_BY_SUFFIX",
     "SourceFile",
     "SourceLanguage",
+    "source_language_for_path",
     "snapshot_id",
     "stable_hash",
     "stable_id",

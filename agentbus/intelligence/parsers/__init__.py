@@ -20,6 +20,18 @@ from agentbus.intelligence.parsers.registry import ParserRegistry
 from agentbus.intelligence.parsers.python import PythonAstParser
 from agentbus.intelligence.parsers.typescript import TypeScriptStaticParser
 
+
+def default_parser_registry() -> ParserRegistry:
+    return ParserRegistry(
+        (
+            PythonAstParser(),
+            TypeScriptStaticParser(),
+            JavaStaticParser(),
+            GoStaticParser(),
+        )
+    )
+
+
 __all__ = [
     "CancellationSignal",
     "GoStaticParser",
@@ -36,6 +48,7 @@ __all__ = [
     "PythonAstParser",
     "TypeScriptStaticParser",
     "cancellation_requested",
+    "default_parser_registry",
     "finalize_result",
     "sanitize_documentation",
 ]
