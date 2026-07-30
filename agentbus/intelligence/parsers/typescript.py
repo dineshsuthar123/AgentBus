@@ -64,7 +64,7 @@ class _DefinitionSpan:
 class TypeScriptStaticParser:
     descriptor = ParserDescriptor(
         name="typescript-static",
-        version="1.1.0",
+        version="1.2.0",
         languages=(
             SourceLanguage.TYPESCRIPT,
             SourceLanguage.JAVASCRIPT,
@@ -122,12 +122,16 @@ class TypeScriptStaticParser:
             cancellation,
         )
         reference_scanner.scan()
+        definitions = _apply_frontend_conventions(
+            (*parser.definitions, *reference_scanner.definitions),
+            request.relative_path,
+        )
         diagnostics.extend(parser.diagnostics)
         diagnostics.extend(reference_scanner.diagnostics)
         return finalize_result(
             self.descriptor,
             request,
-            definitions=parser.definitions,
+            definitions=definitions,
             references=reference_scanner.references,
             diagnostics=diagnostics,
             limits=active_limits,
@@ -367,7 +371,8 @@ class _DeclarationParser:
                 "async": any(
                     token.value == "async"
                     for token in self.tokens[declaration_start:keyword_index]
-                )
+                ),
+                "react_component_candidate": name[:1].isupper(),
             },
         )
         if body_index is not None and body_end is not None:
@@ -513,6 +518,8 @@ class _DeclarationParser:
         parent: str | None = None,
         signature: str | None = None,
         exported: bool = False,
+        test: bool = False,
+        endpoint: str | None = None,
         confidence: float = 1.0,
         attributes: dict[str, object] | None = None,
     ) -> None:
@@ -528,6 +535,8 @@ class _DeclarationParser:
                 signature=signature,
                 parent_qualified_name=parent[:2_048] if parent else None,
                 exported=exported,
+                test=test,
+                endpoint=endpoint,
                 confidence=confidence,
                 attributes=attributes or {},
             )
@@ -611,15 +620,18 @@ class _ReferenceScanner:
         self.cancellation = cancellation
         self.lines = LineMap(request.relative_path, request.content)
         self.references: list[ParsedReference] = []
+        self.definitions: list[ParsedDefinition] = []
         self.diagnostics: list[IndexDiagnostic] = []
         self.partial = False
         self.cancelled = False
+        self.stopped = False
         self._handled_calls: set[int] = set()
+        self._pseudo_definition_count = 0
 
     def scan(self) -> None:
         index = 0
         iterations = 0
-        while index < len(self.tokens) and not self.partial:
+        while index < len(self.tokens) and not self.stopped:
             iterations += 1
             if (
                 iterations % self.limits.cancellation_check_interval == 0
@@ -627,6 +639,7 @@ class _ReferenceScanner:
             ):
                 self.partial = True
                 self.cancelled = True
+                self.stopped = True
                 break
             value = self.tokens[index].value
             if value == "import":
@@ -639,6 +652,10 @@ class _ReferenceScanner:
                 self._scan_type_relationships(index)
             if value == "require":
                 self._scan_require(index)
+            if value in {"module", "exports"}:
+                self._scan_commonjs_export(index)
+            if value == "process":
+                self._scan_process_environment(index)
             if self._is_call(index):
                 self._scan_call(index)
             index += 1
@@ -814,6 +831,160 @@ class _ReferenceScanner:
             ),
             attributes={"heuristic": True},
         )
+        self._scan_test_call(index, opening, target)
+        self._scan_route_call(index, opening, target)
+
+    def _scan_test_call(self, index: int, opening: int, target: str) -> None:
+        function = target.rsplit(".", 1)[-1]
+        if function not in {"describe", "it", "test"}:
+            return
+        title = self._static_argument(opening)
+        if title is None:
+            return
+        source = self._source_for(self.tokens[index].start)
+        self._add_pseudo_definition(
+            token_index=index,
+            name=title,
+            qualified_name=f"{source}.__test__.{self._next_pseudo_id()}",
+            kind=SymbolKind.TEST,
+            test=True,
+            confidence=0.9,
+            attributes={
+                "framework": "jest-or-vitest",
+                "suite": function == "describe",
+                "test_function": target,
+            },
+        )
+
+    def _scan_route_call(self, index: int, opening: int, target: str) -> None:
+        method = target.rsplit(".", 1)[-1].casefold()
+        owner = (
+            target.rsplit(".", 1)[0].rsplit(".", 1)[-1].casefold()
+            if "." in target
+            else ""
+        )
+        if method not in {
+            "delete",
+            "get",
+            "head",
+            "options",
+            "patch",
+            "post",
+            "put",
+        } or not (
+            owner in {"api", "app", "router", "server"}
+            or owner.endswith("router")
+        ):
+            return
+        path = self._static_argument(opening)
+        if path is None:
+            self.partial = True
+            self.diagnostics.append(
+                IndexDiagnostic(
+                    code="parser.typescript_dynamic_endpoint",
+                    severity=DiagnosticSeverity.INFO,
+                    message="JavaScript route path could not be resolved statically.",
+                    relative_path=self.request.relative_path,
+                    parser_name=TypeScriptStaticParser.descriptor.name,
+                    recoverable=True,
+                )
+            )
+            return
+        source = self._source_for(self.tokens[index].start)
+        endpoint = f"{method.upper()} {path}"[:2_048]
+        self._add_pseudo_definition(
+            token_index=index,
+            name=endpoint,
+            qualified_name=f"{source}.__endpoint__.{self._next_pseudo_id()}",
+            kind=SymbolKind.ENDPOINT,
+            endpoint=endpoint,
+            confidence=0.8,
+            attributes={
+                "framework": "express-compatible",
+                "heuristic": True,
+                "route_call": target,
+            },
+        )
+
+    def _scan_commonjs_export(self, index: int) -> None:
+        target, terminal = self._qualified_target(index, len(self.tokens))
+        if (
+            target not in {"module.exports"}
+            and not target.startswith("exports.")
+        ):
+            return
+        if self._value(terminal) != "=":
+            return
+        self._add_reference(
+            index,
+            target=target,
+            kind=DependencyKind.EXPORTS,
+            confidence=0.9,
+            explanation="Static CommonJS export assignment.",
+            attributes={"commonjs": True},
+        )
+
+    def _scan_process_environment(self, index: int) -> None:
+        target, _ = self._qualified_target(index, len(self.tokens))
+        if not target.startswith("process.env."):
+            return
+        key = target.removeprefix("process.env.")
+        if not key:
+            return
+        self._add_reference(
+            index,
+            target=f"env.{key}",
+            kind=DependencyKind.CONFIGURES,
+            confidence=1.0,
+            explanation="Static process.env configuration reference.",
+        )
+
+    def _static_argument(self, opening: int) -> str | None:
+        closing = self.pairs.get(opening)
+        argument = opening + 1
+        if (
+            closing is None
+            or argument >= closing
+            or self.tokens[argument].kind != "string"
+        ):
+            return None
+        value = self.tokens[argument].value.strip()
+        return value[:2_048] if value else None
+
+    def _add_pseudo_definition(
+        self,
+        *,
+        token_index: int,
+        name: str,
+        qualified_name: str,
+        kind: SymbolKind,
+        test: bool = False,
+        endpoint: str | None = None,
+        confidence: float,
+        attributes: dict[str, object],
+    ) -> None:
+        if len(self.definitions) > self.limits.maximum_definitions:
+            self.partial = True
+            self.stopped = True
+            return
+        token = self.tokens[token_index]
+        self.definitions.append(
+            ParsedDefinition(
+                name=name[:512],
+                qualified_name=qualified_name[:2_048],
+                kind=kind,
+                location=self.lines.location(token.start, token.end),
+                parent_qualified_name=self._source_for(token.start)[:2_048],
+                test=test,
+                endpoint=endpoint,
+                confidence=confidence,
+                attributes=attributes,
+            )
+        )
+
+    def _next_pseudo_id(self) -> int:
+        self._pseudo_definition_count += 1
+        return self._pseudo_definition_count
 
     def _is_call(self, index: int) -> bool:
         if self.tokens[index].kind != "identifier":
@@ -880,6 +1051,7 @@ class _ReferenceScanner:
             return
         if len(self.references) > self.limits.maximum_references:
             self.partial = True
+            self.stopped = True
             return
         token = self.tokens[token_index]
         self.references.append(
@@ -1128,6 +1300,74 @@ def _module_name(relative_path: str) -> str:
             break
     parts = (*path.parent.parts, stem)
     return ".".join(part for part in parts if part and part != ".")
+
+
+def _apply_frontend_conventions(
+    definitions: tuple[ParsedDefinition, ...],
+    relative_path: str,
+) -> tuple[ParsedDefinition, ...]:
+    route_path = _next_route_path(relative_path)
+    route_methods = {
+        "DELETE",
+        "GET",
+        "HEAD",
+        "OPTIONS",
+        "PATCH",
+        "POST",
+        "PUT",
+    }
+    normalized: list[ParsedDefinition] = []
+    for definition in definitions:
+        update: dict[str, object] = {}
+        attributes = dict(definition.attributes)
+        if (
+            definition.kind == SymbolKind.FUNCTION
+            and definition.name[:1].isupper()
+            and attributes.get("react_component_candidate")
+        ):
+            attributes.update({"framework": "react", "heuristic": True})
+            update.update({"attributes": attributes, "confidence": 0.7})
+        if (
+            route_path is not None
+            and definition.exported
+            and definition.name in route_methods
+            and definition.parent_qualified_name is None
+        ):
+            endpoint = f"{definition.name} {route_path}"[:2_048]
+            attributes.update({"framework": "nextjs", "heuristic": True})
+            update.update(
+                {
+                    "kind": SymbolKind.ENDPOINT,
+                    "endpoint": endpoint,
+                    "confidence": 0.85,
+                    "attributes": attributes,
+                }
+            )
+        if update:
+            definition = ParsedDefinition.model_validate(
+                definition.model_copy(update=update).model_dump(mode="python")
+            )
+        normalized.append(definition)
+    return tuple(normalized)
+
+
+def _next_route_path(relative_path: str) -> str | None:
+    path = PurePosixPath(relative_path)
+    if not path.name.startswith("route."):
+        return None
+    parts = list(path.parent.parts)
+    if "app" not in parts:
+        return None
+    parts = parts[parts.index("app") + 1 :]
+    route_parts: list[str] = []
+    for part in parts:
+        if part.startswith("(") and part.endswith(")"):
+            continue
+        if part.startswith("[") and part.endswith("]"):
+            route_parts.append(f":{part[1:-1]}")
+        else:
+            route_parts.append(part)
+    return "/" + "/".join(route_parts)
 
 
 def _type_signature(
