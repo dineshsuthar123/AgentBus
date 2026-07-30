@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 
 from agentbus.intelligence.models import (
+    DependencyKind,
     DiagnosticSeverity,
     IndexDiagnostic,
     SourceLanguage,
@@ -14,6 +15,7 @@ from agentbus.intelligence.parsers.base import (
     ParseRequest,
     ParseResult,
     ParsedDefinition,
+    ParsedReference,
     ParserDescriptor,
     ParserLimits,
 )
@@ -22,6 +24,43 @@ from agentbus.intelligence.parsers.common import (
     cancellation_requested,
     finalize_result,
 )
+
+
+_GO_NON_CALL_IDENTIFIERS = {
+    "case",
+    "defer",
+    "else",
+    "for",
+    "func",
+    "go",
+    "if",
+    "import",
+    "package",
+    "range",
+    "select",
+    "switch",
+    "type",
+}
+_GO_NON_COMPOSITE_IDENTIFIERS = {
+    "func",
+    "interface",
+    "map",
+    "select",
+    "struct",
+    "switch",
+}
+_GO_COMPOSITE_PREFIXES = {
+    "&",
+    "(",
+    ",",
+    ":",
+    ":=",
+    "=",
+    "[",
+    "{",
+    "case",
+    "return",
+}
 
 
 @dataclass(frozen=True)
@@ -38,6 +77,14 @@ class _DefinitionSpan:
     end: int
     qualified_name: str
     kind: SymbolKind
+
+
+@dataclass(frozen=True)
+class _ReceiverDeclaration:
+    token_index: int
+    receiver: str
+    qualified_name: str
+    pointer: bool
 
 
 class GoStaticParser:
@@ -87,19 +134,35 @@ class GoStaticParser:
         )
         parser.parse()
         diagnostics.extend(parser.diagnostics)
+        reference_scanner = _GoReferenceScanner(
+            request,
+            tokens,
+            pairs,
+            tuple(parser.definitions),
+            tuple(parser.spans),
+            parser.declaration_openings,
+            parser.declaration_bodies,
+            tuple(parser.receiver_declarations),
+            active_limits,
+            cancellation,
+        )
+        reference_scanner.scan()
+        diagnostics.extend(reference_scanner.diagnostics)
         return finalize_result(
             self.descriptor,
             request,
             definitions=parser.definitions,
+            references=reference_scanner.references,
             diagnostics=diagnostics,
             limits=active_limits,
             partial=(
                 partial
                 or bool(pair_diagnostics)
                 or parser.partial
+                or reference_scanner.partial
                 or cancelled
             ),
-            cancelled=cancelled,
+            cancelled=cancelled or reference_scanner.cancelled,
         )
 
 
@@ -123,6 +186,8 @@ class _GoDeclarationParser:
         self.definitions: list[ParsedDefinition] = []
         self.spans: list[_DefinitionSpan] = []
         self.declaration_openings: set[int] = set()
+        self.declaration_bodies: set[int] = set()
+        self.receiver_declarations: list[_ReceiverDeclaration] = []
         self.diagnostics: list[IndexDiagnostic] = []
         self.partial = False
 
@@ -226,6 +291,7 @@ class _GoDeclarationParser:
             },
         )
         if body is not None and body_end is not None:
+            self.declaration_bodies.add(body)
             if kind == SymbolKind.CLASS:
                 self._parse_struct_fields(
                     body + 1,
@@ -243,9 +309,15 @@ class _GoDeclarationParser:
     def _parse_function(self, start: int, end: int) -> int:
         cursor = start + 1
         receiver: str | None = None
+        receiver_pointer = False
+        receiver_token_index: int | None = None
         if self._value(cursor) == "(" and cursor in self.pairs:
             closing = self.pairs[cursor]
-            receiver = _receiver_type(self.tokens, cursor + 1, closing)
+            receiver, receiver_pointer, receiver_token_index = _receiver_details(
+                self.tokens,
+                cursor + 1,
+                closing,
+            )
             cursor = closing + 1
         name_index = self._next_identifier(cursor, end)
         if name_index is None:
@@ -262,6 +334,8 @@ class _GoDeclarationParser:
         closing = self.pairs[opening]
         body = self._function_body(closing + 1, end)
         body_end = self.pairs.get(body) if body is not None else None
+        if body is not None:
+            self.declaration_bodies.add(body)
         declaration_end = (
             body_end + 1
             if body_end is not None
@@ -285,8 +359,18 @@ class _GoDeclarationParser:
             exported=_go_exported(name),
             attributes={
                 "receiver": receiver,
+                "receiver_pointer": receiver_pointer,
             },
         )
+        if receiver is not None and receiver_token_index is not None:
+            self.receiver_declarations.append(
+                _ReceiverDeclaration(
+                    token_index=receiver_token_index,
+                    receiver=receiver,
+                    qualified_name=qualified_name,
+                    pointer=receiver_pointer,
+                )
+            )
         return max(start + 1, declaration_end)
 
     def _parse_values(
@@ -594,6 +678,430 @@ class _GoDeclarationParser:
         )
 
 
+class _GoReferenceScanner:
+    def __init__(
+        self,
+        request: ParseRequest,
+        tokens: tuple[_Token, ...],
+        pairs: dict[int, int],
+        definitions: tuple[ParsedDefinition, ...],
+        spans: tuple[_DefinitionSpan, ...],
+        declaration_openings: set[int],
+        declaration_bodies: set[int],
+        receiver_declarations: tuple[_ReceiverDeclaration, ...],
+        limits: ParserLimits,
+        cancellation: CancellationSignal | None,
+    ) -> None:
+        self.request = request
+        self.tokens = tokens
+        self.pairs = pairs
+        self.definitions = definitions
+        self.spans = spans
+        self.declaration_openings = declaration_openings
+        self.declaration_bodies = declaration_bodies
+        self.receiver_declarations = receiver_declarations
+        self.limits = limits
+        self.cancellation = cancellation
+        self.lines = LineMap(request.relative_path, request.content)
+        self.package_name = (
+            _package_name(tokens)
+            or PurePosixPath(request.relative_path).stem
+        )
+        self.references: list[ParsedReference] = []
+        self.diagnostics: list[IndexDiagnostic] = []
+        self.partial = False
+        self.cancelled = False
+        self._handled_openings: set[int] = set()
+        self._handled_composites: set[int] = set()
+
+    def scan(self) -> None:
+        index = 0
+        while index < len(self.tokens) and not self.partial:
+            if (
+                index % self.limits.cancellation_check_interval == 0
+                and cancellation_requested(self.cancellation)
+            ):
+                self.partial = True
+                self.cancelled = True
+                return
+            value = self.tokens[index].value
+            if value == "import":
+                index = self._scan_import(index)
+                continue
+            if self.tokens[index].kind == "identifier":
+                self._scan_call(index)
+                self._scan_composite_literal(index)
+            index += 1
+        if not self.partial:
+            self._scan_receiver_relationships()
+        if not self.partial:
+            self._scan_structural_implementations()
+
+    def _scan_import(self, index: int) -> int:
+        cursor = index + 1
+        while self._kind(cursor) == "newline":
+            cursor += 1
+        if self._value(cursor) == "(" and cursor in self.pairs:
+            closing = self.pairs[cursor]
+            spec_start = cursor + 1
+            token_index = spec_start
+            while token_index < closing:
+                if self.tokens[token_index].kind == "string":
+                    self._add_import(spec_start, token_index)
+                if self.tokens[token_index].value in {"\n", ";"}:
+                    spec_start = token_index + 1
+                token_index += 1
+            return closing + 1
+        terminal = self._line_end(cursor, len(self.tokens))
+        string_index = next(
+            (
+                candidate
+                for candidate in range(cursor, terminal)
+                if self.tokens[candidate].kind == "string"
+            ),
+            None,
+        )
+        if string_index is not None:
+            self._add_import(cursor, string_index)
+        return terminal
+
+    def _add_import(self, start: int, string_index: int) -> None:
+        alias: str | None = None
+        alias_tokens = [
+            token
+            for token in self.tokens[start:string_index]
+            if token.kind == "identifier" or token.value == "."
+        ]
+        if alias_tokens:
+            alias = alias_tokens[-1].value
+        target = self.tokens[string_index].value
+        if not target:
+            return
+        self._add_reference_token(
+            string_index,
+            target=target,
+            kind=DependencyKind.IMPORTS,
+            confidence=0.9 if "\\" in target else 1.0,
+            explanation="Static Go import declaration.",
+            source=self.package_name,
+            attributes={
+                "alias": alias,
+                "blank": alias == "_",
+                "dot": alias == ".",
+                "side_effect_only": alias == "_",
+            },
+        )
+
+    def _scan_call(self, index: int) -> None:
+        target, target_index = self._qualified_target(index, len(self.tokens))
+        opening = target_index + 1
+        if self._value(opening) == "[" and opening in self.pairs:
+            opening = self.pairs[opening] + 1
+        if self._value(opening) != "(":
+            return
+        if (
+            opening in self.declaration_openings
+            or opening in self._handled_openings
+            or target.rsplit(".", 1)[-1] in _GO_NON_CALL_IDENTIFIERS
+        ):
+            return
+        self._handled_openings.add(opening)
+        if target in {"make", "new"}:
+            instantiated = self._first_argument_type(opening)
+            if instantiated:
+                self._add_reference_token(
+                    index,
+                    target=instantiated,
+                    kind=DependencyKind.INSTANTIATES,
+                    confidence=0.8,
+                    explanation=(
+                        "Go built-in allocation with a statically "
+                        "identifiable type."
+                    ),
+                    attributes={
+                        "builtin": target,
+                        "heuristic": True,
+                    },
+                )
+            return
+        self._add_reference_token(
+            index,
+            target=target,
+            kind=DependencyKind.CALLS,
+            confidence=0.75,
+            explanation="Syntactically identifiable Go call target.",
+            attributes={"heuristic": True},
+        )
+
+    def _scan_composite_literal(self, index: int) -> None:
+        target, target_index = self._qualified_target(index, len(self.tokens))
+        opening = target_index + 1
+        if self._value(opening) == "[" and opening in self.pairs:
+            opening = self.pairs[opening] + 1
+        if (
+            self._value(opening) != "{"
+            or opening in self.declaration_bodies
+            or opening in self._handled_composites
+            or target.rsplit(".", 1)[-1] in _GO_NON_COMPOSITE_IDENTIFIERS
+        ):
+            return
+        previous = self._value(index - 1)
+        if (
+            not target.rsplit(".", 1)[-1][:1].isupper()
+            and previous not in _GO_COMPOSITE_PREFIXES
+        ):
+            return
+        self._handled_composites.add(opening)
+        self._add_reference_token(
+            index,
+            target=target,
+            kind=DependencyKind.INSTANTIATES,
+            confidence=0.85,
+            explanation="Statically identifiable Go composite literal.",
+            attributes={"composite_literal": True},
+        )
+
+    def _scan_receiver_relationships(self) -> None:
+        for index, declaration in enumerate(self.receiver_declarations):
+            if (
+                index % self.limits.cancellation_check_interval == 0
+                and cancellation_requested(self.cancellation)
+            ):
+                self.partial = True
+                self.cancelled = True
+                return
+            target = self._qualified_local_type(declaration.receiver)
+            self._add_reference_token(
+                declaration.token_index,
+                target=target,
+                kind=DependencyKind.REFERENCES,
+                confidence=1.0,
+                explanation="Explicit Go method receiver type.",
+                source=declaration.qualified_name,
+                attributes={
+                    "receiver": True,
+                    "pointer": declaration.pointer,
+                },
+            )
+
+    def _scan_structural_implementations(self) -> None:
+        interface_methods: dict[str, set[tuple[str, str | None]]] = {}
+        receiver_methods: dict[
+            str,
+            dict[tuple[str, str | None], bool],
+        ] = {}
+        for definition in self.definitions:
+            parent = definition.parent_qualified_name
+            if not parent:
+                continue
+            signature = (definition.name, definition.signature)
+            if definition.attributes.get("interface_method") is True:
+                interface_methods.setdefault(parent, set()).add(signature)
+                continue
+            receiver = definition.attributes.get("receiver")
+            if (
+                definition.kind == SymbolKind.METHOD
+                and isinstance(receiver, str)
+                and receiver
+            ):
+                concrete = self._qualified_local_type(receiver)
+                methods = receiver_methods.setdefault(concrete, {})
+                methods[signature] = (
+                    methods.get(signature, False)
+                    or definition.attributes.get("receiver_pointer") is True
+                )
+        comparisons = 0
+        maximum_comparisons = min(
+            100_000,
+            max(1_024, self.limits.maximum_references * 4),
+        )
+        for concrete in sorted(receiver_methods):
+            methods = receiver_methods[concrete]
+            available = set(methods)
+            for interface in sorted(interface_methods):
+                comparisons += 1
+                if comparisons > maximum_comparisons:
+                    self.partial = True
+                    self.diagnostics.append(
+                        _diagnostic(
+                            self.request,
+                            "parser.go_relationship_limit",
+                            "Go interface matching reached its configured limit.",
+                        )
+                    )
+                    return
+                if (
+                    comparisons % self.limits.cancellation_check_interval == 0
+                    and cancellation_requested(self.cancellation)
+                ):
+                    self.partial = True
+                    self.cancelled = True
+                    return
+                required = interface_methods[interface]
+                if not required or concrete == interface:
+                    continue
+                if not required.issubset(available):
+                    continue
+                span = next(
+                    (
+                        item
+                        for item in self.spans
+                        if item.qualified_name == concrete
+                    ),
+                    None,
+                )
+                if span is None:
+                    continue
+                self._add_reference_offset(
+                    span.start,
+                    min(span.end, span.start + 512),
+                    target=interface,
+                    kind=DependencyKind.IMPLEMENTS,
+                    confidence=0.65,
+                    explanation=(
+                        "Heuristic Go interface satisfaction based on "
+                        "locally indexed method names and parameter counts."
+                    ),
+                    source=concrete,
+                    attributes={
+                        "heuristic": True,
+                        "pointer_receiver_required": any(
+                            methods[signature]
+                            for signature in required
+                        ),
+                        "matched_methods": tuple(
+                            sorted(name for name, _ in required)
+                        )[:64],
+                    },
+                )
+
+    def _first_argument_type(self, opening: int) -> str | None:
+        closing = self.pairs.get(opening)
+        if closing is None:
+            return None
+        index = opening + 1
+        while index < closing:
+            if self.tokens[index].kind == "identifier":
+                target, _ = self._qualified_target(index, closing)
+                return target
+            index += 1
+        return None
+
+    def _qualified_local_type(self, receiver: str) -> str:
+        name = receiver.rsplit(".", 1)[-1]
+        return f"{self.package_name}.{name}"[:2_048]
+
+    def _source_for(self, offset: int) -> str:
+        containing = [
+            span
+            for span in self.spans
+            if span.start <= offset <= span.end
+        ]
+        if not containing:
+            return self.package_name
+        return min(
+            containing,
+            key=lambda item: (
+                item.end - item.start,
+                item.qualified_name,
+            ),
+        ).qualified_name
+
+    def _add_reference_token(
+        self,
+        token_index: int,
+        *,
+        target: str,
+        kind: DependencyKind,
+        confidence: float,
+        explanation: str,
+        source: str | None = None,
+        attributes: dict[str, object] | None = None,
+    ) -> None:
+        token = self.tokens[token_index]
+        self._add_reference_offset(
+            token.start,
+            token.end,
+            target=target,
+            kind=kind,
+            confidence=confidence,
+            explanation=explanation,
+            source=source,
+            attributes=attributes,
+        )
+
+    def _add_reference_offset(
+        self,
+        start: int,
+        end: int,
+        *,
+        target: str,
+        kind: DependencyKind,
+        confidence: float,
+        explanation: str,
+        source: str | None = None,
+        attributes: dict[str, object] | None = None,
+    ) -> None:
+        if not target:
+            return
+        if len(self.references) > self.limits.maximum_references:
+            self.partial = True
+            return
+        self.references.append(
+            ParsedReference(
+                target=target[:2_048],
+                kind=kind,
+                location=self.lines.location(start, end),
+                source_qualified_name=(
+                    source or self._source_for(start)
+                )[:2_048],
+                confidence=confidence,
+                explanation=explanation,
+                attributes=attributes or {},
+            )
+        )
+
+    def _qualified_target(
+        self,
+        start: int,
+        end: int,
+    ) -> tuple[str, int]:
+        if self._kind(start) != "identifier":
+            return "", start
+        values = [self.tokens[start].value]
+        index = start + 1
+        terminal = start
+        while (
+            index + 1 < end
+            and self.tokens[index].value == "."
+            and self.tokens[index + 1].kind == "identifier"
+        ):
+            values.append(self.tokens[index + 1].value)
+            terminal = index + 1
+            index += 2
+        return ".".join(values), terminal
+
+    def _line_end(self, start: int, end: int) -> int:
+        index = start
+        while index < end:
+            if self.tokens[index].value in {"\n", ";"}:
+                return index
+            if (
+                self.tokens[index].value in {"(", "[", "{"}
+                and index in self.pairs
+            ):
+                index = self.pairs[index] + 1
+            else:
+                index += 1
+        return end
+
+    def _kind(self, index: int) -> str | None:
+        return self.tokens[index].kind if 0 <= index < len(self.tokens) else None
+
+    def _value(self, index: int) -> str | None:
+        return self.tokens[index].value if 0 <= index < len(self.tokens) else None
+
+
 def _tokenize(
     request: ParseRequest,
     limits: ParserLimits,
@@ -838,18 +1346,18 @@ def _package_name(tokens: tuple[_Token, ...]) -> str | None:
     return None
 
 
-def _receiver_type(
+def _receiver_details(
     tokens: tuple[_Token, ...],
     start: int,
     end: int,
-) -> str | None:
+) -> tuple[str | None, bool, int | None]:
     identifiers = [
         index
         for index in range(start, end)
         if tokens[index].kind == "identifier"
     ]
     if not identifiers:
-        return None
+        return None, False, None
     target_start = identifiers[1] if len(identifiers) > 1 else identifiers[0]
     values = [tokens[target_start].value]
     index = target_start + 1
@@ -860,7 +1368,11 @@ def _receiver_type(
     ):
         values.append(tokens[index + 1].value)
         index += 2
-    return ".".join(values)[:2_048]
+    pointer = any(
+        tokens[index].value == "*"
+        for index in range(start, target_start)
+    )
+    return ".".join(values)[:2_048], pointer, target_start
 
 
 def _token_signature(
