@@ -7,6 +7,7 @@ from agentbus.execution.cancellation import CancellationToken
 from agentbus.intelligence import (
     IndexState,
     IndexStore,
+    InvalidationLimits,
     RepositoryIndexer,
     repository_identity,
     workspace_identity,
@@ -68,6 +69,7 @@ def _indexer(
     tmp_path: Path,
     store: IndexStore,
     *parsers: _CountingParser,
+    invalidation_limits: InvalidationLimits | None = None,
 ) -> RepositoryIndexer:
     repository = repository_identity("fixtures/incremental-indexer")
     workspace = workspace_identity(repository.repository_id, [""])
@@ -77,6 +79,7 @@ def _indexer(
         workspace,
         store,
         registry=ParserRegistry(parsers),
+        invalidation_limits=invalidation_limits,
     )
 
 
@@ -253,7 +256,7 @@ def test_project_configuration_change_invalidates_project_files(
     assert updated.reused_paths == ()
 
 
-def test_reused_reference_rebinds_to_changed_target_symbol(
+def test_changed_target_reindexes_and_resolves_dependent_reference(
     tmp_path: Path,
 ) -> None:
     _write_python_project(tmp_path)
@@ -295,12 +298,234 @@ def test_reused_reference_rebinds_to_changed_target_symbol(
         and item.target_symbol_id is not None
     )
 
-    assert parser.paths == ["target.py"]
+    assert parser.paths == ["target.py", "caller.py"]
+    assert updated.invalidated_paths == ("caller.py",)
+    assert updated.invalidation_plan is not None
+    assert updated.invalidation_plan.dependent_paths == ("caller.py",)
     assert original_target.symbol_id != current_target.symbol_id
     assert caller_references
     assert {
         item.target_symbol_id for item in caller_references
     } == {current_target.symbol_id}
+
+
+def test_deleted_target_reindexes_dependent_but_not_unrelated_file(
+    tmp_path: Path,
+) -> None:
+    _write_python_project(tmp_path)
+    (tmp_path / "caller.py").write_text(
+        "from target import run\n\n"
+        "def call():\n"
+        "    return run()\n",
+        encoding="utf-8",
+    )
+    target = tmp_path / "target.py"
+    target.write_text(
+        "def run():\n    return True\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "unrelated.py").write_text(
+        "def other():\n    return True\n",
+        encoding="utf-8",
+    )
+    store = _store(tmp_path)
+    parser = _CountingParser(PythonAstParser())
+    indexer = _indexer(tmp_path, store, parser)
+    indexer.build()
+    parser.paths.clear()
+
+    target.unlink()
+    updated = indexer.update()
+
+    assert parser.paths == ["caller.py"]
+    assert updated.deleted_paths == ("target.py",)
+    assert updated.invalidated_paths == ("caller.py",)
+    assert updated.reused_paths == ("unrelated.py",)
+    assert {
+        item.relative_path
+        for item in store.list_files(updated.snapshot.snapshot_id)
+    } == {"caller.py", "unrelated.py"}
+
+
+def test_invalidation_bound_reindexes_all_carried_files(
+    tmp_path: Path,
+) -> None:
+    _write_python_project(tmp_path)
+    target = tmp_path / "target.py"
+    target.write_text(
+        "def run():\n    return True\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "caller.py").write_text(
+        "from target import run\n\n"
+        "def call():\n"
+        "    return run()\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "api.py").write_text(
+        "from caller import call\n\n"
+        "def handle():\n"
+        "    return call()\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "unrelated.py").write_text(
+        "def other():\n    return True\n",
+        encoding="utf-8",
+    )
+    store = _store(tmp_path)
+    _indexer(
+        tmp_path,
+        store,
+        _CountingParser(PythonAstParser()),
+    ).build()
+    target.write_text(
+        "def run(value: bool = True):\n    return value\n",
+        encoding="utf-8",
+    )
+    parser = _CountingParser(PythonAstParser())
+
+    updated = _indexer(
+        tmp_path,
+        store,
+        parser,
+        invalidation_limits=InvalidationLimits(
+            maximum_references=1
+        ),
+    ).update()
+
+    assert parser.paths == [
+        "target.py",
+        "api.py",
+        "caller.py",
+        "unrelated.py",
+    ]
+    assert updated.invalidation_plan is not None
+    assert updated.invalidation_plan.requires_full_reindex is True
+    assert updated.invalidated_paths == (
+        "api.py",
+        "caller.py",
+        "unrelated.py",
+    )
+    assert updated.reused_paths == ()
+    assert any(
+        diagnostic.code == "index.invalidation_fallback"
+        for diagnostic in updated.snapshot.diagnostics
+    )
+
+
+def test_paused_dependency_invalidation_resumes_without_reparsing_target(
+    tmp_path: Path,
+) -> None:
+    _write_python_project(tmp_path)
+    (tmp_path / "caller.py").write_text(
+        "from target import run\n\n"
+        "def call():\n"
+        "    return run()\n",
+        encoding="utf-8",
+    )
+    target = tmp_path / "target.py"
+    target.write_text(
+        "def run():\n    return True\n",
+        encoding="utf-8",
+    )
+    store = _store(tmp_path)
+    _indexer(
+        tmp_path,
+        store,
+        _CountingParser(PythonAstParser()),
+    ).build()
+    target.write_text(
+        "def run(value: bool = True):\n    return value\n",
+        encoding="utf-8",
+    )
+    cancellation = CancellationToken()
+
+    def pause_after_target(request: ParseRequest) -> None:
+        if request.relative_path == "target.py":
+            cancellation.request("test")
+
+    pausing_parser = _CountingParser(
+        PythonAstParser(),
+        after_parse=pause_after_target,
+    )
+    paused = _indexer(
+        tmp_path,
+        store,
+        pausing_parser,
+    ).update(cancellation=cancellation)
+
+    assert pausing_parser.paths == ["target.py"]
+    assert paused.snapshot.state == IndexState.PAUSED
+    assert paused.invalidated_paths == ()
+    assert any(
+        diagnostic.code == "index.invalidation_pending"
+        for diagnostic in paused.snapshot.diagnostics
+    )
+    resume_parser = _CountingParser(PythonAstParser())
+
+    resumed = _indexer(tmp_path, store, resume_parser).update()
+
+    assert resume_parser.paths == ["caller.py"]
+    assert resumed.snapshot.state == IndexState.CURRENT
+    assert resumed.indexed_paths == ("caller.py",)
+    assert resumed.invalidated_paths == ("caller.py",)
+    assert resumed.reused_paths == ("target.py",)
+
+
+def test_failed_dependent_invalidation_is_retried(
+    tmp_path: Path,
+) -> None:
+    _write_python_project(tmp_path)
+    (tmp_path / "caller.py").write_text(
+        "from target import run\n\n"
+        "def call():\n"
+        "    return run()\n",
+        encoding="utf-8",
+    )
+    target = tmp_path / "target.py"
+    target.write_text(
+        "def run():\n    return True\n",
+        encoding="utf-8",
+    )
+    store = _store(tmp_path)
+    _indexer(
+        tmp_path,
+        store,
+        _CountingParser(PythonAstParser()),
+    ).build()
+    target.write_text(
+        "def run(value: bool = True):\n    return value\n",
+        encoding="utf-8",
+    )
+
+    def fail_caller(request: ParseRequest) -> None:
+        if request.relative_path == "caller.py":
+            raise ValueError("injected parser failure")
+
+    failing_parser = _CountingParser(
+        PythonAstParser(),
+        after_parse=fail_caller,
+    )
+    partial = _indexer(
+        tmp_path,
+        store,
+        failing_parser,
+    ).update()
+
+    assert failing_parser.paths == ["target.py", "caller.py"]
+    assert partial.snapshot.state == IndexState.PARTIALLY_CURRENT
+    assert any(
+        diagnostic.code == "index.invalidation_pending"
+        for diagnostic in partial.snapshot.diagnostics
+    )
+    retry_parser = _CountingParser(PythonAstParser())
+
+    retried = _indexer(tmp_path, store, retry_parser).update()
+
+    assert retry_parser.paths == ["caller.py"]
+    assert retried.snapshot.state == IndexState.CURRENT
+    assert retried.invalidated_paths == ("caller.py",)
+    assert retried.reused_paths == ("target.py",)
 
 
 def test_paused_update_preserves_unprocessed_files_and_resumes(

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
 from agentbus.intelligence.discovery import (
+    DiscoveredFile,
     DiscoveryLimits,
     ProjectDiscovery,
     RepositoryInventory,
@@ -30,6 +32,11 @@ from agentbus.intelligence.identities import (
     stable_hash,
     symbol_id,
 )
+from agentbus.intelligence.invalidation import (
+    DependencyInvalidator,
+    InvalidationLimits,
+    InvalidationPlan,
+)
 from agentbus.intelligence.models import (
     DiagnosticSeverity,
     IndexDiagnostic,
@@ -45,6 +52,7 @@ from agentbus.intelligence.models import (
     SymbolKind,
     SymbolReference,
     WorkspaceIdentity,
+    _relative_path,
 )
 from agentbus.intelligence.parsers import (
     CancellationSignal,
@@ -81,6 +89,8 @@ _PROJECT_KIND_BY_LANGUAGE = {
     SourceLanguage.TYPESCRIPT: ProjectKind.NODE,
 }
 _MAX_SNAPSHOT_DIAGNOSTICS = 1_000
+_MAX_PENDING_INVALIDATION_PATHS = 256
+_MAX_PENDING_INVALIDATION_CHARS = 4_000
 
 
 @dataclass(frozen=True)
@@ -91,6 +101,8 @@ class IndexingResult:
     skipped_paths: tuple[str, ...] = ()
     deleted_paths: tuple[str, ...] = ()
     renamed_paths: tuple[tuple[str, str], ...] = ()
+    invalidated_paths: tuple[str, ...] = ()
+    invalidation_plan: InvalidationPlan | None = None
     unchanged: bool = False
 
 
@@ -109,6 +121,18 @@ class _SymbolDraft:
     module_identity: str | None
 
 
+@dataclass(frozen=True)
+class _FileIndexOutcome:
+    observed_hash: str | None = None
+    unit: _ParsedUnit | None = None
+    carried_source: SourceFile | None = None
+    diagnostics: tuple[IndexDiagnostic, ...] = ()
+    reused: bool = False
+    skipped: bool = False
+    partial: bool = False
+    cancelled: bool = False
+
+
 class RepositoryIndexer:
     """Build portable, content-addressed repository intelligence snapshots."""
 
@@ -122,6 +146,7 @@ class RepositoryIndexer:
         registry: ParserRegistry | None = None,
         discovery_limits: DiscoveryLimits | None = None,
         parser_limits: ParserLimits | None = None,
+        invalidation_limits: InvalidationLimits | None = None,
     ) -> None:
         self.workspace = Path(workspace).expanduser().resolve()
         if not self.workspace.is_dir():
@@ -143,6 +168,9 @@ class RepositoryIndexer:
         self.discovery_limits = discovery_limits or DiscoveryLimits()
         self.parser_limits = parser_limits or ParserLimits(
             maximum_source_bytes=self.discovery_limits.maximum_file_bytes
+        )
+        self.invalidator = DependencyInvalidator(
+            limits=invalidation_limits
         )
 
     def build(
@@ -209,12 +237,12 @@ class RepositoryIndexer:
             and _snapshot_configuration_fingerprint(previous)
             == configuration_hash
         )
-        units: list[_ParsedUnit] = []
+        units_by_path: dict[str, _ParsedUnit] = {}
         carried_sources: dict[str, SourceFile] = {}
         observed_hashes: dict[str, str] = {}
-        indexed_paths: list[str] = []
-        reused_paths: list[str] = []
-        skipped_paths: list[str] = []
+        indexed_paths: set[str] = set()
+        reused_paths: set[str] = set()
+        skipped_paths: set[str] = set()
         processed_paths: set[str] = set()
         parser_partial = False
         paused = False
@@ -229,117 +257,34 @@ class RepositoryIndexer:
                 paused = True
                 break
             processed_paths.add(discovered.relative_path)
-            language = _source_language(discovered.relative_path)
-            if language is None:
-                continue
-            project = _project_for_path(
-                discovered.relative_path,
-                language,
-                discovery.projects,
+            outcome = self._index_file(
+                inventory,
+                discovered,
+                projects,
+                previous_files_by_path.get(discovered.relative_path),
+                reuse_enabled=reuse_enabled,
+                cancellation=cancellation,
             )
-            try:
-                payload = inventory.read_bytes(
-                    discovered.relative_path,
-                    maximum_bytes=min(
-                        self.discovery_limits.maximum_file_bytes,
-                        self.parser_limits.maximum_source_bytes,
-                    ),
+            if outcome.observed_hash is not None:
+                observed_hashes[discovered.relative_path] = (
+                    outcome.observed_hash
                 )
-                observed_hashes[discovered.relative_path] = content_hash(payload)
-                content = payload.decode("utf-8-sig")
-                parser = self.registry.resolve(language)
-                descriptor = parser.descriptor
-                source_identity = file_id(
-                    self.repository.repository_id,
-                    discovered.relative_path,
+            if outcome.unit is not None:
+                units_by_path[discovered.relative_path] = outcome.unit
+                indexed_paths.add(discovered.relative_path)
+            if outcome.carried_source is not None:
+                carried_sources[discovered.relative_path] = (
+                    outcome.carried_source
                 )
-                previous_source = previous_files_by_path.get(
-                    discovered.relative_path
-                )
-                decoded_hash = content_hash(content)
-                project_identity = project.project_id if project else None
-                if (
-                    reuse_enabled
-                    and previous_source is not None
-                    and previous_source.content_hash == decoded_hash
-                    and previous_source.language == language
-                    and previous_source.project_id == project_identity
-                    and previous_source.parser_name == descriptor.name
-                    and previous_source.parser_version == descriptor.version
-                ):
-                    carried_sources[discovered.relative_path] = (
-                        previous_source.model_copy(
-                            update={
-                                "size_bytes": len(payload),
-                                "generated": discovered.generated,
-                                "test": discovered.test,
-                            }
-                        )
-                    )
-                    reused_paths.append(discovered.relative_path)
-                    continue
-                request = ParseRequest.from_content(
-                    repository_id=self.repository.repository_id,
-                    file_id=source_identity,
-                    project_id=project.project_id if project else None,
-                    relative_path=discovered.relative_path,
-                    language=language,
-                    content=content,
-                )
-                result = self.registry.parse(
-                    request,
-                    limits=self.parser_limits,
-                    cancellation=cancellation,
-                )
-                source = SourceFile(
-                    file_id=source_identity,
-                    repository_id=self.repository.repository_id,
-                    project_id=project.project_id if project else None,
-                    relative_path=discovered.relative_path,
-                    language=language,
-                    content_hash=result.source_hash,
-                    size_bytes=len(payload),
-                    parser_name=descriptor.name,
-                    parser_version=descriptor.version,
-                    generated=discovered.generated,
-                    test=discovered.test,
-                    protected=False,
-                )
-                units.append(
-                    _ParsedUnit(
-                        source=source,
-                        result=result,
-                        project=project,
-                    )
-                )
-                indexed_paths.append(discovered.relative_path)
-                diagnostics.extend(result.diagnostics)
-                parser_partial = parser_partial or result.partial
-                if result.cancelled:
-                    paused = True
-                    break
-            except (UnicodeError, RepositoryIntelligenceError, ValueError) as exc:
-                skipped_paths.append(discovered.relative_path)
-                parser_partial = True
-                if reuse_enabled:
-                    previous_source = previous_files_by_path.get(
-                        discovered.relative_path
-                    )
-                    if previous_source is not None:
-                        carried_sources[discovered.relative_path] = (
-                            previous_source
-                        )
-                _append_diagnostic(
-                    diagnostics,
-                    IndexDiagnostic(
-                        code="index.file_failed",
-                        severity=DiagnosticSeverity.WARNING,
-                        message="A source file could not be indexed safely.",
-                        relative_path=discovered.relative_path,
-                        recoverable=True,
-                        details={"error_type": type(exc).__name__},
-                    ),
-                )
+            if outcome.reused:
+                reused_paths.add(discovered.relative_path)
+            if outcome.skipped:
+                skipped_paths.add(discovered.relative_path)
+            diagnostics.extend(outcome.diagnostics)
+            parser_partial = parser_partial or outcome.partial
+            if outcome.cancelled or _cancelled(cancellation):
+                paused = True
+                break
 
         if paused and reuse_enabled:
             discovered_paths = {
@@ -349,25 +294,205 @@ class RepositoryIndexer:
                 if path in discovered_paths and path not in processed_paths:
                     carried_sources[path] = source
 
-        new_modules, new_symbols, new_references = _materialize_records(units)
-        reused_file_ids = {
-            source.file_id for source in carried_sources.values()
-        }
+        _, preliminary_symbols, _ = _materialize_records(
+            list(units_by_path.values())
+        )
         previous_modules = (
             self.store.list_modules(previous.snapshot_id)
-            if previous is not None and reused_file_ids
+            if previous is not None and reuse_enabled
             else ()
         )
         previous_symbols = (
             self.store.list_symbols(previous.snapshot_id)
-            if previous is not None and reused_file_ids
+            if previous is not None and reuse_enabled
             else ()
         )
         previous_references = (
             self.store.list_references(previous.snapshot_id)
-            if previous is not None and reused_file_ids
+            if previous is not None and reuse_enabled
             else ()
         )
+        preliminary_files = tuple(
+            sorted(
+                (
+                    *carried_sources.values(),
+                    *(unit.source for unit in units_by_path.values()),
+                ),
+                key=lambda item: item.file_id,
+            )
+        )
+        current_paths = {
+            item.relative_path for item in supported_files
+        }
+        removed_paths = sorted(
+            set(previous_files_by_path).difference(current_paths)
+        )
+        renamed_paths = _detect_renames(
+            removed_paths,
+            indexed_paths,
+            previous_files_by_path,
+            {
+                source.relative_path: source
+                for source in preliminary_files
+            },
+        )
+        renamed_sources = {source for source, _ in renamed_paths}
+        deleted_paths = [
+            path for path in removed_paths if path not in renamed_sources
+        ]
+
+        invalidation_plan: InvalidationPlan | None = None
+        invalidation_targets: set[str] = set()
+        pending_paths, resume_requires_full = (
+            _pending_invalidations(previous)
+            if previous is not None and reuse_enabled
+            else ((), False)
+        )
+        if resume_requires_full:
+            invalidation_targets.update(carried_sources)
+        else:
+            invalidation_targets.update(
+                path
+                for path in pending_paths
+                if path in carried_sources
+            )
+        if (
+            previous is not None
+            and reuse_enabled
+            and (indexed_paths or removed_paths)
+        ):
+            invalidation_plan = self.invalidator.plan(
+                previous_files,
+                previous_symbols,
+                previous_references,
+                changed_paths=indexed_paths,
+                deleted_paths=deleted_paths,
+                renamed_paths=renamed_paths,
+                changed_qualified_names=(
+                    symbol.qualified_name
+                    for symbol in preliminary_symbols
+                ),
+            )
+            if invalidation_plan.requires_full_reindex:
+                invalidation_targets.update(carried_sources)
+                _append_diagnostic(
+                    diagnostics,
+                    IndexDiagnostic(
+                        code="index.invalidation_fallback",
+                        severity=DiagnosticSeverity.WARNING,
+                        message=(
+                            "Dependency invalidation reached a safety bound; "
+                            "remaining files require a full local reindex."
+                        ),
+                        recoverable=True,
+                        details={
+                            "dependent_count": len(
+                                invalidation_plan.dependent_paths
+                            ),
+                            "inspected_references": (
+                                invalidation_plan.inspected_references
+                            ),
+                        },
+                    ),
+                )
+            else:
+                invalidation_targets.update(
+                    path
+                    for path in invalidation_plan.dependent_paths
+                    if path in carried_sources
+                )
+            _append_diagnostic(
+                diagnostics,
+                IndexDiagnostic(
+                    code="index.dependency_invalidation",
+                    severity=DiagnosticSeverity.INFO,
+                    message=(
+                        "Reverse dependencies were evaluated for changed "
+                        "repository records."
+                    ),
+                    recoverable=True,
+                    details={
+                        "direct_count": len(
+                            invalidation_plan.direct_paths
+                        ),
+                        "dependent_count": len(
+                            invalidation_plan.dependent_paths
+                        ),
+                        "full_reindex": (
+                            invalidation_plan.requires_full_reindex
+                        ),
+                    },
+                ),
+            )
+
+        invalidated_paths: set[str] = set()
+        ordered_targets = tuple(
+            sorted(
+                path
+                for path in invalidation_targets
+                if path not in skipped_paths
+            )
+        )
+        pending_targets: tuple[str, ...] = ()
+        retry_targets: set[str] = set()
+        supported_by_path = {
+            item.relative_path: item for item in supported_files
+        }
+        if paused:
+            pending_targets = ordered_targets
+        else:
+            for index, path in enumerate(ordered_targets):
+                if _cancelled(cancellation):
+                    paused = True
+                    pending_targets = ordered_targets[index:]
+                    break
+                discovered = supported_by_path.get(path)
+                if discovered is None:
+                    continue
+                outcome = self._index_file(
+                    inventory,
+                    discovered,
+                    projects,
+                    previous_files_by_path.get(path),
+                    reuse_enabled=reuse_enabled,
+                    force=True,
+                    cancellation=cancellation,
+                )
+                if outcome.observed_hash is not None:
+                    observed_hashes[path] = outcome.observed_hash
+                reused_paths.discard(path)
+                if outcome.unit is not None:
+                    units_by_path[path] = outcome.unit
+                    carried_sources.pop(path, None)
+                    indexed_paths.add(path)
+                    invalidated_paths.add(path)
+                elif outcome.carried_source is not None:
+                    carried_sources[path] = outcome.carried_source
+                if outcome.skipped:
+                    skipped_paths.add(path)
+                    retry_targets.add(path)
+                diagnostics.extend(outcome.diagnostics)
+                parser_partial = parser_partial or outcome.partial
+                if outcome.cancelled or _cancelled(cancellation):
+                    paused = True
+                    retry_from = index if outcome.cancelled else index + 1
+                    pending_targets = ordered_targets[retry_from:]
+                    break
+        remaining_targets = tuple(
+            sorted({*pending_targets, *retry_targets})
+        )
+        if remaining_targets:
+            _append_diagnostic(
+                diagnostics,
+                _pending_invalidation_diagnostic(remaining_targets),
+            )
+
+        new_modules, new_symbols, new_references = _materialize_records(
+            list(units_by_path.values())
+        )
+        reused_file_ids = {
+            source.file_id for source in carried_sources.values()
+        }
         reused_modules = tuple(
             item
             for item in previous_modules
@@ -395,27 +520,11 @@ class RepositoryIndexer:
             sorted(
                 (
                     *carried_sources.values(),
-                    *(unit.source for unit in units),
+                    *(unit.source for unit in units_by_path.values()),
                 ),
                 key=lambda item: item.file_id,
             )
         )
-        current_paths = {
-            item.relative_path for item in supported_files
-        }
-        deleted_paths = sorted(
-            set(previous_files_by_path).difference(current_paths)
-        )
-        renamed_paths = _detect_renames(
-            deleted_paths,
-            indexed_paths,
-            previous_files_by_path,
-            {source.relative_path: source for source in files},
-        )
-        renamed_sources = {source for source, _ in renamed_paths}
-        deleted_paths = [
-            path for path in deleted_paths if path not in renamed_sources
-        ]
         source_fingerprint = stable_hash(
             {
                 "inventory": discovery.inventory_fingerprint,
@@ -450,6 +559,7 @@ class RepositoryIndexer:
                         {
                             "code": item.code,
                             "path": item.relative_path,
+                            "details_hash": stable_hash(item.details),
                         }
                         for item in bounded_diagnostics
                     ],
@@ -504,6 +614,8 @@ class RepositoryIndexer:
                 skipped_paths=tuple(sorted(skipped_paths)),
                 deleted_paths=tuple(deleted_paths),
                 renamed_paths=renamed_paths,
+                invalidated_paths=tuple(sorted(invalidated_paths)),
+                invalidation_plan=invalidation_plan,
             )
         return IndexingResult(
             snapshot=existing,
@@ -512,16 +624,140 @@ class RepositoryIndexer:
             skipped_paths=tuple(sorted(skipped_paths)),
             deleted_paths=tuple(deleted_paths),
             renamed_paths=renamed_paths,
+            invalidated_paths=tuple(sorted(invalidated_paths)),
+            invalidation_plan=invalidation_plan,
             unchanged=not any(
                 (
                     indexed_paths,
                     skipped_paths,
                     deleted_paths,
                     renamed_paths,
+                    invalidated_paths,
                     paused,
                 )
             ),
         )
+
+    def _index_file(
+        self,
+        inventory: RepositoryInventory,
+        discovered: DiscoveredFile,
+        projects: tuple[Project, ...],
+        previous_source: SourceFile | None,
+        *,
+        reuse_enabled: bool,
+        force: bool = False,
+        cancellation: CancellationSignal | None = None,
+    ) -> _FileIndexOutcome:
+        language = _source_language(discovered.relative_path)
+        if language is None:
+            raise ValueError("unsupported source file reached the indexer")
+        project = _project_for_path(
+            discovered.relative_path,
+            language,
+            projects,
+        )
+        observed_hash: str | None = None
+        try:
+            payload = inventory.read_bytes(
+                discovered.relative_path,
+                maximum_bytes=min(
+                    self.discovery_limits.maximum_file_bytes,
+                    self.parser_limits.maximum_source_bytes,
+                ),
+            )
+            observed_hash = content_hash(payload)
+            content = payload.decode("utf-8-sig")
+            parser = self.registry.resolve(language)
+            descriptor = parser.descriptor
+            source_identity = file_id(
+                self.repository.repository_id,
+                discovered.relative_path,
+            )
+            decoded_hash = content_hash(content)
+            project_identity = project.project_id if project else None
+            if (
+                reuse_enabled
+                and not force
+                and previous_source is not None
+                and previous_source.content_hash == decoded_hash
+                and previous_source.language == language
+                and previous_source.project_id == project_identity
+                and previous_source.parser_name == descriptor.name
+                and previous_source.parser_version == descriptor.version
+            ):
+                return _FileIndexOutcome(
+                    observed_hash=observed_hash,
+                    carried_source=previous_source.model_copy(
+                        update={
+                            "size_bytes": len(payload),
+                            "generated": discovered.generated,
+                            "test": discovered.test,
+                        }
+                    ),
+                    reused=True,
+                )
+            request = ParseRequest.from_content(
+                repository_id=self.repository.repository_id,
+                file_id=source_identity,
+                project_id=project_identity,
+                relative_path=discovered.relative_path,
+                language=language,
+                content=content,
+            )
+            result = self.registry.parse(
+                request,
+                limits=self.parser_limits,
+                cancellation=cancellation,
+            )
+            source = SourceFile(
+                file_id=source_identity,
+                repository_id=self.repository.repository_id,
+                project_id=project_identity,
+                relative_path=discovered.relative_path,
+                language=language,
+                content_hash=result.source_hash,
+                size_bytes=len(payload),
+                parser_name=descriptor.name,
+                parser_version=descriptor.version,
+                generated=discovered.generated,
+                test=discovered.test,
+                protected=False,
+            )
+            return _FileIndexOutcome(
+                observed_hash=observed_hash,
+                unit=_ParsedUnit(
+                    source=source,
+                    result=result,
+                    project=project,
+                ),
+                diagnostics=result.diagnostics,
+                partial=result.partial,
+                cancelled=result.cancelled,
+            )
+        except (
+            UnicodeError,
+            RepositoryIntelligenceError,
+            ValueError,
+        ) as exc:
+            return _FileIndexOutcome(
+                observed_hash=observed_hash,
+                carried_source=(
+                    previous_source if reuse_enabled else None
+                ),
+                diagnostics=(
+                    IndexDiagnostic(
+                        code="index.file_failed",
+                        severity=DiagnosticSeverity.WARNING,
+                        message="A source file could not be indexed safely.",
+                        relative_path=discovered.relative_path,
+                        recoverable=True,
+                        details={"error_type": type(exc).__name__},
+                    ),
+                ),
+                skipped=True,
+                partial=True,
+            )
 
     def update(
         self,
@@ -592,6 +828,61 @@ def _snapshot_configuration_fingerprint(
         if isinstance(fingerprint, str):
             return fingerprint
     return None
+
+
+def _pending_invalidation_diagnostic(
+    paths: Iterable[str],
+) -> IndexDiagnostic:
+    normalized = tuple(sorted({_relative_path(path) for path in paths}))
+    bounded: list[str] = []
+    character_count = 0
+    for path in normalized:
+        if len(bounded) >= _MAX_PENDING_INVALIDATION_PATHS:
+            break
+        if character_count + len(path) > _MAX_PENDING_INVALIDATION_CHARS:
+            break
+        bounded.append(path)
+        character_count += len(path)
+    truncated = len(bounded) != len(normalized)
+    return IndexDiagnostic(
+        code="index.invalidation_pending",
+        severity=DiagnosticSeverity.INFO,
+        message=(
+            "Dependency-aware indexing has bounded work remaining."
+        ),
+        recoverable=True,
+        details={
+            "paths": bounded,
+            "pending_count": len(normalized),
+            "requires_full_reindex": truncated,
+        },
+    )
+
+
+def _pending_invalidations(
+    snapshot: IndexSnapshot,
+) -> tuple[tuple[str, ...], bool]:
+    pending: set[str] = set()
+    requires_full_reindex = False
+    for diagnostic in snapshot.diagnostics:
+        if diagnostic.code != "index.invalidation_pending":
+            continue
+        raw_paths = diagnostic.details.get("paths", ())
+        if not isinstance(raw_paths, (list, tuple)):
+            requires_full_reindex = True
+            continue
+        for path in raw_paths:
+            if not isinstance(path, str):
+                requires_full_reindex = True
+                continue
+            try:
+                pending.add(_relative_path(path))
+            except ValueError:
+                requires_full_reindex = True
+        requires_full_reindex = requires_full_reindex or bool(
+            diagnostic.details.get("requires_full_reindex")
+        )
+    return tuple(sorted(pending)), requires_full_reindex
 
 
 def _unique_modules(modules: tuple[Module, ...]) -> tuple[Module, ...]:
@@ -702,8 +993,8 @@ def _rebind_references(
 
 
 def _detect_renames(
-    deleted_paths: list[str],
-    indexed_paths: list[str],
+    deleted_paths: Iterable[str],
+    indexed_paths: Iterable[str],
     previous_files: dict[str, SourceFile],
     current_files: dict[str, SourceFile],
 ) -> tuple[tuple[str, str], ...]:
