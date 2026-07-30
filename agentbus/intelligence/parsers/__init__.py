@@ -14,6 +14,7 @@ from agentbus.intelligence.parsers.common import (
     finalize_result,
     sanitize_documentation,
 )
+from agentbus.intelligence.parsers.go import GoStaticParser
 from agentbus.intelligence.parsers.java import JavaStaticParser
 from agentbus.intelligence.parsers.registry import ParserRegistry
 from agentbus.intelligence.parsers.python import PythonAstParser
@@ -21,6 +22,7 @@ from agentbus.intelligence.parsers.typescript import TypeScriptStaticParser
 
 __all__ = [
     "CancellationSignal",
+    "GoStaticParser",
     "LanguageParser",
     "JavaStaticParser",
     "LineMap",
