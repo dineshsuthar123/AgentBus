@@ -115,6 +115,10 @@ from agentbus.intelligence.scheduler import (
     ScheduledBatch,
     ScheduledItem,
 )
+from agentbus.intelligence.search import (
+    LexicalSearchLimits,
+    RepositoryLexicalIndex,
+)
 from agentbus.intelligence.storage import IndexStore
 from agentbus.intelligence.traversal import (
     CentralityScore,
@@ -196,6 +200,7 @@ __all__ = [
     "InvalidationReason",
     "INTELLIGENCE_PROTOCOL_VERSION",
     "INTELLIGENCE_SCHEMA_VERSION",
+    "LexicalSearchLimits",
     "Module",
     "module_id",
     "OwnershipRule",
@@ -215,6 +220,7 @@ __all__ = [
     "RepositoryIndexer",
     "repository_identity",
     "RepositoryIntelligenceError",
+    "RepositoryLexicalIndex",
     "RepositoryWatchUpdater",
     "ResolutionMatch",
     "SearchQuery",
