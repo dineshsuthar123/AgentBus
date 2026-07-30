@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable, Iterator, Sequence, TypeVar
 
@@ -25,6 +25,9 @@ from agentbus.intelligence.models import (
     DependencyKind,
     DiagnosticSeverity,
     IndexDiagnostic,
+    IndexOperation,
+    IndexOperationKind,
+    IndexOperationState,
     IndexSnapshot,
     IndexState,
     IntelligenceModel,
@@ -96,7 +99,13 @@ class IndexStore:
         edges: Iterable[DependencyEdge] = (),
         ownership_rules: Iterable[OwnershipRule] = (),
         architecture_boundaries: Iterable[ArchitectureBoundary] = (),
+        operation_id: str | None = None,
+        operation_owner_pid: int | None = None,
     ) -> IndexSnapshot:
+        if (operation_id is None) != (operation_owner_pid is None):
+            raise ValueError(
+                "operation_id and operation_owner_pid must be supplied together"
+            )
         repository = _revalidate(RepositoryIdentity, repository)
         workspace = _revalidate(WorkspaceIdentity, workspace)
         snapshot = _revalidate(IndexSnapshot, snapshot)
@@ -168,6 +177,14 @@ class IndexStore:
         with self._write_transaction() as connection:
             self._register_repository(connection, repository)
             self._register_workspace(connection, workspace)
+            if operation_id is not None and operation_owner_pid is not None:
+                self._require_index_operation(
+                    connection,
+                    repository.repository_id,
+                    operation_id,
+                    operation_owner_pid,
+                    allow_cancellation=snapshot.state == IndexState.PAUSED,
+                )
             existing = connection.execute(
                 "SELECT * FROM index_snapshots WHERE snapshot_id = ?",
                 (snapshot.snapshot_id,),
@@ -347,6 +364,241 @@ class IndexStore:
     ) -> tuple[ArchitectureBoundary, ...]:
         with self._connection() as connection:
             return self._boundaries_for_snapshot(connection, snapshot_id)
+
+    def acquire_index_operation(
+        self,
+        repository: RepositoryIdentity,
+        operation_id: str,
+        operation_kind: IndexOperationKind,
+        owner_pid: int,
+        *,
+        now: datetime,
+        stale_after: timedelta,
+    ) -> IndexOperation:
+        repository = _revalidate(RepositoryIdentity, repository)
+        if stale_after <= timedelta(0) or stale_after > timedelta(days=7):
+            raise ValueError(
+                "stale_after must be greater than zero and at most seven days"
+            )
+        candidate = IndexOperation(
+            repository_id=repository.repository_id,
+            operation_id=operation_id,
+            operation_kind=operation_kind,
+            state=IndexOperationState.RUNNING,
+            owner_pid=owner_pid,
+            started_at=now,
+            heartbeat_at=now,
+        )
+        stale_before = _datetime_text(now - stale_after)
+        with self._write_transaction() as connection:
+            self._register_repository(connection, repository)
+            existing = connection.execute(
+                """
+                SELECT *
+                FROM index_operations
+                WHERE repository_id = ?
+                """,
+                (repository.repository_id,),
+            ).fetchone()
+            if existing is not None:
+                current = self._operation_from_row(existing)
+                if (
+                    current.operation_id == candidate.operation_id
+                    and current.owner_pid == candidate.owner_pid
+                    and current.state == IndexOperationState.RUNNING
+                ):
+                    return current
+                if (
+                    current.state == IndexOperationState.RUNNING
+                    and str(existing["heartbeat_at"]) > stale_before
+                ):
+                    raise IndexBusyError(
+                        "A repository intelligence operation is already active."
+                    )
+                connection.execute(
+                    """
+                    DELETE FROM index_operations
+                    WHERE repository_id = ?
+                    """,
+                    (repository.repository_id,),
+                )
+            connection.execute(
+                """
+                INSERT INTO index_operations(
+                    repository_id, operation_id, operation_kind, state,
+                    owner_pid, started_at, heartbeat_at,
+                    cancellation_requested
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+                """,
+                (
+                    candidate.repository_id,
+                    candidate.operation_id,
+                    candidate.operation_kind.value,
+                    candidate.state.value,
+                    candidate.owner_pid,
+                    _datetime_text(candidate.started_at),
+                    _datetime_text(candidate.heartbeat_at),
+                ),
+            )
+        return self.get_index_operation(repository.repository_id) or candidate
+
+    def get_index_operation(
+        self,
+        repository_id: str,
+    ) -> IndexOperation | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT *
+                FROM index_operations
+                WHERE repository_id = ?
+                """,
+                (repository_id,),
+            ).fetchone()
+        return self._operation_from_row(row) if row is not None else None
+
+    def heartbeat_index_operation(
+        self,
+        repository_id: str,
+        operation_id: str,
+        owner_pid: int,
+        *,
+        at: datetime,
+    ) -> IndexOperation:
+        with self._write_transaction() as connection:
+            current = self._require_index_operation(
+                connection,
+                repository_id,
+                operation_id,
+                owner_pid,
+                allow_cancellation=True,
+            )
+            if at < current.started_at:
+                raise ValueError(
+                    "operation heartbeat cannot precede its start"
+                )
+            connection.execute(
+                """
+                UPDATE index_operations
+                SET heartbeat_at = ?
+                WHERE repository_id = ?
+                  AND operation_id = ?
+                  AND owner_pid = ?
+                  AND state = ?
+                """,
+                (
+                    _datetime_text(at),
+                    repository_id,
+                    operation_id,
+                    owner_pid,
+                    IndexOperationState.RUNNING.value,
+                ),
+            )
+            row = connection.execute(
+                """
+                SELECT *
+                FROM index_operations
+                WHERE repository_id = ?
+                """,
+                (repository_id,),
+            ).fetchone()
+            if row is None:
+                raise IndexBusyError(
+                    "Repository intelligence operation ownership was lost."
+                )
+            return self._operation_from_row(row)
+
+    def request_index_cancellation(self, repository_id: str) -> bool:
+        with self._write_transaction() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE index_operations
+                SET cancellation_requested = 1
+                WHERE repository_id = ? AND state = ?
+                """,
+                (repository_id, IndexOperationState.RUNNING.value),
+            )
+        return cursor.rowcount > 0
+
+    def finish_index_operation(
+        self,
+        repository_id: str,
+        operation_id: str,
+        owner_pid: int,
+        state: IndexOperationState,
+        *,
+        at: datetime,
+    ) -> IndexOperation:
+        terminal_state = IndexOperationState(state)
+        if terminal_state == IndexOperationState.RUNNING:
+            raise ValueError("an index operation must finish in a terminal state")
+        with self._write_transaction() as connection:
+            current = self._require_index_operation(
+                connection,
+                repository_id,
+                operation_id,
+                owner_pid,
+                allow_cancellation=True,
+            )
+            if at < current.started_at:
+                raise ValueError(
+                    "operation completion cannot precede its start"
+                )
+            if (
+                current.cancellation_requested
+                and terminal_state == IndexOperationState.COMPLETED
+            ):
+                raise IndexBusyError(
+                    "A cancelled index operation cannot be completed."
+                )
+            connection.execute(
+                """
+                UPDATE index_operations
+                SET state = ?, heartbeat_at = ?
+                WHERE repository_id = ?
+                  AND operation_id = ?
+                  AND owner_pid = ?
+                  AND state = ?
+                """,
+                (
+                    terminal_state.value,
+                    _datetime_text(at),
+                    repository_id,
+                    operation_id,
+                    owner_pid,
+                    IndexOperationState.RUNNING.value,
+                ),
+            )
+            row = connection.execute(
+                """
+                SELECT *
+                FROM index_operations
+                WHERE repository_id = ?
+                """,
+                (repository_id,),
+            ).fetchone()
+            if row is None:
+                raise IndexBusyError(
+                    "Repository intelligence operation ownership was lost."
+                )
+            return self._operation_from_row(row)
+
+    def validate_index_operation(
+        self,
+        repository_id: str,
+        operation_id: str,
+        owner_pid: int,
+        *,
+        allow_cancellation: bool = False,
+    ) -> IndexOperation:
+        with self._connection() as connection:
+            return self._require_index_operation(
+                connection,
+                repository_id,
+                operation_id,
+                owner_pid,
+                allow_cancellation=allow_cancellation,
+            )
 
     def put_cache_metadata(
         self,
@@ -1240,6 +1492,56 @@ class IndexStore:
         _unique_ids(
             (boundary.boundary_id for boundary in architecture_boundaries),
             "architecture boundary",
+        )
+
+    def _require_index_operation(
+        self,
+        connection: sqlite3.Connection,
+        repository_id: str,
+        operation_id: str,
+        owner_pid: int,
+        *,
+        allow_cancellation: bool,
+    ) -> IndexOperation:
+        row = connection.execute(
+            """
+            SELECT *
+            FROM index_operations
+            WHERE repository_id = ?
+            """,
+            (repository_id,),
+        ).fetchone()
+        if row is None:
+            raise IndexBusyError(
+                "Repository intelligence operation ownership was lost."
+            )
+        operation = self._operation_from_row(row)
+        if (
+            operation.operation_id != operation_id
+            or operation.owner_pid != owner_pid
+            or operation.state != IndexOperationState.RUNNING
+        ):
+            raise IndexBusyError(
+                "Repository intelligence operation fencing rejected "
+                "a stale owner."
+            )
+        if operation.cancellation_requested and not allow_cancellation:
+            raise IndexBusyError(
+                "Repository intelligence operation was cancelled."
+            )
+        return operation
+
+    @staticmethod
+    def _operation_from_row(row: sqlite3.Row) -> IndexOperation:
+        return IndexOperation(
+            repository_id=row["repository_id"],
+            operation_id=row["operation_id"],
+            operation_kind=IndexOperationKind(row["operation_kind"]),
+            state=IndexOperationState(row["state"]),
+            owner_pid=row["owner_pid"],
+            started_at=row["started_at"],
+            heartbeat_at=row["heartbeat_at"],
+            cancellation_requested=bool(row["cancellation_requested"]),
         )
 
     def _snapshot_from_row(

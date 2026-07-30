@@ -15,6 +15,7 @@ _IDENTITY_PATTERN = re.compile(
     r"^(repo|workspace|project|module|file|symbol|reference|edge|snapshot|plan|impact|testimpact)_[a-f0-9]{32,64}$"
 )
 _HASH_PATTERN = re.compile(r"^[a-f0-9]{64}$")
+_INDEX_OPERATION_PATTERN = re.compile(r"^indexop_[a-f0-9]{32,64}$")
 _MAX_PATH_CHARS = 2_048
 _MAX_TEXT_CHARS = 8_192
 
@@ -91,6 +92,20 @@ class IndexState(str, Enum):
     CORRUPTED = "corrupted"
     INCOMPATIBLE = "incompatible"
     PAUSED = "paused"
+
+
+class IndexOperationKind(str, Enum):
+    BUILD = "build"
+    UPDATE = "update"
+    REPAIR = "repair"
+
+
+class IndexOperationState(str, Enum):
+    RUNNING = "running"
+    COMPLETED = "completed"
+    PAUSED = "paused"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class DiagnosticSeverity(str, Enum):
@@ -522,6 +537,48 @@ class IndexStatus(IntelligenceModel):
     @classmethod
     def validate_stale_paths(cls, values: tuple[str, ...]) -> tuple[str, ...]:
         return tuple(_relative_path(value) for value in values)
+
+
+class IndexOperation(IntelligenceModel):
+    repository_id: str
+    operation_id: str
+    operation_kind: IndexOperationKind
+    state: IndexOperationState
+    owner_pid: int = Field(ge=1)
+    started_at: datetime
+    heartbeat_at: datetime
+    cancellation_requested: bool = False
+
+    @field_validator("repository_id")
+    @classmethod
+    def validate_repository_id(cls, value: str) -> str:
+        return _identity(value, "repo")
+
+    @field_validator("operation_id")
+    @classmethod
+    def validate_operation_id(cls, value: str) -> str:
+        if not _INDEX_OPERATION_PATTERN.fullmatch(value):
+            raise ValueError(
+                "index operation id must be a portable indexop identity"
+            )
+        return value
+
+    @field_validator("started_at", "heartbeat_at")
+    @classmethod
+    def validate_aware_timestamp(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError(
+                "index operation timestamps must include a timezone"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def validate_timestamps(self) -> IndexOperation:
+        if self.heartbeat_at < self.started_at:
+            raise ValueError(
+                "index operation heartbeat cannot precede its start"
+            )
+        return self
 
 
 class SearchQuery(IntelligenceModel):
