@@ -101,6 +101,14 @@ from agentbus.intelligence.version import (
     INTELLIGENCE_PROTOCOL_VERSION,
     INTELLIGENCE_SCHEMA_VERSION,
 )
+from agentbus.intelligence.watcher import (
+    FileChangeKind,
+    RepositoryChangeBuffer,
+    RepositoryWatchUpdater,
+    WatchBatch,
+    WatchLimits,
+    WatchUpdate,
+)
 
 __all__ = [
     "ArchitectureBoundary",
@@ -116,6 +124,7 @@ __all__ = [
     "DependencyInvalidator",
     "DependencyKind",
     "DiagnosticSeverity",
+    "FileChangeKind",
     "FreshnessLimits",
     "ImpactRequest",
     "ImpactResult",
@@ -159,10 +168,12 @@ __all__ = [
     "project_id",
     "project_map_fingerprint",
     "QueryLimitError",
+    "RepositoryChangeBuffer",
     "RepositoryIdentity",
     "RepositoryIndexer",
     "repository_identity",
     "RepositoryIntelligenceError",
+    "RepositoryWatchUpdater",
     "SearchQuery",
     "SearchResult",
     "ScheduledBatch",
@@ -182,6 +193,9 @@ __all__ = [
     "TestImpactResult",
     "test_impact_result_id",
     "UnsafeRepositoryPathError",
+    "WatchBatch",
+    "WatchLimits",
+    "WatchUpdate",
     "WorkspaceIdentity",
     "workspace_identity",
     "edge_id",
