@@ -77,6 +77,18 @@ def test_repository_models_reject_unsafe_or_personal_paths(unsafe):
         )
 
 
+def test_repository_models_accept_literal_bracketed_route_paths():
+    location = SymbolLocation(
+        relative_path="src/app/users/[id]/route.ts",
+        start_line=1,
+        start_column=0,
+        end_line=1,
+        end_column=1,
+    )
+
+    assert location.relative_path == "src/app/users/[id]/route.ts"
+
+
 def test_symbol_location_rejects_reversed_ranges():
     with pytest.raises(ValidationError, match="must not precede"):
         SymbolLocation(

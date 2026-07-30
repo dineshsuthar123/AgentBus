@@ -786,6 +786,6 @@ def _relative_path(
     parts = PurePosixPath(normalized).parts
     if any(part in {"", ".", ".."} for part in parts):
         raise ValueError("repository path must not traverse")
-    if not allow_pattern and any(character in normalized for character in "*?[]"):
-        raise ValueError("repository path must not contain glob syntax")
+    if not allow_pattern and any(character in normalized for character in "*?"):
+        raise ValueError("repository path must not contain glob wildcard syntax")
     return PurePosixPath(*parts).as_posix()
