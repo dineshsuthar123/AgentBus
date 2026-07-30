@@ -7,6 +7,7 @@ from agentbus.intelligence.discovery.base import (
     ProjectDetection,
     ProjectDetector,
 )
+from agentbus.intelligence.discovery.go import GoProjectDetector
 from agentbus.intelligence.discovery.models import (
     DiscoveryLimits,
     ProjectDiscoveryResult,
@@ -44,6 +45,7 @@ class ProjectDiscovery:
                 PythonProjectDetector(),
                 NodeProjectDetector(),
                 JavaProjectDetector(),
+                GoProjectDetector(),
             )
         )
         names = [detector.name for detector in self.detectors]

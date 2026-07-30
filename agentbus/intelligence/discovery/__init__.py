@@ -2,6 +2,7 @@ from agentbus.intelligence.discovery.base import (
     ProjectDetection,
     ProjectDetector,
 )
+from agentbus.intelligence.discovery.go import GoProjectDetector
 from agentbus.intelligence.discovery.models import (
     DiscoveredFile,
     DiscoveryLimits,
@@ -19,6 +20,7 @@ from agentbus.intelligence.discovery.python import PythonProjectDetector
 __all__ = [
     "DiscoveredFile",
     "DiscoveryLimits",
+    "GoProjectDetector",
     "JavaProjectDetector",
     "NodeProjectDetector",
     "ProjectDiscoveryResult",
