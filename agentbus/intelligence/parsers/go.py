@@ -61,6 +61,17 @@ _GO_COMPOSITE_PREFIXES = {
     "case",
     "return",
 }
+_GO_HTTP_METHODS = {
+    "CONNECT",
+    "DELETE",
+    "GET",
+    "HEAD",
+    "OPTIONS",
+    "PATCH",
+    "POST",
+    "PUT",
+    "TRACE",
+}
 
 
 @dataclass(frozen=True)
@@ -151,7 +162,10 @@ class GoStaticParser:
         return finalize_result(
             self.descriptor,
             request,
-            definitions=parser.definitions,
+            definitions=(
+                *parser.definitions,
+                *reference_scanner.generated_definitions,
+            ),
             references=reference_scanner.references,
             diagnostics=diagnostics,
             limits=active_limits,
@@ -344,10 +358,23 @@ class _GoDeclarationParser:
         qualified_name = self._qualified(
             f"{receiver}.{name}" if receiver else name
         )
+        original_kind = (
+            SymbolKind.METHOD if receiver else SymbolKind.FUNCTION
+        )
+        test_kind = _go_test_kind(
+            name,
+            self.request.relative_path,
+            receiver,
+        )
+        http_handler = _go_http_handler_signature(
+            self.tokens,
+            opening,
+            closing,
+        )
         self._add_definition(
             name=name,
             qualified_name=qualified_name,
-            kind=SymbolKind.METHOD if receiver else SymbolKind.FUNCTION,
+            kind=SymbolKind.TEST if test_kind else original_kind,
             start=self.tokens[start].start,
             end=self._terminal_offset(declaration_end, closing),
             signature=_parameter_count_signature(
@@ -357,9 +384,14 @@ class _GoDeclarationParser:
             ),
             parent=self._qualified(receiver) if receiver else None,
             exported=_go_exported(name),
+            test=test_kind is not None,
+            confidence=0.9 if test_kind else 1.0,
             attributes={
                 "receiver": receiver,
                 "receiver_pointer": receiver_pointer,
+                "test_kind": test_kind,
+                "http_handler": http_handler,
+                "original_kind": original_kind.value,
             },
         )
         if receiver is not None and receiver_token_index is not None:
@@ -708,11 +740,13 @@ class _GoReferenceScanner:
             or PurePosixPath(request.relative_path).stem
         )
         self.references: list[ParsedReference] = []
+        self.generated_definitions: list[ParsedDefinition] = []
         self.diagnostics: list[IndexDiagnostic] = []
         self.partial = False
         self.cancelled = False
         self._handled_openings: set[int] = set()
         self._handled_composites: set[int] = set()
+        self._endpoint_count = 0
 
     def scan(self) -> None:
         index = 0
@@ -806,6 +840,7 @@ class _GoReferenceScanner:
         ):
             return
         self._handled_openings.add(opening)
+        self._scan_http_registration(index, target, opening)
         if target in {"make", "new"}:
             instantiated = self._first_argument_type(opening)
             if instantiated:
@@ -831,6 +866,201 @@ class _GoReferenceScanner:
             confidence=0.75,
             explanation="Syntactically identifiable Go call target.",
             attributes={"heuristic": True},
+        )
+
+    def _scan_http_registration(
+        self,
+        index: int,
+        target: str,
+        opening: int,
+    ) -> None:
+        function = target.rsplit(".", 1)[-1]
+        arguments = self._arguments(opening)
+        if not arguments:
+            return
+        methods: tuple[str, ...]
+        path_argument = 0
+        handler_argument = 1
+        if function in _GO_HTTP_METHODS:
+            methods = (function,)
+        elif function in {"Handle", "HandleFunc"}:
+            chained_methods = self._chained_http_methods(opening)
+            if chained_methods is None:
+                methods = ("ANY",)
+            elif chained_methods:
+                methods = chained_methods
+            else:
+                methods = ("UNKNOWN",)
+                self._add_diagnostic(
+                    "parser.go_dynamic_endpoint_method",
+                    "Go HTTP route methods could not be resolved statically.",
+                )
+        elif function in {"Method", "MethodFunc"}:
+            if len(arguments) < 2:
+                return
+            method = self._static_string_argument(arguments[0])
+            if method is None or not _valid_http_method(method):
+                return
+            methods = (method.upper(),)
+            path_argument = 1
+            handler_argument = 2
+        else:
+            return
+        if path_argument >= len(arguments):
+            return
+        path = self._static_string_argument(arguments[path_argument])
+        if path is None:
+            self._add_diagnostic(
+                "parser.go_dynamic_endpoint",
+                "Go HTTP route path could not be resolved statically.",
+            )
+            return
+        if (
+            target.startswith("http.")
+            and methods == ("ANY",)
+            and " " in path
+        ):
+            method, candidate_path = path.split(" ", 1)
+            if _valid_http_method(method) and candidate_path:
+                methods = (method.upper(),)
+                path = candidate_path
+        handler = (
+            self._argument_target(arguments[handler_argument])
+            if handler_argument < len(arguments)
+            else None
+        )
+        endpoint = f"{'|'.join(methods)} {path}"[:2_048]
+        self._add_generated_endpoint(
+            token_index=index,
+            endpoint=endpoint,
+            source=self._source_for(self.tokens[index].start),
+            attributes={
+                "framework": (
+                    "net/http"
+                    if target.startswith("http.")
+                    else "go-http-router"
+                ),
+                "heuristic": True,
+                "registration_target": target,
+                "handler": handler,
+                "http_methods": methods,
+            },
+        )
+
+    def _chained_http_methods(
+        self,
+        opening: int,
+    ) -> tuple[str, ...] | None:
+        closing = self.pairs.get(opening)
+        if closing is None:
+            return None
+        cursor = closing + 1
+        if (
+            self._value(cursor) != "."
+            or self._value(cursor + 1) != "Methods"
+            or self._value(cursor + 2) != "("
+            or cursor + 2 not in self.pairs
+        ):
+            return None
+        methods = [
+            value.upper()
+            for argument in self._arguments(cursor + 2)
+            if (value := self._static_string_argument(argument)) is not None
+            and _valid_http_method(value)
+        ]
+        return tuple(dict.fromkeys(methods))[:16]
+
+    def _add_diagnostic(self, code: str, message: str) -> None:
+        if len(self.diagnostics) >= self.limits.maximum_diagnostics:
+            return
+        self.diagnostics.append(
+            _diagnostic(
+                self.request,
+                code,
+                message,
+            )
+        )
+
+    def _arguments(self, opening: int) -> tuple[tuple[int, int], ...]:
+        closing = self.pairs.get(opening)
+        if closing is None:
+            return ()
+        arguments: list[tuple[int, int]] = []
+        start = opening + 1
+        index = start
+        while index < closing:
+            if self.tokens[index].value == ",":
+                arguments.append((start, index))
+                start = index + 1
+                index += 1
+                continue
+            if (
+                self.tokens[index].value in {"(", "[", "{"}
+                and index in self.pairs
+            ):
+                index = self.pairs[index] + 1
+            else:
+                index += 1
+        if start < closing:
+            arguments.append((start, closing))
+        return tuple(arguments[:256])
+
+    def _static_string_argument(
+        self,
+        argument: tuple[int, int],
+    ) -> str | None:
+        tokens = [
+            token
+            for token in self.tokens[argument[0]:argument[1]]
+            if token.kind != "newline"
+        ]
+        if len(tokens) != 1 or tokens[0].kind != "string":
+            return None
+        return tokens[0].value[:2_048]
+
+    def _argument_target(
+        self,
+        argument: tuple[int, int],
+    ) -> str | None:
+        index = argument[0]
+        while index < argument[1] and self.tokens[index].kind == "newline":
+            index += 1
+        if self._kind(index) != "identifier":
+            return None
+        target, _ = self._qualified_target(index, argument[1])
+        if target in _GO_NON_CALL_IDENTIFIERS:
+            return None
+        return target[:2_048]
+
+    def _add_generated_endpoint(
+        self,
+        *,
+        token_index: int,
+        endpoint: str,
+        source: str,
+        attributes: dict[str, object],
+    ) -> None:
+        if (
+            len(self.definitions) + len(self.generated_definitions)
+            > self.limits.maximum_definitions
+        ):
+            self.partial = True
+            return
+        self._endpoint_count += 1
+        token = self.tokens[token_index]
+        self.generated_definitions.append(
+            ParsedDefinition(
+                name=endpoint[:512],
+                qualified_name=(
+                    f"{source}.__endpoint__.{self._endpoint_count}"
+                )[:2_048],
+                kind=SymbolKind.ENDPOINT,
+                location=self.lines.location(token.start, token.end),
+                parent_qualified_name=source[:2_048],
+                endpoint=endpoint,
+                confidence=0.8,
+                attributes=attributes,
+            )
         )
 
     def _scan_composite_literal(self, index: int) -> None:
@@ -922,12 +1152,9 @@ class _GoReferenceScanner:
                 comparisons += 1
                 if comparisons > maximum_comparisons:
                     self.partial = True
-                    self.diagnostics.append(
-                        _diagnostic(
-                            self.request,
-                            "parser.go_relationship_limit",
-                            "Go interface matching reached its configured limit.",
-                        )
+                    self._add_diagnostic(
+                        "parser.go_relationship_limit",
+                        "Go interface matching reached its configured limit.",
                     )
                     return
                 if (
@@ -1373,6 +1600,62 @@ def _receiver_details(
         for index in range(start, target_start)
     )
     return ".".join(values)[:2_048], pointer, target_start
+
+
+def _go_test_kind(
+    name: str,
+    relative_path: str,
+    receiver: str | None,
+) -> str | None:
+    if receiver is not None:
+        return None
+    filename = PurePosixPath(relative_path.replace("\\", "/")).name
+    if not filename.endswith("_test.go"):
+        return None
+    for prefix, kind in (
+        ("Benchmark", "benchmark"),
+        ("Example", "example"),
+        ("Fuzz", "fuzz"),
+        ("Test", "test"),
+    ):
+        if not name.startswith(prefix):
+            continue
+        suffix = name[len(prefix):]
+        if not suffix or not suffix[0].islower():
+            return kind
+    return None
+
+
+def _go_http_handler_signature(
+    tokens: tuple[_Token, ...],
+    start: int,
+    end: int,
+) -> bool:
+    qualified: set[str] = set()
+    index = start + 1
+    while index < end:
+        if tokens[index].kind != "identifier":
+            index += 1
+            continue
+        values = [tokens[index].value]
+        cursor = index + 1
+        while (
+            cursor + 1 < end
+            and tokens[cursor].value == "."
+            and tokens[cursor + 1].kind == "identifier"
+        ):
+            values.append(tokens[cursor + 1].value)
+            cursor += 2
+        qualified.add(".".join(values))
+        index = cursor
+    return {
+        "http.Request",
+        "http.ResponseWriter",
+    }.issubset(qualified)
+
+
+def _valid_http_method(value: str) -> bool:
+    return 1 <= len(value) <= 32 and value.isascii() and value.isalpha()
 
 
 def _token_signature(
