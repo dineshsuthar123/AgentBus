@@ -11,6 +11,7 @@ from agentbus.intelligence.discovery.models import (
     DiscoveryLimits,
     ProjectDiscoveryResult,
 )
+from agentbus.intelligence.discovery.java import JavaProjectDetector
 from agentbus.intelligence.discovery.node import NodeProjectDetector
 from agentbus.intelligence.discovery.python import PythonProjectDetector
 from agentbus.intelligence.discovery.scanner import RepositoryInventoryScanner
@@ -42,6 +43,7 @@ class ProjectDiscovery:
             or (
                 PythonProjectDetector(),
                 NodeProjectDetector(),
+                JavaProjectDetector(),
             )
         )
         names = [detector.name for detector in self.detectors]
