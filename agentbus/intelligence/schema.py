@@ -51,7 +51,7 @@ CREATE INDEX IF NOT EXISTS idx_snapshots_repository_created
 ON index_snapshots(repository_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS projects (
-    project_id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
     repository_id TEXT NOT NULL REFERENCES repositories(repository_id) ON DELETE CASCADE,
     snapshot_id TEXT NOT NULL REFERENCES index_snapshots(snapshot_id) ON DELETE CASCADE,
     name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 256),
@@ -61,7 +61,8 @@ CREATE TABLE IF NOT EXISTS projects (
     test_roots_json TEXT NOT NULL CHECK(length(test_roots_json) <= 65536),
     generated_roots_json TEXT NOT NULL CHECK(length(generated_roots_json) <= 65536),
     manifest_paths_json TEXT NOT NULL CHECK(length(manifest_paths_json) <= 65536),
-    workspace_project_ids_json TEXT NOT NULL CHECK(length(workspace_project_ids_json) <= 65536)
+    workspace_project_ids_json TEXT NOT NULL CHECK(length(workspace_project_ids_json) <= 65536),
+    PRIMARY KEY(snapshot_id, project_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_projects_repository_root
@@ -74,9 +75,9 @@ CREATE TABLE IF NOT EXISTS content_hashes (
 );
 
 CREATE TABLE IF NOT EXISTS indexed_files (
-    file_id TEXT PRIMARY KEY,
+    file_id TEXT NOT NULL,
     repository_id TEXT NOT NULL REFERENCES repositories(repository_id) ON DELETE CASCADE,
-    project_id TEXT REFERENCES projects(project_id) ON DELETE SET NULL,
+    project_id TEXT,
     snapshot_id TEXT NOT NULL REFERENCES index_snapshots(snapshot_id) ON DELETE CASCADE,
     relative_path TEXT NOT NULL CHECK(length(relative_path) BETWEEN 1 AND 2048),
     language TEXT NOT NULL,
@@ -87,7 +88,11 @@ CREATE TABLE IF NOT EXISTS indexed_files (
     generated INTEGER NOT NULL DEFAULT 0 CHECK(generated IN (0, 1)),
     is_test INTEGER NOT NULL DEFAULT 0 CHECK(is_test IN (0, 1)),
     protected INTEGER NOT NULL DEFAULT 0 CHECK(protected IN (0, 1)),
-    UNIQUE(repository_id, snapshot_id, relative_path)
+    PRIMARY KEY(snapshot_id, file_id),
+    UNIQUE(repository_id, snapshot_id, relative_path),
+    FOREIGN KEY(snapshot_id, project_id)
+        REFERENCES projects(snapshot_id, project_id)
+        DEFERRABLE INITIALLY DEFERRED
 );
 
 CREATE INDEX IF NOT EXISTS idx_files_repository_path
@@ -102,21 +107,25 @@ ON indexed_files(snapshot_id, content_hash);
         name="symbols_edges_and_search",
         sql="""
 CREATE TABLE IF NOT EXISTS modules (
-    module_id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
+    module_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
     snapshot_id TEXT NOT NULL REFERENCES index_snapshots(snapshot_id) ON DELETE CASCADE,
     name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 512),
     qualified_name TEXT NOT NULL CHECK(length(qualified_name) BETWEEN 1 AND 2048),
     relative_path TEXT NOT NULL CHECK(length(relative_path) BETWEEN 1 AND 2048),
     language TEXT NOT NULL,
-    public INTEGER NOT NULL DEFAULT 0 CHECK(public IN (0, 1))
+    public INTEGER NOT NULL DEFAULT 0 CHECK(public IN (0, 1)),
+    PRIMARY KEY(snapshot_id, module_id),
+    FOREIGN KEY(snapshot_id, project_id)
+        REFERENCES projects(snapshot_id, project_id) ON DELETE CASCADE
+        DEFERRABLE INITIALLY DEFERRED
 );
 
 CREATE TABLE IF NOT EXISTS symbols (
-    symbol_id TEXT PRIMARY KEY,
-    file_id TEXT NOT NULL REFERENCES indexed_files(file_id) ON DELETE CASCADE,
-    project_id TEXT REFERENCES projects(project_id) ON DELETE SET NULL,
-    module_id TEXT REFERENCES modules(module_id) ON DELETE SET NULL,
+    symbol_id TEXT NOT NULL,
+    file_id TEXT NOT NULL,
+    project_id TEXT,
+    module_id TEXT,
     snapshot_id TEXT NOT NULL REFERENCES index_snapshots(snapshot_id) ON DELETE CASCADE,
     name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 512),
     qualified_name TEXT NOT NULL CHECK(length(qualified_name) BETWEEN 1 AND 2048),
@@ -128,12 +137,25 @@ CREATE TABLE IF NOT EXISTS symbols (
     end_column INTEGER NOT NULL CHECK(end_column >= 0),
     signature TEXT CHECK(signature IS NULL OR length(signature) <= 4096),
     documentation TEXT CHECK(documentation IS NULL OR length(documentation) <= 8192),
-    parent_symbol_id TEXT REFERENCES symbols(symbol_id) ON DELETE SET NULL,
+    parent_symbol_id TEXT,
     exported INTEGER NOT NULL DEFAULT 0 CHECK(exported IN (0, 1)),
     is_test INTEGER NOT NULL DEFAULT 0 CHECK(is_test IN (0, 1)),
     endpoint TEXT CHECK(endpoint IS NULL OR length(endpoint) <= 2048),
     confidence REAL NOT NULL CHECK(confidence BETWEEN 0 AND 1),
-    attributes_json TEXT NOT NULL CHECK(length(attributes_json) <= 65536)
+    attributes_json TEXT NOT NULL CHECK(length(attributes_json) <= 65536),
+    PRIMARY KEY(snapshot_id, symbol_id),
+    FOREIGN KEY(snapshot_id, file_id)
+        REFERENCES indexed_files(snapshot_id, file_id) ON DELETE CASCADE
+        DEFERRABLE INITIALLY DEFERRED,
+    FOREIGN KEY(snapshot_id, project_id)
+        REFERENCES projects(snapshot_id, project_id)
+        DEFERRABLE INITIALLY DEFERRED,
+    FOREIGN KEY(snapshot_id, module_id)
+        REFERENCES modules(snapshot_id, module_id)
+        DEFERRABLE INITIALLY DEFERRED,
+    FOREIGN KEY(snapshot_id, parent_symbol_id)
+        REFERENCES symbols(snapshot_id, symbol_id)
+        DEFERRABLE INITIALLY DEFERRED
 );
 
 CREATE INDEX IF NOT EXISTS idx_symbols_snapshot_qualified
@@ -143,10 +165,10 @@ CREATE INDEX IF NOT EXISTS idx_symbols_file_kind
 ON symbols(file_id, kind);
 
 CREATE TABLE IF NOT EXISTS symbol_references (
-    reference_id TEXT PRIMARY KEY,
-    source_symbol_id TEXT REFERENCES symbols(symbol_id) ON DELETE CASCADE,
-    source_file_id TEXT NOT NULL REFERENCES indexed_files(file_id) ON DELETE CASCADE,
-    target_symbol_id TEXT REFERENCES symbols(symbol_id) ON DELETE SET NULL,
+    reference_id TEXT NOT NULL,
+    source_symbol_id TEXT,
+    source_file_id TEXT NOT NULL,
+    target_symbol_id TEXT,
     snapshot_id TEXT NOT NULL REFERENCES index_snapshots(snapshot_id) ON DELETE CASCADE,
     unresolved_target TEXT CHECK(unresolved_target IS NULL OR length(unresolved_target) <= 2048),
     kind TEXT NOT NULL,
@@ -157,14 +179,24 @@ CREATE TABLE IF NOT EXISTS symbol_references (
     end_column INTEGER NOT NULL CHECK(end_column >= 0),
     confidence REAL NOT NULL CHECK(confidence BETWEEN 0 AND 1),
     explanation TEXT NOT NULL CHECK(length(explanation) BETWEEN 1 AND 2048),
-    CHECK(target_symbol_id IS NOT NULL OR unresolved_target IS NOT NULL)
+    PRIMARY KEY(snapshot_id, reference_id),
+    CHECK(target_symbol_id IS NOT NULL OR unresolved_target IS NOT NULL),
+    FOREIGN KEY(snapshot_id, source_symbol_id)
+        REFERENCES symbols(snapshot_id, symbol_id) ON DELETE CASCADE
+        DEFERRABLE INITIALLY DEFERRED,
+    FOREIGN KEY(snapshot_id, source_file_id)
+        REFERENCES indexed_files(snapshot_id, file_id) ON DELETE CASCADE
+        DEFERRABLE INITIALLY DEFERRED,
+    FOREIGN KEY(snapshot_id, target_symbol_id)
+        REFERENCES symbols(snapshot_id, symbol_id)
+        DEFERRABLE INITIALLY DEFERRED
 );
 
 CREATE INDEX IF NOT EXISTS idx_references_target
 ON symbol_references(snapshot_id, target_symbol_id);
 
 CREATE TABLE IF NOT EXISTS dependency_edges (
-    edge_id TEXT PRIMARY KEY,
+    edge_id TEXT NOT NULL,
     snapshot_id TEXT NOT NULL REFERENCES index_snapshots(snapshot_id) ON DELETE CASCADE,
     kind TEXT NOT NULL,
     source_id TEXT NOT NULL CHECK(length(source_id) BETWEEN 1 AND 256),
@@ -178,7 +210,8 @@ CREATE TABLE IF NOT EXISTS dependency_edges (
     parser_name TEXT NOT NULL CHECK(length(parser_name) BETWEEN 1 AND 128),
     parser_version TEXT NOT NULL CHECK(length(parser_version) BETWEEN 1 AND 128),
     explanation TEXT NOT NULL CHECK(length(explanation) BETWEEN 1 AND 2048),
-    resolved INTEGER NOT NULL DEFAULT 1 CHECK(resolved IN (0, 1))
+    resolved INTEGER NOT NULL DEFAULT 1 CHECK(resolved IN (0, 1)),
+    PRIMARY KEY(snapshot_id, edge_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_edges_source_kind
@@ -188,17 +221,18 @@ CREATE INDEX IF NOT EXISTS idx_edges_target_kind
 ON dependency_edges(snapshot_id, target_id, kind);
 
 CREATE TABLE IF NOT EXISTS ownership_rules (
-    rule_id TEXT PRIMARY KEY,
+    rule_id TEXT NOT NULL,
     snapshot_id TEXT NOT NULL REFERENCES index_snapshots(snapshot_id) ON DELETE CASCADE,
     pattern TEXT NOT NULL CHECK(length(pattern) BETWEEN 1 AND 2048),
     owners_json TEXT NOT NULL CHECK(length(owners_json) <= 32768),
     source_path TEXT NOT NULL CHECK(length(source_path) BETWEEN 1 AND 2048),
     confidence REAL NOT NULL CHECK(confidence BETWEEN 0 AND 1),
-    explanation TEXT NOT NULL CHECK(length(explanation) BETWEEN 1 AND 2048)
+    explanation TEXT NOT NULL CHECK(length(explanation) BETWEEN 1 AND 2048),
+    PRIMARY KEY(snapshot_id, rule_id)
 );
 
 CREATE TABLE IF NOT EXISTS architecture_boundaries (
-    boundary_id TEXT PRIMARY KEY,
+    boundary_id TEXT NOT NULL,
     snapshot_id TEXT NOT NULL REFERENCES index_snapshots(snapshot_id) ON DELETE CASCADE,
     name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 512),
     scope_json TEXT NOT NULL CHECK(length(scope_json) <= 65536),
@@ -206,7 +240,8 @@ CREATE TABLE IF NOT EXISTS architecture_boundaries (
     source_evidence_json TEXT NOT NULL CHECK(length(source_evidence_json) <= 65536),
     confidence REAL NOT NULL CHECK(confidence BETWEEN 0 AND 1),
     explanation TEXT NOT NULL CHECK(length(explanation) BETWEEN 1 AND 2048),
-    forbidden_targets_json TEXT NOT NULL CHECK(length(forbidden_targets_json) <= 65536)
+    forbidden_targets_json TEXT NOT NULL CHECK(length(forbidden_targets_json) <= 65536),
+    PRIMARY KEY(snapshot_id, boundary_id)
 );
 
 CREATE TABLE IF NOT EXISTS search_terms (
