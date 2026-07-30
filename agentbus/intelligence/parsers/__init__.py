@@ -16,6 +16,7 @@ from agentbus.intelligence.parsers.common import (
 )
 from agentbus.intelligence.parsers.registry import ParserRegistry
 from agentbus.intelligence.parsers.python import PythonAstParser
+from agentbus.intelligence.parsers.typescript import TypeScriptStaticParser
 
 __all__ = [
     "CancellationSignal",
@@ -29,6 +30,7 @@ __all__ = [
     "ParserLimits",
     "ParserRegistry",
     "PythonAstParser",
+    "TypeScriptStaticParser",
     "cancellation_requested",
     "finalize_result",
     "sanitize_documentation",
