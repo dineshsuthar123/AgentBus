@@ -119,6 +119,13 @@ from agentbus.intelligence.search import (
     LexicalSearchLimits,
     RepositoryLexicalIndex,
 )
+from agentbus.intelligence.semantic import (
+    EmbeddingProviderDescriptor,
+    OptionalSemanticSearch,
+    SemanticEmbeddingProvider,
+    SemanticIndexStatus,
+    SemanticSearchConfig,
+)
 from agentbus.intelligence.storage import IndexStore
 from agentbus.intelligence.traversal import (
     CentralityScore,
@@ -164,6 +171,7 @@ __all__ = [
     "DependencyKind",
     "DependencyPath",
     "DiagnosticSeverity",
+    "EmbeddingProviderDescriptor",
     "FileChangeKind",
     "FreshnessLimits",
     "GraphBuildLimits",
@@ -206,6 +214,7 @@ __all__ = [
     "OwnershipRule",
     "OwnershipExtraction",
     "OwnershipLimits",
+    "OptionalSemanticSearch",
     "ParserCompatibilityError",
     "ParserUnavailableError",
     "Project",
@@ -227,6 +236,9 @@ __all__ = [
     "SearchResult",
     "ScheduledBatch",
     "ScheduledItem",
+    "SemanticEmbeddingProvider",
+    "SemanticIndexStatus",
+    "SemanticSearchConfig",
     "SOURCE_LANGUAGE_BY_SUFFIX",
     "SourceFile",
     "SourceLanguage",
