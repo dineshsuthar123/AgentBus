@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 
 from agentbus.intelligence.models import (
+    DependencyKind,
     DiagnosticSeverity,
     IndexDiagnostic,
     SourceLanguage,
@@ -14,6 +15,7 @@ from agentbus.intelligence.parsers.base import (
     ParseRequest,
     ParseResult,
     ParsedDefinition,
+    ParsedReference,
     ParserDescriptor,
     ParserLimits,
 )
@@ -45,6 +47,18 @@ _TYPE_KEYWORDS = {
     "interface": SymbolKind.INTERFACE,
     "record": SymbolKind.RECORD,
 }
+_NON_CALL_IDENTIFIERS = {
+    "catch",
+    "do",
+    "for",
+    "if",
+    "return",
+    "switch",
+    "synchronized",
+    "throw",
+    "try",
+    "while",
+}
 
 
 @dataclass(frozen=True)
@@ -53,6 +67,14 @@ class _Token:
     value: str
     start: int
     end: int
+
+
+@dataclass(frozen=True)
+class _DefinitionSpan:
+    start: int
+    end: int
+    qualified_name: str
+    kind: SymbolKind
 
 
 class JavaStaticParser:
@@ -102,19 +124,32 @@ class JavaStaticParser:
         )
         parser.parse()
         diagnostics.extend(parser.diagnostics)
+        reference_scanner = _JavaReferenceScanner(
+            request,
+            tokens,
+            pairs,
+            tuple(parser.spans),
+            parser.declaration_openings,
+            active_limits,
+            cancellation,
+        )
+        reference_scanner.scan()
+        diagnostics.extend(reference_scanner.diagnostics)
         return finalize_result(
             self.descriptor,
             request,
             definitions=parser.definitions,
+            references=reference_scanner.references,
             diagnostics=diagnostics,
             limits=active_limits,
             partial=(
                 partial
                 or bool(pair_diagnostics)
                 or parser.partial
+                or reference_scanner.partial
                 or cancelled
             ),
-            cancelled=cancelled,
+            cancelled=cancelled or reference_scanner.cancelled,
         )
 
 
@@ -137,6 +172,8 @@ class _JavaDeclarationParser:
             or PurePosixPath(request.relative_path).stem
         )
         self.definitions: list[ParsedDefinition] = []
+        self.spans: list[_DefinitionSpan] = []
+        self.declaration_openings: set[int] = set()
         self.diagnostics: list[IndexDiagnostic] = []
         self.partial = False
 
@@ -208,6 +245,13 @@ class _JavaDeclarationParser:
         kind = _TYPE_KEYWORDS[self.tokens[keyword_index].value]
         body = self._find_value("{", name_index + 1, end)
         body_end = self.pairs.get(body) if body is not None else None
+        header_opening = self._find_value(
+            "(",
+            name_index + 1,
+            body if body is not None else end,
+        )
+        if header_opening is not None:
+            self.declaration_openings.add(header_opening)
         terminal = (
             self.tokens[body_end].end
             if body_end is not None
@@ -250,6 +294,7 @@ class _JavaDeclarationParser:
             return start
         opening = self._find_value("(", start, statement_end)
         if opening is not None:
+            self.declaration_openings.add(opening)
             name_index = opening - 1
             if not self._is_identifier(name_index, statement_end):
                 return statement_end
@@ -424,6 +469,14 @@ class _JavaDeclarationParser:
                 attributes=attributes or {},
             )
         )
+        self.spans.append(
+            _DefinitionSpan(
+                start=start,
+                end=max(start, end),
+                qualified_name=qualified_name[:2_048],
+                kind=kind,
+            )
+        )
 
     def _find_value(
         self,
@@ -474,6 +527,318 @@ class _JavaDeclarationParser:
             for token in self.tokens[start:end]
             if token.value in _MODIFIERS
         )
+
+
+class _JavaReferenceScanner:
+    def __init__(
+        self,
+        request: ParseRequest,
+        tokens: tuple[_Token, ...],
+        pairs: dict[int, int],
+        spans: tuple[_DefinitionSpan, ...],
+        declaration_openings: set[int],
+        limits: ParserLimits,
+        cancellation: CancellationSignal | None,
+    ) -> None:
+        self.request = request
+        self.tokens = tokens
+        self.pairs = pairs
+        self.spans = spans
+        self.declaration_openings = declaration_openings
+        self.limits = limits
+        self.cancellation = cancellation
+        self.lines = LineMap(request.relative_path, request.content)
+        self.module_name = (
+            _package_name(tokens)
+            or PurePosixPath(request.relative_path).stem
+        )
+        self.references: list[ParsedReference] = []
+        self.diagnostics: list[IndexDiagnostic] = []
+        self.partial = False
+        self.cancelled = False
+        self._handled_openings: set[int] = set()
+        self._handled_method_references: set[int] = set()
+
+    def scan(self) -> None:
+        index = 0
+        while index < len(self.tokens) and not self.partial:
+            if (
+                index % self.limits.cancellation_check_interval == 0
+                and cancellation_requested(self.cancellation)
+            ):
+                self.partial = True
+                self.cancelled = True
+                return
+            value = self.tokens[index].value
+            if value == "import":
+                index = self._scan_import(index)
+                continue
+            if value in _TYPE_KEYWORDS:
+                self._scan_type_relationships(index)
+            if self.tokens[index].kind == "identifier":
+                self._scan_method_reference(index)
+                self._scan_call(index)
+            index += 1
+
+    def _scan_import(self, index: int) -> int:
+        terminal = self._statement_end(index + 1)
+        target_start = index + 1
+        is_static = self._value(target_start) == "static"
+        if is_static:
+            target_start += 1
+        target, target_index = self._qualified_target(
+            target_start,
+            terminal,
+            allow_wildcard=True,
+        )
+        if target:
+            self._add_reference(
+                target_index,
+                target=target,
+                kind=DependencyKind.IMPORTS,
+                confidence=0.65 if target.endswith(".*") else 1.0,
+                explanation=(
+                    "Static wildcard Java import with unresolved members."
+                    if target.endswith(".*")
+                    else "Explicit Java import declaration."
+                ),
+                source=self.module_name,
+                attributes={
+                    "static": is_static,
+                    "wildcard": target.endswith(".*"),
+                },
+            )
+        return terminal
+
+    def _scan_type_relationships(self, index: int) -> None:
+        name_index = index + 1
+        if self._kind(name_index) != "identifier":
+            return
+        body = self._find_value("{", name_index + 1, len(self.tokens))
+        terminal = body if body is not None else self._statement_end(name_index + 1)
+        source = self._source_for(self.tokens[name_index].start)
+        cursor = name_index + 1
+        relationship: DependencyKind | None = None
+        while cursor < terminal:
+            value = self.tokens[cursor].value
+            if value == "<":
+                cursor = self._skip_angle_group(cursor, terminal)
+                continue
+            if value == "extends":
+                relationship = DependencyKind.INHERITS
+                cursor += 1
+                continue
+            if value == "implements":
+                relationship = DependencyKind.IMPLEMENTS
+                cursor += 1
+                continue
+            if (
+                relationship is not None
+                and self.tokens[cursor].kind == "identifier"
+            ):
+                target, target_index = self._qualified_target(cursor, terminal)
+                self._add_reference(
+                    target_index,
+                    target=target,
+                    kind=relationship,
+                    confidence=0.9,
+                    explanation=(
+                        "Static Java type relationship; cross-file "
+                        "resolution is deferred."
+                    ),
+                    source=source,
+                )
+                cursor = target_index + 1
+                if self._value(cursor) == "<":
+                    cursor = self._skip_angle_group(cursor, terminal)
+                continue
+            cursor += 1
+
+    def _scan_method_reference(self, index: int) -> None:
+        target, target_index = self._qualified_target(index, len(self.tokens))
+        marker = target_index + 1
+        if (
+            self._value(marker) != "::"
+            or marker in self._handled_method_references
+        ):
+            return
+        member_index = target_index + 2
+        if self._kind(member_index) != "identifier":
+            return
+        self._handled_method_references.add(marker)
+        self._add_reference(
+            index,
+            target=f"{target}.{self.tokens[member_index].value}",
+            kind=DependencyKind.REFERENCES,
+            confidence=0.8,
+            explanation="Syntactically identifiable Java method reference.",
+            attributes={"method_reference": True},
+        )
+
+    def _scan_call(self, index: int) -> None:
+        target, target_index = self._qualified_target(index, len(self.tokens))
+        opening = target_index + 1
+        if self._value(opening) == "<":
+            opening = self._skip_angle_group(opening, len(self.tokens))
+        if self._value(opening) != "(":
+            return
+        if (
+            opening in self.declaration_openings
+            or opening in self._handled_openings
+            or self._is_annotation_target(index)
+            or target.rsplit(".", 1)[-1] in _NON_CALL_IDENTIFIERS
+        ):
+            return
+        self._handled_openings.add(opening)
+        kind = (
+            DependencyKind.INSTANTIATES
+            if self._value(index - 1) == "new"
+            else DependencyKind.CALLS
+        )
+        self._add_reference(
+            index,
+            target=target,
+            kind=kind,
+            confidence=0.9 if kind == DependencyKind.INSTANTIATES else 0.75,
+            explanation=(
+                "Static Java constructor invocation."
+                if kind == DependencyKind.INSTANTIATES
+                else "Syntactically identifiable Java call target."
+            ),
+            attributes={"heuristic": True},
+        )
+
+    def _add_reference(
+        self,
+        token_index: int,
+        *,
+        target: str,
+        kind: DependencyKind,
+        confidence: float,
+        explanation: str,
+        source: str | None = None,
+        attributes: dict[str, object] | None = None,
+    ) -> None:
+        if not target:
+            return
+        if len(self.references) > self.limits.maximum_references:
+            self.partial = True
+            return
+        token = self.tokens[token_index]
+        self.references.append(
+            ParsedReference(
+                target=target[:2_048],
+                kind=kind,
+                location=self.lines.location(token.start, token.end),
+                source_qualified_name=(
+                    source or self._source_for(token.start)
+                )[:2_048],
+                confidence=confidence,
+                explanation=explanation,
+                attributes=attributes or {},
+            )
+        )
+
+    def _source_for(self, offset: int) -> str:
+        containing = [
+            span
+            for span in self.spans
+            if span.start <= offset <= span.end
+        ]
+        if not containing:
+            return self.module_name
+        return min(
+            containing,
+            key=lambda item: (
+                item.end - item.start,
+                item.qualified_name,
+            ),
+        ).qualified_name
+
+    def _statement_end(self, start: int) -> int:
+        index = start
+        while index < len(self.tokens):
+            if self.tokens[index].value == ";":
+                return index + 1
+            if (
+                self.tokens[index].value in {"(", "[", "{"}
+                and index in self.pairs
+            ):
+                index = self.pairs[index] + 1
+            else:
+                index += 1
+        return len(self.tokens)
+
+    def _find_value(
+        self,
+        value: str,
+        start: int,
+        end: int,
+    ) -> int | None:
+        index = start
+        while index < end:
+            if self.tokens[index].value == value:
+                return index
+            if (
+                self.tokens[index].value in {"(", "[", "{"}
+                and index in self.pairs
+            ):
+                index = self.pairs[index] + 1
+            else:
+                index += 1
+        return None
+
+    def _qualified_target(
+        self,
+        start: int,
+        end: int,
+        *,
+        allow_wildcard: bool = False,
+    ) -> tuple[str, int]:
+        if self._kind(start) != "identifier":
+            return "", start
+        values = [self.tokens[start].value]
+        index = start + 1
+        terminal = start
+        while index + 1 < end and self.tokens[index].value == ".":
+            candidate = self.tokens[index + 1]
+            if candidate.kind != "identifier" and not (
+                allow_wildcard and candidate.value == "*"
+            ):
+                break
+            values.append(candidate.value)
+            terminal = index + 1
+            index += 2
+        return ".".join(values), terminal
+
+    def _skip_angle_group(self, start: int, end: int) -> int:
+        depth = 0
+        index = start
+        while index < end:
+            value = self.tokens[index].value
+            if value == "<":
+                depth += 1
+            elif value == ">":
+                depth -= 1
+                if depth == 0:
+                    return index + 1
+            index += 1
+        return end
+
+    def _is_annotation_target(self, index: int) -> bool:
+        cursor = index - 1
+        while (
+            self._value(cursor) == "."
+            and self._kind(cursor - 1) == "identifier"
+        ):
+            cursor -= 2
+        return self._value(cursor) == "@"
+
+    def _kind(self, index: int) -> str | None:
+        return self.tokens[index].kind if 0 <= index < len(self.tokens) else None
+
+    def _value(self, index: int) -> str | None:
+        return self.tokens[index].value if 0 <= index < len(self.tokens) else None
 
 
 def _tokenize(
