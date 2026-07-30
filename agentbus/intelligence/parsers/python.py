@@ -30,7 +30,7 @@ from agentbus.intelligence.parsers.common import (
 class PythonAstParser:
     descriptor = ParserDescriptor(
         name="python-ast",
-        version="1.1.0",
+        version="1.2.0",
         languages=(SourceLanguage.PYTHON,),
     )
 
@@ -122,6 +122,7 @@ class _PythonDefinitionVisitor(ast.NodeVisitor):
         self.references: list[ParsedReference] = []
         self.diagnostics: list[IndexDiagnostic] = []
         self.explicit_exports: set[str] | None = None
+        self.django_route_count = 0
         self.scope: list[str] = []
         self.scope_kinds: list[SymbolKind] = []
         self.visited_nodes = 0
@@ -162,15 +163,21 @@ class _PythonDefinitionVisitor(ast.NodeVisitor):
         if self._stop_before(node):
             return
         qualified_name = self._qualified(node.name)
+        decorators = _decorator_names(node.decorator_list)
+        test = _is_test_class(node)
         self._add_definition(
             node,
             name=node.name,
             qualified_name=qualified_name,
-            kind=SymbolKind.CLASS,
+            kind=SymbolKind.TEST if test else SymbolKind.CLASS,
             signature=_class_signature(node),
             documentation=ast.get_docstring(node, clean=False),
             exported=self._exported(node.name),
-            attributes={"decorators": _decorator_names(node.decorator_list)},
+            test=test,
+            attributes={
+                "decorators": decorators,
+                "original_kind": SymbolKind.CLASS.value,
+            },
         )
         for base in node.bases:
             target = _expression_name(base)
@@ -183,7 +190,11 @@ class _PythonDefinitionVisitor(ast.NodeVisitor):
                     confidence=_expression_confidence(base),
                     explanation="Static Python base-class expression.",
                 )
-        self._visit_scope(node.body, node.name, SymbolKind.CLASS)
+        self._visit_scope(
+            node.body,
+            node.name,
+            SymbolKind.TEST if test else SymbolKind.CLASS,
+        )
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         self._visit_function(node)
@@ -196,6 +207,7 @@ class _PythonDefinitionVisitor(ast.NodeVisitor):
             return
         if self._indexes_assignments():
             self._record_exports(node.targets, node.value)
+            self._record_django_routes(node.targets, node.value)
             for target in node.targets:
                 for name in _assignment_names(target):
                     self._add_assignment(node, name, annotation=None)
@@ -269,6 +281,15 @@ class _PythonDefinitionVisitor(ast.NodeVisitor):
             return
         target = _expression_name(node.func)
         if target:
+            configuration = _call_configuration_target(node, target)
+            if configuration:
+                self._add_reference(
+                    node,
+                    target=configuration,
+                    kind=DependencyKind.CONFIGURES,
+                    confidence=1.0,
+                    explanation="Static Python configuration lookup.",
+                )
             last_component = target.rsplit(".", 1)[-1]
             likely_constructor = last_component[:1].isupper()
             self._add_reference(
@@ -297,17 +318,41 @@ class _PythonDefinitionVisitor(ast.NodeVisitor):
             return
         target = _expression_name(node)
         if target:
+            is_setting = target.startswith(("settings.", "config."))
             self._add_reference(
                 node,
                 target=target,
-                kind=(
+                kind=DependencyKind.CONFIGURES
+                if is_setting
+                else (
                     DependencyKind.WRITES
                     if isinstance(node.ctx, ast.Store)
                     else DependencyKind.REFERENCES
                 ),
-                confidence=0.55,
-                explanation="Static Python attribute expression.",
+                confidence=0.8 if is_setting else 0.55,
+                explanation=(
+                    "Static Python settings reference."
+                    if is_setting
+                    else "Static Python attribute expression."
+                ),
             )
+
+    def visit_Subscript(self, node: ast.Subscript) -> None:
+        if self._stop_before(node):
+            return
+        target = _expression_name(node.value)
+        key = _static_string(node.slice)
+        if target == "os.environ" and key:
+            self._add_reference(
+                node,
+                target=f"env.{key}",
+                kind=DependencyKind.CONFIGURES,
+                confidence=1.0,
+                explanation="Static os.environ configuration lookup.",
+            )
+        else:
+            self.visit(node.value)
+        self.visit(node.slice)
 
     def visit_Name(self, node: ast.Name) -> None:
         if self._stop_before(node):
@@ -343,14 +388,48 @@ class _PythonDefinitionVisitor(ast.NodeVisitor):
             return
         parent_kind = self.scope_kinds[-1] if self.scope_kinds else None
         decorators = _decorator_names(node.decorator_list)
-        if parent_kind == SymbolKind.CLASS and node.name == "__init__":
+        endpoint, endpoint_attributes, dynamic_endpoint = _endpoint_from_decorators(
+            node.decorator_list
+        )
+        if dynamic_endpoint:
+            self.partial = True
+            self.diagnostics.append(
+                IndexDiagnostic(
+                    code="parser.python_dynamic_endpoint",
+                    severity=DiagnosticSeverity.INFO,
+                    message="Python route path could not be resolved statically.",
+                    relative_path=self.request.relative_path,
+                    parser_name=PythonAstParser.descriptor.name,
+                    recoverable=True,
+                )
+            )
+        test = _is_test_function(
+            node.name,
+            self.scope,
+            self.scope_kinds,
+        )
+        fixture = any(
+            name in {"fixture", "pytest.fixture"}
+            for name in decorators
+        )
+        parametrized = any(
+            name.endswith("parametrize")
+            for name in decorators
+        )
+        class_scope = parent_kind in {SymbolKind.CLASS, SymbolKind.TEST}
+        if class_scope and node.name == "__init__":
             kind = SymbolKind.CONSTRUCTOR
-        elif parent_kind == SymbolKind.CLASS and "property" in decorators:
+        elif class_scope and "property" in decorators:
             kind = SymbolKind.PROPERTY
-        elif parent_kind == SymbolKind.CLASS:
+        elif class_scope:
             kind = SymbolKind.METHOD
         else:
             kind = SymbolKind.FUNCTION
+        original_kind = kind
+        if endpoint:
+            kind = SymbolKind.ENDPOINT
+        elif test:
+            kind = SymbolKind.TEST
         qualified_name = self._qualified(node.name)
         self._add_definition(
             node,
@@ -360,12 +439,19 @@ class _PythonDefinitionVisitor(ast.NodeVisitor):
             signature=_function_signature(node),
             documentation=ast.get_docstring(node, clean=False),
             exported=self._exported(node.name),
+            test=test,
+            endpoint=endpoint,
+            confidence=0.9 if endpoint or test else 1.0,
             attributes={
                 "async": isinstance(node, ast.AsyncFunctionDef),
                 "decorators": decorators,
+                "fixture": fixture,
+                "parametrized": parametrized,
+                "original_kind": original_kind.value,
+                **endpoint_attributes,
             },
         )
-        self._visit_scope(node.body, node.name, kind)
+        self._visit_scope(node.body, node.name, original_kind)
 
     def _visit_scope(
         self,
@@ -394,7 +480,7 @@ class _PythonDefinitionVisitor(ast.NodeVisitor):
         parent_kind = self.scope_kinds[-1] if self.scope_kinds else None
         kind = (
             SymbolKind.FIELD
-            if parent_kind == SymbolKind.CLASS
+            if parent_kind in {SymbolKind.CLASS, SymbolKind.TEST}
             else SymbolKind.CONSTANT
             if name.isupper()
             else SymbolKind.VARIABLE
@@ -418,6 +504,9 @@ class _PythonDefinitionVisitor(ast.NodeVisitor):
         signature: str | None = None,
         documentation: str | None = None,
         exported: bool = False,
+        test: bool = False,
+        endpoint: str | None = None,
+        confidence: float = 1.0,
         attributes: dict[str, object] | None = None,
     ) -> None:
         if len(self.definitions) > self.limits.maximum_definitions:
@@ -441,6 +530,9 @@ class _PythonDefinitionVisitor(ast.NodeVisitor):
                     else None
                 ),
                 exported=exported,
+                test=test,
+                endpoint=endpoint,
+                confidence=confidence,
                 attributes=attributes or {},
             )
         )
@@ -509,6 +601,50 @@ class _PythonDefinitionVisitor(ast.NodeVisitor):
                 source_qualified_name=self.module_name,
             )
 
+    def _record_django_routes(
+        self,
+        targets: list[ast.expr],
+        value: ast.expr,
+    ) -> None:
+        if not any(
+            isinstance(target, ast.Name) and target.id == "urlpatterns"
+            for target in targets
+        ):
+            return
+        if not isinstance(value, (ast.List, ast.Tuple)):
+            return
+        for item in value.elts[:256]:
+            if not isinstance(item, ast.Call):
+                continue
+            function = _expression_name(item.func)
+            if function not in {"path", "re_path"} or not item.args:
+                continue
+            route = _static_string(item.args[0])
+            if route is None:
+                continue
+            view = (
+                _expression_name(item.args[1])
+                if len(item.args) > 1
+                else None
+            )
+            self.django_route_count += 1
+            name = f"route:{route}"[:512]
+            self._add_definition(
+                item,
+                name=name,
+                qualified_name=(
+                    f"{self.module_name}.__route__.{self.django_route_count}"
+                ),
+                kind=SymbolKind.ENDPOINT,
+                endpoint=f"ROUTE {route}"[:2_048],
+                confidence=0.9,
+                attributes={
+                    "framework": "django",
+                    "view": view,
+                    "route_function": function,
+                },
+            )
+
     def _qualified(self, name: str | None) -> str:
         parts = [self.module_name, *self.scope]
         if name:
@@ -519,7 +655,10 @@ class _PythonDefinitionVisitor(ast.NodeVisitor):
         return not name.startswith("_") and len(self.scope) == 0
 
     def _indexes_assignments(self) -> bool:
-        return not self.scope_kinds or self.scope_kinds[-1] == SymbolKind.CLASS
+        return not self.scope_kinds or self.scope_kinds[-1] in {
+            SymbolKind.CLASS,
+            SymbolKind.TEST,
+        }
 
     def _stop_before(self, node: ast.AST) -> bool:
         if self.stopped:
@@ -689,6 +828,123 @@ def _expression_name(node: ast.AST) -> str | None:
 
 def _expression_confidence(node: ast.AST) -> float:
     return 1.0 if isinstance(node, (ast.Name, ast.Attribute)) else 0.7
+
+
+def _is_test_class(node: ast.ClassDef) -> bool:
+    if node.name.startswith("Test"):
+        return True
+    return any(
+        (_expression_name(base) or "").endswith("TestCase")
+        for base in node.bases
+    )
+
+
+def _is_test_function(
+    name: str,
+    scope: list[str],
+    scope_kinds: list[SymbolKind],
+) -> bool:
+    if not name.startswith("test"):
+        return False
+    if not scope:
+        return True
+    return bool(
+        scope_kinds
+        and (
+            scope_kinds[-1] == SymbolKind.TEST
+            or scope[-1].startswith("Test")
+        )
+    )
+
+
+def _endpoint_from_decorators(
+    decorators: list[ast.expr],
+) -> tuple[str | None, dict[str, object], bool]:
+    methods = {
+        "get",
+        "post",
+        "put",
+        "delete",
+        "patch",
+        "options",
+        "head",
+    }
+    dynamic_endpoint = False
+    for decorator in decorators[:64]:
+        if not isinstance(decorator, ast.Call):
+            continue
+        function = _expression_name(decorator.func) or ""
+        route_method = function.rsplit(".", 1)[-1].casefold()
+        if route_method not in methods | {"route", "api_route"}:
+            continue
+        route_node = (
+            decorator.args[0]
+            if decorator.args
+            else next(
+                (
+                    keyword.value
+                    for keyword in decorator.keywords
+                    if keyword.arg in {"path", "rule"}
+                ),
+                None,
+            )
+        )
+        route = _static_string(route_node) if route_node is not None else None
+        if route is None:
+            dynamic_endpoint = True
+            continue
+        configured_methods = _keyword_string_collection(
+            decorator.keywords,
+            "methods",
+        )
+        if route_method in methods:
+            configured_methods = (route_method.upper(),)
+        elif not configured_methods:
+            configured_methods = ("ROUTE",)
+        method_label = "|".join(configured_methods[:16])
+        framework = (
+            "fastapi"
+            if route_method in methods or route_method == "api_route"
+            else "flask"
+        )
+        return (
+            f"{method_label} {route}"[:2_048],
+            {
+                "framework": framework,
+                "heuristic": True,
+                "route_decorator": function,
+                "methods": configured_methods[:16],
+            },
+            dynamic_endpoint,
+        )
+    return None, {}, dynamic_endpoint
+
+
+def _keyword_string_collection(
+    keywords: list[ast.keyword],
+    name: str,
+) -> tuple[str, ...]:
+    keyword = next((item for item in keywords if item.arg == name), None)
+    if keyword is None:
+        return ()
+    values = _string_collection(keyword.value)
+    return tuple(value.upper() for value in values) if values else ()
+
+
+def _call_configuration_target(node: ast.Call, target: str) -> str | None:
+    if target not in {"os.getenv", "environ.get", "os.environ.get"}:
+        return None
+    if not node.args:
+        return None
+    key = _static_string(node.args[0])
+    return f"env.{key}" if key else None
+
+
+def _static_string(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        value = node.value.strip()
+        return value[:2_048] if value else None
+    return None
 
 
 def _string_collection(node: ast.AST) -> tuple[str, ...] | None:
