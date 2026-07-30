@@ -77,6 +77,7 @@ from agentbus.intelligence.models import (
     TestImpactResult,
     WorkspaceIdentity,
 )
+from agentbus.intelligence.operations import IndexOperationLease
 from agentbus.intelligence.scheduler import (
     BoundedIndexScheduler,
     IndexProgressEvent,
@@ -117,6 +118,7 @@ __all__ = [
     "IndexDiagnostic",
     "IndexOperation",
     "IndexOperationKind",
+    "IndexOperationLease",
     "IndexOperationState",
     "IndexProgressEvent",
     "IndexProgressPhase",
