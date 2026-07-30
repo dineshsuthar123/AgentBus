@@ -1,6 +1,7 @@
 from agentbus.intelligence.errors import (
     IndexBusyError,
     IndexCorruptedError,
+    IndexPersistenceError,
     IndexSchemaError,
     IndexUnavailableError,
     ParserCompatibilityError,
@@ -63,6 +64,7 @@ from agentbus.intelligence.models import (
     TestImpactResult,
     WorkspaceIdentity,
 )
+from agentbus.intelligence.storage import IndexStore
 from agentbus.intelligence.version import (
     INTELLIGENCE_PROTOCOL_VERSION,
     INTELLIGENCE_SCHEMA_VERSION,
@@ -86,11 +88,13 @@ __all__ = [
     "IndexBusyError",
     "IndexCorruptedError",
     "IndexDiagnostic",
+    "IndexPersistenceError",
     "IndexSchemaError",
     "IndexSnapshot",
     "IndexState",
     "IndexStatus",
     "IndexUnavailableError",
+    "IndexStore",
     "INTELLIGENCE_PROTOCOL_VERSION",
     "INTELLIGENCE_SCHEMA_VERSION",
     "Module",

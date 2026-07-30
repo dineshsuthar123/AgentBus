@@ -18,6 +18,10 @@ class IndexUnavailableError(RepositoryIntelligenceError):
     """Raised when an optional repository index cannot be used."""
 
 
+class IndexPersistenceError(RepositoryIntelligenceError):
+    """Raised when portable index records cannot be stored safely."""
+
+
 class ParserCompatibilityError(RepositoryIntelligenceError):
     """Raised when parser ownership or versions are incompatible."""
 
