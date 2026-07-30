@@ -18,7 +18,10 @@ from agentbus.intelligence.discovery.python import PythonProjectDetector
 from agentbus.intelligence.discovery.relationships import (
     normalize_project_relationships,
 )
-from agentbus.intelligence.discovery.scanner import RepositoryInventoryScanner
+from agentbus.intelligence.discovery.scanner import (
+    RepositoryInventory,
+    RepositoryInventoryScanner,
+)
 from agentbus.intelligence.errors import RepositoryIntelligenceError
 from agentbus.intelligence.models import (
     DiagnosticSeverity,
@@ -60,6 +63,16 @@ class ProjectDiscovery:
             self.workspace,
             limits=self.limits,
         ).scan()
+        return self.discover_inventory(inventory)
+
+    def discover_inventory(
+        self,
+        inventory: RepositoryInventory,
+    ) -> ProjectDiscoveryResult:
+        if inventory.root != self.workspace:
+            raise ValueError(
+                "project discovery inventory belongs to another workspace"
+            )
         projects: dict[str, Project] = {}
         diagnostics = list(inventory.diagnostics)
         for detector in self.detectors:

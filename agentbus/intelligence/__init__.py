@@ -35,6 +35,7 @@ from agentbus.intelligence.identities import (
     test_impact_result_id,
     workspace_identity,
 )
+from agentbus.intelligence.indexer import IndexingResult, RepositoryIndexer
 from agentbus.intelligence.models import (
     ArchitectureBoundary,
     ContextCandidate,
@@ -99,6 +100,7 @@ __all__ = [
     "IndexStatus",
     "IndexUnavailableError",
     "IndexStore",
+    "IndexingResult",
     "INTELLIGENCE_PROTOCOL_VERSION",
     "INTELLIGENCE_SCHEMA_VERSION",
     "Module",
@@ -112,6 +114,7 @@ __all__ = [
     "project_map_fingerprint",
     "QueryLimitError",
     "RepositoryIdentity",
+    "RepositoryIndexer",
     "repository_identity",
     "RepositoryIntelligenceError",
     "SearchQuery",
