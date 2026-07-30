@@ -33,6 +33,7 @@ class ParserLimits:
     maximum_references: int = 100_000
     maximum_diagnostics: int = 1_000
     maximum_documentation_chars: int = 8_192
+    maximum_syntax_nodes: int = 1_000_000
     cancellation_check_interval: int = 256
 
     def __post_init__(self) -> None:
@@ -65,6 +66,12 @@ class ParserLimits:
             "maximum_documentation_chars",
             1,
             8_192,
+        )
+        _bounded(
+            self.maximum_syntax_nodes,
+            "maximum_syntax_nodes",
+            1,
+            5_000_000,
         )
         _bounded(
             self.cancellation_check_interval,

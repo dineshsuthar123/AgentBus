@@ -15,6 +15,7 @@ from agentbus.intelligence.parsers.common import (
     sanitize_documentation,
 )
 from agentbus.intelligence.parsers.registry import ParserRegistry
+from agentbus.intelligence.parsers.python import PythonAstParser
 
 __all__ = [
     "CancellationSignal",
@@ -27,6 +28,7 @@ __all__ = [
     "ParserDescriptor",
     "ParserLimits",
     "ParserRegistry",
+    "PythonAstParser",
     "cancellation_requested",
     "finalize_result",
     "sanitize_documentation",
