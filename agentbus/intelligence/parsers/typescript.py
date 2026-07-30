@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 
 from agentbus.intelligence.models import (
+    DependencyKind,
     DiagnosticSeverity,
     IndexDiagnostic,
     SourceLanguage,
@@ -14,6 +15,7 @@ from agentbus.intelligence.parsers.base import (
     ParseRequest,
     ParseResult,
     ParsedDefinition,
+    ParsedReference,
     ParserDescriptor,
     ParserLimits,
 )
@@ -51,10 +53,18 @@ class _Token:
     end: int
 
 
+@dataclass(frozen=True)
+class _DefinitionSpan:
+    start: int
+    end: int
+    qualified_name: str
+    kind: SymbolKind
+
+
 class TypeScriptStaticParser:
     descriptor = ParserDescriptor(
         name="typescript-static",
-        version="1.0.0",
+        version="1.1.0",
         languages=(
             SourceLanguage.TYPESCRIPT,
             SourceLanguage.JAVASCRIPT,
@@ -102,15 +112,33 @@ class TypeScriptStaticParser:
             active_limits,
         )
         parser.parse()
+        reference_scanner = _ReferenceScanner(
+            request,
+            tokens,
+            pairs,
+            parser.spans,
+            parser.declaration_parentheses,
+            active_limits,
+            cancellation,
+        )
+        reference_scanner.scan()
         diagnostics.extend(parser.diagnostics)
+        diagnostics.extend(reference_scanner.diagnostics)
         return finalize_result(
             self.descriptor,
             request,
             definitions=parser.definitions,
+            references=reference_scanner.references,
             diagnostics=diagnostics,
             limits=active_limits,
-            partial=partial or parser.partial or cancelled,
-            cancelled=cancelled,
+            partial=(
+                partial
+                or parser.partial
+                or reference_scanner.partial
+                or reference_scanner.cancelled
+                or cancelled
+            ),
+            cancelled=cancelled or reference_scanner.cancelled,
         )
 
 
@@ -129,6 +157,8 @@ class _DeclarationParser:
         self.lines = LineMap(request.relative_path, request.content)
         self.module_name = _module_name(request.relative_path)
         self.definitions: list[ParsedDefinition] = []
+        self.spans: list[_DefinitionSpan] = []
+        self.declaration_parentheses: set[int] = set()
         self.diagnostics: list[IndexDiagnostic] = []
         self.partial = False
 
@@ -300,6 +330,8 @@ class _DeclarationParser:
         name = self.tokens[name_index].value
         parameters = self._find_value("(", name_index + 1, end)
         parameter_end = self.pairs.get(parameters) if parameters is not None else None
+        if parameters is not None:
+            self.declaration_parentheses.add(parameters)
         body_index = (
             self._find_value("{", parameter_end + 1, end)
             if parameter_end is not None
@@ -416,6 +448,7 @@ class _DeclarationParser:
         name = self.tokens[index].value
         next_value = self._value(index + 1)
         if next_value == "(":
+            self.declaration_parentheses.add(index + 1)
             parameter_end = self.pairs.get(index + 1)
             if parameter_end is None:
                 return index + 1
@@ -499,6 +532,14 @@ class _DeclarationParser:
                 attributes=attributes or {},
             )
         )
+        self.spans.append(
+            _DefinitionSpan(
+                start=start,
+                end=end,
+                qualified_name=qualified_name[:2_048],
+                kind=kind,
+            )
+        )
 
     def _statement_end(self, start: int, end: int) -> int:
         index = start
@@ -548,6 +589,348 @@ class _DeclarationParser:
         if not scope:
             return None
         return ".".join((self.module_name, *(item[0] for item in scope)))
+
+
+class _ReferenceScanner:
+    def __init__(
+        self,
+        request: ParseRequest,
+        tokens: tuple[_Token, ...],
+        pairs: dict[int, int],
+        spans: list[_DefinitionSpan],
+        declaration_parentheses: set[int],
+        limits: ParserLimits,
+        cancellation: CancellationSignal | None,
+    ) -> None:
+        self.request = request
+        self.tokens = tokens
+        self.pairs = pairs
+        self.spans = tuple(spans)
+        self.declaration_parentheses = declaration_parentheses
+        self.limits = limits
+        self.cancellation = cancellation
+        self.lines = LineMap(request.relative_path, request.content)
+        self.references: list[ParsedReference] = []
+        self.diagnostics: list[IndexDiagnostic] = []
+        self.partial = False
+        self.cancelled = False
+        self._handled_calls: set[int] = set()
+
+    def scan(self) -> None:
+        index = 0
+        iterations = 0
+        while index < len(self.tokens) and not self.partial:
+            iterations += 1
+            if (
+                iterations % self.limits.cancellation_check_interval == 0
+                and cancellation_requested(self.cancellation)
+            ):
+                self.partial = True
+                self.cancelled = True
+                break
+            value = self.tokens[index].value
+            if value == "import":
+                index = self._scan_import(index)
+                continue
+            if value == "export":
+                index = self._scan_export(index)
+                continue
+            if value in {"class", "interface"}:
+                self._scan_type_relationships(index)
+            if value == "require":
+                self._scan_require(index)
+            if self._is_call(index):
+                self._scan_call(index)
+            index += 1
+
+    def _scan_import(self, index: int) -> int:
+        if self._value(index + 1) == "(":
+            self._scan_dynamic_import(index)
+            return index + 1
+        terminal = self._statement_end(index + 1)
+        string_index = next(
+            (
+                candidate
+                for candidate in range(index + 1, terminal)
+                if self.tokens[candidate].kind == "string"
+            ),
+            None,
+        )
+        if string_index is not None:
+            imported = tuple(
+                token.value
+                for token in self.tokens[index + 1 : string_index]
+                if token.kind == "identifier"
+                and token.value not in {"as", "from", "type"}
+            )[:64]
+            self._add_reference(
+                string_index,
+                target=self.tokens[string_index].value,
+                kind=DependencyKind.IMPORTS,
+                confidence=1.0,
+                explanation="Static ECMAScript module import.",
+                attributes={"imported_names": imported},
+            )
+        return terminal
+
+    def _scan_dynamic_import(self, index: int) -> None:
+        opening = index + 1
+        closing = self.pairs.get(opening)
+        target_index = opening + 1
+        if (
+            closing is not None
+            and target_index < closing
+            and self.tokens[target_index].kind == "string"
+        ):
+            self._handled_calls.add(opening)
+            self._add_reference(
+                target_index,
+                target=self.tokens[target_index].value,
+                kind=DependencyKind.IMPORTS,
+                confidence=0.9,
+                explanation="Static dynamic-import module specifier.",
+                attributes={"dynamic": True},
+            )
+
+    def _scan_export(self, index: int) -> int:
+        terminal = self._statement_end(index + 1)
+        from_index = self._find_value("from", index + 1, terminal)
+        if from_index is not None:
+            target_index = from_index + 1
+            if (
+                target_index < terminal
+                and self.tokens[target_index].kind == "string"
+            ):
+                self._add_reference(
+                    target_index,
+                    target=self.tokens[target_index].value,
+                    kind=DependencyKind.EXPORTS,
+                    confidence=1.0,
+                    explanation="Static ECMAScript module re-export.",
+                    attributes={"reexport": True},
+                )
+        brace = self._find_value("{", index + 1, terminal)
+        brace_end = self.pairs.get(brace) if brace is not None else None
+        if brace is not None and brace_end is not None:
+            for candidate in range(brace + 1, brace_end):
+                token = self.tokens[candidate]
+                if token.kind != "identifier" or token.value == "as":
+                    continue
+                if self._value(candidate - 1) == "as":
+                    continue
+                self._add_reference(
+                    candidate,
+                    target=token.value,
+                    kind=DependencyKind.EXPORTS,
+                    confidence=0.9,
+                    explanation="Named ECMAScript export.",
+                )
+        return terminal
+
+    def _scan_type_relationships(self, index: int) -> None:
+        name_index = index + 1
+        if self._kind(name_index) != "identifier":
+            return
+        source = self._source_for(self.tokens[name_index].start)
+        body = self._find_value("{", name_index + 1, len(self.tokens))
+        terminal = body if body is not None else self._statement_end(name_index + 1)
+        cursor = name_index + 1
+        relationship: DependencyKind | None = None
+        generic_depth = 0
+        while cursor < terminal:
+            value = self.tokens[cursor].value
+            if value == "<" and relationship is not None:
+                generic_depth += 1
+                cursor += 1
+                continue
+            if value == ">" and generic_depth:
+                generic_depth -= 1
+                cursor += 1
+                continue
+            if generic_depth:
+                cursor += 1
+                continue
+            if value == "extends":
+                relationship = DependencyKind.INHERITS
+            elif value == "implements":
+                relationship = DependencyKind.IMPLEMENTS
+            elif relationship is not None and self.tokens[cursor].kind == "identifier":
+                target, target_end = self._qualified_target(cursor, terminal)
+                self._add_reference(
+                    cursor,
+                    target=target,
+                    kind=relationship,
+                    confidence=0.9,
+                    explanation=(
+                        "Static TypeScript type relationship; "
+                        "cross-file resolution is deferred."
+                    ),
+                    source=source,
+                )
+                cursor = target_end
+                continue
+            cursor += 1
+
+    def _scan_require(self, index: int) -> None:
+        opening = index + 1
+        closing = self.pairs.get(opening)
+        target_index = opening + 1
+        if (
+            self._value(opening) == "("
+            and closing is not None
+            and target_index < closing
+            and self.tokens[target_index].kind == "string"
+        ):
+            self._handled_calls.add(opening)
+            self._add_reference(
+                target_index,
+                target=self.tokens[target_index].value,
+                kind=DependencyKind.IMPORTS,
+                confidence=1.0,
+                explanation="Static CommonJS require module specifier.",
+                attributes={"commonjs": True},
+            )
+
+    def _scan_call(self, index: int) -> None:
+        target, opening = self._qualified_target(index, len(self.tokens))
+        if not target:
+            return
+        previous = self._value(index - 1)
+        kind = (
+            DependencyKind.INSTANTIATES
+            if previous == "new"
+            else DependencyKind.CALLS
+        )
+        self._handled_calls.add(opening)
+        self._add_reference(
+            index,
+            target=target,
+            kind=kind,
+            confidence=0.85 if kind == DependencyKind.INSTANTIATES else 0.7,
+            explanation=(
+                "Static JavaScript new-expression target."
+                if kind == DependencyKind.INSTANTIATES
+                else "Syntactically identifiable JavaScript call target."
+            ),
+            attributes={"heuristic": True},
+        )
+
+    def _is_call(self, index: int) -> bool:
+        if self.tokens[index].kind != "identifier":
+            return False
+        if self._value(index - 1) in {".", "?."}:
+            return False
+        target, terminal = self._qualified_target(index, len(self.tokens))
+        del target
+        if self._value(terminal) != "(":
+            return False
+        if terminal in self.declaration_parentheses or terminal in self._handled_calls:
+            return False
+        if self.tokens[index].value in {
+            "catch",
+            "for",
+            "function",
+            "if",
+            "import",
+            "require",
+            "switch",
+            "while",
+            "with",
+        }:
+            return False
+        return True
+
+    def _qualified_target(self, start: int, end: int) -> tuple[str, int]:
+        values = [self.tokens[start].value]
+        index = start + 1
+        while (
+            index + 1 < end
+            and self.tokens[index].value in {".", "?."}
+            and self.tokens[index + 1].kind == "identifier"
+        ):
+            values.append(self.tokens[index + 1].value)
+            index += 2
+        return ".".join(values), index
+
+    def _source_for(self, offset: int) -> str:
+        containing = [
+            span
+            for span in self.spans
+            if span.start <= offset <= span.end
+        ]
+        if not containing:
+            return _module_name(self.request.relative_path)
+        return min(
+            containing,
+            key=lambda item: (item.end - item.start, item.qualified_name),
+        ).qualified_name
+
+    def _add_reference(
+        self,
+        token_index: int,
+        *,
+        target: str,
+        kind: DependencyKind,
+        confidence: float,
+        explanation: str,
+        source: str | None = None,
+        attributes: dict[str, object] | None = None,
+    ) -> None:
+        if not target:
+            return
+        if len(self.references) > self.limits.maximum_references:
+            self.partial = True
+            return
+        token = self.tokens[token_index]
+        self.references.append(
+            ParsedReference(
+                target=target[:2_048],
+                kind=kind,
+                location=self.lines.location(token.start, token.end),
+                source_qualified_name=(
+                    source or self._source_for(token.start)
+                )[:2_048],
+                confidence=confidence,
+                explanation=explanation,
+                attributes=attributes or {},
+            )
+        )
+
+    def _statement_end(self, start: int) -> int:
+        index = start
+        while index < len(self.tokens):
+            if self.tokens[index].value == ";":
+                return index + 1
+            if self.tokens[index].value in {"(", "[", "{"} and index in self.pairs:
+                index = self.pairs[index] + 1
+            else:
+                index += 1
+        return len(self.tokens)
+
+    def _find_value(
+        self,
+        value: str,
+        start: int,
+        end: int,
+    ) -> int | None:
+        return next(
+            (
+                index
+                for index in range(start, end)
+                if self.tokens[index].value == value
+            ),
+            None,
+        )
+
+    def _value(self, index: int) -> str | None:
+        if 0 <= index < len(self.tokens):
+            return self.tokens[index].value
+        return None
+
+    def _kind(self, index: int) -> str | None:
+        if 0 <= index < len(self.tokens):
+            return self.tokens[index].kind
+        return None
 
 
 def _tokenize(
