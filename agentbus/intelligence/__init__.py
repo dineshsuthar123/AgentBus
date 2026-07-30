@@ -16,6 +16,16 @@ from agentbus.intelligence.errors import (
     UnsafeRepositoryPathError,
 )
 from agentbus.intelligence.cache import CacheEntry, IntelligenceCache
+from agentbus.intelligence.budgeting import (
+    ContentCost,
+    ContextBudget,
+    estimate_tokens,
+)
+from agentbus.intelligence.context import (
+    ContextPlanner,
+    ContextPlanningConfig,
+    ContextPlanningRequest,
+)
 from agentbus.intelligence.fingerprints import (
     content_hash,
     context_candidates_fingerprint,
@@ -120,6 +130,10 @@ from agentbus.intelligence.scheduler import (
     ScheduledBatch,
     ScheduledItem,
 )
+from agentbus.intelligence.selection import (
+    ContextSelection,
+    ContextSelector,
+)
 from agentbus.intelligence.search import (
     LexicalSearchLimits,
     RepositoryLexicalIndex,
@@ -167,8 +181,15 @@ __all__ = [
     "context_candidates_fingerprint",
     "context_plan_id",
     "ContextCandidate",
+    "ContextBudget",
     "ContextPlan",
+    "ContextPlanner",
+    "ContextPlanningConfig",
+    "ContextPlanningRequest",
     "ContextRole",
+    "ContextSelection",
+    "ContextSelector",
+    "ContentCost",
     "DependencyEdge",
     "DependencyGraphBuilder",
     "DependencyGraph",
@@ -271,6 +292,7 @@ __all__ = [
     "WorkspaceIdentity",
     "workspace_identity",
     "edge_id",
+    "estimate_tokens",
     "file_id",
     "file_set_fingerprint",
     "graph_fingerprint",
