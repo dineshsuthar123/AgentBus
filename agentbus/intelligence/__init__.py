@@ -33,6 +33,11 @@ from agentbus.intelligence.graph import (
     GraphBuildLimits,
     GraphBuildResult,
 )
+from agentbus.intelligence.hybrid import (
+    HybridRankingWeights,
+    HybridRetrievalLimits,
+    HybridRetriever,
+)
 from agentbus.intelligence.identities import (
     context_plan_id,
     edge_id,
@@ -176,6 +181,9 @@ __all__ = [
     "FreshnessLimits",
     "GraphBuildLimits",
     "GraphBuildResult",
+    "HybridRankingWeights",
+    "HybridRetrievalLimits",
+    "HybridRetriever",
     "ImpactRequest",
     "ImpactResult",
     "ImpactRisk",
