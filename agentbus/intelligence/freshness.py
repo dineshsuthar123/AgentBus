@@ -23,6 +23,7 @@ from agentbus.intelligence.models import (
     RepositoryIdentity,
     WorkspaceIdentity,
 )
+from agentbus.intelligence.ownership import CodeOwnershipExtractor
 from agentbus.intelligence.parsers import (
     ParserRegistry,
     default_parser_registry,
@@ -177,6 +178,29 @@ class IndexFreshnessChecker:
         }
         stale_paths: set[str] = set()
         diagnostics = list(inventory.diagnostics)
+        ownership = CodeOwnershipExtractor().extract(inventory)
+        diagnostics.extend(ownership.diagnostics)
+        stored_ownership = self.store.list_ownership_rules(
+            snapshot.snapshot_id
+        )
+        if ownership.rules != stored_ownership:
+            ownership_paths = {
+                item.source_path for item in stored_ownership
+            }
+            if ownership.source_path is not None:
+                ownership_paths.add(ownership.source_path)
+            stale_paths.update(ownership_paths)
+            self._append_diagnostic(
+                diagnostics,
+                IndexDiagnostic(
+                    code="index.ownership_stale",
+                    severity=DiagnosticSeverity.WARNING,
+                    message=(
+                        "Repository ownership metadata changed after indexing."
+                    ),
+                    recoverable=True,
+                ),
+            )
         for path, discovered in discovered_files.items():
             indexed = indexed_files.get(path)
             if indexed is None:

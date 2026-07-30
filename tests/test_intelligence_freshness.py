@@ -87,6 +87,32 @@ def test_freshness_detects_modified_added_and_deleted_sources(
     assert deleted.stale_paths == ("service.py",)
 
 
+def test_freshness_detects_same_size_ownership_changes(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "service.py").write_text(
+        "VALUE = 1\n",
+        encoding="utf-8",
+    )
+    codeowners = tmp_path / "CODEOWNERS"
+    original = "*.py @team-one\n"
+    changed = "*.py @team-two\n"
+    assert len(original.encode("utf-8")) == len(changed.encode("utf-8"))
+    codeowners.write_text(original, encoding="utf-8")
+    indexer, checker = _components(tmp_path)
+    indexer.build()
+
+    codeowners.write_text(changed, encoding="utf-8")
+    status = checker.status()
+
+    assert status.state == IndexState.STALE
+    assert status.stale_paths == ("CODEOWNERS",)
+    assert any(
+        item.code == "index.ownership_stale"
+        for item in status.diagnostics
+    )
+
+
 def test_freshness_excludes_protected_and_generated_files(
     tmp_path: Path,
 ) -> None:
