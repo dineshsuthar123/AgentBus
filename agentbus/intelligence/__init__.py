@@ -77,6 +77,16 @@ from agentbus.intelligence.models import (
     TestImpactResult,
     WorkspaceIdentity,
 )
+from agentbus.intelligence.scheduler import (
+    BoundedIndexScheduler,
+    IndexProgressEvent,
+    IndexProgressPhase,
+    IndexProgressReporter,
+    IndexProgressSink,
+    IndexSchedulerLimits,
+    ScheduledBatch,
+    ScheduledItem,
+)
 from agentbus.intelligence.storage import IndexStore
 from agentbus.intelligence.version import (
     INTELLIGENCE_PROTOCOL_VERSION,
@@ -85,6 +95,7 @@ from agentbus.intelligence.version import (
 
 __all__ = [
     "ArchitectureBoundary",
+    "BoundedIndexScheduler",
     "CacheEntry",
     "content_hash",
     "context_candidates_fingerprint",
@@ -107,6 +118,11 @@ __all__ = [
     "IndexOperation",
     "IndexOperationKind",
     "IndexOperationState",
+    "IndexProgressEvent",
+    "IndexProgressPhase",
+    "IndexProgressReporter",
+    "IndexProgressSink",
+    "IndexSchedulerLimits",
     "IndexPersistenceError",
     "IndexSchemaError",
     "IndexSnapshot",
@@ -137,6 +153,8 @@ __all__ = [
     "RepositoryIntelligenceError",
     "SearchQuery",
     "SearchResult",
+    "ScheduledBatch",
+    "ScheduledItem",
     "SourceFile",
     "SourceLanguage",
     "snapshot_id",
