@@ -91,6 +91,11 @@ from agentbus.intelligence.models import (
     WorkspaceIdentity,
 )
 from agentbus.intelligence.operations import IndexOperationLease
+from agentbus.intelligence.ownership import (
+    CodeOwnershipExtractor,
+    OwnershipExtraction,
+    OwnershipLimits,
+)
 from agentbus.intelligence.resolution import (
     ReferenceResolver,
     ResolutionMatch,
@@ -133,6 +138,7 @@ __all__ = [
     "BoundedIndexScheduler",
     "CacheEntry",
     "CentralityScore",
+    "CodeOwnershipExtractor",
     "content_hash",
     "context_candidates_fingerprint",
     "context_plan_id",
@@ -185,6 +191,8 @@ __all__ = [
     "Module",
     "module_id",
     "OwnershipRule",
+    "OwnershipExtraction",
+    "OwnershipLimits",
     "ParserCompatibilityError",
     "ParserUnavailableError",
     "Project",

@@ -61,6 +61,7 @@ from agentbus.intelligence.models import (
     _relative_path,
 )
 from agentbus.intelligence.operations import IndexOperationLease
+from agentbus.intelligence.ownership import CodeOwnershipExtractor
 from agentbus.intelligence.parsers import (
     CancellationSignal,
     ParseRequest,
@@ -338,6 +339,8 @@ class RepositoryIndexer:
             *discovery.diagnostics,
             *configuration_diagnostics,
         ]
+        ownership = CodeOwnershipExtractor().extract(inventory)
+        diagnostics.extend(ownership.diagnostics)
         previous = self.store.latest_snapshot(
             self.repository.repository_id
         )
@@ -673,6 +676,7 @@ class RepositoryIndexer:
                 "inventory": discovery.inventory_fingerprint,
                 "configuration": configuration_hash,
                 "observed_sources": file_set_fingerprint(observed_hashes),
+                "ownership": stable_hash(ownership.rules),
                 "observation_complete": (
                     len(observed_hashes) == len(supported_files)
                 ),
@@ -763,6 +767,7 @@ class RepositoryIndexer:
                 symbols=symbols,
                 references=references,
                 edges=edges,
+                ownership_rules=ownership.rules,
                 **publish_guard,
             )
             return IndexingResult(
