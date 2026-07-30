@@ -23,6 +23,11 @@ from agentbus.intelligence.freshness import (
     FreshnessLimits,
     IndexFreshnessChecker,
 )
+from agentbus.intelligence.graph import (
+    DependencyGraphBuilder,
+    GraphBuildLimits,
+    GraphBuildResult,
+)
 from agentbus.intelligence.identities import (
     context_plan_id,
     edge_id,
@@ -121,11 +126,14 @@ __all__ = [
     "ContextPlan",
     "ContextRole",
     "DependencyEdge",
+    "DependencyGraphBuilder",
     "DependencyInvalidator",
     "DependencyKind",
     "DiagnosticSeverity",
     "FileChangeKind",
     "FreshnessLimits",
+    "GraphBuildLimits",
+    "GraphBuildResult",
     "ImpactRequest",
     "ImpactResult",
     "ImpactRisk",

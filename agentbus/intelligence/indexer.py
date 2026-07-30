@@ -25,6 +25,7 @@ from agentbus.intelligence.fingerprints import (
     parser_versions_fingerprint,
     project_map_fingerprint,
 )
+from agentbus.intelligence.graph import DependencyGraphBuilder
 from agentbus.intelligence.identities import (
     file_id,
     module_id,
@@ -676,7 +677,13 @@ class RepositoryIndexer:
             }
         )
         project_hash = project_map_fingerprint(projects)
-        graph_hash = graph_fingerprint(())
+        graph = DependencyGraphBuilder().build(
+            files,
+            symbols,
+            references,
+        )
+        edges = graph.edges
+        graph_hash = graph_fingerprint(edges)
         state = _snapshot_state(
             paused=paused,
             partial=(
@@ -726,7 +733,7 @@ class RepositoryIndexer:
             file_count=len(files),
             symbol_count=len(symbols),
             reference_count=len(references),
-            edge_count=0,
+            edge_count=len(edges),
             project_map_hash=project_hash,
             graph_hash=graph_hash,
             parser_versions=parser_versions,
@@ -753,6 +760,7 @@ class RepositoryIndexer:
                 modules=modules,
                 symbols=symbols,
                 references=references,
+                edges=edges,
                 **publish_guard,
             )
             return IndexingResult(
