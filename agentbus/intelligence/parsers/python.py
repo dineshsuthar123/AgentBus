@@ -4,6 +4,7 @@ import ast
 from pathlib import PurePosixPath
 
 from agentbus.intelligence.models import (
+    DependencyKind,
     DiagnosticSeverity,
     IndexDiagnostic,
     SourceLanguage,
@@ -15,6 +16,7 @@ from agentbus.intelligence.parsers.base import (
     ParseRequest,
     ParseResult,
     ParsedDefinition,
+    ParsedReference,
     ParserDescriptor,
     ParserLimits,
 )
@@ -28,7 +30,7 @@ from agentbus.intelligence.parsers.common import (
 class PythonAstParser:
     descriptor = ParserDescriptor(
         name="python-ast",
-        version="1.0.0",
+        version="1.1.0",
         languages=(SourceLanguage.PYTHON,),
     )
 
@@ -87,10 +89,16 @@ class PythonAstParser:
                     )
                 )
         diagnostics.extend(visitor.diagnostics)
+        definitions = _apply_explicit_exports(
+            visitor.definitions,
+            module_name,
+            visitor.explicit_exports,
+        )
         return finalize_result(
             self.descriptor,
             request,
-            definitions=visitor.definitions,
+            definitions=definitions,
+            references=visitor.references,
             diagnostics=diagnostics,
             limits=active_limits,
             partial=partial or visitor.partial,
@@ -111,7 +119,9 @@ class _PythonDefinitionVisitor(ast.NodeVisitor):
         self.limits = limits
         self.cancellation = cancellation
         self.definitions: list[ParsedDefinition] = []
+        self.references: list[ParsedReference] = []
         self.diagnostics: list[IndexDiagnostic] = []
+        self.explicit_exports: set[str] | None = None
         self.scope: list[str] = []
         self.scope_kinds: list[SymbolKind] = []
         self.visited_nodes = 0
@@ -162,6 +172,17 @@ class _PythonDefinitionVisitor(ast.NodeVisitor):
             exported=self._exported(node.name),
             attributes={"decorators": _decorator_names(node.decorator_list)},
         )
+        for base in node.bases:
+            target = _expression_name(base)
+            if target:
+                self._add_reference(
+                    base,
+                    target=target,
+                    kind=DependencyKind.INHERITS,
+                    source_qualified_name=qualified_name,
+                    confidence=_expression_confidence(base),
+                    explanation="Static Python base-class expression.",
+                )
         self._visit_scope(node.body, node.name, SymbolKind.CLASS)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
@@ -171,26 +192,134 @@ class _PythonDefinitionVisitor(ast.NodeVisitor):
         self._visit_function(node)
 
     def visit_Assign(self, node: ast.Assign) -> None:
-        if self._stop_before(node) or not self._indexes_assignments():
+        if self._stop_before(node):
             return
-        for target in node.targets:
-            for name in _assignment_names(target):
-                self._add_assignment(node, name, annotation=None)
-        self.generic_visit(node.value)
+        if self._indexes_assignments():
+            self._record_exports(node.targets, node.value)
+            for target in node.targets:
+                for name in _assignment_names(target):
+                    self._add_assignment(node, name, annotation=None)
+        else:
+            for target in node.targets:
+                self.visit(target)
+        self.visit(node.value)
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
-        if self._stop_before(node) or not self._indexes_assignments():
+        if self._stop_before(node):
             return
-        annotation = _safe_unparse(node.annotation)
-        for name in _assignment_names(node.target):
-            self._add_assignment(node, name, annotation=annotation)
+        if self._indexes_assignments():
+            annotation = _safe_unparse(node.annotation)
+            for name in _assignment_names(node.target):
+                self._add_assignment(node, name, annotation=annotation)
+        else:
+            self.visit(node.target)
         if node.value is not None:
-            self.generic_visit(node.value)
+            self.visit(node.value)
 
     def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
         if self._stop_before(node):
             return
         self.generic_visit(node.value)
+
+    def visit_Import(self, node: ast.Import) -> None:
+        if self._stop_before(node):
+            return
+        for alias in node.names[:256]:
+            self._add_reference(
+                node,
+                target=alias.name,
+                kind=DependencyKind.IMPORTS,
+                confidence=1.0,
+                explanation="Explicit Python import statement.",
+                attributes={"alias": alias.asname},
+            )
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        if self._stop_before(node):
+            return
+        prefix = "." * node.level
+        module = node.module or ""
+        base = f"{prefix}{module}"
+        for alias in node.names[:256]:
+            target = (
+                f"{base}.{alias.name}"
+                if base and module
+                else f"{base}{alias.name}"
+            )
+            is_star = alias.name == "*"
+            self._add_reference(
+                node,
+                target=target,
+                kind=DependencyKind.IMPORTS,
+                confidence=0.35 if is_star else 0.9,
+                explanation=(
+                    "Python star import with unresolved exported names."
+                    if is_star
+                    else "Explicit Python from-import statement."
+                ),
+                attributes={
+                    "alias": alias.asname,
+                    "relative_level": node.level,
+                    "star": is_star,
+                },
+            )
+
+    def visit_Call(self, node: ast.Call) -> None:
+        if self._stop_before(node):
+            return
+        target = _expression_name(node.func)
+        if target:
+            last_component = target.rsplit(".", 1)[-1]
+            likely_constructor = last_component[:1].isupper()
+            self._add_reference(
+                node.func,
+                target=target,
+                kind=(
+                    DependencyKind.INSTANTIATES
+                    if likely_constructor
+                    else DependencyKind.CALLS
+                ),
+                confidence=0.65 if likely_constructor else 0.75,
+                explanation=(
+                    "Capitalized Python call may instantiate a type."
+                    if likely_constructor
+                    else "Statically identifiable Python call target."
+                ),
+                attributes={"heuristic": True},
+            )
+        for argument in node.args:
+            self.visit(argument)
+        for keyword in node.keywords:
+            self.visit(keyword.value)
+
+    def visit_Attribute(self, node: ast.Attribute) -> None:
+        if self._stop_before(node):
+            return
+        target = _expression_name(node)
+        if target:
+            self._add_reference(
+                node,
+                target=target,
+                kind=(
+                    DependencyKind.WRITES
+                    if isinstance(node.ctx, ast.Store)
+                    else DependencyKind.REFERENCES
+                ),
+                confidence=0.55,
+                explanation="Static Python attribute expression.",
+            )
+
+    def visit_Name(self, node: ast.Name) -> None:
+        if self._stop_before(node):
+            return
+        if isinstance(node.ctx, ast.Load):
+            self._add_reference(
+                node,
+                target=node.id,
+                kind=DependencyKind.REFERENCES,
+                confidence=0.45,
+                explanation="Unresolved Python name reference.",
+            )
 
     def visit_TypeAlias(self, node: ast.TypeAlias) -> None:
         if self._stop_before(node):
@@ -307,7 +436,7 @@ class _PythonDefinitionVisitor(ast.NodeVisitor):
                     maximum_chars=self.limits.maximum_documentation_chars,
                 ),
                 parent_qualified_name=(
-                    self._qualified(None)
+                    self._qualified(None)[:2_048]
                     if self.scope
                     else None
                 ),
@@ -315,6 +444,70 @@ class _PythonDefinitionVisitor(ast.NodeVisitor):
                 attributes=attributes or {},
             )
         )
+
+    def _add_reference(
+        self,
+        node: ast.AST,
+        *,
+        target: str,
+        kind: DependencyKind,
+        confidence: float,
+        explanation: str,
+        source_qualified_name: str | None = None,
+        attributes: dict[str, object] | None = None,
+    ) -> None:
+        if len(self.references) > self.limits.maximum_references:
+            self.partial = True
+            self.stopped = True
+            return
+        self.references.append(
+            ParsedReference(
+                target=target[:2_048],
+                kind=kind,
+                location=_node_location(self.request.relative_path, node),
+                source_qualified_name=(
+                    source_qualified_name or self._qualified(None)
+                )[:2_048],
+                confidence=confidence,
+                explanation=explanation,
+                attributes=attributes or {},
+            )
+        )
+
+    def _record_exports(
+        self,
+        targets: list[ast.expr],
+        value: ast.expr,
+    ) -> None:
+        if not any(
+            isinstance(target, ast.Name) and target.id == "__all__"
+            for target in targets
+        ):
+            return
+        exports = _string_collection(value)
+        if exports is None:
+            self.partial = True
+            self.diagnostics.append(
+                IndexDiagnostic(
+                    code="parser.python_dynamic_exports",
+                    severity=DiagnosticSeverity.INFO,
+                    message="Python __all__ could not be resolved statically.",
+                    relative_path=self.request.relative_path,
+                    parser_name=PythonAstParser.descriptor.name,
+                    recoverable=True,
+                )
+            )
+            return
+        self.explicit_exports = set(exports)
+        for name in exports:
+            self._add_reference(
+                value,
+                target=name,
+                kind=DependencyKind.EXPORTS,
+                confidence=1.0,
+                explanation="Name declared in static Python __all__.",
+                source_qualified_name=self.module_name,
+            )
 
     def _qualified(self, name: str | None) -> str:
         parts = [self.module_name, *self.scope]
@@ -492,6 +685,49 @@ def _expression_name(node: ast.AST) -> str | None:
     if isinstance(node, ast.Call):
         return _expression_name(node.func)
     return _bounded(_safe_unparse(node), 2_048)
+
+
+def _expression_confidence(node: ast.AST) -> float:
+    return 1.0 if isinstance(node, (ast.Name, ast.Attribute)) else 0.7
+
+
+def _string_collection(node: ast.AST) -> tuple[str, ...] | None:
+    if not isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        return None
+    values: list[str] = []
+    for item in node.elts[:256]:
+        if not (
+            isinstance(item, ast.Constant)
+            and isinstance(item.value, str)
+            and item.value
+        ):
+            return None
+        values.append(item.value[:512])
+    return tuple(values)
+
+
+def _apply_explicit_exports(
+    definitions: list[ParsedDefinition],
+    module_name: str,
+    exports: set[str] | None,
+) -> tuple[ParsedDefinition, ...]:
+    if exports is None:
+        return tuple(definitions)
+    normalized: list[ParsedDefinition] = []
+    for definition in definitions:
+        top_level = definition.parent_qualified_name is None
+        if top_level and definition.kind != SymbolKind.MODULE:
+            expected = definition.qualified_name == (
+                f"{module_name}.{definition.name}"
+            )
+            if expected:
+                definition = ParsedDefinition.model_validate(
+                    definition.model_copy(
+                        update={"exported": definition.name in exports}
+                    ).model_dump(mode="python")
+                )
+        normalized.append(definition)
+    return tuple(normalized)
 
 
 def _assignment_names(node: ast.AST) -> tuple[str, ...]:
