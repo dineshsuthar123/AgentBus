@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from agentbus.intelligence import (
     ArchitectureBoundary,
@@ -299,6 +300,98 @@ def test_graph_reference_cannot_resolve_through_an_older_snapshot(
         )
 
 
+def test_snapshot_pruning_retains_latest_and_resumable_records(
+    tmp_path: Path,
+) -> None:
+    store = IndexStore(tmp_path / "repository.sqlite3")
+    repository, workspace, first, projects, files = _bundle(snapshot_suffix="first")
+    store.publish_snapshot(
+        repository,
+        workspace,
+        first,
+        projects=projects,
+        files=files,
+    )
+    second_file = files[0].model_copy(
+        update={
+            "content_hash": content_hash("second source"),
+            "size_bytes": len("second source"),
+        }
+    )
+    second = _snapshot_for_file(
+        first,
+        second_file,
+        suffix="second",
+        completed_at=first.completed_at + timedelta(minutes=1),
+    )
+    store.publish_snapshot(
+        repository,
+        workspace,
+        second,
+        projects=projects,
+        files=(second_file,),
+    )
+    building_file = files[0].model_copy(
+        update={
+            "content_hash": content_hash("building source"),
+            "size_bytes": len("building source"),
+        }
+    )
+    building = _snapshot_for_file(
+        first,
+        building_file,
+        suffix="building",
+        completed_at=first.completed_at - timedelta(minutes=1),
+    ).model_copy(update={"state": IndexState.BUILDING})
+    store.publish_snapshot(
+        repository,
+        workspace,
+        building,
+        projects=projects,
+        files=(building_file,),
+    )
+
+    deleted = store.prune_snapshots(repository.repository_id, retain=1)
+
+    assert deleted == (first.snapshot_id,)
+    retained = {
+        snapshot.snapshot_id
+        for snapshot in store.list_snapshots(repository.repository_id)
+    }
+    assert retained == {second.snapshot_id, building.snapshot_id}
+    with sqlite3.connect(store.database_path) as connection:
+        hashes = {
+            row[0]
+            for row in connection.execute(
+                "SELECT content_hash FROM content_hashes"
+            ).fetchall()
+        }
+    assert hashes == {second_file.content_hash, building_file.content_hash}
+    store.verify()
+
+
+def test_store_revalidates_copied_models_before_writing(tmp_path: Path) -> None:
+    store = IndexStore(tmp_path / "repository.sqlite3")
+    repository, workspace, snapshot, projects, files = _bundle()
+    unsafe = files[0].model_copy(
+        update={"relative_path": "../../outside.py"}
+    )
+
+    with pytest.raises(ValidationError, match="traverse"):
+        store.publish_snapshot(
+            repository,
+            workspace,
+            snapshot,
+            projects=projects,
+            files=(unsafe,),
+        )
+
+    with sqlite3.connect(store.database_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM repositories"
+        ).fetchone()[0] == 0
+
+
 def _bundle(
     *,
     snapshot_suffix: str = "default",
@@ -523,3 +616,28 @@ def _graph_bundle() -> dict[str, object]:
         "ownership_rules": (ownership,),
         "boundaries": (boundary,),
     }
+
+
+def _snapshot_for_file(
+    base: IndexSnapshot,
+    source: SourceFile,
+    *,
+    suffix: str,
+    completed_at: datetime,
+) -> IndexSnapshot:
+    source_fingerprint = file_set_fingerprint((source,))
+    identity = snapshot_id(
+        base.repository_id,
+        content_hash(f"{source_fingerprint}:{suffix}"),
+        parser_versions_fingerprint(base.parser_versions),
+        base.project_map_hash,
+        base.graph_hash,
+    )
+    return base.model_copy(
+        update={
+            "snapshot_id": identity,
+            "created_at": completed_at - timedelta(seconds=1),
+            "completed_at": completed_at,
+            "source_fingerprint": source_fingerprint,
+        }
+    )

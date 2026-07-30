@@ -5,7 +5,7 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Iterator, Sequence
+from typing import Iterable, Iterator, Sequence, TypeVar
 
 from agentbus.intelligence.errors import (
     IndexBusyError,
@@ -27,6 +27,7 @@ from agentbus.intelligence.models import (
     IndexDiagnostic,
     IndexSnapshot,
     IndexState,
+    IntelligenceModel,
     Module,
     OwnershipRule,
     Project,
@@ -96,20 +97,57 @@ class IndexStore:
         ownership_rules: Iterable[OwnershipRule] = (),
         architecture_boundaries: Iterable[ArchitectureBoundary] = (),
     ) -> IndexSnapshot:
-        project_records = tuple(sorted(projects, key=lambda item: item.project_id))
-        file_records = tuple(sorted(files, key=lambda item: item.file_id))
-        module_records = tuple(sorted(modules, key=lambda item: item.module_id))
-        symbol_records = tuple(sorted(symbols, key=lambda item: item.symbol_id))
-        reference_records = tuple(
-            sorted(references, key=lambda item: item.reference_id)
+        repository = _revalidate(RepositoryIdentity, repository)
+        workspace = _revalidate(WorkspaceIdentity, workspace)
+        snapshot = _revalidate(IndexSnapshot, snapshot)
+        project_records = tuple(
+            sorted(
+                _revalidate_all(Project, projects),
+                key=lambda item: item.project_id,
+            )
         )
-        edge_records = tuple(sorted(edges, key=lambda item: item.edge_id))
+        file_records = tuple(
+            sorted(
+                _revalidate_all(SourceFile, files),
+                key=lambda item: item.file_id,
+            )
+        )
+        module_records = tuple(
+            sorted(
+                _revalidate_all(Module, modules),
+                key=lambda item: item.module_id,
+            )
+        )
+        symbol_records = tuple(
+            sorted(
+                _revalidate_all(Symbol, symbols),
+                key=lambda item: item.symbol_id,
+            )
+        )
+        reference_records = tuple(
+            sorted(
+                _revalidate_all(SymbolReference, references),
+                key=lambda item: item.reference_id,
+            )
+        )
+        edge_records = tuple(
+            sorted(
+                _revalidate_all(DependencyEdge, edges),
+                key=lambda item: item.edge_id,
+            )
+        )
         ownership_records = tuple(
-            sorted(ownership_rules, key=lambda item: item.rule_id)
+            sorted(
+                _revalidate_all(OwnershipRule, ownership_rules),
+                key=lambda item: item.rule_id,
+            )
         )
         boundary_records = tuple(
             sorted(
-                architecture_boundaries,
+                _revalidate_all(
+                    ArchitectureBoundary,
+                    architecture_boundaries,
+                ),
                 key=lambda item: item.boundary_id,
             )
         )
@@ -309,6 +347,133 @@ class IndexStore:
     ) -> tuple[ArchitectureBoundary, ...]:
         with self._connection() as connection:
             return self._boundaries_for_snapshot(connection, snapshot_id)
+
+    def put_cache_metadata(
+        self,
+        repository_id: str,
+        namespace: str,
+        cache_key: str,
+        value_hash: str,
+        metadata_json: str,
+        *,
+        expires_at: datetime | None = None,
+    ) -> None:
+        with self._write_transaction() as connection:
+            connection.execute(
+                """
+                INSERT INTO intelligence_cache(
+                    repository_id, namespace, cache_key, value_hash,
+                    metadata_json, expires_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(repository_id, namespace, cache_key)
+                DO UPDATE SET
+                    value_hash = excluded.value_hash,
+                    metadata_json = excluded.metadata_json,
+                    expires_at = excluded.expires_at
+                """,
+                (
+                    repository_id,
+                    namespace,
+                    cache_key,
+                    value_hash,
+                    metadata_json,
+                    _datetime_text(expires_at),
+                ),
+            )
+
+    def get_cache_metadata(
+        self,
+        repository_id: str,
+        namespace: str,
+        cache_key: str,
+    ) -> tuple[str, str, str | None] | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT value_hash, metadata_json, expires_at
+                FROM intelligence_cache
+                WHERE repository_id = ? AND namespace = ? AND cache_key = ?
+                """,
+                (repository_id, namespace, cache_key),
+            ).fetchone()
+        if row is None:
+            return None
+        return (
+            str(row["value_hash"]),
+            str(row["metadata_json"]),
+            row["expires_at"],
+        )
+
+    def delete_cache_metadata(
+        self,
+        repository_id: str,
+        namespace: str,
+        cache_key: str,
+    ) -> bool:
+        with self._write_transaction() as connection:
+            cursor = connection.execute(
+                """
+                DELETE FROM intelligence_cache
+                WHERE repository_id = ? AND namespace = ? AND cache_key = ?
+                """,
+                (repository_id, namespace, cache_key),
+            )
+        return cursor.rowcount > 0
+
+    def purge_expired_cache(self, *, now: datetime) -> int:
+        with self._write_transaction() as connection:
+            cursor = connection.execute(
+                """
+                DELETE FROM intelligence_cache
+                WHERE expires_at IS NOT NULL AND expires_at <= ?
+                """,
+                (_datetime_text(now),),
+            )
+        return cursor.rowcount
+
+    def prune_snapshots(
+        self,
+        repository_id: str,
+        *,
+        retain: int = 3,
+    ) -> tuple[str, ...]:
+        if retain < 1 or retain > 1_000:
+            raise ValueError("retain must be between 1 and 1000")
+        protected_states = {
+            IndexState.BUILDING.value,
+            IndexState.PAUSED.value,
+        }
+        with self._write_transaction() as connection:
+            rows = connection.execute(
+                """
+                SELECT snapshot_id, state
+                FROM index_snapshots
+                WHERE repository_id = ?
+                ORDER BY COALESCE(completed_at, created_at) DESC, snapshot_id DESC
+                """,
+                (repository_id,),
+            ).fetchall()
+            terminal = [
+                str(row["snapshot_id"])
+                for row in rows
+                if row["state"] not in protected_states
+            ]
+            deleted = tuple(terminal[retain:])
+            connection.executemany(
+                "DELETE FROM index_snapshots WHERE snapshot_id = ?",
+                ((snapshot_id,) for snapshot_id in deleted),
+            )
+            connection.execute(
+                """
+                DELETE FROM content_hashes
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM indexed_files
+                    WHERE indexed_files.content_hash = content_hashes.content_hash
+                )
+                """
+            )
+        return deleted
 
     def verify(self) -> None:
         try:
@@ -1402,6 +1567,23 @@ def _bounded_limit(value: int) -> int:
     if value < 1 or value > _MAX_LIST_LIMIT:
         raise ValueError(f"limit must be between 1 and {_MAX_LIST_LIMIT}")
     return value
+
+
+_IntelligenceRecord = TypeVar("_IntelligenceRecord", bound=IntelligenceModel)
+
+
+def _revalidate(
+    model_type: type[_IntelligenceRecord],
+    value: _IntelligenceRecord,
+) -> _IntelligenceRecord:
+    return model_type.model_validate(value.model_dump(mode="python"))
+
+
+def _revalidate_all(
+    model_type: type[_IntelligenceRecord],
+    values: Iterable[_IntelligenceRecord],
+) -> tuple[_IntelligenceRecord, ...]:
+    return tuple(_revalidate(model_type, value) for value in values)
 
 
 def _unique_ids(values: Iterable[str], description: str) -> set[str]:

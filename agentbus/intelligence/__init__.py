@@ -9,6 +9,7 @@ from agentbus.intelligence.errors import (
     RepositoryIntelligenceError,
     UnsafeRepositoryPathError,
 )
+from agentbus.intelligence.cache import CacheEntry, IntelligenceCache
 from agentbus.intelligence.fingerprints import (
     content_hash,
     context_candidates_fingerprint,
@@ -72,6 +73,7 @@ from agentbus.intelligence.version import (
 
 __all__ = [
     "ArchitectureBoundary",
+    "CacheEntry",
     "content_hash",
     "context_candidates_fingerprint",
     "context_plan_id",
@@ -85,6 +87,7 @@ __all__ = [
     "ImpactResult",
     "ImpactRisk",
     "impact_result_id",
+    "IntelligenceCache",
     "IndexBusyError",
     "IndexCorruptedError",
     "IndexDiagnostic",
