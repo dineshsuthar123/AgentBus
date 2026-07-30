@@ -16,6 +16,9 @@ from agentbus.intelligence.discovery.scanner import (
 )
 from agentbus.intelligence.discovery.projects import ProjectDiscovery
 from agentbus.intelligence.discovery.python import PythonProjectDetector
+from agentbus.intelligence.discovery.relationships import (
+    normalize_project_relationships,
+)
 
 __all__ = [
     "DiscoveredFile",
@@ -30,4 +33,5 @@ __all__ = [
     "PythonProjectDetector",
     "RepositoryInventory",
     "RepositoryInventoryScanner",
+    "normalize_project_relationships",
 ]

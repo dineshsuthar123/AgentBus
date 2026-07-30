@@ -15,6 +15,9 @@ from agentbus.intelligence.discovery.models import (
 from agentbus.intelligence.discovery.java import JavaProjectDetector
 from agentbus.intelligence.discovery.node import NodeProjectDetector
 from agentbus.intelligence.discovery.python import PythonProjectDetector
+from agentbus.intelligence.discovery.relationships import (
+    normalize_project_relationships,
+)
 from agentbus.intelligence.discovery.scanner import RepositoryInventoryScanner
 from agentbus.intelligence.errors import RepositoryIntelligenceError
 from agentbus.intelligence.models import (
@@ -88,13 +91,20 @@ class ProjectDiscovery:
                         "project detectors produced conflicting stable identities"
                     )
                 projects[validated.project_id] = validated
+        normalized_projects, relationship_diagnostics = (
+            normalize_project_relationships(
+                tuple(projects.values()),
+                repository_id=self.repository.repository_id,
+            )
+        )
+        diagnostics.extend(relationship_diagnostics)
         bounded_diagnostics = tuple(
             diagnostics[: self.limits.maximum_diagnostics]
         )
         return ProjectDiscoveryResult(
             projects=tuple(
                 sorted(
-                    projects.values(),
+                    normalized_projects,
                     key=lambda item: (item.root, item.kind.value, item.project_id),
                 )
             ),
