@@ -36,6 +36,13 @@ from agentbus.intelligence.identities import (
     workspace_identity,
 )
 from agentbus.intelligence.indexer import IndexingResult, RepositoryIndexer
+from agentbus.intelligence.invalidation import (
+    DependencyInvalidator,
+    InvalidationCause,
+    InvalidationLimits,
+    InvalidationPlan,
+    InvalidationReason,
+)
 from agentbus.intelligence.models import (
     ArchitectureBoundary,
     ContextCandidate,
@@ -83,6 +90,7 @@ __all__ = [
     "ContextPlan",
     "ContextRole",
     "DependencyEdge",
+    "DependencyInvalidator",
     "DependencyKind",
     "DiagnosticSeverity",
     "ImpactRequest",
@@ -101,6 +109,10 @@ __all__ = [
     "IndexUnavailableError",
     "IndexStore",
     "IndexingResult",
+    "InvalidationCause",
+    "InvalidationLimits",
+    "InvalidationPlan",
+    "InvalidationReason",
     "INTELLIGENCE_PROTOCOL_VERSION",
     "INTELLIGENCE_SCHEMA_VERSION",
     "Module",
