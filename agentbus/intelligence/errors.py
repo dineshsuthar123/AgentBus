@@ -26,6 +26,10 @@ class ParserCompatibilityError(RepositoryIntelligenceError):
     """Raised when parser ownership or versions are incompatible."""
 
 
+class ParserUnavailableError(RepositoryIntelligenceError):
+    """Raised when no safe local parser owns a requested language."""
+
+
 class UnsafeRepositoryPathError(RepositoryIntelligenceError):
     """Raised when a repository-relative path is unsafe."""
 
