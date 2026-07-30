@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Iterable
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
+from typing import Callable
 
 from agentbus.intelligence.discovery import (
     DiscoveredFile,
@@ -40,6 +41,9 @@ from agentbus.intelligence.invalidation import (
 from agentbus.intelligence.models import (
     DiagnosticSeverity,
     IndexDiagnostic,
+    IndexOperation,
+    IndexOperationKind,
+    IndexOperationState,
     IndexSnapshot,
     IndexState,
     Module,
@@ -54,6 +58,7 @@ from agentbus.intelligence.models import (
     WorkspaceIdentity,
     _relative_path,
 )
+from agentbus.intelligence.operations import IndexOperationLease
 from agentbus.intelligence.parsers import (
     CancellationSignal,
     GoStaticParser,
@@ -64,6 +69,12 @@ from agentbus.intelligence.parsers import (
     ParserRegistry,
     PythonAstParser,
     TypeScriptStaticParser,
+)
+from agentbus.intelligence.scheduler import (
+    IndexProgressEvent,
+    IndexProgressPhase,
+    IndexProgressReporter,
+    IndexProgressSink,
 )
 from agentbus.intelligence.storage import IndexStore
 
@@ -103,6 +114,8 @@ class IndexingResult:
     renamed_paths: tuple[tuple[str, str], ...] = ()
     invalidated_paths: tuple[str, ...] = ()
     invalidation_plan: InvalidationPlan | None = None
+    operation: IndexOperation | None = None
+    progress_events: tuple[IndexProgressEvent, ...] = ()
     unchanged: bool = False
 
 
@@ -147,6 +160,12 @@ class RepositoryIndexer:
         discovery_limits: DiscoveryLimits | None = None,
         parser_limits: ParserLimits | None = None,
         invalidation_limits: InvalidationLimits | None = None,
+        operation_stale_after: timedelta = timedelta(minutes=5),
+        operation_heartbeat_seconds: float = 5.0,
+        operation_owner_pid: int | None = None,
+        operation_clock: Callable[[], datetime] | None = None,
+        operation_monotonic: Callable[[], float] | None = None,
+        maximum_progress_events: int = 1_000,
     ) -> None:
         self.workspace = Path(workspace).expanduser().resolve()
         if not self.workspace.is_dir():
@@ -172,13 +191,121 @@ class RepositoryIndexer:
         self.invalidator = DependencyInvalidator(
             limits=invalidation_limits
         )
+        self.operation_stale_after = operation_stale_after
+        self.operation_heartbeat_seconds = operation_heartbeat_seconds
+        self.operation_owner_pid = operation_owner_pid
+        self.operation_clock = operation_clock
+        self.operation_monotonic = operation_monotonic
+        if maximum_progress_events < 2 or maximum_progress_events > 100_000:
+            raise ValueError(
+                "maximum_progress_events must be between 2 and 100000"
+            )
+        self.maximum_progress_events = maximum_progress_events
 
     def build(
         self,
         *,
         cancellation: CancellationSignal | None = None,
+        operation_id: str | None = None,
+        progress_sink: IndexProgressSink | None = None,
     ) -> IndexingResult:
-        started_at = datetime.now(timezone.utc)
+        return self._run_operation(
+            IndexOperationKind.BUILD,
+            cancellation=cancellation,
+            operation_id=operation_id,
+            progress_sink=progress_sink,
+        )
+
+    def _run_operation(
+        self,
+        operation_kind: IndexOperationKind,
+        *,
+        cancellation: CancellationSignal | None,
+        operation_id: str | None,
+        progress_sink: IndexProgressSink | None,
+    ) -> IndexingResult:
+        lease = IndexOperationLease(
+            self.store,
+            self.repository,
+            operation_kind,
+            operation_id=operation_id,
+            owner_pid=self.operation_owner_pid,
+            stale_after=self.operation_stale_after,
+            heartbeat_interval_seconds=self.operation_heartbeat_seconds,
+            cancellation=cancellation,
+            clock=self.operation_clock,
+            monotonic=self.operation_monotonic,
+        )
+        operation = lease.acquire()
+        reporter = IndexProgressReporter(
+            operation.operation_id,
+            progress_sink,
+            maximum_events=self.maximum_progress_events,
+        )
+        reporter.emit(
+            IndexProgressPhase.DISCOVERY,
+            completed_items=0,
+            total_items=0,
+            message="Repository discovery started.",
+        )
+        try:
+            result = self._build_snapshot(
+                cancellation=lease,
+                lease=lease,
+                reporter=reporter,
+            )
+            paused = result.snapshot.state == IndexState.PAUSED
+            finished = lease.finish(
+                IndexOperationState.PAUSED
+                if paused
+                else IndexOperationState.COMPLETED
+            )
+            reporter.emit(
+                (
+                    IndexProgressPhase.PAUSED
+                    if paused
+                    else IndexProgressPhase.COMPLETED
+                ),
+                completed_items=result.snapshot.file_count,
+                total_items=result.snapshot.file_count,
+                message=(
+                    "Repository indexing paused."
+                    if paused
+                    else "Repository indexing completed."
+                ),
+                terminal=True,
+            )
+            return replace(
+                result,
+                operation=finished,
+                progress_events=reporter.events,
+            )
+        except BaseException:
+            lease.fail()
+            events = reporter.events
+            last = events[-1] if events else None
+            try:
+                reporter.emit(
+                    IndexProgressPhase.FAILED,
+                    completed_items=(
+                        last.completed_items if last is not None else 0
+                    ),
+                    total_items=last.total_items if last is not None else 0,
+                    message="Repository indexing failed.",
+                    terminal=True,
+                )
+            except Exception:
+                pass
+            raise
+
+    def _build_snapshot(
+        self,
+        *,
+        cancellation: CancellationSignal,
+        lease: IndexOperationLease,
+        reporter: IndexProgressReporter,
+    ) -> IndexingResult:
+        started_at = lease.operation.started_at
         inventory = RepositoryInventoryScanner(
             self.workspace,
             limits=self.discovery_limits,
@@ -251,6 +378,12 @@ class RepositoryIndexer:
             for item in discovery.files
             if _source_language(item.relative_path) is not None
         )
+        reporter.emit(
+            IndexProgressPhase.INDEXING,
+            completed_items=0,
+            total_items=len(supported_files),
+            message="Repository source indexing started.",
+        )
 
         for discovered in supported_files:
             if _cancelled(cancellation):
@@ -282,6 +415,13 @@ class RepositoryIndexer:
                 skipped_paths.add(discovered.relative_path)
             diagnostics.extend(outcome.diagnostics)
             parser_partial = parser_partial or outcome.partial
+            reporter.emit(
+                IndexProgressPhase.INDEXING,
+                completed_items=len(processed_paths),
+                total_items=len(supported_files),
+                relative_path=discovered.relative_path,
+                message="Repository source file observed.",
+            )
             if outcome.cancelled or _cancelled(cancellation):
                 paused = True
                 break
@@ -438,6 +578,13 @@ class RepositoryIndexer:
         supported_by_path = {
             item.relative_path: item for item in supported_files
         }
+        if ordered_targets:
+            reporter.emit(
+                IndexProgressPhase.INVALIDATION,
+                completed_items=0,
+                total_items=len(ordered_targets),
+                message="Dependency-aware reindexing started.",
+            )
         if paused:
             pending_targets = ordered_targets
         else:
@@ -473,6 +620,13 @@ class RepositoryIndexer:
                     retry_targets.add(path)
                 diagnostics.extend(outcome.diagnostics)
                 parser_partial = parser_partial or outcome.partial
+                reporter.emit(
+                    IndexProgressPhase.INVALIDATION,
+                    completed_items=index + 1,
+                    total_items=len(ordered_targets),
+                    relative_path=path,
+                    message="Invalidated source file reindexed.",
+                )
                 if outcome.cancelled or _cancelled(cancellation):
                     paused = True
                     retry_from = index if outcome.cancelled else index + 1
@@ -594,6 +748,13 @@ class RepositoryIndexer:
             diagnostics=bounded_diagnostics,
         )
 
+        reporter.emit(
+            IndexProgressPhase.PERSISTENCE,
+            completed_items=len(files),
+            total_items=len(files),
+            message="Repository index snapshot is ready to persist.",
+        )
+        publish_guard = lease.publish_guard()
         try:
             existing = self.store.get_snapshot(identity)
         except IndexUnavailableError:
@@ -606,6 +767,7 @@ class RepositoryIndexer:
                 modules=modules,
                 symbols=symbols,
                 references=references,
+                **publish_guard,
             )
             return IndexingResult(
                 snapshot=stored,
@@ -763,8 +925,15 @@ class RepositoryIndexer:
         self,
         *,
         cancellation: CancellationSignal | None = None,
+        operation_id: str | None = None,
+        progress_sink: IndexProgressSink | None = None,
     ) -> IndexingResult:
-        return self.build(cancellation=cancellation)
+        return self._run_operation(
+            IndexOperationKind.UPDATE,
+            cancellation=cancellation,
+            operation_id=operation_id,
+            progress_sink=progress_sink,
+        )
 
 
 def _default_registry() -> ParserRegistry:

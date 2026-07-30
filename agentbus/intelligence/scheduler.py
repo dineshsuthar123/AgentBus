@@ -155,8 +155,15 @@ class IndexProgressReporter:
                 dropped_events=self._dropped_events,
             )
             self._events.append(event)
-        if self.sink is not None:
-            self.sink(event)
+        sink = self.sink
+        if sink is not None:
+            try:
+                sink(event)
+            except Exception:
+                with self._lock:
+                    self._dropped_events += 1
+                    if self.sink is sink:
+                        self.sink = None
         return event
 
 

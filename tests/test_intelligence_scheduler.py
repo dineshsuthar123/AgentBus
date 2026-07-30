@@ -130,6 +130,40 @@ def test_progress_reporter_caps_events_and_reserves_terminal_event() -> None:
     assert reporter.dropped_events == 8
 
 
+def test_progress_sink_failure_does_not_abort_reporting() -> None:
+    calls: list[int] = []
+
+    def failing_sink(event: IndexProgressEvent) -> None:
+        calls.append(event.sequence)
+        raise RuntimeError("observer failed")
+
+    reporter = IndexProgressReporter(
+        _OPERATION_ID,
+        failing_sink,
+        maximum_events=4,
+    )
+
+    first = reporter.emit(
+        IndexProgressPhase.INDEXING,
+        completed_items=0,
+        total_items=1,
+        message="Indexing started.",
+    )
+    second = reporter.emit(
+        IndexProgressPhase.COMPLETED,
+        completed_items=1,
+        total_items=1,
+        message="Indexing completed.",
+        terminal=True,
+    )
+
+    assert first is not None
+    assert second is not None
+    assert calls == [1]
+    assert reporter.dropped_events == 1
+    assert second.dropped_events == 1
+
+
 def test_scheduler_propagates_unexpected_worker_failure() -> None:
     scheduler = BoundedIndexScheduler(
         limits=IndexSchedulerLimits(
