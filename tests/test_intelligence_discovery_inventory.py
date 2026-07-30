@@ -78,10 +78,14 @@ def test_inventory_excludes_protected_generated_and_vendored_paths(
     assert files["tests/test_app.py"].test is True
     assert inventory.generated_roots == ("node_modules",)
     assert inventory.vendored_roots == ("vendor",)
-    assert any(
-        item.code == "discovery.protected_path"
+    protected = next(
+        item
         for item in inventory.diagnostics
+        if item.code == "discovery.protected_path"
     )
+    assert protected.relative_path is None
+    assert ".env" not in protected.model_dump_json()
+    assert "SECRET" not in protected.model_dump_json()
 
 
 def test_inventory_rejects_symlink_escape_and_safe_reader_traversal(

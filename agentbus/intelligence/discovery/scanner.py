@@ -334,7 +334,6 @@ class RepositoryInventoryScanner:
                     "discovery.protected_path",
                     DiagnosticSeverity.INFO,
                     "Protected repository path was excluded from discovery.",
-                    relative_path,
                 )
                 continue
             except (FileSystemContainmentError, FileSystemSecurityError):
