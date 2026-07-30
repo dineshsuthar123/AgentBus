@@ -14,6 +14,7 @@ from agentbus.intelligence.discovery import (
     RepositoryInventory,
     RepositoryInventoryScanner,
 )
+from agentbus.intelligence.architecture import ArchitectureAnalyzer
 from agentbus.intelligence.errors import (
     IndexUnavailableError,
     RepositoryIntelligenceError,
@@ -80,6 +81,7 @@ from agentbus.intelligence.scheduler import (
     IndexSchedulerLimits,
 )
 from agentbus.intelligence.storage import IndexStore
+from agentbus.intelligence.traversal import DependencyGraph
 
 
 _PROJECT_KIND_BY_LANGUAGE = {
@@ -671,17 +673,6 @@ class RepositoryIndexer:
                 key=lambda item: item.file_id,
             )
         )
-        source_fingerprint = stable_hash(
-            {
-                "inventory": discovery.inventory_fingerprint,
-                "configuration": configuration_hash,
-                "observed_sources": file_set_fingerprint(observed_hashes),
-                "ownership": stable_hash(ownership.rules),
-                "observation_complete": (
-                    len(observed_hashes) == len(supported_files)
-                ),
-            }
-        )
         project_hash = project_map_fingerprint(projects)
         graph = DependencyGraphBuilder().build(
             files,
@@ -690,6 +681,31 @@ class RepositoryIndexer:
         )
         edges = graph.edges
         graph_hash = graph_fingerprint(edges)
+        architecture = ArchitectureAnalyzer().analyze(
+            projects,
+            files,
+            symbols,
+            DependencyGraph(
+                edges,
+                symbols=symbols,
+                files=files,
+                modules=modules,
+            ),
+            generated_roots=inventory.generated_roots,
+        )
+        diagnostics.extend(architecture.diagnostics)
+        source_fingerprint = stable_hash(
+            {
+                "inventory": discovery.inventory_fingerprint,
+                "configuration": configuration_hash,
+                "observed_sources": file_set_fingerprint(observed_hashes),
+                "ownership": stable_hash(ownership.rules),
+                "architecture": stable_hash(architecture.boundaries),
+                "observation_complete": (
+                    len(observed_hashes) == len(supported_files)
+                ),
+            }
+        )
         state = _snapshot_state(
             paused=paused,
             partial=(
@@ -768,6 +784,7 @@ class RepositoryIndexer:
                 references=references,
                 edges=edges,
                 ownership_rules=ownership.rules,
+                architecture_boundaries=architecture.boundaries,
                 **publish_guard,
             )
             return IndexingResult(

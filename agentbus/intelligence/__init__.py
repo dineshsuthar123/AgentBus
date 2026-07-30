@@ -1,3 +1,8 @@
+from agentbus.intelligence.architecture import (
+    ArchitectureAnalyzer,
+    ArchitectureInference,
+    ArchitectureLimits,
+)
 from agentbus.intelligence.errors import (
     IndexBusyError,
     IndexCorruptedError,
@@ -135,6 +140,9 @@ from agentbus.intelligence.watcher import (
 
 __all__ = [
     "ArchitectureBoundary",
+    "ArchitectureAnalyzer",
+    "ArchitectureInference",
+    "ArchitectureLimits",
     "BoundedIndexScheduler",
     "CacheEntry",
     "CentralityScore",
