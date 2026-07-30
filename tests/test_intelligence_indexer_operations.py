@@ -4,7 +4,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from threading import Event
+from threading import Barrier, Event
 from typing import Any
 
 import pytest
@@ -15,8 +15,10 @@ from agentbus.intelligence import (
     IndexOperationState,
     IndexProgressEvent,
     IndexProgressPhase,
+    IndexSchedulerLimits,
     IndexState,
     IndexStore,
+    QueryLimitError,
     RepositoryIndexer,
     repository_identity,
     workspace_identity,
@@ -282,3 +284,75 @@ def test_progress_sink_failure_does_not_fail_index_build(
         result.progress_events[-1].phase
         == IndexProgressPhase.COMPLETED
     )
+
+
+def test_indexer_runs_parser_work_with_bounded_parallelism(
+    tmp_path: Path,
+) -> None:
+    for name in ("a.py", "b.py", "c.py"):
+        (tmp_path / name).write_text(
+            f"def {name[0]}_marker():\n    return True\n",
+            encoding="utf-8",
+        )
+    store = IndexStore(tmp_path / ".agentbus-test" / "index.sqlite3")
+    both_started = Barrier(2)
+
+    def synchronize_first_workers(request: ParseRequest) -> None:
+        if request.relative_path in {"a.py", "b.py"}:
+            both_started.wait(timeout=5)
+
+    result = _indexer(
+        tmp_path,
+        store,
+        _HookParser(before=synchronize_first_workers),
+        scheduler_limits=IndexSchedulerLimits(
+            maximum_workers=2,
+            maximum_in_flight=2,
+        ),
+    ).build(operation_id="indexop_" + ("8" * 32))
+
+    assert result.maximum_active_workers == 2
+    assert sorted(
+        source.relative_path
+        for source in store.list_files(result.snapshot.snapshot_id)
+    ) == ["a.py", "b.py", "c.py"]
+    assert [
+        event.relative_path
+        for event in result.progress_events
+        if (
+            event.phase == IndexProgressPhase.INDEXING
+            and event.relative_path is not None
+        )
+    ] == ["a.py", "b.py", "c.py"]
+
+
+def test_scheduler_limit_failure_marks_index_operation_failed(
+    tmp_path: Path,
+) -> None:
+    for name in ("a.py", "b.py"):
+        (tmp_path / name).write_text(
+            f"def {name[0]}_marker():\n    return True\n",
+            encoding="utf-8",
+        )
+    store = IndexStore(tmp_path / ".agentbus-test" / "index.sqlite3")
+    indexer = _indexer(
+        tmp_path,
+        store,
+        _HookParser(),
+        scheduler_limits=IndexSchedulerLimits(
+            maximum_workers=1,
+            maximum_in_flight=1,
+            maximum_items=1,
+        ),
+    )
+
+    with pytest.raises(QueryLimitError, match="scheduler item limit"):
+        indexer.build(operation_id="indexop_" + ("9" * 32))
+
+    operation = store.get_index_operation(
+        repository_identity(
+            "fixtures/indexer-operations"
+        ).repository_id
+    )
+    assert operation is not None
+    assert operation.state == IndexOperationState.FAILED

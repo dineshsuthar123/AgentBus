@@ -71,10 +71,12 @@ from agentbus.intelligence.parsers import (
     TypeScriptStaticParser,
 )
 from agentbus.intelligence.scheduler import (
+    BoundedIndexScheduler,
     IndexProgressEvent,
     IndexProgressPhase,
     IndexProgressReporter,
     IndexProgressSink,
+    IndexSchedulerLimits,
 )
 from agentbus.intelligence.storage import IndexStore
 
@@ -116,6 +118,7 @@ class IndexingResult:
     invalidation_plan: InvalidationPlan | None = None
     operation: IndexOperation | None = None
     progress_events: tuple[IndexProgressEvent, ...] = ()
+    maximum_active_workers: int = 0
     unchanged: bool = False
 
 
@@ -166,6 +169,7 @@ class RepositoryIndexer:
         operation_clock: Callable[[], datetime] | None = None,
         operation_monotonic: Callable[[], float] | None = None,
         maximum_progress_events: int = 1_000,
+        scheduler_limits: IndexSchedulerLimits | None = None,
     ) -> None:
         self.workspace = Path(workspace).expanduser().resolve()
         if not self.workspace.is_dir():
@@ -201,6 +205,15 @@ class RepositoryIndexer:
                 "maximum_progress_events must be between 2 and 100000"
             )
         self.maximum_progress_events = maximum_progress_events
+        self.scheduler = BoundedIndexScheduler(
+            limits=(
+                scheduler_limits
+                or IndexSchedulerLimits(
+                    maximum_workers=1,
+                    maximum_in_flight=1,
+                )
+            )
+        )
 
     def build(
         self,
@@ -373,31 +386,32 @@ class RepositoryIndexer:
         processed_paths: set[str] = set()
         parser_partial = False
         paused = False
+        maximum_active_workers = 0
         supported_files = tuple(
             item
             for item in discovery.files
             if _source_language(item.relative_path) is not None
         )
-        reporter.emit(
-            IndexProgressPhase.INDEXING,
-            completed_items=0,
-            total_items=len(supported_files),
-            message="Repository source indexing started.",
-        )
-
-        for discovered in supported_files:
-            if _cancelled(cancellation):
-                paused = True
-                break
-            processed_paths.add(discovered.relative_path)
-            outcome = self._index_file(
+        direct_batch = self.scheduler.run(
+            supported_files,
+            lambda discovered: self._index_file(
                 inventory,
                 discovered,
                 projects,
                 previous_files_by_path.get(discovered.relative_path),
                 reuse_enabled=reuse_enabled,
                 cancellation=cancellation,
-            )
+            ),
+            cancellation=cancellation,
+            reporter=reporter,
+            phase=IndexProgressPhase.INDEXING,
+            item_path=lambda discovered: discovered.relative_path,
+        )
+        maximum_active_workers = direct_batch.maximum_active_workers
+        for scheduled in direct_batch.completed:
+            discovered = scheduled.item
+            outcome = scheduled.result
+            processed_paths.add(discovered.relative_path)
             if outcome.observed_hash is not None:
                 observed_hashes[discovered.relative_path] = (
                     outcome.observed_hash
@@ -415,16 +429,10 @@ class RepositoryIndexer:
                 skipped_paths.add(discovered.relative_path)
             diagnostics.extend(outcome.diagnostics)
             parser_partial = parser_partial or outcome.partial
-            reporter.emit(
-                IndexProgressPhase.INDEXING,
-                completed_items=len(processed_paths),
-                total_items=len(supported_files),
-                relative_path=discovered.relative_path,
-                message="Repository source file observed.",
-            )
-            if outcome.cancelled or _cancelled(cancellation):
+            if outcome.cancelled:
                 paused = True
-                break
+        if direct_batch.cancelled or _cancelled(cancellation):
+            paused = True
 
         if paused and reuse_enabled:
             discovered_paths = {
@@ -578,33 +586,35 @@ class RepositoryIndexer:
         supported_by_path = {
             item.relative_path: item for item in supported_files
         }
-        if ordered_targets:
-            reporter.emit(
-                IndexProgressPhase.INVALIDATION,
-                completed_items=0,
-                total_items=len(ordered_targets),
-                message="Dependency-aware reindexing started.",
-            )
         if paused:
             pending_targets = ordered_targets
-        else:
-            for index, path in enumerate(ordered_targets):
-                if _cancelled(cancellation):
-                    paused = True
-                    pending_targets = ordered_targets[index:]
-                    break
-                discovered = supported_by_path.get(path)
-                if discovered is None:
-                    continue
-                outcome = self._index_file(
+        elif ordered_targets:
+            invalidation_batch = self.scheduler.run(
+                ordered_targets,
+                lambda path: self._index_file(
                     inventory,
-                    discovered,
+                    supported_by_path[path],
                     projects,
                     previous_files_by_path.get(path),
                     reuse_enabled=reuse_enabled,
                     force=True,
                     cancellation=cancellation,
-                )
+                ),
+                cancellation=cancellation,
+                reporter=reporter,
+                phase=IndexProgressPhase.INVALIDATION,
+                item_path=lambda path: path,
+            )
+            maximum_active_workers = max(
+                maximum_active_workers,
+                invalidation_batch.maximum_active_workers,
+            )
+            pending_targets = invalidation_batch.pending
+            if invalidation_batch.cancelled:
+                paused = True
+            for scheduled in invalidation_batch.completed:
+                path = scheduled.item
+                outcome = scheduled.result
                 if outcome.observed_hash is not None:
                     observed_hashes[path] = outcome.observed_hash
                 reused_paths.discard(path)
@@ -620,18 +630,9 @@ class RepositoryIndexer:
                     retry_targets.add(path)
                 diagnostics.extend(outcome.diagnostics)
                 parser_partial = parser_partial or outcome.partial
-                reporter.emit(
-                    IndexProgressPhase.INVALIDATION,
-                    completed_items=index + 1,
-                    total_items=len(ordered_targets),
-                    relative_path=path,
-                    message="Invalidated source file reindexed.",
-                )
-                if outcome.cancelled or _cancelled(cancellation):
+                if outcome.cancelled:
                     paused = True
-                    retry_from = index if outcome.cancelled else index + 1
-                    pending_targets = ordered_targets[retry_from:]
-                    break
+                    retry_targets.add(path)
         remaining_targets = tuple(
             sorted({*pending_targets, *retry_targets})
         )
@@ -778,6 +779,7 @@ class RepositoryIndexer:
                 renamed_paths=renamed_paths,
                 invalidated_paths=tuple(sorted(invalidated_paths)),
                 invalidation_plan=invalidation_plan,
+                maximum_active_workers=maximum_active_workers,
             )
         return IndexingResult(
             snapshot=existing,
@@ -788,6 +790,7 @@ class RepositoryIndexer:
             renamed_paths=renamed_paths,
             invalidated_paths=tuple(sorted(invalidated_paths)),
             invalidation_plan=invalidation_plan,
+            maximum_active_workers=maximum_active_workers,
             unchanged=not any(
                 (
                     indexed_paths,
