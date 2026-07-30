@@ -59,6 +59,29 @@ _NON_CALL_IDENTIFIERS = {
     "try",
     "while",
 }
+_JAVA_TEST_METHOD_ANNOTATIONS = {
+    "ParameterizedTest",
+    "RepeatedTest",
+    "Test",
+    "TestFactory",
+    "TestTemplate",
+    "Theory",
+}
+_JAVA_TEST_TYPE_ANNOTATIONS = {
+    "RunWith",
+    "SpringBootTest",
+}
+_SPRING_CONTROLLER_ANNOTATIONS = {
+    "Controller",
+    "RestController",
+}
+_SPRING_ROUTE_METHODS = {
+    "DeleteMapping": ("DELETE",),
+    "GetMapping": ("GET",),
+    "PatchMapping": ("PATCH",),
+    "PostMapping": ("POST",),
+    "PutMapping": ("PUT",),
+}
 
 
 @dataclass(frozen=True)
@@ -67,6 +90,13 @@ class _Token:
     value: str
     start: int
     end: int
+
+
+@dataclass(frozen=True)
+class _Annotation:
+    name: str
+    argument_start: int | None = None
+    argument_end: int | None = None
 
 
 @dataclass(frozen=True)
@@ -174,6 +204,8 @@ class _JavaDeclarationParser:
         self.definitions: list[ParsedDefinition] = []
         self.spans: list[_DefinitionSpan] = []
         self.declaration_openings: set[int] = set()
+        self.controllers: set[str] = set()
+        self.controller_prefixes: dict[str, tuple[str, ...] | None] = {}
         self.diagnostics: list[IndexDiagnostic] = []
         self.partial = False
 
@@ -236,13 +268,20 @@ class _JavaDeclarationParser:
         keyword_index: int,
         end: int,
         scope: tuple[tuple[str, SymbolKind], ...],
-        annotations: tuple[str, ...],
+        annotations: tuple[_Annotation, ...],
     ) -> int:
         name_index = keyword_index + 1
         if not self._is_identifier(name_index, end):
             return keyword_index + 1
         name = self.tokens[name_index].value
         kind = _TYPE_KEYWORDS[self.tokens[keyword_index].value]
+        qualified_name = self._qualified(scope, name)
+        test = _is_java_test_type(
+            name,
+            self.request.relative_path,
+            annotations,
+        )
+        definition_kind = SymbolKind.TEST if test else kind
         body = self._find_value("{", name_index + 1, end)
         body_end = self.pairs.get(body) if body is not None else None
         header_opening = self._find_value(
@@ -259,8 +298,8 @@ class _JavaDeclarationParser:
         )
         self._add_definition(
             name=name,
-            qualified_name=self._qualified(scope, name),
-            kind=kind,
+            qualified_name=qualified_name,
+            kind=definition_kind,
             start=self.tokens[declaration_start].start,
             end=terminal,
             parent=self._scope_name(scope),
@@ -270,8 +309,13 @@ class _JavaDeclarationParser:
                 body if body is not None else name_index + 1,
             ),
             exported=self._has_public_modifier(declaration_start, keyword_index),
-            attributes={"annotations": annotations},
+            test=test,
+            attributes={
+                "annotations": _annotation_names(annotations),
+                "original_kind": kind.value,
+            },
         )
+        self._record_controller(qualified_name, annotations)
         if body is not None and body_end is not None:
             self._parse_range(
                 body + 1,
@@ -287,7 +331,7 @@ class _JavaDeclarationParser:
         start: int,
         end: int,
         scope: tuple[tuple[str, SymbolKind], ...],
-        annotations: tuple[str, ...],
+        annotations: tuple[_Annotation, ...],
     ) -> int:
         statement_end = self._member_end(start, end)
         if statement_end <= start:
@@ -307,11 +351,28 @@ class _JavaDeclarationParser:
             body_end = self.pairs.get(body) if body is not None else None
             terminal_index = body_end if body_end is not None else closing
             owner = scope[-1][0]
-            kind = (
+            original_kind = (
                 SymbolKind.CONSTRUCTOR
                 if name == owner
                 else SymbolKind.METHOD
             )
+            test = (
+                original_kind == SymbolKind.METHOD
+                and _is_java_test_method(
+                    name,
+                    self.request.relative_path,
+                    annotations,
+                )
+            )
+            endpoint, endpoint_attributes = self._spring_endpoint(
+                scope,
+                annotations,
+            )
+            kind = original_kind
+            if endpoint:
+                kind = SymbolKind.ENDPOINT
+            elif test:
+                kind = SymbolKind.TEST
             self._add_definition(
                 name=name,
                 qualified_name=self._qualified(scope, name),
@@ -328,12 +389,17 @@ class _JavaDeclarationParser:
                     declaration_start,
                     name_index,
                 ),
+                test=test,
+                endpoint=endpoint,
+                confidence=0.9 if endpoint or test else 1.0,
                 attributes={
-                    "annotations": annotations,
+                    "annotations": _annotation_names(annotations),
                     "modifiers": self._modifiers(
                         declaration_start,
                         name_index,
                     ),
+                    "original_kind": original_kind.value,
+                    **endpoint_attributes,
                 },
             )
             if body is not None and body_end is not None:
@@ -357,7 +423,7 @@ class _JavaDeclarationParser:
         start: int,
         end: int,
         scope: tuple[tuple[str, SymbolKind], ...],
-        annotations: tuple[str, ...],
+        annotations: tuple[_Annotation, ...],
     ) -> int:
         segment_start = start
         while segment_start < end:
@@ -388,7 +454,7 @@ class _JavaDeclarationParser:
                         name_index,
                     ),
                     attributes={
-                        "annotations": annotations,
+                        "annotations": _annotation_names(annotations),
                         "modifiers": self._modifiers(
                             declaration_start,
                             name_index,
@@ -404,8 +470,8 @@ class _JavaDeclarationParser:
         self,
         start: int,
         end: int,
-    ) -> tuple[tuple[str, ...], int]:
-        annotations: list[str] = []
+    ) -> tuple[tuple[_Annotation, ...], int]:
+        annotations: list[_Annotation] = []
         index = start
         while index < end and self.tokens[index].value == "@":
             name_index = index + 1
@@ -420,9 +486,20 @@ class _JavaDeclarationParser:
             ):
                 values.append(self.tokens[index + 1].value)
                 index += 2
-            annotations.append(".".join(values)[:512])
+            annotation_name = ".".join(values)[:512]
+            argument_start: int | None = None
+            argument_end: int | None = None
             if self._value(index) == "(" and index in self.pairs:
-                index = self.pairs[index] + 1
+                argument_start = index + 1
+                argument_end = self.pairs[index]
+                index = argument_end + 1
+            annotations.append(
+                _Annotation(
+                    name=annotation_name,
+                    argument_start=argument_start,
+                    argument_end=argument_end,
+                )
+            )
         return tuple(annotations[:64]), index
 
     def _member_end(self, start: int, end: int) -> int:
@@ -439,6 +516,172 @@ class _JavaDeclarationParser:
                 index += 1
         return end
 
+    def _record_controller(
+        self,
+        qualified_name: str,
+        annotations: tuple[_Annotation, ...],
+    ) -> None:
+        names = {_annotation_short_name(item) for item in annotations}
+        if not names.intersection(_SPRING_CONTROLLER_ANNOTATIONS):
+            return
+        self.controllers.add(qualified_name)
+        mapping = next(
+            (
+                item
+                for item in annotations
+                if _annotation_short_name(item) == "RequestMapping"
+            ),
+            None,
+        )
+        if mapping is None:
+            self.controller_prefixes[qualified_name] = ("",)
+            return
+        paths = self._annotation_route_paths(mapping)
+        if paths is None:
+            self.controller_prefixes[qualified_name] = None
+            self.diagnostics.append(
+                _diagnostic(
+                    self.request,
+                    "parser.java_dynamic_endpoint",
+                    "Spring controller path could not be resolved statically.",
+                )
+            )
+            return
+        self.controller_prefixes[qualified_name] = paths
+
+    def _spring_endpoint(
+        self,
+        scope: tuple[tuple[str, SymbolKind], ...],
+        annotations: tuple[_Annotation, ...],
+    ) -> tuple[str | None, dict[str, object]]:
+        owner = self._scope_name(scope)
+        if owner is None or owner not in self.controllers:
+            return None, {}
+        mapping = next(
+            (
+                item
+                for item in annotations
+                if _annotation_short_name(item) in {
+                    *_SPRING_ROUTE_METHODS,
+                    "RequestMapping",
+                }
+            ),
+            None,
+        )
+        if mapping is None:
+            return None, {}
+        prefixes = self.controller_prefixes.get(owner)
+        paths = self._annotation_route_paths(mapping)
+        if prefixes is None or paths is None:
+            if paths is None:
+                self.diagnostics.append(
+                    _diagnostic(
+                        self.request,
+                        "parser.java_dynamic_endpoint",
+                        "Spring endpoint path could not be resolved statically.",
+                    )
+                )
+            return None, {}
+        annotation_name = _annotation_short_name(mapping)
+        methods = _SPRING_ROUTE_METHODS.get(
+            annotation_name,
+            self._request_mapping_methods(mapping),
+        )
+        combined_paths = tuple(
+            _join_route(prefix, path)
+            for prefix in prefixes
+            for path in paths
+        )[:32]
+        endpoint = f"{'|'.join(methods)} {combined_paths[0]}"[:2_048]
+        return endpoint, {
+            "framework": "spring",
+            "http_methods": methods,
+            "route_paths": combined_paths,
+            "mapping_annotation": annotation_name,
+        }
+
+    def _annotation_route_paths(
+        self,
+        annotation: _Annotation,
+    ) -> tuple[str, ...] | None:
+        if (
+            annotation.argument_start is None
+            or annotation.argument_end is None
+            or annotation.argument_start >= annotation.argument_end
+        ):
+            return ("",)
+        start = annotation.argument_start
+        end = annotation.argument_end
+        for index in range(start, end - 1):
+            if (
+                self.tokens[index].value in {"path", "value"}
+                and self.tokens[index + 1].value == "="
+            ):
+                value_end = self._argument_value_end(index + 2, end)
+                values = self._static_strings(index + 2, value_end)
+                return values or None
+        first = self.tokens[start]
+        if first.kind == "string":
+            value = _java_string_value(self.request.content, first)
+            return (value,) if value is not None else None
+        if first.value == "{" and start in self.pairs:
+            values = self._static_strings(start + 1, self.pairs[start])
+            return values or None
+        if any(
+            self.tokens[index].value == "="
+            for index in range(start, end)
+        ):
+            return ("",)
+        return None
+
+    def _request_mapping_methods(
+        self,
+        annotation: _Annotation,
+    ) -> tuple[str, ...]:
+        if (
+            annotation.argument_start is None
+            or annotation.argument_end is None
+        ):
+            return ("ANY",)
+        methods: list[str] = []
+        for index in range(
+            annotation.argument_start,
+            annotation.argument_end - 2,
+        ):
+            if (
+                self.tokens[index].value == "RequestMethod"
+                and self.tokens[index + 1].value == "."
+                and self.tokens[index + 2].kind == "identifier"
+            ):
+                method = self.tokens[index + 2].value.upper()
+                if method not in methods:
+                    methods.append(method)
+        return tuple(methods[:16]) or ("ANY",)
+
+    def _argument_value_end(self, start: int, end: int) -> int:
+        index = start
+        while index < end:
+            if self.tokens[index].value == ",":
+                return index
+            if (
+                self.tokens[index].value in {"(", "[", "{"}
+                and index in self.pairs
+            ):
+                index = self.pairs[index] + 1
+            else:
+                index += 1
+        return end
+
+    def _static_strings(self, start: int, end: int) -> tuple[str, ...]:
+        values: list[str] = []
+        for token in self.tokens[start:end]:
+            if token.kind != "string":
+                continue
+            value = _java_string_value(self.request.content, token)
+            if value is not None and value not in values:
+                values.append(value)
+        return tuple(values[:32])
+
     def _add_definition(
         self,
         *,
@@ -450,6 +693,8 @@ class _JavaDeclarationParser:
         parent: str | None = None,
         signature: str | None = None,
         exported: bool = False,
+        test: bool = False,
+        endpoint: str | None = None,
         confidence: float = 1.0,
         attributes: dict[str, object] | None = None,
     ) -> None:
@@ -465,6 +710,8 @@ class _JavaDeclarationParser:
                 signature=signature,
                 parent_qualified_name=parent[:2_048] if parent else None,
                 exported=exported,
+                test=test,
+                endpoint=endpoint,
                 confidence=confidence,
                 attributes=attributes or {},
             )
@@ -1054,6 +1301,100 @@ def _package_name(tokens: tuple[_Token, ...]) -> str | None:
             cursor += 1
         return ".".join(values)[:2_048] or None
     return None
+
+
+def _annotation_short_name(annotation: _Annotation) -> str:
+    return annotation.name.rsplit(".", 1)[-1]
+
+
+def _annotation_names(
+    annotations: tuple[_Annotation, ...],
+) -> tuple[str, ...]:
+    return tuple(item.name for item in annotations)
+
+
+def _is_java_test_type(
+    name: str,
+    relative_path: str,
+    annotations: tuple[_Annotation, ...],
+) -> bool:
+    annotation_names = {
+        _annotation_short_name(item)
+        for item in annotations
+    }
+    if annotation_names.intersection(_JAVA_TEST_TYPE_ANNOTATIONS):
+        return True
+    normalized = "/" + relative_path.lower().replace("\\", "/") + "/"
+    return (
+        "/src/test/" in normalized
+        and name.endswith(("IT", "Test", "Tests"))
+    )
+
+
+def _is_java_test_method(
+    name: str,
+    relative_path: str,
+    annotations: tuple[_Annotation, ...],
+) -> bool:
+    annotation_names = {
+        _annotation_short_name(item)
+        for item in annotations
+    }
+    if annotation_names.intersection(_JAVA_TEST_METHOD_ANNOTATIONS):
+        return True
+    normalized = "/" + relative_path.lower().replace("\\", "/") + "/"
+    return "/src/test/" in normalized and name.startswith("test")
+
+
+def _java_string_value(content: str, token: _Token) -> str | None:
+    literal = content[token.start:token.end]
+    if (
+        len(literal) < 2
+        or not literal.startswith('"')
+        or not literal.endswith('"')
+        or literal.startswith('"""')
+    ):
+        return None
+    value: list[str] = []
+    index = 1
+    escapes = {
+        '"': '"',
+        "'": "'",
+        "\\": "\\",
+        "b": "\b",
+        "f": "\f",
+        "n": "\n",
+        "r": "\r",
+        "t": "\t",
+    }
+    while index < len(literal) - 1:
+        character = literal[index]
+        if character != "\\":
+            value.append(character)
+            index += 1
+            continue
+        if index + 1 >= len(literal) - 1:
+            return None
+        escaped = literal[index + 1]
+        replacement = escapes.get(escaped)
+        if replacement is None:
+            return None
+        value.append(replacement)
+        index += 2
+    return "".join(value)[:2_048]
+
+
+def _join_route(prefix: str, path: str) -> str:
+    prefix_value = prefix.strip()
+    path_value = path.strip()
+    if not prefix_value and not path_value:
+        return "/"
+    combined = "/".join(
+        value.strip("/")
+        for value in (prefix_value, path_value)
+        if value.strip("/")
+    )
+    return f"/{combined}"[:2_048]
 
 
 def _type_signature(
