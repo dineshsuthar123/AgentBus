@@ -69,6 +69,7 @@ from agentbus.intelligence.parsers import (
     ParserRegistry,
     default_parser_registry,
 )
+from agentbus.intelligence.resolution import ReferenceResolver
 from agentbus.intelligence.scheduler import (
     BoundedIndexScheduler,
     IndexProgressEvent,
@@ -651,11 +652,12 @@ class RepositoryIndexer:
         )
         modules = _unique_modules((*reused_modules, *new_modules))
         symbols = _unique_symbols((*reused_symbols, *new_symbols))
-        references = _rebind_references(
-            (*reused_references, *new_references),
+        references = ReferenceResolver(
             symbols,
             modules,
-            previous_symbols,
+        ).rebind(
+            (*reused_references, *new_references),
+            previous_symbols=previous_symbols,
         )
         files = tuple(
             sorted(
@@ -1060,89 +1062,6 @@ def _unique_symbols(symbols: tuple[Symbol, ...]) -> tuple[Symbol, ...]:
         by_identity[symbol.symbol_id] = symbol
     return tuple(
         sorted(by_identity.values(), key=lambda item: item.symbol_id)
-    )
-
-
-def _rebind_references(
-    references: tuple[SymbolReference, ...],
-    symbols: tuple[Symbol, ...],
-    modules: tuple[Module, ...],
-    previous_symbols: tuple[Symbol, ...],
-) -> tuple[SymbolReference, ...]:
-    symbols_by_id = {item.symbol_id: item for item in symbols}
-    previous_by_id = {
-        item.symbol_id: item for item in previous_symbols
-    }
-    symbols_by_qualified_name: dict[str, list[str]] = defaultdict(list)
-    for symbol in symbols:
-        symbols_by_qualified_name[symbol.qualified_name].append(
-            symbol.symbol_id
-        )
-    modules_by_id = {item.module_id: item for item in modules}
-    rebound: dict[str, SymbolReference] = {}
-    for reference in references:
-        source = (
-            symbols_by_id.get(reference.source_symbol_id)
-            if reference.source_symbol_id
-            else None
-        )
-        current_target = (
-            symbols_by_id.get(reference.target_symbol_id)
-            if reference.target_symbol_id
-            else None
-        )
-        previous_target = (
-            previous_by_id.get(reference.target_symbol_id)
-            if reference.target_symbol_id
-            else None
-        )
-        target = (
-            reference.unresolved_target
-            or (
-                current_target.qualified_name
-                if current_target is not None
-                else None
-            )
-            or (
-                previous_target.qualified_name
-                if previous_target is not None
-                else None
-            )
-        )
-        if target is None:
-            continue
-        module = (
-            modules_by_id.get(source.module_id)
-            if source is not None and source.module_id
-            else None
-        )
-        target_identity = _resolve_target(
-            target,
-            source.qualified_name if source else None,
-            module,
-            symbols_by_qualified_name,
-        )
-        rebound_reference = SymbolReference(
-            reference_id=reference.reference_id,
-            source_symbol_id=(
-                source.symbol_id if source is not None else None
-            ),
-            source_file_id=reference.source_file_id,
-            target_symbol_id=target_identity,
-            unresolved_target=None if target_identity else target,
-            kind=reference.kind,
-            location=reference.location,
-            confidence=reference.confidence,
-            explanation=reference.explanation,
-        )
-        existing = rebound.get(reference.reference_id)
-        if existing is not None and existing != rebound_reference:
-            raise ValueError(
-                "incremental index produced conflicting references"
-            )
-        rebound[reference.reference_id] = rebound_reference
-    return tuple(
-        sorted(rebound.values(), key=lambda item: item.reference_id)
     )
 
 

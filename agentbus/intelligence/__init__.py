@@ -91,6 +91,10 @@ from agentbus.intelligence.models import (
     WorkspaceIdentity,
 )
 from agentbus.intelligence.operations import IndexOperationLease
+from agentbus.intelligence.resolution import (
+    ReferenceResolver,
+    ResolutionMatch,
+)
 from agentbus.intelligence.scheduler import (
     BoundedIndexScheduler,
     IndexProgressEvent,
@@ -176,12 +180,14 @@ __all__ = [
     "project_id",
     "project_map_fingerprint",
     "QueryLimitError",
+    "ReferenceResolver",
     "RepositoryChangeBuffer",
     "RepositoryIdentity",
     "RepositoryIndexer",
     "repository_identity",
     "RepositoryIntelligenceError",
     "RepositoryWatchUpdater",
+    "ResolutionMatch",
     "SearchQuery",
     "SearchResult",
     "ScheduledBatch",
