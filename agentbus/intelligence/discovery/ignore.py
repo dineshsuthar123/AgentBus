@@ -23,10 +23,10 @@ class GitIgnoreRule:
             return False
         if "/" not in self.pattern and not self.anchored:
             return any(
-                _glob_match(component, self.pattern)
+                glob_match(component, self.pattern)
                 for component in PurePosixPath(candidate).parts
             )
-        return _glob_match(candidate, self.pattern)
+        return glob_match(candidate, self.pattern)
 
 
 class GitIgnoreMatcher:
@@ -88,7 +88,7 @@ def _under_base(relative_path: str, base: str) -> str | None:
     return relative_path[len(prefix) :] if relative_path.startswith(prefix) else None
 
 
-def _glob_match(value: str, pattern: str) -> bool:
+def glob_match(value: str, pattern: str) -> bool:
     expression = ["^"]
     index = 0
     while index < len(pattern):

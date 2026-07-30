@@ -11,6 +11,7 @@ from agentbus.intelligence.discovery.models import (
     DiscoveryLimits,
     ProjectDiscoveryResult,
 )
+from agentbus.intelligence.discovery.node import NodeProjectDetector
 from agentbus.intelligence.discovery.python import PythonProjectDetector
 from agentbus.intelligence.discovery.scanner import RepositoryInventoryScanner
 from agentbus.intelligence.errors import RepositoryIntelligenceError
@@ -36,7 +37,13 @@ class ProjectDiscovery:
             repository.model_dump(mode="python")
         )
         self.limits = limits or DiscoveryLimits()
-        self.detectors = tuple(detectors or (PythonProjectDetector(),))
+        self.detectors = tuple(
+            detectors
+            or (
+                PythonProjectDetector(),
+                NodeProjectDetector(),
+            )
+        )
         names = [detector.name for detector in self.detectors]
         if len(names) != len(set(names)):
             raise ValueError("project detector names must be unique")
