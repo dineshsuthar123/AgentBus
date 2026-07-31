@@ -157,6 +157,11 @@ from agentbus.intelligence.semantic import (
     SemanticSearchConfig,
 )
 from agentbus.intelligence.storage import IndexStore
+from agentbus.intelligence.test_impact import (
+    HistoricalTestFixture,
+    TestImpactSelector,
+    TestSelectionLimits,
+)
 from agentbus.intelligence.traversal import (
     CentralityScore,
     DependencyGraph,
@@ -219,6 +224,7 @@ __all__ = [
     "HybridRankingWeights",
     "HybridRetrievalLimits",
     "HybridRetriever",
+    "HistoricalTestFixture",
     "ImpactRequest",
     "ImpactResult",
     "ImpactRisk",
@@ -300,6 +306,8 @@ __all__ = [
     "SymbolLocation",
     "SymbolReference",
     "TestImpactResult",
+    "TestImpactSelector",
+    "TestSelectionLimits",
     "test_impact_result_id",
     "UnsafeRepositoryPathError",
     "TraversalLimits",

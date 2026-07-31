@@ -10,14 +10,12 @@ from agentbus.intelligence.errors import QueryLimitError
 from agentbus.intelligence.identities import (
     impact_result_id,
     stable_hash,
-    test_impact_result_id,
 )
 from agentbus.intelligence.models import (
     ArchitectureBoundary,
     DependencyEdge,
     ImpactRequest,
     ImpactResult,
-    ImpactRisk,
     Module,
     OwnershipRule,
     Project,
@@ -25,12 +23,15 @@ from agentbus.intelligence.models import (
     SourceLanguage,
     Symbol,
     SymbolKind,
-    TestImpactResult,
 )
 from agentbus.intelligence.ownership import OwnershipExtraction
 from agentbus.intelligence.risk import (
     EvidenceBackedRiskAssessor,
     RiskSignals,
+)
+from agentbus.intelligence.test_impact import (
+    HistoricalTestFixture,
+    TestImpactSelector,
 )
 from agentbus.intelligence.traversal import (
     DependencyGraph,
@@ -119,6 +120,7 @@ class ChangeImpactAnalyzer:
         boundaries: Iterable[ArchitectureBoundary] = (),
         ownership: OwnershipExtraction | Iterable[OwnershipRule] | None = None,
         risk_assessor: EvidenceBackedRiskAssessor | None = None,
+        test_selector: TestImpactSelector | None = None,
         limits: ImpactAnalysisLimits | None = None,
     ) -> None:
         self.limits = limits or ImpactAnalysisLimits()
@@ -205,6 +207,7 @@ class ChangeImpactAnalyzer:
         self.ownership = _ownership(ownership)
         self.ownership_available = ownership is not None
         self.risk_assessor = risk_assessor or EvidenceBackedRiskAssessor()
+        self.test_selector = test_selector
         self._all_files_by_path = {
             item.relative_path: item for item in all_files
         }
@@ -242,6 +245,8 @@ class ChangeImpactAnalyzer:
         snapshot_id: str | None = None,
         proposed_edges: Iterable[DependencyEdge] = (),
         previous_ownership_rules: Iterable[OwnershipRule] | None = None,
+        mandatory_tests: Iterable[str] = (),
+        historical_test_fixtures: Iterable[HistoricalTestFixture] = (),
     ) -> ImpactResult:
         proposed_records = tuple(
             sorted(proposed_edges, key=lambda item: item.edge_id)
@@ -481,49 +486,32 @@ class ChangeImpactAnalyzer:
         )
         evidence.extend(assessment.evidence)
 
-        all_test_paths, mandatory_test_paths = self._affected_tests(
-            affected_nodes,
-            direct_nodes,
-            changed_paths,
+        test_selector = self.test_selector or TestImpactSelector(
+            working_graph,
+            projects=self.projects,
+            files=self.files,
+            symbols=self.symbols,
         )
-        test_paths, test_truncated = _take(all_test_paths, 2_000)
-        mandatory_tests, mandatory_truncated = _take(
-            mandatory_test_paths,
-            2_000,
+        tests = test_selector.select(
+            request,
+            snapshot_id=snapshot_id,
+            affected_node_ids=affected_nodes,
+            direct_dependent_ids=direct_nodes,
+            affected_project_ids=affected_projects,
+            affected_configuration_ids=affected_configurations,
+            configured_mandatory_tests=mandatory_tests,
+            historical_fixtures=historical_test_fixtures,
+            subject_paths=tuple(sorted(changed_paths)),
+            subject_symbol_ids=tuple(sorted(reported_changed_symbols)),
+            risk=assessment.risk,
+            impact_confidence=assessment.confidence,
+            impact_truncated=truncated,
         )
-        optional_tests, optional_truncated = _take(
-            set(test_paths) - set(mandatory_tests),
-            2_000,
-        )
-        truncated = truncated or any(
-            (test_truncated, mandatory_truncated, optional_truncated)
-        )
-        test_evidence = tuple(
-            f"test.direct_dependency:{path}" for path in mandatory_tests
-        ) + tuple(
-            f"test.transitive_dependency:{path}" for path in optional_tests
-        )
-        tests = TestImpactResult(
-            result_id=test_impact_result_id(
-                snapshot_id,
-                tuple(changed_paths),
-                tuple(reported_changed_symbols),
-            ),
-            selected_tests=test_paths,
-            mandatory_tests=mandatory_tests,
-            optional_tests=optional_tests,
-            full_suite_recommended=(
-                assessment.risk in {ImpactRisk.HIGH, ImpactRisk.CRITICAL}
-                or truncated
-            ),
-            confidence=assessment.confidence,
-            evidence=test_evidence,
-            escalation_reasons=tuple(
-                reason
-                for reason in assessment.evidence
-                if reason.startswith(("risk.high", "risk.critical"))
-            ),
-        )
+        if any(
+            "truncated" in reason or "limit_reached" in reason
+            for reason in tests.escalation_reasons
+        ):
+            truncated = True
 
         result_values = (
             ("changed_symbols", reported_changed_symbols, 1_000),
@@ -758,32 +746,6 @@ class ChangeImpactAnalyzer:
             ):
                 hotspots.update((edge.source_id, edge.target_id))
         return set(sorted(hotspots)[: self.limits.maximum_hotspots])
-
-    def _affected_tests(
-        self,
-        affected_nodes: set[str],
-        direct_nodes: set[str],
-        changed_paths: set[str],
-    ) -> tuple[set[str], set[str]]:
-        selected: set[str] = set()
-        mandatory: set[str] = set()
-        for source in self.files:
-            if source.relative_path in changed_paths and source.test:
-                selected.add(source.relative_path)
-                mandatory.add(source.relative_path)
-            if source.file_id in affected_nodes and source.test:
-                selected.add(source.relative_path)
-                if source.file_id in direct_nodes:
-                    mandatory.add(source.relative_path)
-        for symbol in self.symbols:
-            if not (symbol.test or symbol.kind == SymbolKind.TEST):
-                continue
-            path = symbol.location.relative_path
-            if symbol.symbol_id in affected_nodes:
-                selected.add(path)
-                if symbol.symbol_id in direct_nodes:
-                    mandatory.add(path)
-        return selected, mandatory
 
     def _boundaries_for(self, path: str) -> tuple[ArchitectureBoundary, ...]:
         return tuple(

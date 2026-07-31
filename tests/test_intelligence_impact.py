@@ -300,6 +300,15 @@ def test_change_impact_propagates_across_projects_and_selects_tests() -> None:
     assert result.confidence > 0.5
     assert result.truncated is False
 
+    configured = fixture.analyzer.analyze(
+        ImpactRequest(paths=("shared/config.py",), max_depth=4),
+        mandatory_tests=("checks/release_gate.py",),
+    )
+    assert "checks/release_gate.py" in configured.tests.mandatory_tests
+    assert "mandatory_test_not_indexed" in (
+        configured.tests.escalation_reasons
+    )
+
 
 def test_proposed_dependency_cycle_is_reported_as_high_risk() -> None:
     fixture = _fixture()
