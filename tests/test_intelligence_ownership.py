@@ -39,6 +39,9 @@ def test_extracts_codeowners_with_precedence_and_last_match_semantics(
     assert ownership.owners_for("README.md") == ("@all",)
     assert ownership.owners_for("src/app.py") == ("@platform/team",)
     assert ownership.owners_for("src/security/auth.py") == ("@security",)
+    effective = ownership.effective_rule_for("src/security/auth.py")
+    assert effective is not None
+    assert effective.owners == ("@security",)
     assert all(rule.confidence == 1.0 for rule in ownership.rules)
     assert any(
         item.code == "ownership.multiple_sources"

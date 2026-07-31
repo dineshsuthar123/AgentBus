@@ -48,6 +48,11 @@ from agentbus.intelligence.hybrid import (
     HybridRetrievalLimits,
     HybridRetriever,
 )
+from agentbus.intelligence.impact import (
+    ChangeImpactAnalyzer,
+    ImpactAnalysisLimits,
+    ImpactAnalyzer,
+)
 from agentbus.intelligence.identities import (
     context_plan_id,
     edge_id,
@@ -120,6 +125,12 @@ from agentbus.intelligence.resolution import (
     ReferenceResolver,
     ResolutionMatch,
 )
+from agentbus.intelligence.risk import (
+    ChangeRiskAssessor,
+    EvidenceBackedRiskAssessor,
+    RiskAssessment,
+    RiskSignals,
+)
 from agentbus.intelligence.scheduler import (
     BoundedIndexScheduler,
     IndexProgressEvent,
@@ -177,6 +188,8 @@ __all__ = [
     "CacheEntry",
     "CentralityScore",
     "CodeOwnershipExtractor",
+    "ChangeImpactAnalyzer",
+    "ChangeRiskAssessor",
     "content_hash",
     "context_candidates_fingerprint",
     "context_plan_id",
@@ -198,6 +211,7 @@ __all__ = [
     "DependencyPath",
     "DiagnosticSeverity",
     "EmbeddingProviderDescriptor",
+    "EvidenceBackedRiskAssessor",
     "FileChangeKind",
     "FreshnessLimits",
     "GraphBuildLimits",
@@ -208,6 +222,8 @@ __all__ = [
     "ImpactRequest",
     "ImpactResult",
     "ImpactRisk",
+    "ImpactAnalysisLimits",
+    "ImpactAnalyzer",
     "impact_result_id",
     "IntelligenceCache",
     "IndexBusyError",
@@ -261,6 +277,8 @@ __all__ = [
     "RepositoryLexicalIndex",
     "RepositoryWatchUpdater",
     "ResolutionMatch",
+    "RiskAssessment",
+    "RiskSignals",
     "SearchQuery",
     "SearchResult",
     "ScheduledBatch",

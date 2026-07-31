@@ -60,13 +60,20 @@ class OwnershipExtraction:
     diagnostics: tuple[IndexDiagnostic, ...]
     source_path: str | None = None
 
-    def owners_for(self, relative_path: str) -> tuple[str, ...]:
+    def effective_rule_for(
+        self,
+        relative_path: str,
+    ) -> OwnershipRule | None:
         normalized = _relative_path(relative_path)
-        owners: tuple[str, ...] = ()
+        effective: OwnershipRule | None = None
         for rule in self.rules:
             if _matches(normalized, rule.pattern):
-                owners = rule.owners
-        return owners
+                effective = rule
+        return effective
+
+    def owners_for(self, relative_path: str) -> tuple[str, ...]:
+        effective = self.effective_rule_for(relative_path)
+        return effective.owners if effective is not None else ()
 
 
 class CodeOwnershipExtractor:
