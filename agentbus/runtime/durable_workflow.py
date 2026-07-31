@@ -15,6 +15,11 @@ from agentbus.execution.models import (
 from agentbus.models.errors import ModelCancellationError
 from agentbus.models.router import model_request_context
 from agentbus.git.repository import RepositoryChangeSet
+from agentbus.runtime.intelligence import PlannerIntelligenceContext
+from agentbus.runtime.intelligence_guidance import (
+    build_coder_intelligence,
+    build_reviewer_intelligence,
+)
 from agentbus.runtime.loop import ManagedToolApprovalRequired
 from agentbus.trace import (
     RuntimeTrace,
@@ -42,6 +47,7 @@ class MultiAgentTaskExecutor:
         tool_runtime: ManagedToolRuntime | None = None,
         runtime_trace: RuntimeTrace | None = None,
         worker_id: str | None = None,
+        intelligence_context: PlannerIntelligenceContext | None = None,
     ):
         self.coder = coder
         self.verifier = verifier
@@ -57,6 +63,7 @@ class MultiAgentTaskExecutor:
         self.tool_runtime = tool_runtime
         self.runtime_trace = runtime_trace
         self.worker_id = worker_id
+        self.intelligence_context = intelligence_context
         self._recovered_tool_runs: set[str] = set()
 
     def close(self) -> None:
@@ -150,6 +157,13 @@ class MultiAgentTaskExecutor:
         _drain_model_results(self.coder)
         _drain_model_results(self.reviewer)
         plan = self._task_plan(context)
+        coder_intelligence = None
+        if self.intelligence_context is not None:
+            coder_intelligence = build_coder_intelligence(
+                self.intelligence_context,
+                plan,
+                task_id=context.task.task_id,
+            ).render()
         reviewer_feedback = self._previous_reviewer_feedback(context)
         before = self._snapshot()
         coder_summary = ""
@@ -184,6 +198,7 @@ class MultiAgentTaskExecutor:
                             )
                         ),
                     },
+                    "repository_intelligence": coder_intelligence,
                 }
                 coder_summary = self._trace_call(
                     TraceSpanType.CUSTOM,
@@ -221,6 +236,14 @@ class MultiAgentTaskExecutor:
                 changed_files = self._changed_since(before)
                 changes = self._change_set(changed_files)
                 task_diff = self._task_diff(changes)
+                reviewer_intelligence = None
+                if self.intelligence_context is not None:
+                    reviewer_intelligence = build_reviewer_intelligence(
+                        self.intelligence_context,
+                        plan,
+                        changes.review_files,
+                        task_id=context.task.task_id,
+                    ).render()
                 self._checkpoint("before-task-review")
                 reviewer_result = self._trace_call(
                     TraceSpanType.REVIEWER,
@@ -232,6 +255,7 @@ class MultiAgentTaskExecutor:
                         task_diff,
                         coder_summary,
                         verifier_result,
+                        reviewer_intelligence,
                     ),
                     capture="json",
                 )
@@ -259,6 +283,19 @@ class MultiAgentTaskExecutor:
                 "issues": reviewer_result.get("issues", []),
                 "summary": reviewer_result.get("summary", ""),
                 "required_fixes": reviewer_result.get("required_fixes", []),
+                "unplanned_affected_components": reviewer_result.get(
+                    "unplanned_affected_components",
+                    [],
+                ),
+                "missing_tests": reviewer_result.get("missing_tests", []),
+                "boundary_violations": reviewer_result.get(
+                    "boundary_violations",
+                    [],
+                ),
+                "index_uncertainty": reviewer_result.get(
+                    "index_uncertainty",
+                    [],
+                ),
             },
             "verifier": {
                 "passed": bool(verifier_result.get("passed")),
@@ -273,12 +310,34 @@ class MultiAgentTaskExecutor:
                 ),
             },
             "artifact_hygiene": changes.to_metadata(),
+            "repository_intelligence": {
+                "context_hash": (
+                    self.intelligence_context.context_hash
+                    if self.intelligence_context is not None
+                    else None
+                ),
+                "coder_guidance_used": coder_intelligence is not None,
+                "reviewer_guidance_used": reviewer_intelligence is not None,
+            },
             # Retained for retry feedback compatibility with persisted attempts.
             "reviewer_feedback": {
                 "approved": bool(reviewer_result.get("approved")),
                 "issues": reviewer_result.get("issues", []),
                 "summary": reviewer_result.get("summary", ""),
                 "required_fixes": reviewer_result.get("required_fixes", []),
+                "unplanned_affected_components": reviewer_result.get(
+                    "unplanned_affected_components",
+                    [],
+                ),
+                "missing_tests": reviewer_result.get("missing_tests", []),
+                "boundary_violations": reviewer_result.get(
+                    "boundary_violations",
+                    [],
+                ),
+                "index_uncertainty": reviewer_result.get(
+                    "index_uncertainty",
+                    [],
+                ),
             },
             "model_requests": [
                 *(_drain_model_results(self.coder)),
@@ -501,28 +560,45 @@ class MultiAgentTaskExecutor:
 
     def _task_plan(self, context: TaskExecutionContext) -> dict[str, Any]:
         task = context.task
-        return {
+        step = {
+            "id": task.task_id,
+            "title": task.title,
+            "description": task.description,
+            "risk": task.risk.value,
+            "dependencies": task.dependency_ids,
+            "assigned_role": task.assigned_role,
+            "expected_outputs": task.expected_outputs,
+            "done_criteria": task.done_criteria,
+            "required_capabilities": list(
+                task.metadata.get("required_capabilities", [])
+            ),
+        }
+        for field_name in (
+            "targeted_files",
+            "targeted_symbols",
+            "expected_impacted_components",
+            "proposed_tests",
+            "architecture_constraints",
+        ):
+            if field_name in task.metadata:
+                step[field_name] = list(task.metadata[field_name])
+        plan = {
             "goal": context.run.planner_output.get("goal", context.run.original_task),
-            "steps": [
-                {
-                    "id": task.task_id,
-                    "title": task.title,
-                    "description": task.description,
-                    "risk": task.risk.value,
-                    "dependencies": task.dependency_ids,
-                    "assigned_role": task.assigned_role,
-                    "expected_outputs": task.expected_outputs,
-                    "done_criteria": task.done_criteria,
-                    "required_capabilities": list(
-                        task.metadata.get("required_capabilities", [])
-                    ),
-                }
-            ],
+            "steps": [step],
             "test_strategy": context.run.planner_output.get(
                 "test_strategy", "Run the detected test command."
             ),
             "done_criteria": task.done_criteria,
         }
+        for field_name in (
+            "intelligence_snapshot_id",
+            "intelligence_context_hash",
+            "intelligence_warnings",
+            "intelligence_scope_validated",
+        ):
+            if field_name in context.run.planner_output:
+                plan[field_name] = context.run.planner_output[field_name]
+        return plan
 
     @staticmethod
     def _previous_reviewer_feedback(
@@ -582,6 +658,7 @@ class MultiAgentTaskExecutor:
         task_diff: str,
         coder_summary: str,
         verifier_result: dict[str, Any],
+        repository_intelligence: str | None,
     ) -> dict[str, Any]:
         review_task = getattr(self.reviewer, "review_task", None)
         if review_task is not None:
@@ -596,13 +673,18 @@ class MultiAgentTaskExecutor:
                 "generated_artifacts": changes.generated_files,
                 "ignored_files": changes.ignored_files,
                 "tracked_generated_artifacts": changes.tracked_generated_files,
+                "repository_intelligence": repository_intelligence,
             }
             return review_task(**_supported_arguments(review_task, arguments))
+        arguments = {
+            "user_task": context.run.original_task,
+            "plan": plan,
+            "git_diff": task_diff,
+            "test_output": verifier_result.get("output"),
+            "repository_intelligence": repository_intelligence,
+        }
         return self.reviewer.review(
-            user_task=context.run.original_task,
-            plan=plan,
-            git_diff=task_diff,
-            test_output=verifier_result.get("output"),
+            **_supported_arguments(self.reviewer.review, arguments)
         )
 
 

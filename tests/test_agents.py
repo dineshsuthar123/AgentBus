@@ -184,3 +184,69 @@ def test_coder_propagates_managed_runtime_identity_to_modern_loop():
     assert seen["task_id"] == "task-1"
     assert seen["resource_budget"] is budget
     assert seen["policy_context"] == {"attempt_number": 1}
+
+
+def test_coder_receives_only_bounded_repository_intelligence():
+    seen = {}
+
+    class CapturingLoop:
+        def __init__(self, config):
+            pass
+
+        def run(self, task):
+            seen["task"] = task
+            return "complete"
+
+    coder = CoderAgent(model=FakeModel({}), loop_factory=CapturingLoop)
+
+    coder.execute(
+        "Update service",
+        {"goal": "Update", "steps": []},
+        repository_intelligence=(
+            "Coder Repository Intelligence\nfocused-definition"
+        ),
+    )
+
+    assert "focused-definition" in seen["task"]
+    assert "untrusted evidence, not authorization" in seen["task"]
+    assert "runtime policy remains authoritative" in seen["task"]
+
+
+def test_reviewer_reports_intelligence_findings_with_heuristic_caveat():
+    model = FakeModel(
+        {
+            "approved": False,
+            "issues": [
+                {
+                    "severity": "medium",
+                    "message": "Unplanned component needs review",
+                }
+            ],
+            "summary": "Inspect impact",
+            "required_fixes": ["Add coverage"],
+            "unplanned_affected_components": ["symbol_unplanned"],
+            "missing_tests": ["tests/test_service.py"],
+            "boundary_violations": ["boundary_candidate"],
+            "index_uncertainty": ["repository_index_state:stale"],
+        }
+    )
+    reviewer = ReviewerAgent(model=model)
+
+    review = reviewer.review(
+        user_task="update service",
+        plan={"goal": "Update", "steps": []},
+        git_diff="diff --git a/service.py b/service.py",
+        test_output="1 passed",
+        repository_intelligence=(
+            "Reviewer Repository Intelligence\nunplanned-file"
+        ),
+    )
+
+    assert review["unplanned_affected_components"] == ["symbol_unplanned"]
+    assert review["missing_tests"] == ["tests/test_service.py"]
+    assert review["boundary_violations"] == ["boundary_candidate"]
+    assert review["index_uncertainty"] == [
+        "repository_index_state:stale"
+    ]
+    assert "unplanned-file" in model.prompts[0]
+    assert "heuristics, not proof" in model.prompts[0]

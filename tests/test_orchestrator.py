@@ -47,6 +47,22 @@ class FakeCoder:
         return f"coded attempt {len(self.calls)}"
 
 
+class IntelligenceCoder(FakeCoder):
+    def __init__(self):
+        super().__init__()
+        self.repository_intelligence = []
+
+    def execute(
+        self,
+        user_task,
+        plan,
+        reviewer_feedback=None,
+        repository_intelligence=None,
+    ):
+        self.repository_intelligence.append(repository_intelligence)
+        return super().execute(user_task, plan, reviewer_feedback)
+
+
 class FakeVerifier:
     def __init__(self, passed=True):
         self.calls = 0
@@ -77,6 +93,23 @@ class FakeReviewer:
             }
         )
         return self.reviews.pop(0)
+
+
+class IntelligenceReviewer(FakeReviewer):
+    def __init__(self, reviews):
+        super().__init__(reviews)
+        self.repository_intelligence = []
+
+    def review(
+        self,
+        user_task,
+        plan,
+        git_diff,
+        test_output=None,
+        repository_intelligence=None,
+    ):
+        self.repository_intelligence.append(repository_intelligence)
+        return super().review(user_task, plan, git_diff, test_output)
 
 
 class FakeGitRepository:
@@ -163,7 +196,17 @@ def test_orchestrator_validates_repository_intelligence_before_execution(
     tmp_path,
 ):
     planner = FakePlanner()
-    coder = FakeCoder()
+    coder = IntelligenceCoder()
+    reviewer = IntelligenceReviewer(
+        [
+            {
+                "approved": True,
+                "issues": [],
+                "summary": "Approved",
+                "required_fixes": [],
+            }
+        ]
+    )
     intelligence = PlannerIntelligenceContext(
         risk_areas=("calculator.py",),
     )
@@ -171,16 +214,7 @@ def test_orchestrator_validates_repository_intelligence_before_execution(
         config=config(tmp_path),
         planner=planner,
         coder=coder,
-        reviewer=FakeReviewer(
-            [
-                {
-                    "approved": True,
-                    "issues": [],
-                    "summary": "Approved",
-                    "required_fixes": [],
-                }
-            ]
-        ),
+        reviewer=reviewer,
         verifier=FakeVerifier(),
         intelligence_source=StaticPlannerIntelligenceSource(intelligence),
     )
@@ -192,6 +226,10 @@ def test_orchestrator_validates_repository_intelligence_before_execution(
     assert result.plan["intelligence_context_hash"] == intelligence.context_hash
     assert result.plan["intelligence_scope_validated"] is True
     assert coder.calls[0]["plan"]["intelligence_scope_validated"] is True
+    assert "Coder Repository Intelligence" in coder.repository_intelligence[0]
+    assert "Reviewer Repository Intelligence" in (
+        reviewer.repository_intelligence[0]
+    )
     assert "planner_intelligence_context" in log_events(tmp_path)
     assert "planner_intelligence_validated" in log_events(tmp_path)
 

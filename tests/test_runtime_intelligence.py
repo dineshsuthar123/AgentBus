@@ -40,6 +40,10 @@ from agentbus.runtime.intelligence import (
     PlannerScopeValidator,
     append_planner_intelligence,
 )
+from agentbus.runtime.intelligence_guidance import (
+    build_coder_intelligence,
+    build_reviewer_intelligence,
+)
 
 
 @dataclass(frozen=True)
@@ -284,6 +288,70 @@ def _plan(fixture: PlannerFixture) -> dict:
     }
 
 
+def _with_unrelated_source(
+    fixture: PlannerFixture,
+) -> tuple[PlannerIntelligenceContext, SourceFile, Symbol]:
+    path = "tools/unrelated.py"
+    unrelated_file = SourceFile(
+        file_id=file_id(fixture.source.repository_id, path),
+        repository_id=fixture.source.repository_id,
+        project_id=fixture.project.project_id,
+        relative_path=path,
+        language=SourceLanguage.PYTHON,
+        content_hash=content_hash("unrelated"),
+        size_bytes=40,
+        parser_name="fixture",
+        parser_version="1.0.0",
+    )
+    unrelated_symbol = Symbol(
+        symbol_id=stable_id("symbol", "runtime-planner", "unrelated"),
+        file_id=unrelated_file.file_id,
+        project_id=fixture.project.project_id,
+        name="unrelated_helper",
+        qualified_name="tools.unrelated_helper",
+        kind=SymbolKind.FUNCTION,
+        language=SourceLanguage.PYTHON,
+        location=SymbolLocation(
+            relative_path=path,
+            start_line=1,
+            start_column=0,
+            end_line=2,
+            end_column=1,
+        ),
+    )
+    unrelated_candidate = ContextCandidate(
+        candidate_id="candidate-unrelated",
+        relative_path=path,
+        source_hash=unrelated_file.content_hash,
+        symbol_id=unrelated_symbol.symbol_id,
+        role=ContextRole.PLANNER,
+        score=0.1,
+        byte_count=40,
+        estimated_tokens=10,
+        selected=True,
+        reasons=("low_rank_fallback",),
+        content="UNRELATED_SENTINEL = True",
+    )
+    context_plan = fixture.context.context_plan.model_copy(
+        update={
+            "candidates": (
+                *fixture.context.context_plan.candidates,
+                unrelated_candidate,
+            ),
+            "selected_bytes": fixture.context.context_plan.selected_bytes + 40,
+            "selected_tokens": fixture.context.context_plan.selected_tokens + 10,
+            "plan_hash": content_hash("context-plan-with-unrelated"),
+        }
+    )
+    context = replace(
+        fixture.context,
+        files=(*fixture.context.files, unrelated_file),
+        symbols=(*fixture.context.symbols, unrelated_symbol),
+        context_plan=context_plan,
+    )
+    return context, unrelated_file, unrelated_symbol
+
+
 def test_planner_context_is_bounded_deterministic_and_protected() -> None:
     fixture = _fixture()
 
@@ -420,3 +488,101 @@ def test_scope_validator_rejects_protected_derived_impact_evidence() -> None:
 
     with pytest.raises(PlannerScopeValidationError, match="protected path"):
         PlannerScopeValidator().validate(_plan(fixture), unsafe_context)
+
+
+def test_coder_intelligence_is_focused_and_excludes_unrelated_source() -> None:
+    fixture = _fixture()
+    context, unrelated_file, unrelated_symbol = _with_unrelated_source(fixture)
+    plan = PlannerScopeValidator().validate(_plan(fixture), context).plan
+
+    evidence = build_coder_intelligence(context, plan)
+    rendered = evidence.render()
+
+    assert fixture.source.relative_path in evidence.targeted_files
+    assert fixture.test.relative_path in evidence.expected_tests
+    assert fixture.symbol.symbol_id in {
+        item.symbol_id for item in evidence.definitions
+    }
+    assert fixture.boundary.boundary_id in {
+        item.boundary_id for item in evidence.architecture_constraints
+    }
+    assert fixture.symbol.symbol_id in evidence.interface_symbols
+    assert unrelated_file.relative_path not in evidence.targeted_files
+    assert unrelated_symbol.symbol_id not in {
+        item.symbol_id for item in evidence.definitions
+    }
+    assert "UNRELATED_SENTINEL" not in rendered
+    assert fixture.protected.relative_path not in rendered
+    assert "REAL_KEY" not in rendered
+    assert len(evidence.render(maximum_characters=1_000)) <= 1_000
+
+    task_plan = {
+        **plan,
+        "targeted_files": [unrelated_file.relative_path],
+        "steps": [
+            {
+                **plan["steps"][0],
+                "id": "focused-step",
+                "targeted_files": [fixture.source.relative_path],
+            },
+            {
+                **plan["steps"][0],
+                "id": "unrelated-step",
+                "targeted_files": [unrelated_file.relative_path],
+            },
+        ],
+    }
+    task_evidence = build_coder_intelligence(
+        context,
+        task_plan,
+        task_id="focused-step",
+    )
+
+    assert unrelated_file.relative_path not in task_evidence.targeted_files
+    assert unrelated_symbol.symbol_id not in {
+        item.symbol_id for item in task_evidence.definitions
+    }
+    assert fixture.test.relative_path not in task_evidence.expected_tests
+
+    task_review = build_reviewer_intelligence(
+        context,
+        task_plan,
+        (fixture.source.relative_path,),
+        task_id="focused-step",
+    )
+
+    assert fixture.test.relative_path not in task_review.missing_test_candidates
+    assert unrelated_symbol.symbol_id not in (
+        task_review.unplanned_affected_components
+    )
+
+
+def test_reviewer_intelligence_compares_actual_and_planned_impact() -> None:
+    fixture = _fixture()
+    context, unrelated_file, unrelated_symbol = _with_unrelated_source(fixture)
+    plan = PlannerScopeValidator().validate(_plan(fixture), context).plan
+
+    evidence = build_reviewer_intelligence(
+        context,
+        plan,
+        (
+            fixture.source.relative_path,
+            unrelated_file.relative_path,
+            fixture.protected.relative_path,
+        ),
+    )
+    rendered = evidence.render()
+
+    assert unrelated_file.relative_path in evidence.unplanned_files
+    assert unrelated_symbol.symbol_id in evidence.unplanned_affected_components
+    assert fixture.test.relative_path in evidence.missing_test_candidates
+    assert (
+        f"outside_all_planned_boundaries:{unrelated_file.relative_path}"
+        in evidence.boundary_risk_candidates
+    )
+    assert "repository_index_state:stale" in evidence.index_uncertainty
+    assert "protected_changed_path_omitted" in evidence.index_uncertainty
+    assert fixture.protected.relative_path not in evidence.actual_files
+    assert "heuristic evidence, not proof" in rendered
+    assert "not necessarily missing" in rendered
+    assert "REAL_KEY" not in rendered
