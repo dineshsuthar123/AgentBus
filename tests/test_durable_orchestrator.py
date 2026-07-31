@@ -9,6 +9,10 @@ from agentbus.execution.models import FailureCategory
 from agentbus.execution.state_store import StateStore, StateStoreError
 from agentbus.models.errors import ModelAuthenticationError
 from agentbus.replay.checkpoints import CheckpointKind, CheckpointManager
+from agentbus.runtime.intelligence import (
+    PlannerIntelligenceContext,
+    StaticPlannerIntelligenceSource,
+)
 from agentbus.runtime.orchestrator import MultiAgentOrchestrator
 from agentbus.trace import TraceSpanType, TraceStatus
 from agentbus.tools.protocol import ToolResourceBudget
@@ -225,6 +229,39 @@ def test_durable_mode_persists_validated_planner_graph_before_execution(tmp_path
 
     assert report.status == RunStatus.SUCCEEDED
     assert [call["task_id"] for call in coder.calls] == ["step-1", "step-2"]
+
+
+def test_durable_mode_persists_validated_repository_intelligence(tmp_path):
+    planner = FakePlanner()
+    intelligence = PlannerIntelligenceContext(
+        risk_areas=("calculator.py",),
+    )
+    runner, store = orchestrator(
+        tmp_path,
+        planner=planner,
+        intelligence_source=StaticPlannerIntelligenceSource(intelligence),
+    )
+
+    run_id = runner.create_durable_run("Create calculator")
+    snapshot = store.load_snapshot(run_id)
+
+    assert "Repository Intelligence Context" in planner.context_pack
+    assert snapshot.run.planner_output["intelligence_scope_validated"] is True
+    assert snapshot.run.planner_output["intelligence_context_hash"] == (
+        intelligence.context_hash
+    )
+    assert snapshot.run.metadata["repository_intelligence"] == (
+        intelligence.safe_metadata()
+    )
+    assert all(
+        task.spec.metadata["intelligence_scope_validated"] is True
+        for task in snapshot.tasks
+    )
+    assert all(
+        task.spec.metadata["intelligence_context_hash"]
+        == intelligence.context_hash
+        for task in snapshot.tasks
+    )
 
 
 def test_durable_run_records_hierarchical_trace_and_final_review_order(

@@ -1,6 +1,10 @@
 import json
 
 from agentbus.config import AgentBusConfig
+from agentbus.runtime.intelligence import (
+    PlannerIntelligenceContext,
+    StaticPlannerIntelligenceSource,
+)
 from agentbus.runtime.orchestrator import MultiAgentOrchestrator
 
 
@@ -153,6 +157,83 @@ def test_orchestrator_happy_path_uses_agents_and_logs(tmp_path):
     assert "test_command_detected" in log_events(tmp_path)
     assert "context_pack_created" in log_events(tmp_path)
     assert "orchestration_finished" in log_events(tmp_path)
+
+
+def test_orchestrator_validates_repository_intelligence_before_execution(
+    tmp_path,
+):
+    planner = FakePlanner()
+    coder = FakeCoder()
+    intelligence = PlannerIntelligenceContext(
+        risk_areas=("calculator.py",),
+    )
+    orchestrator = MultiAgentOrchestrator(
+        config=config(tmp_path),
+        planner=planner,
+        coder=coder,
+        reviewer=FakeReviewer(
+            [
+                {
+                    "approved": True,
+                    "issues": [],
+                    "summary": "Approved",
+                    "required_fixes": [],
+                }
+            ]
+        ),
+        verifier=FakeVerifier(),
+        intelligence_source=StaticPlannerIntelligenceSource(intelligence),
+    )
+
+    result = orchestrator.run("create calculator")
+
+    assert "Repository Intelligence Context" in planner.context_pack
+    assert "calculator.py" in planner.context_pack
+    assert result.plan["intelligence_context_hash"] == intelligence.context_hash
+    assert result.plan["intelligence_scope_validated"] is True
+    assert coder.calls[0]["plan"]["intelligence_scope_validated"] is True
+    assert "planner_intelligence_context" in log_events(tmp_path)
+    assert "planner_intelligence_validated" in log_events(tmp_path)
+
+
+def test_orchestrator_does_not_trust_unvalidated_planner_metadata(tmp_path):
+    unsafe_plan = {
+        **PLAN,
+        "targeted_files": ["unvalidated.py"],
+        "intelligence_context_hash": "f" * 64,
+        "intelligence_scope_validated": True,
+        "steps": [
+            {
+                **PLAN["steps"][0],
+                "targeted_symbols": ["symbol_unvalidated"],
+            }
+        ],
+    }
+    planner = FakePlanner()
+    planner.plan = lambda *args, **kwargs: unsafe_plan
+    orchestrator = MultiAgentOrchestrator(
+        config=config(tmp_path),
+        planner=planner,
+        coder=FakeCoder(),
+        reviewer=FakeReviewer(
+            [
+                {
+                    "approved": True,
+                    "issues": [],
+                    "summary": "Approved",
+                    "required_fixes": [],
+                }
+            ]
+        ),
+        verifier=FakeVerifier(),
+    )
+
+    result = orchestrator.run("create calculator")
+
+    assert "intelligence_context_hash" not in result.plan
+    assert "intelligence_scope_validated" not in result.plan
+    assert "targeted_files" not in result.plan
+    assert "targeted_symbols" not in result.plan["steps"][0]
 
 
 def test_orchestrator_reviewer_rejection_triggers_one_retry(tmp_path):

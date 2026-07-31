@@ -64,6 +64,35 @@ class TaskGraph:
 
             dependencies = cls._parse_dependencies(task_id, raw_dependencies)
             try:
+                metadata = {
+                    **dict(raw_step.get("metadata", {})),
+                    "planner_index": index,
+                    "required_capabilities": list(
+                        raw_step.get("required_capabilities") or []
+                    ),
+                }
+                for field_name in (
+                    "targeted_files",
+                    "targeted_symbols",
+                    "expected_impacted_components",
+                    "proposed_tests",
+                    "architecture_constraints",
+                ):
+                    if raw_step.get(field_name) is not None:
+                        metadata[field_name] = list(raw_step[field_name])
+                for field_name in (
+                    "intelligence_snapshot_id",
+                    "intelligence_context_hash",
+                    "intelligence_warnings",
+                    "intelligence_scope_validated",
+                ):
+                    if planner_output.get(field_name) is not None:
+                        value = planner_output[field_name]
+                        metadata[field_name] = (
+                            list(value)
+                            if field_name == "intelligence_warnings"
+                            else value
+                        )
                 task = TaskSpec(
                     task_id=task_id,
                     title=str(raw_step.get("title") or task_id),
@@ -76,13 +105,7 @@ class TaskGraph:
                     maximum_attempts=int(raw_step.get("maximum_attempts", 2)),
                     expected_outputs=list(raw_step.get("expected_outputs", [])),
                     done_criteria=list(raw_step.get("done_criteria", overall_done)),
-                    metadata={
-                        **dict(raw_step.get("metadata", {})),
-                        "planner_index": index,
-                        "required_capabilities": list(
-                            raw_step.get("required_capabilities") or []
-                        ),
-                    },
+                    metadata=metadata,
                 )
             except (TypeError, ValueError) as exc:
                 raise TaskGraphValidationError(

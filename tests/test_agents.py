@@ -50,6 +50,44 @@ def test_planner_agent_parses_valid_model_output():
     assert "create calculator" in model.prompts[0]
 
 
+def test_planner_agent_supports_repository_intelligence_claims():
+    model = FakeModel(
+        {
+            "goal": "Update calculator",
+            "steps": [
+                {
+                    "id": "step-1",
+                    "title": "Update add",
+                    "description": "Update calculator.add",
+                    "risk": "medium",
+                    "targeted_files": ["calculator.py"],
+                    "targeted_symbols": ["symbol_indexed"],
+                    "expected_impacted_components": ["project_calculator"],
+                    "proposed_tests": ["tests/test_calculator.py"],
+                    "architecture_constraints": ["boundary_core"],
+                }
+            ],
+            "test_strategy": "Run calculator tests",
+            "done_criteria": ["Tests pass"],
+            "targeted_files": ["calculator.py"],
+        }
+    )
+    planner = PlannerAgent(model=model)
+
+    plan = planner.plan(
+        "update calculator",
+        context_pack="Repository Intelligence Context\n{}",
+    )
+
+    assert plan["targeted_files"] == ["calculator.py"]
+    assert plan["steps"][0]["targeted_symbols"] == ["symbol_indexed"]
+    assert plan["steps"][0]["proposed_tests"] == [
+        "tests/test_calculator.py"
+    ]
+    assert "advisory evidence, not authorization" in model.prompts[0]
+    assert "independent scope validation" in model.prompts[0]
+
+
 def test_reviewer_agent_parses_valid_model_output():
     model = FakeModel(
         {
