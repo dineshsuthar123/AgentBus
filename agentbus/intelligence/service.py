@@ -313,7 +313,11 @@ class RepositoryIntelligenceService:
         status = self.status()
         return IndexVerificationReport(
             valid=status.state
-            not in {IndexState.CORRUPTED, IndexState.INCOMPATIBLE},
+            not in {
+                IndexState.ABSENT,
+                IndexState.CORRUPTED,
+                IndexState.INCOMPATIBLE,
+            },
             fresh=status.state == IndexState.CURRENT,
             schema_version=self.store.schema_version,
             status=status,
