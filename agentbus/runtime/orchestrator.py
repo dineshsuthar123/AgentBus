@@ -53,11 +53,13 @@ from agentbus.runtime.intelligence_guidance import (
 )
 from agentbus.runtime.verifier import Verifier
 from agentbus.trace import (
+    REPOSITORY_INTELLIGENCE_COMPONENT,
     RuntimeTrace,
     Trace,
     TraceFailure,
     TraceSpanType,
     TraceStatus,
+    build_repository_intelligence_trace_evidence,
 )
 from agentbus.trace.errors import TraceIntegrityError
 from agentbus.trace.sealing import (
@@ -474,6 +476,11 @@ class MultiAgentOrchestrator:
             runtime_trace.finish_span(
                 planning_span,
                 output_references=[plan_output] if plan_output is not None else [],
+            )
+            self._record_repository_intelligence_trace(
+                runtime_trace,
+                user_task,
+                intelligence_context,
             )
             runtime_trace.replay_checkpoint(
                 "plan_created",
@@ -2181,6 +2188,70 @@ class MultiAgentOrchestrator:
             },
         )
         return result.plan
+
+    def _record_repository_intelligence_trace(
+        self,
+        runtime_trace: RuntimeTrace,
+        user_task: str,
+        intelligence: PlannerIntelligenceContext | None,
+    ) -> None:
+        if intelligence is None:
+            return
+        span = None
+        try:
+            evidence = build_repository_intelligence_trace_evidence(
+                user_task,
+                intelligence,
+                private_roots=(self.workspace,),
+            )
+            span = runtime_trace.start_span(
+                TraceSpanType.CUSTOM,
+                "repository intelligence",
+                attributes={
+                    "component": REPOSITORY_INTELLIGENCE_COMPONENT,
+                    "evidence_schema_version": evidence.schema_version,
+                    "context_hash": evidence.context_hash,
+                    "snapshot_id": (
+                        evidence.snapshot.snapshot_id
+                        if evidence.snapshot is not None
+                        else None
+                    ),
+                    "context_plan_hash": evidence.context_plan_hash,
+                    "impact_result_id": (
+                        evidence.impact_result.result_id
+                        if evidence.impact_result is not None
+                        else None
+                    ),
+                    "test_selection_result_id": (
+                        evidence.test_selection_result.result_id
+                        if evidence.test_selection_result is not None
+                        else None
+                    ),
+                },
+            )
+            query_input = runtime_trace.capture_json_input(
+                span,
+                "repository.intelligence.query",
+                {
+                    "search_query": evidence.search_query,
+                    "search_query_sha256": evidence.search_query_sha256,
+                },
+            )
+            evidence_output = runtime_trace.capture_json_output(
+                span,
+                "repository.intelligence.evidence",
+                evidence.model_dump(mode="json"),
+            )
+            runtime_trace.finish_span(
+                span,
+                input_references=[query_input] if query_input is not None else [],
+                output_references=(
+                    [evidence_output] if evidence_output is not None else []
+                ),
+            )
+        except Exception as exc:
+            runtime_trace.fail_span(span, exc)
+            runtime_trace.recording_failed("repository_intelligence", exc)
 
     def _intelligence_context_for_plan(
         self,

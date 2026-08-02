@@ -17,6 +17,7 @@ from agentbus.replay.session import (
     ReplaySessionStatus,
 )
 from agentbus.trace import (
+    IntelligenceDriftCategory,
     ProvenanceBuilder,
     ReplayMode,
     ReplayabilityLevel,
@@ -113,8 +114,16 @@ def test_replay_session_lifecycle_is_durable_bounded_and_path_safe(tmp_path) -> 
     )
     assert store.record_replay_session(request, running) == running
 
-    terminal = _validated_session(
+    drifted = _validated_session(
         running,
+        intelligence_drift=[IntelligenceDriftCategory.GRAPH],
+    )
+    assert store.record_replay_session(request, drifted) == drifted
+    with pytest.raises(ReplaySessionConflictError, match="cannot be rewritten"):
+        store.record_replay_session(request, running)
+
+    terminal = _validated_session(
+        drifted,
         status=ReplaySessionStatus.SUCCEEDED,
         completed_at=started_at + timedelta(seconds=1),
     )

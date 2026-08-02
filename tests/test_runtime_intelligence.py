@@ -44,6 +44,11 @@ from agentbus.runtime.intelligence_guidance import (
     build_coder_intelligence,
     build_reviewer_intelligence,
 )
+from agentbus.trace import (
+    IntelligenceDriftCategory,
+    build_repository_intelligence_trace_evidence,
+    compare_repository_intelligence,
+)
 
 
 @dataclass(frozen=True)
@@ -586,3 +591,98 @@ def test_reviewer_intelligence_compares_actual_and_planned_impact() -> None:
     assert "heuristic evidence, not proof" in rendered
     assert "not necessarily missing" in rendered
     assert "REAL_KEY" not in rendered
+
+
+def test_trace_evidence_is_sanitized_bounded_and_drift_comparable() -> None:
+    fixture = _fixture()
+    context, unrelated_file, _ = _with_unrelated_source(fixture)
+    private_root = "C:/Users/Private/agentbus-workspace"
+
+    captured = build_repository_intelligence_trace_evidence(
+        f"update total api_key=REAL_KEY in {private_root}",
+        context,
+        private_roots=(private_root,),
+    )
+
+    serialized = captured.model_dump_json()
+    assert captured.snapshot is not None
+    assert captured.snapshot.snapshot_id == fixture.context.snapshot.snapshot_id
+    assert captured.snapshot.parser_versions == {"python": "1.0.0"}
+    assert captured.snapshot.project_map_hash == fixture.context.snapshot.project_map_hash
+    assert captured.snapshot.graph_hash == fixture.context.snapshot.graph_hash
+    assert captured.context_plan_hash == context.context_plan.plan_hash
+    assert captured.impact_result.result_id == context.impact.result_id
+    assert captured.test_selection_result.result_id == context.impact.tests.result_id
+    assert captured.retrieval_result_hashes == tuple(
+        item.result_hash for item in captured.retrieval_results
+    )
+    assert any(
+        item.relative_path == unrelated_file.relative_path
+        for item in captured.retrieval_results
+    )
+    assert captured.protected_items_omitted >= 1
+    assert "REAL_KEY" not in serialized
+    assert private_root not in serialized
+    assert fixture.protected.relative_path not in serialized
+    assert fixture.protected_symbol.symbol_id not in serialized
+
+    changed_candidate = context.context_plan.candidates[0].model_copy(
+        update={
+            "score": context.context_plan.candidates[0].score + 1,
+            "source_hash": content_hash("changed retrieval"),
+        }
+    )
+    current = replace(
+        context,
+        snapshot=context.snapshot.model_copy(
+            update={
+                "snapshot_id": stable_id("snapshot", "runtime-planner-current"),
+                "graph_hash": content_hash("current graph"),
+                "source_fingerprint": content_hash("current source"),
+            }
+        ),
+        context_plan=context.context_plan.model_copy(
+            update={
+                "candidates": (
+                    changed_candidate,
+                    *context.context_plan.candidates[1:],
+                ),
+                "plan_hash": content_hash("current context plan"),
+            }
+        ),
+        impact=context.impact.model_copy(
+            update={
+                "result_id": stable_id("impact", "runtime-planner-current"),
+                "tests": context.impact.tests.model_copy(
+                    update={
+                        "result_id": stable_id(
+                            "testimpact",
+                            "runtime-planner-current",
+                        )
+                    }
+                ),
+            }
+        ),
+    )
+    current_evidence = build_repository_intelligence_trace_evidence(
+        captured.search_query,
+        current,
+        private_roots=(private_root,),
+    )
+
+    report = compare_repository_intelligence(captured, current_evidence)
+    categories = {item.category for item in report.findings}
+
+    assert report.captured_snapshot_reused is True
+    assert report.compared_current is True
+    assert report.index_drift is True
+    assert report.retrieval_drift is True
+    assert IntelligenceDriftCategory.INDEX_SNAPSHOT in categories
+    assert IntelligenceDriftCategory.GRAPH in categories
+    assert IntelligenceDriftCategory.RETRIEVAL_RESULTS in categories
+    assert IntelligenceDriftCategory.RETRIEVAL_SCORING in categories
+    assert IntelligenceDriftCategory.CONTEXT_PLAN in categories
+    assert IntelligenceDriftCategory.IMPACT in categories
+    assert IntelligenceDriftCategory.TEST_SELECTION in categories
+    assert report.provider_calls == 0
+    assert report.network_calls == 0

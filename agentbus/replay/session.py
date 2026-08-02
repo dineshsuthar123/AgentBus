@@ -16,6 +16,10 @@ from agentbus.trace.models import (
     TraceStatus,
     utc_now,
 )
+from agentbus.trace.intelligence import (
+    IntelligenceDriftCategory,
+    RepositoryIntelligenceReplayReport,
+)
 
 
 class ReplaySessionStatus(str, Enum):
@@ -107,6 +111,10 @@ class ReplaySession(TraceModel):
     substitutions: list[str] = Field(default_factory=list, max_length=4_096)
     missing_inputs: list[Sha256Digest] = Field(default_factory=list)
     policy_drift: list[str] = Field(default_factory=list, max_length=1_024)
+    intelligence_drift: list[IntelligenceDriftCategory] = Field(
+        default_factory=list,
+        max_length=32,
+    )
     failure_category: str | None = Field(default=None, max_length=256)
     failure_message: str | None = Field(default=None, max_length=4_000)
     provider_calls: int = Field(default=0, ge=0)
@@ -125,6 +133,7 @@ class ReplayResult(TraceModel):
     result_sha256: Sha256Digest
     verifier_result: dict[str, Any] | None = None
     reviewer_result: dict[str, Any] | None = None
+    repository_intelligence: RepositoryIntelligenceReplayReport | None = None
 
     @field_validator("verifier_result", "reviewer_result")
     @classmethod

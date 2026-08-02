@@ -4,7 +4,7 @@ import hashlib
 from collections.abc import Callable, Mapping
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import Field
 
@@ -85,11 +85,18 @@ from agentbus.trace.retention import (
     TraceRetentionPolicy,
 )
 from agentbus.trace.storage import ContentAddressedStore
+from agentbus.trace.intelligence import (
+    RepositoryIntelligenceTraceEvidence,
+    build_repository_intelligence_trace_evidence,
+)
 from agentbus.tools.descriptors import descriptor_map
 from agentbus.tools.protocol import (
     ToolDescriptor,
     safe_protocol_dict,
 )
+
+if TYPE_CHECKING:
+    from agentbus.runtime.intelligence import PlannerIntelligenceSource
 
 
 _REPLAY_PROCESS_EXECUTABLES = ("git", "pytest", "python")
@@ -122,6 +129,7 @@ class TraceReplayService:
         cancelled: Callable[[], bool] | None = None,
         tool_replay_planner: ToolReplayPlanner | None = None,
         tool_descriptors: Mapping[str, ToolDescriptor] | None = None,
+        intelligence_source: PlannerIntelligenceSource | None = None,
     ) -> None:
         self.config = config
         self.state_store = state_store or StateStore(
@@ -133,6 +141,7 @@ class TraceReplayService:
         )
         self.cancelled = cancelled
         self.tool_replay_planner = tool_replay_planner or ToolReplayPlanner()
+        self.intelligence_source = intelligence_source
         current_descriptors = (
             dict(tool_descriptors)
             if tool_descriptors is not None
@@ -669,7 +678,27 @@ class TraceReplayService:
             checkpoint_manager=checkpoint_manager,
             isolation_manager=isolation_manager,
             source_workspace=source_workspace,
+            repository_intelligence_resolver=(
+                self._current_repository_intelligence
+                if self.intelligence_source is not None
+                else None
+            ),
             cancelled=self.cancelled,
+        )
+
+    def _current_repository_intelligence(
+        self,
+        captured: RepositoryIntelligenceTraceEvidence,
+    ) -> RepositoryIntelligenceTraceEvidence | None:
+        if self.intelligence_source is None:
+            return None
+        context = self.intelligence_source.planner_context(captured.search_query)
+        if context is None:
+            return None
+        return build_repository_intelligence_trace_evidence(
+            captured.search_query,
+            context,
+            private_roots=(self.config.workspace_path,),
         )
 
     def _prepared_request(

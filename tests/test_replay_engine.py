@@ -1,3 +1,4 @@
+import hashlib
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
@@ -15,7 +16,12 @@ from agentbus.replay import (
 )
 from agentbus.trace import (
     ContentAddressedStore,
+    IndexSnapshotTraceEvidence,
+    IntelligenceDriftCategory,
+    REPOSITORY_INTELLIGENCE_COMPONENT,
+    REPOSITORY_INTELLIGENCE_EVIDENCE_MEDIA_TYPE,
     ReplayMode,
+    RepositoryIntelligenceTraceEvidence,
     Trace,
     TraceInput,
     TraceOutput,
@@ -24,6 +30,7 @@ from agentbus.trace import (
     TraceStatus,
     TraceRecorder,
 )
+from agentbus.trace.redaction import canonical_json_bytes
 from agentbus.execution.models import RunRecord
 from agentbus.execution.state_store import StateStore
 
@@ -160,6 +167,66 @@ def _request(mode=ReplayMode.OFFLINE):
     )
 
 
+def _sha(value) -> str:
+    return hashlib.sha256(canonical_json_bytes(value)).hexdigest()
+
+
+def _intelligence_evidence(
+    *,
+    context_hash: str = "3" * 64,
+    snapshot_id: str = "snapshot_replay-captured",
+    graph_hash: str = "4" * 64,
+) -> RepositoryIntelligenceTraceEvidence:
+    query = "update calculator"
+    empty_hash = _sha([])
+    return RepositoryIntelligenceTraceEvidence(
+        search_query=query,
+        search_query_sha256=_sha(query),
+        context_hash=context_hash,
+        snapshot=IndexSnapshotTraceEvidence(
+            snapshot_id=snapshot_id,
+            repository_id="repo_replay",
+            workspace_id="workspace_replay",
+            state="current",
+            project_map_hash="5" * 64,
+            graph_hash=graph_hash,
+            source_fingerprint="6" * 64,
+            parser_versions={"python": "1.0.0"},
+        ),
+        retrieval_scoring_sha256=empty_hash,
+        dependency_result_hash=empty_hash,
+        architecture_result_hash=empty_hash,
+    )
+
+
+def _with_intelligence_span(
+    store: ContentAddressedStore,
+    trace: Trace,
+    evidence: RepositoryIntelligenceTraceEvidence,
+) -> Trace:
+    metadata = store.put_json(
+        evidence.model_dump(mode="json"),
+        producing_span_id="intelligence",
+        media_type=REPOSITORY_INTELLIGENCE_EVIDENCE_MEDIA_TYPE,
+    )
+    output = store.reference_output(
+        metadata,
+        reference_id="intelligence-output",
+        name="repository intelligence evidence",
+    )
+    sequence = max(item.sequence for item in trace.spans) + 1
+    span = _span(
+        "intelligence",
+        TraceSpanType.CUSTOM,
+        sequence,
+        outputs=[output],
+        attributes={"component": REPOSITORY_INTELLIGENCE_COMPONENT},
+    )
+    return Trace.model_validate(
+        trace.model_copy(update={"spans": [*trace.spans, span]}).model_dump()
+    )
+
+
 def test_providerless_replay_runs_parsing_policy_and_verifier(tmp_path: Path) -> None:
     store, trace = _fixture(tmp_path)
     calls = {"policy": 0, "verifier": 0}
@@ -185,6 +252,63 @@ def test_providerless_replay_runs_parsing_policy_and_verifier(tmp_path: Path) ->
     assert calls == {"policy": 1, "verifier": 1}
     assert result.verifier_result == {"passed": True}
     assert "provider" in result.session.substitutions
+
+
+def test_replay_reuses_captured_repository_intelligence_without_provider(
+    tmp_path: Path,
+) -> None:
+    store, trace = _fixture(tmp_path)
+    trace = _with_intelligence_span(store, trace, _intelligence_evidence())
+
+    result = ReplayEngine(store).replay(trace, _request())
+
+    assert result.session.status == ReplaySessionStatus.SUCCEEDED
+    assert result.repository_intelligence.captured_snapshot_reused is True
+    assert result.repository_intelligence.compared_current is False
+    assert result.repository_intelligence.findings == ()
+    assert result.session.intelligence_drift == []
+    assert result.session.policy_drift == []
+    assert result.session.provider_calls == 0
+    assert result.session.network_calls == 0
+    replayed = next(
+        item
+        for item in result.session.span_results
+        if item.span_id == "intelligence"
+    )
+    assert replayed.action.value == "reused"
+
+
+def test_replay_classifies_current_index_and_graph_drift_providerlessly(
+    tmp_path: Path,
+) -> None:
+    store, trace = _fixture(tmp_path)
+    captured = _intelligence_evidence()
+    current = _intelligence_evidence(
+        context_hash="7" * 64,
+        snapshot_id="snapshot_replay-current",
+        graph_hash="8" * 64,
+    )
+    trace = _with_intelligence_span(store, trace, captured)
+
+    result = ReplayEngine(
+        store,
+        repository_intelligence_resolver=lambda evidence: current,
+    ).replay(trace, _request())
+
+    categories = {
+        item.category for item in result.repository_intelligence.findings
+    }
+    assert result.session.status == ReplaySessionStatus.SUCCEEDED
+    assert result.repository_intelligence.compared_current is True
+    assert result.repository_intelligence.index_drift is True
+    assert IntelligenceDriftCategory.INDEX_SNAPSHOT in categories
+    assert IntelligenceDriftCategory.GRAPH in categories
+    assert IntelligenceDriftCategory.INDEX_SNAPSHOT in (
+        result.session.intelligence_drift
+    )
+    assert result.session.policy_drift == []
+    assert result.session.provider_calls == 0
+    assert result.session.network_calls == 0
 
 
 def test_replay_uses_content_addressed_component_outputs(tmp_path: Path) -> None:

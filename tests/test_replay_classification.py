@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 
 from agentbus.replay import ReplayabilityClassifier, ReplayabilityLevel
 from agentbus.trace import (
+    REPOSITORY_INTELLIGENCE_COMPONENT,
     Trace,
     TraceInput,
     TraceOutput,
@@ -193,3 +194,29 @@ def test_unresolved_nondeterminism_prevents_exact_classification() -> None:
 
     assert result.level == ReplayabilityLevel.PARTIALLY_REPLAYABLE
     assert "nondeterministic" in result.reasons[0]
+
+
+def test_repository_intelligence_snapshot_is_substitutable_providerlessly() -> None:
+    span = _span(
+        "intelligence",
+        TraceSpanType.CUSTOM,
+        2,
+        outputs=[
+            TraceOutput(
+                reference_id="intelligence-output",
+                name="repository intelligence evidence",
+                sha256=OUTPUT,
+                byte_length=10,
+            )
+        ],
+        attributes={"component": REPOSITORY_INTELLIGENCE_COMPONENT},
+    )
+
+    result = ReplayabilityClassifier().classify_span(
+        span,
+        available_object_hashes={OUTPUT},
+    )
+
+    assert result.level == ReplayabilityLevel.DETERMINISTICALLY_SUBSTITUTABLE
+    assert result.substitution_kinds == ["repository_intelligence_snapshot"]
+    assert result.live_provider_consent_required is False

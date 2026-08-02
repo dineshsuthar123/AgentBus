@@ -14,7 +14,13 @@ from agentbus.runtime.intelligence import (
     StaticPlannerIntelligenceSource,
 )
 from agentbus.runtime.orchestrator import MultiAgentOrchestrator
-from agentbus.trace import TraceSpanType, TraceStatus
+from agentbus.trace import (
+    REPOSITORY_INTELLIGENCE_COMPONENT,
+    ContentAddressedStore,
+    RepositoryIntelligenceTraceEvidence,
+    TraceSpanType,
+    TraceStatus,
+)
 from agentbus.tools.protocol import ToolResourceBudget
 
 
@@ -329,6 +335,20 @@ def test_durable_mode_persists_validated_repository_intelligence(tmp_path):
         "task_review"
     ]
     final_review = store.get_run(run_id).metadata["final_review"]
+    trace = store.get_run_trace(run_id)
+    intelligence_span = next(
+        span
+        for span in trace.spans
+        if span.attributes.get("component")
+        == REPOSITORY_INTELLIGENCE_COMPONENT
+    )
+    object_store = ContentAddressedStore(
+        runner.config.trace_store_path,
+        private_roots=(runner.workspace,),
+    )
+    trace_evidence = RepositoryIntelligenceTraceEvidence.model_validate_json(
+        object_store.get(intelligence_span.output_references[0].sha256).data
+    )
     assert task_review["unplanned_affected_components"] == [
         "symbol_unplanned"
     ]
@@ -337,6 +357,10 @@ def test_durable_mode_persists_validated_repository_intelligence(tmp_path):
     assert final_review["index_uncertainty"] == [
         "repository_index_state:stale"
     ]
+    assert len(intelligence_span.input_references) == 1
+    assert len(intelligence_span.output_references) == 1
+    assert trace_evidence.context_hash == intelligence.context_hash
+    assert trace_evidence.search_query == "Create calculator"
 
 
 def test_durable_run_records_hierarchical_trace_and_final_review_order(
