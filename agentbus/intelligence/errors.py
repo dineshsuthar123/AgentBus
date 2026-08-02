@@ -36,3 +36,7 @@ class UnsafeRepositoryPathError(RepositoryIntelligenceError):
 
 class QueryLimitError(RepositoryIntelligenceError):
     """Raised when a graph or retrieval query exceeds a hard bound."""
+
+
+class RepositoryQueryError(RepositoryIntelligenceError):
+    """Raised when a bounded repository query cannot be resolved safely."""

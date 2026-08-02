@@ -955,6 +955,20 @@ class RepositoryIndexer:
             progress_sink=progress_sink,
         )
 
+    def repair(
+        self,
+        *,
+        cancellation: CancellationSignal | None = None,
+        operation_id: str | None = None,
+        progress_sink: IndexProgressSink | None = None,
+    ) -> IndexingResult:
+        return self._run_operation(
+            IndexOperationKind.REPAIR,
+            cancellation=cancellation,
+            operation_id=operation_id,
+            progress_sink=progress_sink,
+        )
+
 
 def _configuration_fingerprint(
     inventory: RepositoryInventory,

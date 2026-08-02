@@ -672,16 +672,67 @@ class IndexStore:
             )
         return cursor.rowcount > 0
 
-    def purge_expired_cache(self, *, now: datetime) -> int:
+    def purge_expired_cache(
+        self,
+        *,
+        now: datetime,
+        repository_id: str | None = None,
+    ) -> int:
+        query = """
+            DELETE FROM intelligence_cache
+            WHERE expires_at IS NOT NULL AND expires_at <= ?
+        """
+        parameters: tuple[str, ...] = (_datetime_text(now),)
+        if repository_id is not None:
+            query += " AND repository_id = ?"
+            parameters = (*parameters, repository_id)
         with self._write_transaction() as connection:
-            cursor = connection.execute(
-                """
-                DELETE FROM intelligence_cache
-                WHERE expires_at IS NOT NULL AND expires_at <= ?
-                """,
-                (_datetime_text(now),),
-            )
+            cursor = connection.execute(query, parameters)
         return cursor.rowcount
+
+    def clear_repository(self, repository_id: str) -> int:
+        """Delete one repository's index records after fencing active work."""
+
+        with self._write_transaction() as connection:
+            operation = connection.execute(
+                """
+                SELECT state
+                FROM index_operations
+                WHERE repository_id = ?
+                """,
+                (repository_id,),
+            ).fetchone()
+            if (
+                operation is not None
+                and operation["state"] == IndexOperationState.RUNNING.value
+            ):
+                raise IndexBusyError(
+                    "An active repository intelligence operation cannot be cleared."
+                )
+            row = connection.execute(
+                """
+                SELECT COUNT(*) AS snapshot_count
+                FROM index_snapshots
+                WHERE repository_id = ?
+                """,
+                (repository_id,),
+            ).fetchone()
+            snapshot_count = int(row["snapshot_count"]) if row is not None else 0
+            connection.execute(
+                "DELETE FROM repositories WHERE repository_id = ?",
+                (repository_id,),
+            )
+            connection.execute(
+                """
+                DELETE FROM content_hashes
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM indexed_files
+                    WHERE indexed_files.content_hash = content_hashes.content_hash
+                )
+                """
+            )
+        return snapshot_count
 
     def prune_snapshots(
         self,
