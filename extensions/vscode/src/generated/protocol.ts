@@ -154,6 +154,38 @@ export interface ComparisonSummaryResponse {
   "provenance_root_changed"?: boolean;
 }
 
+export interface ContextCandidateSummary {
+  "candidate_id": string;
+  "relative_path": string;
+  "source_hash": string;
+  "symbol_id"?: string | null;
+  "role": ContextRole;
+  "score": number;
+  "byte_count": number;
+  "estimated_tokens": number;
+  "selected"?: boolean;
+  "reasons"?: Array<string>;
+  "exclusion_reason"?: string | null;
+}
+
+export interface ContextPlanSummary {
+  "plan_id": string;
+  "plan_hash": string;
+  "snapshot_id"?: string | null;
+  "role": ContextRole;
+  "task_hash": string;
+  "byte_budget": number;
+  "token_budget": number;
+  "selected_bytes": number;
+  "selected_tokens": number;
+  "candidates"?: Array<ContextCandidateSummary>;
+  "stale_warning"?: string | null;
+  "provider_calls"?: 0;
+  "network_calls"?: 0;
+}
+
+export type ContextRole = "planner" | "coder" | "verifier" | "reviewer";
+
 export interface DaemonRegistryEntry {
   "daemon_id": string;
   "pid": number;
@@ -169,6 +201,8 @@ export interface DaemonRegistryEntry {
   "registry_path": string;
 }
 
+export type DependencyKind = "imports" | "exports" | "calls" | "references" | "inherits" | "implements" | "instantiates" | "reads" | "writes" | "configures" | "tests" | "owns" | "generated_from";
+
 export interface DeterministicProviderOptions {
   "profile"?: "python-calculator" | "cancellation-two-task" | "tool-safe-read" | "tool-atomic-write" | "tool-source-patch" | "tool-pytest" | "tool-git-diff" | "tool-git-commit" | "tool-delete-approval" | "tool-deny-outside-read" | "tool-deny-credential-read" | "tool-process-timeout" | "tool-process-cancel" | "tool-excessive-output" | "tool-budget-exhaustion" | "tool-local-mcp" | "tool-loop-limit" | "tool-control-acceptance";
   "latency_seconds"?: number;
@@ -177,6 +211,8 @@ export interface DeterministicProviderOptions {
   "failure_calls"?: Array<number>;
   "failure_roles"?: Array<"planner" | "coder" | "reviewer" | "summarizer">;
 }
+
+export type DiagnosticSeverity = "info" | "warning" | "error";
 
 export interface DiffResponse {
   "run_id": string;
@@ -225,9 +261,128 @@ export interface FileContentResponse {
   "truncated"?: boolean;
 }
 
+export interface GraphEdgeSummary {
+  "edge_id": string;
+  "kind": DependencyKind;
+  "source_id": string;
+  "target_id": string;
+  "relative_path"?: string | null;
+  "confidence": number;
+  "resolved": boolean;
+  "explanation": string;
+}
+
+export interface GraphNodeSummary {
+  "node_id": string;
+  "node_type": "symbol" | "file" | "module" | "unresolved";
+  "label": string;
+  "relative_path"?: string | null;
+  "project_id"?: string | null;
+  "language"?: SourceLanguage | null;
+}
+
 export interface HealthResponse {
   "status"?: "ok";
   "protocol_version"?: string;
+}
+
+export interface ImpactResult {
+  "result_id": string;
+  "snapshot_id"?: string | null;
+  "changed_paths"?: Array<string>;
+  "changed_symbols"?: Array<string>;
+  "direct_dependents"?: Array<string>;
+  "transitive_dependents"?: Array<string>;
+  "affected_projects"?: Array<string>;
+  "affected_public_apis"?: Array<string>;
+  "affected_endpoints"?: Array<string>;
+  "affected_configurations"?: Array<string>;
+  "architecture_crossings"?: Array<string>;
+  "ownership_rules"?: Array<string>;
+  "integration_hotspots"?: Array<string>;
+  "risk": ImpactRisk;
+  "confidence": number;
+  "uncertainty"?: Array<string>;
+  "evidence"?: Array<string>;
+  "tests": TestImpactResult;
+  "truncated"?: boolean;
+}
+
+export type ImpactRisk = "low" | "medium" | "high" | "critical";
+
+export interface IndexDiagnostic {
+  "code": string;
+  "severity": DiagnosticSeverity;
+  "message": string;
+  "relative_path"?: string | null;
+  "parser_name"?: string | null;
+  "recoverable"?: boolean;
+  "details"?: Record<string, unknown>;
+}
+
+export interface IndexMutationReport {
+  "operation": IndexOperationKind;
+  "snapshot": IndexSnapshot;
+  "status": IndexStatus;
+  "operation_id"?: string | null;
+  "unchanged"?: boolean;
+  "indexed_count": number;
+  "reused_count": number;
+  "skipped_count": number;
+  "deleted_count": number;
+  "renamed_count": number;
+  "invalidated_count": number;
+  "indexed_paths"?: Array<string>;
+  "reused_paths"?: Array<string>;
+  "skipped_paths"?: Array<string>;
+  "deleted_paths"?: Array<string>;
+  "invalidated_paths"?: Array<string>;
+  "path_reporting_truncated"?: boolean;
+  "provider_calls"?: 0;
+  "network_calls"?: 0;
+}
+
+export type IndexOperationKind = "build" | "update" | "repair";
+
+export interface IndexSnapshot {
+  "snapshot_id": string;
+  "repository_id": string;
+  "workspace_id": string;
+  "state": IndexState;
+  "created_at": string;
+  "completed_at"?: string | null;
+  "file_count"?: number;
+  "symbol_count"?: number;
+  "reference_count"?: number;
+  "edge_count"?: number;
+  "project_map_hash": string;
+  "graph_hash": string;
+  "parser_versions"?: Record<string, string>;
+  "source_fingerprint": string;
+  "diagnostics"?: Array<IndexDiagnostic>;
+}
+
+export type IndexState = "absent" | "building" | "current" | "partially_current" | "stale" | "corrupted" | "incompatible" | "paused";
+
+export interface IndexStatus {
+  "repository_id": string;
+  "workspace_id": string;
+  "state": IndexState;
+  "snapshot_id"?: string | null;
+  "stale_paths"?: Array<string>;
+  "indexed_files"?: number;
+  "total_files"?: number;
+  "message"?: string | null;
+  "diagnostics"?: Array<IndexDiagnostic>;
+}
+
+export interface IndexVerificationReport {
+  "valid": boolean;
+  "fresh": boolean;
+  "schema_version": number;
+  "status": IndexStatus;
+  "provider_calls"?: 0;
+  "network_calls"?: 0;
 }
 
 export interface InfoResponse {
@@ -461,6 +616,15 @@ export interface ReplaySpanResultResponse {
   "drift"?: Array<string>;
 }
 
+export interface RepositorySearchReport {
+  "snapshot_id": string;
+  "index_state": IndexState;
+  "query": SearchQuery;
+  "results"?: Array<SearchMatch>;
+  "provider_calls"?: 0;
+  "network_calls"?: 0;
+}
+
 export interface ResumeResponse {
   "run_id": string;
   "status": string;
@@ -563,6 +727,33 @@ export interface SchedulerResponse {
   "cancellation"?: CancellationLifecycle;
 }
 
+export interface SearchMatch {
+  "rank": number;
+  "score": number;
+  "relative_path": string;
+  "source_hash": string;
+  "project_id"?: string | null;
+  "symbol"?: SymbolSummary | null;
+  "dependency_path"?: Array<string>;
+  "stale"?: boolean;
+  "matched_terms"?: Array<string>;
+  "score_components"?: Record<string, number>;
+  "explanation": string;
+}
+
+export interface SearchQuery {
+  "text": string;
+  "project_ids"?: Array<string>;
+  "languages"?: Array<SourceLanguage>;
+  "symbol_kinds"?: Array<SymbolKind>;
+  "path_prefixes"?: Array<string>;
+  "test_only"?: boolean;
+  "limit"?: number;
+  "offset"?: number;
+}
+
+export type SourceLanguage = "python" | "typescript" | "javascript" | "java" | "go" | "json" | "yaml" | "toml" | "markdown" | "text" | "unknown";
+
 export interface SpanComparisonResponse {
   "semantic_key": string;
   "left_span_id"?: string | null;
@@ -582,6 +773,26 @@ export interface SpanReplayabilityResponse {
   "substitution_kinds"?: Array<string>;
   "requires_isolated_workspace"?: boolean;
   "live_provider_consent_required"?: boolean;
+}
+
+export type SymbolKind = "module" | "package" | "namespace" | "class" | "interface" | "enum" | "record" | "function" | "method" | "constructor" | "field" | "property" | "variable" | "constant" | "type_alias" | "endpoint" | "test" | "configuration_unit";
+
+export interface SymbolSummary {
+  "symbol_id": string;
+  "name": string;
+  "qualified_name": string;
+  "kind": SymbolKind;
+  "language": SourceLanguage;
+  "relative_path": string;
+  "start_line": number;
+  "end_line": number;
+  "project_id"?: string | null;
+  "module_id"?: string | null;
+  "signature"?: string | null;
+  "exported"?: boolean;
+  "test"?: boolean;
+  "endpoint"?: string | null;
+  "confidence": number;
 }
 
 export interface TaskListResponse {
@@ -610,6 +821,17 @@ export interface TaskSummary {
   "reviewer_status"?: string | null;
   "created_at": string;
   "updated_at": string;
+}
+
+export interface TestImpactResult {
+  "result_id": string;
+  "selected_tests"?: Array<string>;
+  "mandatory_tests"?: Array<string>;
+  "optional_tests"?: Array<string>;
+  "full_suite_recommended"?: boolean;
+  "confidence": number;
+  "evidence"?: Array<string>;
+  "escalation_reasons"?: Array<string>;
 }
 
 export interface ToolArtifact {
@@ -1066,6 +1288,127 @@ export interface UsageResponse {
 }
 
 export type WorkflowMode = "single" | "multi";
+
+export interface WorkspaceContextPlanRequest {
+  "task": string;
+  "role"?: "planner" | "coder" | "verifier" | "reviewer";
+  "projects"?: Array<string>;
+  "changed_paths"?: Array<string>;
+  "byte_budget"?: number;
+  "token_budget"?: number;
+  "include_evidence"?: boolean;
+}
+
+export interface WorkspaceContextPlanResponse {
+  "workspace_id": string;
+  "result": ContextPlanSummary;
+}
+
+export interface WorkspaceGraphResponse {
+  "workspace_id": string;
+  "snapshot_id": string;
+  "index_state": string;
+  "direction": "dependencies" | "dependents";
+  "subject": SymbolSummary;
+  "nodes"?: Array<GraphNodeSummary>;
+  "edges"?: Array<GraphEdgeSummary>;
+  "offset": number;
+  "limit": number;
+  "total_edges": number;
+  "next_offset"?: number | null;
+  "maximum_depth_reached": number;
+  "truncated"?: boolean;
+  "provider_calls"?: 0;
+  "network_calls"?: 0;
+}
+
+export interface WorkspaceImpactRequest {
+  "subjects": Array<string>;
+  "projects"?: Array<string>;
+  "languages"?: Array<SourceLanguage>;
+  "max_depth"?: number;
+  "max_nodes"?: number;
+  "include_evidence"?: boolean;
+}
+
+export interface WorkspaceImpactResponse {
+  "workspace_id": string;
+  "result": ImpactResult;
+  "provider_calls"?: 0;
+  "network_calls"?: 0;
+}
+
+export interface WorkspaceIndexActionRequest {
+  "workspace_trusted"?: boolean;
+}
+
+export interface WorkspaceIndexCancellationResponse {
+  "workspace_id": string;
+  "repository_id": string;
+  "cancellation_requested": boolean;
+  "operation_id"?: string | null;
+  "operation_state"?: string | null;
+  "provider_calls"?: 0;
+  "network_calls"?: 0;
+}
+
+export interface WorkspaceIndexCreateRequest {
+  "workspace": string;
+  "workspace_trusted"?: boolean;
+}
+
+export interface WorkspaceIndexMutationResponse {
+  "workspace_id": string;
+  "repository_id": string;
+  "result": IndexMutationReport;
+}
+
+export interface WorkspaceIndexStatusResponse {
+  "workspace_id": string;
+  "repository_id": string;
+  "status": IndexStatus;
+  "provider_calls"?: 0;
+  "network_calls"?: 0;
+}
+
+export interface WorkspaceIndexVerificationResponse {
+  "workspace_id": string;
+  "repository_id": string;
+  "result": IndexVerificationReport;
+}
+
+export interface WorkspaceSearchRequest {
+  "query": string;
+  "projects"?: Array<string>;
+  "languages"?: Array<SourceLanguage>;
+  "symbol_kinds"?: Array<SymbolKind>;
+  "path_prefixes"?: Array<string>;
+  "test_only"?: boolean;
+  "offset"?: number;
+  "limit"?: number;
+  "include_evidence"?: boolean;
+}
+
+export interface WorkspaceSearchResponse {
+  "workspace_id": string;
+  "report": RepositorySearchReport;
+}
+
+export interface WorkspaceSymbolResponse {
+  "workspace_id": string;
+  "snapshot_id": string;
+  "index_state": string;
+  "symbol": SymbolSummary;
+  "provider_calls"?: 0;
+  "network_calls"?: 0;
+}
+
+export interface WorkspaceTestsResponse {
+  "workspace_id": string;
+  "result": TestImpactResult;
+  "provider_calls"?: 0;
+  "network_calls"?: 0;
+}
 
 export interface WorkspaceValidationRequest {
   "workspace": string;

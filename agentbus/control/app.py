@@ -88,6 +88,21 @@ from agentbus.control.models import (
     UsageResponse,
     WorkspaceValidationRequest,
     WorkspaceValidationResponse,
+    WorkspaceContextPlanRequest,
+    WorkspaceContextPlanResponse,
+    WorkspaceGraphResponse,
+    WorkspaceImpactRequest,
+    WorkspaceImpactResponse,
+    WorkspaceIndexActionRequest,
+    WorkspaceIndexCancellationResponse,
+    WorkspaceIndexCreateRequest,
+    WorkspaceIndexMutationResponse,
+    WorkspaceIndexStatusResponse,
+    WorkspaceIndexVerificationResponse,
+    WorkspaceSearchRequest,
+    WorkspaceSearchResponse,
+    WorkspaceSymbolResponse,
+    WorkspaceTestsResponse,
     WorktreeListResponse,
 )
 from agentbus.control.replay_supervisor import BackgroundReplaySupervisor
@@ -279,6 +294,8 @@ def create_app(
                 "trace-comparison",
                 "trace-archives",
                 "regression-fixtures",
+                "repository-intelligence",
+                "repository-index-cancellation",
             ],
         )
 
@@ -321,6 +338,159 @@ def create_app(
         request: WorkspaceValidationRequest,
     ) -> WorkspaceValidationResponse:
         return query_service.workspace_service.validate(request)
+
+    @app.post(
+        f"{API_PREFIX}/workspaces/index",
+        response_model=WorkspaceIndexMutationResponse,
+        status_code=201,
+    )
+    def build_workspace_index(
+        request: WorkspaceIndexCreateRequest,
+    ) -> WorkspaceIndexMutationResponse:
+        return query_service.intelligence.build(request)
+
+    @app.get(
+        f"{API_PREFIX}/workspaces/{{workspace_id}}/index",
+        response_model=WorkspaceIndexStatusResponse,
+    )
+    def workspace_index_status(
+        workspace_id: str,
+    ) -> WorkspaceIndexStatusResponse:
+        return query_service.intelligence.status(workspace_id)
+
+    @app.post(
+        f"{API_PREFIX}/workspaces/{{workspace_id}}/index/update",
+        response_model=WorkspaceIndexMutationResponse,
+    )
+    def update_workspace_index(
+        workspace_id: str,
+        request: WorkspaceIndexActionRequest,
+    ) -> WorkspaceIndexMutationResponse:
+        return query_service.intelligence.update(
+            workspace_id,
+            workspace_trusted=request.workspace_trusted,
+        )
+
+    @app.post(
+        f"{API_PREFIX}/workspaces/{{workspace_id}}/index/verify",
+        response_model=WorkspaceIndexVerificationResponse,
+    )
+    def verify_workspace_index(
+        workspace_id: str,
+    ) -> WorkspaceIndexVerificationResponse:
+        return query_service.intelligence.verify(workspace_id)
+
+    @app.post(
+        f"{API_PREFIX}/workspaces/{{workspace_id}}/index/cancel",
+        response_model=WorkspaceIndexCancellationResponse,
+    )
+    def cancel_workspace_index(
+        workspace_id: str,
+    ) -> WorkspaceIndexCancellationResponse:
+        return query_service.intelligence.cancel(workspace_id)
+
+    @app.post(
+        f"{API_PREFIX}/workspaces/{{workspace_id}}/search",
+        response_model=WorkspaceSearchResponse,
+    )
+    def search_workspace(
+        workspace_id: str,
+        request: WorkspaceSearchRequest,
+    ) -> WorkspaceSearchResponse:
+        return query_service.intelligence.search(workspace_id, request)
+
+    @app.get(
+        f"{API_PREFIX}/workspaces/{{workspace_id}}/symbols/{{symbol_id}}",
+        response_model=WorkspaceSymbolResponse,
+    )
+    def workspace_symbol(
+        workspace_id: str,
+        symbol_id: str,
+        include_evidence: bool = False,
+    ) -> WorkspaceSymbolResponse:
+        return query_service.intelligence.symbol(
+            workspace_id,
+            symbol_id,
+            include_evidence=include_evidence,
+        )
+
+    @app.get(
+        f"{API_PREFIX}/workspaces/{{workspace_id}}/dependencies/{{symbol_id}}",
+        response_model=WorkspaceGraphResponse,
+    )
+    def workspace_dependencies(
+        workspace_id: str,
+        symbol_id: str,
+        depth: int = Query(default=1, ge=0, le=8),
+        offset: int = Query(default=0, ge=0, le=100_000),
+        limit: int = Query(default=100, ge=1, le=500),
+        include_unresolved: bool = False,
+        include_evidence: bool = False,
+    ) -> WorkspaceGraphResponse:
+        return query_service.intelligence.graph(
+            workspace_id,
+            symbol_id,
+            direction="dependencies",
+            depth=depth,
+            offset=offset,
+            limit=limit,
+            include_unresolved=include_unresolved,
+            include_evidence=include_evidence,
+        )
+
+    @app.get(
+        f"{API_PREFIX}/workspaces/{{workspace_id}}/dependents/{{symbol_id}}",
+        response_model=WorkspaceGraphResponse,
+    )
+    def workspace_dependents(
+        workspace_id: str,
+        symbol_id: str,
+        depth: int = Query(default=1, ge=0, le=8),
+        offset: int = Query(default=0, ge=0, le=100_000),
+        limit: int = Query(default=100, ge=1, le=500),
+        include_unresolved: bool = False,
+        include_evidence: bool = False,
+    ) -> WorkspaceGraphResponse:
+        return query_service.intelligence.graph(
+            workspace_id,
+            symbol_id,
+            direction="dependents",
+            depth=depth,
+            offset=offset,
+            limit=limit,
+            include_unresolved=include_unresolved,
+            include_evidence=include_evidence,
+        )
+
+    @app.post(
+        f"{API_PREFIX}/workspaces/{{workspace_id}}/impact",
+        response_model=WorkspaceImpactResponse,
+    )
+    def workspace_impact(
+        workspace_id: str,
+        request: WorkspaceImpactRequest,
+    ) -> WorkspaceImpactResponse:
+        return query_service.intelligence.impact(workspace_id, request)
+
+    @app.post(
+        f"{API_PREFIX}/workspaces/{{workspace_id}}/tests",
+        response_model=WorkspaceTestsResponse,
+    )
+    def workspace_tests(
+        workspace_id: str,
+        request: WorkspaceImpactRequest,
+    ) -> WorkspaceTestsResponse:
+        return query_service.intelligence.tests(workspace_id, request)
+
+    @app.post(
+        f"{API_PREFIX}/workspaces/{{workspace_id}}/context-plan",
+        response_model=WorkspaceContextPlanResponse,
+    )
+    def workspace_context_plan(
+        workspace_id: str,
+        request: WorkspaceContextPlanRequest,
+    ) -> WorkspaceContextPlanResponse:
+        return query_service.intelligence.context_plan(workspace_id, request)
 
     @app.get(f"{API_PREFIX}/providers", response_model=ProviderListResponse)
     async def providers() -> ProviderListResponse:

@@ -1011,6 +1011,213 @@
       "title": "ComparisonSummaryResponse",
       "type": "object"
     },
+    "ContextCandidateSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "byte_count": {
+          "minimum": 0,
+          "title": "Byte Count",
+          "type": "integer"
+        },
+        "candidate_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "estimated_tokens": {
+          "minimum": 0,
+          "title": "Estimated Tokens",
+          "type": "integer"
+        },
+        "exclusion_reason": {
+          "anyOf": [
+            {
+              "maxLength": 1024,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exclusion Reason"
+        },
+        "reasons": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "title": "Reasons",
+          "type": "array"
+        },
+        "relative_path": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Relative Path",
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/ContextRole"
+        },
+        "score": {
+          "minimum": 0,
+          "title": "Score",
+          "type": "number"
+        },
+        "selected": {
+          "default": false,
+          "title": "Selected",
+          "type": "boolean"
+        },
+        "source_hash": {
+          "maxLength": 64,
+          "minLength": 64,
+          "title": "Source Hash",
+          "type": "string"
+        },
+        "symbol_id": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Symbol Id"
+        }
+      },
+      "required": [
+        "candidate_id",
+        "relative_path",
+        "source_hash",
+        "role",
+        "score",
+        "byte_count",
+        "estimated_tokens"
+      ],
+      "title": "ContextCandidateSummary",
+      "type": "object"
+    },
+    "ContextPlanSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "byte_budget": {
+          "exclusiveMinimum": 0,
+          "title": "Byte Budget",
+          "type": "integer"
+        },
+        "candidates": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ContextCandidateSummary"
+          },
+          "maxItems": 2000,
+          "title": "Candidates",
+          "type": "array"
+        },
+        "network_calls": {
+          "const": 0,
+          "default": 0,
+          "title": "Network Calls",
+          "type": "integer"
+        },
+        "plan_hash": {
+          "maxLength": 64,
+          "minLength": 64,
+          "title": "Plan Hash",
+          "type": "string"
+        },
+        "plan_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Plan Id",
+          "type": "string"
+        },
+        "provider_calls": {
+          "const": 0,
+          "default": 0,
+          "title": "Provider Calls",
+          "type": "integer"
+        },
+        "role": {
+          "$ref": "#/$defs/ContextRole"
+        },
+        "selected_bytes": {
+          "minimum": 0,
+          "title": "Selected Bytes",
+          "type": "integer"
+        },
+        "selected_tokens": {
+          "minimum": 0,
+          "title": "Selected Tokens",
+          "type": "integer"
+        },
+        "snapshot_id": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Snapshot Id"
+        },
+        "stale_warning": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stale Warning"
+        },
+        "task_hash": {
+          "maxLength": 64,
+          "minLength": 64,
+          "title": "Task Hash",
+          "type": "string"
+        },
+        "token_budget": {
+          "exclusiveMinimum": 0,
+          "title": "Token Budget",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "plan_id",
+        "plan_hash",
+        "role",
+        "task_hash",
+        "byte_budget",
+        "token_budget",
+        "selected_bytes",
+        "selected_tokens"
+      ],
+      "title": "ContextPlanSummary",
+      "type": "object"
+    },
+    "ContextRole": {
+      "enum": [
+        "planner",
+        "coder",
+        "verifier",
+        "reviewer"
+      ],
+      "title": "ContextRole",
+      "type": "string"
+    },
     "DaemonRegistryEntry": {
       "additionalProperties": false,
       "properties": {
@@ -1084,6 +1291,25 @@
       ],
       "title": "DaemonRegistryEntry",
       "type": "object"
+    },
+    "DependencyKind": {
+      "enum": [
+        "imports",
+        "exports",
+        "calls",
+        "references",
+        "inherits",
+        "implements",
+        "instantiates",
+        "reads",
+        "writes",
+        "configures",
+        "tests",
+        "owns",
+        "generated_from"
+      ],
+      "title": "DependencyKind",
+      "type": "string"
     },
     "DeterministicProviderOptions": {
       "additionalProperties": false,
@@ -1169,6 +1395,15 @@
       },
       "title": "DeterministicProviderOptions",
       "type": "object"
+    },
+    "DiagnosticSeverity": {
+      "enum": [
+        "info",
+        "warning",
+        "error"
+      ],
+      "title": "DiagnosticSeverity",
+      "type": "string"
     },
     "DiffResponse": {
       "additionalProperties": false,
@@ -1405,6 +1640,143 @@
       "title": "FileContentResponse",
       "type": "object"
     },
+    "GraphEdgeSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "edge_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Edge Id",
+          "type": "string"
+        },
+        "explanation": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Explanation",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/DependencyKind"
+        },
+        "relative_path": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relative Path"
+        },
+        "resolved": {
+          "title": "Resolved",
+          "type": "boolean"
+        },
+        "source_id": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Source Id",
+          "type": "string"
+        },
+        "target_id": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Target Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "edge_id",
+        "kind",
+        "source_id",
+        "target_id",
+        "confidence",
+        "resolved",
+        "explanation"
+      ],
+      "title": "GraphEdgeSummary",
+      "type": "object"
+    },
+    "GraphNodeSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "language": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceLanguage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "node_id": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Node Id",
+          "type": "string"
+        },
+        "node_type": {
+          "enum": [
+            "symbol",
+            "file",
+            "module",
+            "unresolved"
+          ],
+          "title": "Node Type",
+          "type": "string"
+        },
+        "project_id": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Project Id"
+        },
+        "relative_path": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relative Path"
+        }
+      },
+      "required": [
+        "node_id",
+        "node_type",
+        "label"
+      ],
+      "title": "GraphNodeSummary",
+      "type": "object"
+    },
     "HealthResponse": {
       "additionalProperties": false,
       "properties": {
@@ -1421,6 +1793,622 @@
         }
       },
       "title": "HealthResponse",
+      "type": "object"
+    },
+    "ImpactResult": {
+      "additionalProperties": false,
+      "properties": {
+        "affected_configurations": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 2000,
+          "title": "Affected Configurations",
+          "type": "array"
+        },
+        "affected_endpoints": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 2000,
+          "title": "Affected Endpoints",
+          "type": "array"
+        },
+        "affected_projects": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 1000,
+          "title": "Affected Projects",
+          "type": "array"
+        },
+        "affected_public_apis": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 2000,
+          "title": "Affected Public Apis",
+          "type": "array"
+        },
+        "architecture_crossings": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 2000,
+          "title": "Architecture Crossings",
+          "type": "array"
+        },
+        "changed_paths": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 1000,
+          "title": "Changed Paths",
+          "type": "array"
+        },
+        "changed_symbols": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 1000,
+          "title": "Changed Symbols",
+          "type": "array"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "direct_dependents": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 5000,
+          "title": "Direct Dependents",
+          "type": "array"
+        },
+        "evidence": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 5000,
+          "title": "Evidence",
+          "type": "array"
+        },
+        "integration_hotspots": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 2000,
+          "title": "Integration Hotspots",
+          "type": "array"
+        },
+        "ownership_rules": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 1000,
+          "title": "Ownership Rules",
+          "type": "array"
+        },
+        "result_id": {
+          "title": "Result Id",
+          "type": "string"
+        },
+        "risk": {
+          "$ref": "#/$defs/ImpactRisk"
+        },
+        "snapshot_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Snapshot Id"
+        },
+        "tests": {
+          "$ref": "#/$defs/TestImpactResult"
+        },
+        "transitive_dependents": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 10000,
+          "title": "Transitive Dependents",
+          "type": "array"
+        },
+        "truncated": {
+          "default": false,
+          "title": "Truncated",
+          "type": "boolean"
+        },
+        "uncertainty": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Uncertainty",
+          "type": "array"
+        }
+      },
+      "required": [
+        "result_id",
+        "risk",
+        "confidence",
+        "tests"
+      ],
+      "title": "ImpactResult",
+      "type": "object"
+    },
+    "ImpactRisk": {
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ],
+      "title": "ImpactRisk",
+      "type": "string"
+    },
+    "IndexDiagnostic": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Code",
+          "type": "string"
+        },
+        "details": {
+          "additionalProperties": true,
+          "title": "Details",
+          "type": "object"
+        },
+        "message": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Message",
+          "type": "string"
+        },
+        "parser_name": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parser Name"
+        },
+        "recoverable": {
+          "default": true,
+          "title": "Recoverable",
+          "type": "boolean"
+        },
+        "relative_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relative Path"
+        },
+        "severity": {
+          "$ref": "#/$defs/DiagnosticSeverity"
+        }
+      },
+      "required": [
+        "code",
+        "severity",
+        "message"
+      ],
+      "title": "IndexDiagnostic",
+      "type": "object"
+    },
+    "IndexMutationReport": {
+      "additionalProperties": false,
+      "properties": {
+        "deleted_count": {
+          "minimum": 0,
+          "title": "Deleted Count",
+          "type": "integer"
+        },
+        "deleted_paths": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 1000,
+          "title": "Deleted Paths",
+          "type": "array"
+        },
+        "indexed_count": {
+          "minimum": 0,
+          "title": "Indexed Count",
+          "type": "integer"
+        },
+        "indexed_paths": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 1000,
+          "title": "Indexed Paths",
+          "type": "array"
+        },
+        "invalidated_count": {
+          "minimum": 0,
+          "title": "Invalidated Count",
+          "type": "integer"
+        },
+        "invalidated_paths": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 1000,
+          "title": "Invalidated Paths",
+          "type": "array"
+        },
+        "network_calls": {
+          "const": 0,
+          "default": 0,
+          "title": "Network Calls",
+          "type": "integer"
+        },
+        "operation": {
+          "$ref": "#/$defs/IndexOperationKind"
+        },
+        "operation_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Operation Id"
+        },
+        "path_reporting_truncated": {
+          "default": false,
+          "title": "Path Reporting Truncated",
+          "type": "boolean"
+        },
+        "provider_calls": {
+          "const": 0,
+          "default": 0,
+          "title": "Provider Calls",
+          "type": "integer"
+        },
+        "renamed_count": {
+          "minimum": 0,
+          "title": "Renamed Count",
+          "type": "integer"
+        },
+        "reused_count": {
+          "minimum": 0,
+          "title": "Reused Count",
+          "type": "integer"
+        },
+        "reused_paths": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 1000,
+          "title": "Reused Paths",
+          "type": "array"
+        },
+        "skipped_count": {
+          "minimum": 0,
+          "title": "Skipped Count",
+          "type": "integer"
+        },
+        "skipped_paths": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 1000,
+          "title": "Skipped Paths",
+          "type": "array"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/IndexSnapshot"
+        },
+        "status": {
+          "$ref": "#/$defs/IndexStatus"
+        },
+        "unchanged": {
+          "default": false,
+          "title": "Unchanged",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "operation",
+        "snapshot",
+        "status",
+        "indexed_count",
+        "reused_count",
+        "skipped_count",
+        "deleted_count",
+        "renamed_count",
+        "invalidated_count"
+      ],
+      "title": "IndexMutationReport",
+      "type": "object"
+    },
+    "IndexOperationKind": {
+      "enum": [
+        "build",
+        "update",
+        "repair"
+      ],
+      "title": "IndexOperationKind",
+      "type": "string"
+    },
+    "IndexSnapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "completed_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Completed At"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "diagnostics": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/IndexDiagnostic"
+          },
+          "maxItems": 1000,
+          "title": "Diagnostics",
+          "type": "array"
+        },
+        "edge_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Edge Count",
+          "type": "integer"
+        },
+        "file_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "File Count",
+          "type": "integer"
+        },
+        "graph_hash": {
+          "title": "Graph Hash",
+          "type": "string"
+        },
+        "parser_versions": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Parser Versions",
+          "type": "object"
+        },
+        "project_map_hash": {
+          "title": "Project Map Hash",
+          "type": "string"
+        },
+        "reference_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Reference Count",
+          "type": "integer"
+        },
+        "repository_id": {
+          "title": "Repository Id",
+          "type": "string"
+        },
+        "snapshot_id": {
+          "title": "Snapshot Id",
+          "type": "string"
+        },
+        "source_fingerprint": {
+          "title": "Source Fingerprint",
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/IndexState"
+        },
+        "symbol_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Symbol Count",
+          "type": "integer"
+        },
+        "workspace_id": {
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "snapshot_id",
+        "repository_id",
+        "workspace_id",
+        "state",
+        "created_at",
+        "project_map_hash",
+        "graph_hash",
+        "source_fingerprint"
+      ],
+      "title": "IndexSnapshot",
+      "type": "object"
+    },
+    "IndexState": {
+      "enum": [
+        "absent",
+        "building",
+        "current",
+        "partially_current",
+        "stale",
+        "corrupted",
+        "incompatible",
+        "paused"
+      ],
+      "title": "IndexState",
+      "type": "string"
+    },
+    "IndexStatus": {
+      "additionalProperties": false,
+      "properties": {
+        "diagnostics": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/IndexDiagnostic"
+          },
+          "maxItems": 1000,
+          "title": "Diagnostics",
+          "type": "array"
+        },
+        "indexed_files": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Indexed Files",
+          "type": "integer"
+        },
+        "message": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Message"
+        },
+        "repository_id": {
+          "title": "Repository Id",
+          "type": "string"
+        },
+        "snapshot_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Snapshot Id"
+        },
+        "stale_paths": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 1000,
+          "title": "Stale Paths",
+          "type": "array"
+        },
+        "state": {
+          "$ref": "#/$defs/IndexState"
+        },
+        "total_files": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Total Files",
+          "type": "integer"
+        },
+        "workspace_id": {
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "repository_id",
+        "workspace_id",
+        "state"
+      ],
+      "title": "IndexStatus",
+      "type": "object"
+    },
+    "IndexVerificationReport": {
+      "additionalProperties": false,
+      "properties": {
+        "fresh": {
+          "title": "Fresh",
+          "type": "boolean"
+        },
+        "network_calls": {
+          "const": 0,
+          "default": 0,
+          "title": "Network Calls",
+          "type": "integer"
+        },
+        "provider_calls": {
+          "const": 0,
+          "default": 0,
+          "title": "Provider Calls",
+          "type": "integer"
+        },
+        "schema_version": {
+          "minimum": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "status": {
+          "$ref": "#/$defs/IndexStatus"
+        },
+        "valid": {
+          "title": "Valid",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "valid",
+        "fresh",
+        "schema_version",
+        "status"
+      ],
+      "title": "IndexVerificationReport",
       "type": "object"
     },
     "InfoResponse": {
@@ -2956,6 +3944,51 @@
       "title": "ReplaySpanResultResponse",
       "type": "object"
     },
+    "RepositorySearchReport": {
+      "additionalProperties": false,
+      "properties": {
+        "index_state": {
+          "$ref": "#/$defs/IndexState"
+        },
+        "network_calls": {
+          "const": 0,
+          "default": 0,
+          "title": "Network Calls",
+          "type": "integer"
+        },
+        "provider_calls": {
+          "const": 0,
+          "default": 0,
+          "title": "Provider Calls",
+          "type": "integer"
+        },
+        "query": {
+          "$ref": "#/$defs/SearchQuery"
+        },
+        "results": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SearchMatch"
+          },
+          "maxItems": 200,
+          "title": "Results",
+          "type": "array"
+        },
+        "snapshot_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Snapshot Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "snapshot_id",
+        "index_state",
+        "query"
+      ],
+      "title": "RepositorySearchReport",
+      "type": "object"
+    },
     "ResumeResponse": {
       "additionalProperties": false,
       "properties": {
@@ -3529,6 +4562,190 @@
       "title": "SchedulerResponse",
       "type": "object"
     },
+    "SearchMatch": {
+      "additionalProperties": false,
+      "properties": {
+        "dependency_path": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "title": "Dependency Path",
+          "type": "array"
+        },
+        "explanation": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Explanation",
+          "type": "string"
+        },
+        "matched_terms": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 128,
+          "title": "Matched Terms",
+          "type": "array"
+        },
+        "project_id": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Project Id"
+        },
+        "rank": {
+          "minimum": 1,
+          "title": "Rank",
+          "type": "integer"
+        },
+        "relative_path": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Relative Path",
+          "type": "string"
+        },
+        "score": {
+          "minimum": 0,
+          "title": "Score",
+          "type": "number"
+        },
+        "score_components": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Score Components",
+          "type": "object"
+        },
+        "source_hash": {
+          "maxLength": 64,
+          "minLength": 64,
+          "title": "Source Hash",
+          "type": "string"
+        },
+        "stale": {
+          "default": false,
+          "title": "Stale",
+          "type": "boolean"
+        },
+        "symbol": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SymbolSummary"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "rank",
+        "score",
+        "relative_path",
+        "source_hash",
+        "explanation"
+      ],
+      "title": "SearchMatch",
+      "type": "object"
+    },
+    "SearchQuery": {
+      "additionalProperties": false,
+      "properties": {
+        "languages": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SourceLanguage"
+          },
+          "maxItems": 32,
+          "title": "Languages",
+          "type": "array"
+        },
+        "limit": {
+          "default": 25,
+          "maximum": 200,
+          "minimum": 1,
+          "title": "Limit",
+          "type": "integer"
+        },
+        "offset": {
+          "default": 0,
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Offset",
+          "type": "integer"
+        },
+        "path_prefixes": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 128,
+          "title": "Path Prefixes",
+          "type": "array"
+        },
+        "project_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 128,
+          "title": "Project Ids",
+          "type": "array"
+        },
+        "symbol_kinds": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SymbolKind"
+          },
+          "maxItems": 64,
+          "title": "Symbol Kinds",
+          "type": "array"
+        },
+        "test_only": {
+          "default": false,
+          "title": "Test Only",
+          "type": "boolean"
+        },
+        "text": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "SearchQuery",
+      "type": "object"
+    },
+    "SourceLanguage": {
+      "enum": [
+        "python",
+        "typescript",
+        "javascript",
+        "java",
+        "go",
+        "json",
+        "yaml",
+        "toml",
+        "markdown",
+        "text",
+        "unknown"
+      ],
+      "title": "SourceLanguage",
+      "type": "string"
+    },
     "SpanComparisonResponse": {
       "additionalProperties": false,
       "properties": {
@@ -3662,6 +4879,156 @@
         "required_input_count"
       ],
       "title": "SpanReplayabilityResponse",
+      "type": "object"
+    },
+    "SymbolKind": {
+      "enum": [
+        "module",
+        "package",
+        "namespace",
+        "class",
+        "interface",
+        "enum",
+        "record",
+        "function",
+        "method",
+        "constructor",
+        "field",
+        "property",
+        "variable",
+        "constant",
+        "type_alias",
+        "endpoint",
+        "test",
+        "configuration_unit"
+      ],
+      "title": "SymbolKind",
+      "type": "string"
+    },
+    "SymbolSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "end_line": {
+          "minimum": 1,
+          "title": "End Line",
+          "type": "integer"
+        },
+        "endpoint": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Endpoint"
+        },
+        "exported": {
+          "default": false,
+          "title": "Exported",
+          "type": "boolean"
+        },
+        "kind": {
+          "$ref": "#/$defs/SymbolKind"
+        },
+        "language": {
+          "$ref": "#/$defs/SourceLanguage"
+        },
+        "module_id": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Module Id"
+        },
+        "name": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "project_id": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Project Id"
+        },
+        "qualified_name": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Qualified Name",
+          "type": "string"
+        },
+        "relative_path": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Relative Path",
+          "type": "string"
+        },
+        "signature": {
+          "anyOf": [
+            {
+              "maxLength": 4096,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Signature"
+        },
+        "start_line": {
+          "minimum": 1,
+          "title": "Start Line",
+          "type": "integer"
+        },
+        "symbol_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Symbol Id",
+          "type": "string"
+        },
+        "test": {
+          "default": false,
+          "title": "Test",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "symbol_id",
+        "name",
+        "qualified_name",
+        "kind",
+        "language",
+        "relative_path",
+        "start_line",
+        "end_line",
+        "confidence"
+      ],
+      "title": "SymbolSummary",
       "type": "object"
     },
     "TaskListResponse": {
@@ -3852,6 +5219,77 @@
         "updated_at"
       ],
       "title": "TaskSummary",
+      "type": "object"
+    },
+    "TestImpactResult": {
+      "additionalProperties": false,
+      "properties": {
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "escalation_reasons": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Escalation Reasons",
+          "type": "array"
+        },
+        "evidence": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 2000,
+          "title": "Evidence",
+          "type": "array"
+        },
+        "full_suite_recommended": {
+          "default": false,
+          "title": "Full Suite Recommended",
+          "type": "boolean"
+        },
+        "mandatory_tests": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 2000,
+          "title": "Mandatory Tests",
+          "type": "array"
+        },
+        "optional_tests": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 2000,
+          "title": "Optional Tests",
+          "type": "array"
+        },
+        "result_id": {
+          "title": "Result Id",
+          "type": "string"
+        },
+        "selected_tests": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 2000,
+          "title": "Selected Tests",
+          "type": "array"
+        }
+      },
+      "required": [
+        "result_id",
+        "confidence"
+      ],
+      "title": "TestImpactResult",
       "type": "object"
     },
     "ToolArtifact": {
@@ -6618,6 +8056,651 @@
       ],
       "title": "WorkflowMode",
       "type": "string"
+    },
+    "WorkspaceContextPlanRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "byte_budget": {
+          "default": 100000,
+          "maximum": 1000000,
+          "minimum": 1,
+          "title": "Byte Budget",
+          "type": "integer"
+        },
+        "changed_paths": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 1000,
+          "title": "Changed Paths",
+          "type": "array"
+        },
+        "include_evidence": {
+          "default": false,
+          "title": "Include Evidence",
+          "type": "boolean"
+        },
+        "projects": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 128,
+          "title": "Projects",
+          "type": "array"
+        },
+        "role": {
+          "default": "planner",
+          "enum": [
+            "planner",
+            "coder",
+            "verifier",
+            "reviewer"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "task": {
+          "maxLength": 20000,
+          "minLength": 1,
+          "title": "Task",
+          "type": "string"
+        },
+        "token_budget": {
+          "default": 16000,
+          "maximum": 200000,
+          "minimum": 1,
+          "title": "Token Budget",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "task"
+      ],
+      "title": "WorkspaceContextPlanRequest",
+      "type": "object"
+    },
+    "WorkspaceContextPlanResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "$ref": "#/$defs/ContextPlanSummary"
+        },
+        "workspace_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "result"
+      ],
+      "title": "WorkspaceContextPlanResponse",
+      "type": "object"
+    },
+    "WorkspaceGraphResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "direction": {
+          "enum": [
+            "dependencies",
+            "dependents"
+          ],
+          "title": "Direction",
+          "type": "string"
+        },
+        "edges": {
+          "items": {
+            "$ref": "#/$defs/GraphEdgeSummary"
+          },
+          "maxItems": 500,
+          "title": "Edges",
+          "type": "array"
+        },
+        "index_state": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Index State",
+          "type": "string"
+        },
+        "limit": {
+          "maximum": 500,
+          "minimum": 1,
+          "title": "Limit",
+          "type": "integer"
+        },
+        "maximum_depth_reached": {
+          "maximum": 16,
+          "minimum": 0,
+          "title": "Maximum Depth Reached",
+          "type": "integer"
+        },
+        "network_calls": {
+          "const": 0,
+          "default": 0,
+          "title": "Network Calls",
+          "type": "integer"
+        },
+        "next_offset": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Next Offset"
+        },
+        "nodes": {
+          "items": {
+            "$ref": "#/$defs/GraphNodeSummary"
+          },
+          "maxItems": 1001,
+          "title": "Nodes",
+          "type": "array"
+        },
+        "offset": {
+          "minimum": 0,
+          "title": "Offset",
+          "type": "integer"
+        },
+        "provider_calls": {
+          "const": 0,
+          "default": 0,
+          "title": "Provider Calls",
+          "type": "integer"
+        },
+        "snapshot_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Snapshot Id",
+          "type": "string"
+        },
+        "subject": {
+          "$ref": "#/$defs/SymbolSummary"
+        },
+        "total_edges": {
+          "minimum": 0,
+          "title": "Total Edges",
+          "type": "integer"
+        },
+        "truncated": {
+          "default": false,
+          "title": "Truncated",
+          "type": "boolean"
+        },
+        "workspace_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "snapshot_id",
+        "index_state",
+        "direction",
+        "subject",
+        "offset",
+        "limit",
+        "total_edges",
+        "maximum_depth_reached"
+      ],
+      "title": "WorkspaceGraphResponse",
+      "type": "object"
+    },
+    "WorkspaceImpactRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "include_evidence": {
+          "default": false,
+          "title": "Include Evidence",
+          "type": "boolean"
+        },
+        "languages": {
+          "items": {
+            "$ref": "#/$defs/SourceLanguage"
+          },
+          "maxItems": 32,
+          "title": "Languages",
+          "type": "array"
+        },
+        "max_depth": {
+          "default": 4,
+          "maximum": 8,
+          "minimum": 0,
+          "title": "Max Depth",
+          "type": "integer"
+        },
+        "max_nodes": {
+          "default": 500,
+          "maximum": 2000,
+          "minimum": 1,
+          "title": "Max Nodes",
+          "type": "integer"
+        },
+        "projects": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 128,
+          "title": "Projects",
+          "type": "array"
+        },
+        "subjects": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 256,
+          "minItems": 1,
+          "title": "Subjects",
+          "type": "array"
+        }
+      },
+      "required": [
+        "subjects"
+      ],
+      "title": "WorkspaceImpactRequest",
+      "type": "object"
+    },
+    "WorkspaceImpactResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "network_calls": {
+          "const": 0,
+          "default": 0,
+          "title": "Network Calls",
+          "type": "integer"
+        },
+        "provider_calls": {
+          "const": 0,
+          "default": 0,
+          "title": "Provider Calls",
+          "type": "integer"
+        },
+        "result": {
+          "$ref": "#/$defs/ImpactResult"
+        },
+        "workspace_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "result"
+      ],
+      "title": "WorkspaceImpactResponse",
+      "type": "object"
+    },
+    "WorkspaceIndexActionRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "workspace_trusted": {
+          "default": false,
+          "title": "Workspace Trusted",
+          "type": "boolean"
+        }
+      },
+      "title": "WorkspaceIndexActionRequest",
+      "type": "object"
+    },
+    "WorkspaceIndexCancellationResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "cancellation_requested": {
+          "title": "Cancellation Requested",
+          "type": "boolean"
+        },
+        "network_calls": {
+          "const": 0,
+          "default": 0,
+          "title": "Network Calls",
+          "type": "integer"
+        },
+        "operation_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Operation Id"
+        },
+        "operation_state": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Operation State"
+        },
+        "provider_calls": {
+          "const": 0,
+          "default": 0,
+          "title": "Provider Calls",
+          "type": "integer"
+        },
+        "repository_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Repository Id",
+          "type": "string"
+        },
+        "workspace_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "repository_id",
+        "cancellation_requested"
+      ],
+      "title": "WorkspaceIndexCancellationResponse",
+      "type": "object"
+    },
+    "WorkspaceIndexCreateRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "workspace": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Workspace",
+          "type": "string"
+        },
+        "workspace_trusted": {
+          "default": false,
+          "title": "Workspace Trusted",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "workspace"
+      ],
+      "title": "WorkspaceIndexCreateRequest",
+      "type": "object"
+    },
+    "WorkspaceIndexMutationResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "repository_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Repository Id",
+          "type": "string"
+        },
+        "result": {
+          "$ref": "#/$defs/IndexMutationReport"
+        },
+        "workspace_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "repository_id",
+        "result"
+      ],
+      "title": "WorkspaceIndexMutationResponse",
+      "type": "object"
+    },
+    "WorkspaceIndexStatusResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "network_calls": {
+          "const": 0,
+          "default": 0,
+          "title": "Network Calls",
+          "type": "integer"
+        },
+        "provider_calls": {
+          "const": 0,
+          "default": 0,
+          "title": "Provider Calls",
+          "type": "integer"
+        },
+        "repository_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Repository Id",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/IndexStatus"
+        },
+        "workspace_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "repository_id",
+        "status"
+      ],
+      "title": "WorkspaceIndexStatusResponse",
+      "type": "object"
+    },
+    "WorkspaceIndexVerificationResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "repository_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Repository Id",
+          "type": "string"
+        },
+        "result": {
+          "$ref": "#/$defs/IndexVerificationReport"
+        },
+        "workspace_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "repository_id",
+        "result"
+      ],
+      "title": "WorkspaceIndexVerificationResponse",
+      "type": "object"
+    },
+    "WorkspaceSearchRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "include_evidence": {
+          "default": false,
+          "title": "Include Evidence",
+          "type": "boolean"
+        },
+        "languages": {
+          "items": {
+            "$ref": "#/$defs/SourceLanguage"
+          },
+          "maxItems": 32,
+          "title": "Languages",
+          "type": "array"
+        },
+        "limit": {
+          "default": 25,
+          "maximum": 200,
+          "minimum": 1,
+          "title": "Limit",
+          "type": "integer"
+        },
+        "offset": {
+          "default": 0,
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Offset",
+          "type": "integer"
+        },
+        "path_prefixes": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 128,
+          "title": "Path Prefixes",
+          "type": "array"
+        },
+        "projects": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 128,
+          "title": "Projects",
+          "type": "array"
+        },
+        "query": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Query",
+          "type": "string"
+        },
+        "symbol_kinds": {
+          "items": {
+            "$ref": "#/$defs/SymbolKind"
+          },
+          "maxItems": 64,
+          "title": "Symbol Kinds",
+          "type": "array"
+        },
+        "test_only": {
+          "default": false,
+          "title": "Test Only",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "title": "WorkspaceSearchRequest",
+      "type": "object"
+    },
+    "WorkspaceSearchResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "report": {
+          "$ref": "#/$defs/RepositorySearchReport"
+        },
+        "workspace_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "report"
+      ],
+      "title": "WorkspaceSearchResponse",
+      "type": "object"
+    },
+    "WorkspaceSymbolResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "index_state": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Index State",
+          "type": "string"
+        },
+        "network_calls": {
+          "const": 0,
+          "default": 0,
+          "title": "Network Calls",
+          "type": "integer"
+        },
+        "provider_calls": {
+          "const": 0,
+          "default": 0,
+          "title": "Provider Calls",
+          "type": "integer"
+        },
+        "snapshot_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Snapshot Id",
+          "type": "string"
+        },
+        "symbol": {
+          "$ref": "#/$defs/SymbolSummary"
+        },
+        "workspace_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "snapshot_id",
+        "index_state",
+        "symbol"
+      ],
+      "title": "WorkspaceSymbolResponse",
+      "type": "object"
+    },
+    "WorkspaceTestsResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "network_calls": {
+          "const": 0,
+          "default": 0,
+          "title": "Network Calls",
+          "type": "integer"
+        },
+        "provider_calls": {
+          "const": 0,
+          "default": 0,
+          "title": "Provider Calls",
+          "type": "integer"
+        },
+        "result": {
+          "$ref": "#/$defs/TestImpactResult"
+        },
+        "workspace_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Workspace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "result"
+      ],
+      "title": "WorkspaceTestsResponse",
+      "type": "object"
     },
     "WorkspaceValidationRequest": {
       "additionalProperties": false,

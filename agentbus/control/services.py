@@ -13,6 +13,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from agentbus.config import AgentBusConfig
+from agentbus.control.intelligence import ControlIntelligenceService
 from agentbus.control.errors import (
     ControlPlaneConflictError,
     ControlPlaneError,
@@ -633,6 +634,10 @@ class ControlQueryService:
         self.store = store or StateStore(config.state_database_path)
         self.workspace_service = workspace_service or WorkspaceService()
         self.repository = RepositoryReviewService(self.workspace_service)
+        self.intelligence = ControlIntelligenceService(
+            config,
+            self.workspace_service,
+        )
         self._mcp_server_configs = {
             server.server_id: server for server in config.mcp_server_configs
         }
