@@ -112,6 +112,7 @@ def test_service_queries_are_explainable_bounded_and_source_free(
         token_budget=4_000,
         projects=("sample-service",),
     )
+    overview = service.overview()
 
     assert search.results
     assert search.results[0].explanation
@@ -124,6 +125,13 @@ def test_service_queries_are_explainable_bounded_and_source_free(
     assert "test_calculator.py" in tests.selected_tests
     assert context.role == ContextRole.CODER
     assert any(item.selected for item in context.candidates)
+    assert overview.projects[0].name == "sample-service"
+    assert overview.projects[0].file_count == 2
+    assert overview.languages[0].language.value == "python"
+    assert overview.symbol_kind_counts["function"] == 2
+    assert overview.symbol_kind_counts["test"] >= 1
+    assert overview.provider_calls == 0
+    assert overview.network_calls == 0
     payload = json.dumps(
         {
             "search": search.model_dump(mode="json"),
@@ -132,6 +140,7 @@ def test_service_queries_are_explainable_bounded_and_source_free(
             "impact": impact.model_dump(mode="json"),
             "tests": tests.model_dump(mode="json"),
             "context": context.model_dump(mode="json"),
+            "overview": overview.model_dump(mode="json"),
         },
         sort_keys=True,
     )

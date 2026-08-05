@@ -21,6 +21,7 @@ from agentbus.intelligence.service import (
     GraphNodeSummary,
     IndexMutationReport,
     IndexVerificationReport,
+    RepositoryOverview,
     RepositorySearchReport,
     SymbolSummary,
 )
@@ -106,6 +107,7 @@ class WorkspaceIndexStatusResponse(ProtocolModel):
     workspace_id: str = Field(min_length=1, max_length=256)
     repository_id: str = Field(min_length=1, max_length=256)
     status: IndexStatus
+    overview: RepositoryOverview | None = None
     provider_calls: Literal[0] = 0
     network_calls: Literal[0] = 0
 

@@ -144,6 +144,11 @@ def test_index_lifecycle_is_authenticated_trust_aware_and_contained(
     assert built["result"]["network_calls"] == 0
     assert status.status_code == 200
     assert status.json()["status"]["state"] == "current"
+    overview = status.json()["overview"]
+    assert overview["projects"][0]["name"] == "control-intelligence"
+    assert overview["languages"][0]["language"] == "python"
+    assert overview["symbol_kind_counts"]["function"] == 2
+    assert overview["symbol_kind_counts"]["test"] >= 1
     assert verified.status_code == 200
     assert verified.json()["result"]["valid"] is True
     assert "repository-intelligence" in info.json()["capabilities"]
@@ -167,6 +172,19 @@ def test_index_lifecycle_is_authenticated_trust_aware_and_contained(
     assert untrusted_update.status_code == 403
     assert updated.status_code == 200
     assert updated.json()["result"]["status"]["state"] == "current"
+    untrusted_repair = client.post(
+        f"/api/v1/workspaces/{workspace_id}/index/repair",
+        headers=_auth(),
+        json={"workspace_trusted": False},
+    )
+    repaired = client.post(
+        f"/api/v1/workspaces/{workspace_id}/index/repair",
+        headers=_auth(),
+        json={"workspace_trusted": True},
+    )
+    assert untrusted_repair.status_code == 403
+    assert repaired.status_code == 200
+    assert repaired.json()["result"]["operation"] == "repair"
 
     nested = repository / "nested"
     nested.mkdir()
@@ -361,6 +379,7 @@ def test_repository_intelligence_routes_are_additive_protocol_v1() -> None:
         "/api/v1/workspaces/{workspace_id}/index",
         "/api/v1/workspaces/{workspace_id}/index/update",
         "/api/v1/workspaces/{workspace_id}/index/verify",
+        "/api/v1/workspaces/{workspace_id}/index/repair",
         "/api/v1/workspaces/{workspace_id}/index/cancel",
         "/api/v1/workspaces/{workspace_id}/search",
         "/api/v1/workspaces/{workspace_id}/symbols/{symbol_id}",

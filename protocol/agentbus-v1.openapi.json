@@ -268,6 +268,76 @@
         "title": "ApprovalSummary",
         "type": "object"
       },
+      "ArchitectureBoundarySummary": {
+        "additionalProperties": false,
+        "properties": {
+          "boundary_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Boundary Id",
+            "type": "string"
+          },
+          "boundary_type": {
+            "enum": [
+              "layer",
+              "component",
+              "service",
+              "shared_library",
+              "generated",
+              "security_sensitive",
+              "forbidden_dependency"
+            ],
+            "title": "Boundary Type",
+            "type": "string"
+          },
+          "confidence": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "type": "number"
+          },
+          "explanation": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Explanation",
+            "type": "string"
+          },
+          "forbidden_targets": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 256,
+            "title": "Forbidden Targets",
+            "type": "array"
+          },
+          "name": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "scope": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 256,
+            "minItems": 1,
+            "title": "Scope",
+            "type": "array"
+          }
+        },
+        "required": [
+          "boundary_id",
+          "name",
+          "boundary_type",
+          "scope",
+          "confidence",
+          "explanation"
+        ],
+        "title": "ArchitectureBoundarySummary",
+        "type": "object"
+      },
       "CancelResponse": {
         "additionalProperties": false,
         "properties": {
@@ -2260,6 +2330,31 @@
         "title": "InfoResponse",
         "type": "object"
       },
+      "LanguageSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "file_count": {
+            "minimum": 0.0,
+            "title": "File Count",
+            "type": "integer"
+          },
+          "language": {
+            "$ref": "#/components/schemas/SourceLanguage"
+          },
+          "symbol_count": {
+            "minimum": 0.0,
+            "title": "Symbol Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "language",
+          "file_count",
+          "symbol_count"
+        ],
+        "title": "LanguageSummary",
+        "type": "object"
+      },
       "McpConfiguredToolSummary": {
         "additionalProperties": false,
         "properties": {
@@ -2503,6 +2598,202 @@
           "request_timeout_seconds"
         ],
         "title": "McpServerSummary",
+        "type": "object"
+      },
+      "ModuleSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "language": {
+            "$ref": "#/components/schemas/SourceLanguage"
+          },
+          "module_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Module Id",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "project_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Project Id",
+            "type": "string"
+          },
+          "public": {
+            "default": false,
+            "title": "Public",
+            "type": "boolean"
+          },
+          "qualified_name": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Qualified Name",
+            "type": "string"
+          },
+          "relative_path": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Relative Path",
+            "type": "string"
+          },
+          "symbol_count": {
+            "minimum": 0.0,
+            "title": "Symbol Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "module_id",
+          "project_id",
+          "name",
+          "qualified_name",
+          "relative_path",
+          "language",
+          "symbol_count"
+        ],
+        "title": "ModuleSummary",
+        "type": "object"
+      },
+      "OwnershipRuleSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "confidence": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "type": "number"
+          },
+          "explanation": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Explanation",
+            "type": "string"
+          },
+          "owners": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 128,
+            "minItems": 1,
+            "title": "Owners",
+            "type": "array"
+          },
+          "pattern": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Pattern",
+            "type": "string"
+          },
+          "rule_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Rule Id",
+            "type": "string"
+          },
+          "source_path": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Source Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "rule_id",
+          "pattern",
+          "owners",
+          "source_path",
+          "confidence",
+          "explanation"
+        ],
+        "title": "OwnershipRuleSummary",
+        "type": "object"
+      },
+      "ProjectKind": {
+        "enum": [
+          "python",
+          "node",
+          "java",
+          "go",
+          "generic"
+        ],
+        "title": "ProjectKind",
+        "type": "string"
+      },
+      "ProjectSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "file_count": {
+            "minimum": 0.0,
+            "title": "File Count",
+            "type": "integer"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ProjectKind"
+          },
+          "languages": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/SourceLanguage"
+            },
+            "maxItems": 32,
+            "title": "Languages",
+            "type": "array"
+          },
+          "name": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "project_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Project Id",
+            "type": "string"
+          },
+          "root": {
+            "maxLength": 2048,
+            "title": "Root",
+            "type": "string"
+          },
+          "source_roots": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 128,
+            "title": "Source Roots",
+            "type": "array"
+          },
+          "symbol_count": {
+            "minimum": 0.0,
+            "title": "Symbol Count",
+            "type": "integer"
+          },
+          "test_roots": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 128,
+            "title": "Test Roots",
+            "type": "array"
+          }
+        },
+        "required": [
+          "project_id",
+          "name",
+          "kind",
+          "root",
+          "file_count",
+          "symbol_count"
+        ],
+        "title": "ProjectSummary",
         "type": "object"
       },
       "ProvenanceProviderRouteSummary": {
@@ -3636,6 +3927,95 @@
           "summary"
         ],
         "title": "ReplaySpanResultResponse",
+        "type": "object"
+      },
+      "RepositoryOverview": {
+        "additionalProperties": false,
+        "properties": {
+          "architecture_boundaries": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ArchitectureBoundarySummary"
+            },
+            "maxItems": 500,
+            "title": "Architecture Boundaries",
+            "type": "array"
+          },
+          "index_state": {
+            "$ref": "#/components/schemas/IndexState"
+          },
+          "languages": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/LanguageSummary"
+            },
+            "maxItems": 32,
+            "title": "Languages",
+            "type": "array"
+          },
+          "modules": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ModuleSummary"
+            },
+            "maxItems": 1000,
+            "title": "Modules",
+            "type": "array"
+          },
+          "network_calls": {
+            "const": 0,
+            "default": 0,
+            "title": "Network Calls",
+            "type": "integer"
+          },
+          "ownership_rules": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/OwnershipRuleSummary"
+            },
+            "maxItems": 500,
+            "title": "Ownership Rules",
+            "type": "array"
+          },
+          "projects": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ProjectSummary"
+            },
+            "maxItems": 256,
+            "title": "Projects",
+            "type": "array"
+          },
+          "provider_calls": {
+            "const": 0,
+            "default": 0,
+            "title": "Provider Calls",
+            "type": "integer"
+          },
+          "snapshot_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Snapshot Id",
+            "type": "string"
+          },
+          "symbol_kind_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Symbol Kind Counts",
+            "type": "object"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "snapshot_id",
+          "index_state"
+        ],
+        "title": "RepositoryOverview",
         "type": "object"
       },
       "RepositorySearchReport": {
@@ -8084,6 +8464,16 @@
             "default": 0,
             "title": "Network Calls",
             "type": "integer"
+          },
+          "overview": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RepositoryOverview"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "provider_calls": {
             "const": 0,
@@ -14247,6 +14637,115 @@
           }
         },
         "summary": "Cancel Workspace Index"
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/index/repair": {
+      "post": {
+        "operationId": "repair_workspace_index_api_v1_workspaces__workspace_id__index_repair_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceIndexActionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceIndexMutationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          }
+        },
+        "summary": "Repair Workspace Index"
       }
     },
     "/api/v1/workspaces/{workspace_id}/index/update": {

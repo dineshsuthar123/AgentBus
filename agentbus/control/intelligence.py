@@ -35,7 +35,7 @@ from agentbus.intelligence.errors import (
     RepositoryIntelligenceError,
     RepositoryQueryError,
 )
-from agentbus.intelligence.models import ImpactResult, TestImpactResult
+from agentbus.intelligence.models import ImpactResult, IndexState, TestImpactResult
 from agentbus.intelligence.service import (
     ContextCandidateSummary,
     ContextPlanSummary,
@@ -86,10 +86,18 @@ class ControlIntelligenceService:
         service = self._get(workspace_id)
         with _control_errors():
             status = service.status()
+            overview = (
+                service.overview()
+                if status.snapshot_id is not None
+                and status.state
+                not in {IndexState.CORRUPTED, IndexState.INCOMPATIBLE}
+                else None
+            )
         return WorkspaceIndexStatusResponse(
             workspace_id=workspace_id,
             repository_id=service.repository.repository_id,
             status=status,
+            overview=overview,
         )
 
     def update(
@@ -116,6 +124,22 @@ class ControlIntelligenceService:
         with _control_errors():
             result = service.verify()
         return WorkspaceIndexVerificationResponse(
+            workspace_id=workspace_id,
+            repository_id=service.repository.repository_id,
+            result=result,
+        )
+
+    def repair(
+        self,
+        workspace_id: str,
+        *,
+        workspace_trusted: bool,
+    ) -> WorkspaceIndexMutationResponse:
+        self._require_trust(workspace_trusted)
+        service = self._get(workspace_id)
+        with _control_errors():
+            result = service.repair()
+        return WorkspaceIndexMutationResponse(
             workspace_id=workspace_id,
             repository_id=service.repository.repository_id,
             result=result,

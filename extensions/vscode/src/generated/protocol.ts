@@ -43,6 +43,16 @@ export interface ApprovalSummary {
   "expires_at"?: string | null;
 }
 
+export interface ArchitectureBoundarySummary {
+  "boundary_id": string;
+  "name": string;
+  "boundary_type": "layer" | "component" | "service" | "shared_library" | "generated" | "security_sensitive" | "forbidden_dependency";
+  "scope": Array<string>;
+  "confidence": number;
+  "explanation": string;
+  "forbidden_targets"?: Array<string>;
+}
+
 export interface CancelResponse {
   "run_id": string;
   "status": string;
@@ -397,6 +407,12 @@ export interface InfoResponse {
   "capabilities"?: Array<string>;
 }
 
+export interface LanguageSummary {
+  "language": SourceLanguage;
+  "file_count": number;
+  "symbol_count": number;
+}
+
 export interface McpConfiguredToolSummary {
   "name": string;
   "namespaced_name": string;
@@ -432,6 +448,40 @@ export interface McpServerSummary {
   "supported_protocol_versions": Array<string>;
   "startup_timeout_seconds": number;
   "request_timeout_seconds": number;
+}
+
+export interface ModuleSummary {
+  "module_id": string;
+  "project_id": string;
+  "name": string;
+  "qualified_name": string;
+  "relative_path": string;
+  "language": SourceLanguage;
+  "public"?: boolean;
+  "symbol_count": number;
+}
+
+export interface OwnershipRuleSummary {
+  "rule_id": string;
+  "pattern": string;
+  "owners": Array<string>;
+  "source_path": string;
+  "confidence": number;
+  "explanation": string;
+}
+
+export type ProjectKind = "python" | "node" | "java" | "go" | "generic";
+
+export interface ProjectSummary {
+  "project_id": string;
+  "name": string;
+  "kind": ProjectKind;
+  "root": string;
+  "source_roots"?: Array<string>;
+  "test_roots"?: Array<string>;
+  "file_count": number;
+  "symbol_count": number;
+  "languages"?: Array<SourceLanguage>;
 }
 
 export interface ProvenanceProviderRouteSummary {
@@ -614,6 +664,20 @@ export interface ReplaySpanResultResponse {
   "summary": string;
   "output_sha256"?: string | null;
   "drift"?: Array<string>;
+}
+
+export interface RepositoryOverview {
+  "snapshot_id": string;
+  "index_state": IndexState;
+  "projects"?: Array<ProjectSummary>;
+  "languages"?: Array<LanguageSummary>;
+  "modules"?: Array<ModuleSummary>;
+  "symbol_kind_counts"?: Record<string, number>;
+  "ownership_rules"?: Array<OwnershipRuleSummary>;
+  "architecture_boundaries"?: Array<ArchitectureBoundarySummary>;
+  "truncated"?: boolean;
+  "provider_calls"?: 0;
+  "network_calls"?: 0;
 }
 
 export interface RepositorySearchReport {
@@ -1367,6 +1431,7 @@ export interface WorkspaceIndexStatusResponse {
   "workspace_id": string;
   "repository_id": string;
   "status": IndexStatus;
+  "overview"?: RepositoryOverview | null;
   "provider_calls"?: 0;
   "network_calls"?: 0;
 }

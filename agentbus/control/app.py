@@ -381,6 +381,19 @@ def create_app(
         return query_service.intelligence.verify(workspace_id)
 
     @app.post(
+        f"{API_PREFIX}/workspaces/{{workspace_id}}/index/repair",
+        response_model=WorkspaceIndexMutationResponse,
+    )
+    def repair_workspace_index(
+        workspace_id: str,
+        request: WorkspaceIndexActionRequest,
+    ) -> WorkspaceIndexMutationResponse:
+        return query_service.intelligence.repair(
+            workspace_id,
+            workspace_trusted=request.workspace_trusted,
+        )
+
+    @app.post(
         f"{API_PREFIX}/workspaces/{{workspace_id}}/index/cancel",
         response_model=WorkspaceIndexCancellationResponse,
     )

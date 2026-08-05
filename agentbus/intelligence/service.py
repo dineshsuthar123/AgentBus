@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -42,6 +43,7 @@ from agentbus.intelligence.models import (
     Module,
     OwnershipRule,
     Project,
+    ProjectKind,
     SearchQuery,
     SourceFile,
     SourceLanguage,
@@ -58,6 +60,9 @@ from agentbus.intelligence.traversal import DependencyGraph, TraversalResult
 
 _MAX_MAINTENANCE_PATHS = 1_000
 _MAX_QUERY_RESULTS = 200
+_MAX_OVERVIEW_PROJECTS = 256
+_MAX_OVERVIEW_MODULES = 1_000
+_MAX_OVERVIEW_RULES = 500
 
 
 class IndexMutationReport(IntelligenceModel):
@@ -102,6 +107,88 @@ class IndexVerificationReport(IntelligenceModel):
     fresh: bool
     schema_version: int = Field(ge=1)
     status: IndexStatus
+    provider_calls: Literal[0] = 0
+    network_calls: Literal[0] = 0
+
+
+class ProjectSummary(IntelligenceModel):
+    project_id: str = Field(min_length=1, max_length=256)
+    name: str = Field(min_length=1, max_length=256)
+    kind: ProjectKind
+    root: str = Field(max_length=2_048)
+    source_roots: tuple[str, ...] = Field(default=(), max_length=128)
+    test_roots: tuple[str, ...] = Field(default=(), max_length=128)
+    file_count: int = Field(ge=0)
+    symbol_count: int = Field(ge=0)
+    languages: tuple[SourceLanguage, ...] = Field(default=(), max_length=32)
+
+
+class LanguageSummary(IntelligenceModel):
+    language: SourceLanguage
+    file_count: int = Field(ge=0)
+    symbol_count: int = Field(ge=0)
+
+
+class ModuleSummary(IntelligenceModel):
+    module_id: str = Field(min_length=1, max_length=256)
+    project_id: str = Field(min_length=1, max_length=256)
+    name: str = Field(min_length=1, max_length=512)
+    qualified_name: str = Field(min_length=1, max_length=2_048)
+    relative_path: str = Field(min_length=1, max_length=2_048)
+    language: SourceLanguage
+    public: bool = False
+    symbol_count: int = Field(ge=0)
+
+
+class OwnershipRuleSummary(IntelligenceModel):
+    rule_id: str = Field(min_length=1, max_length=256)
+    pattern: str = Field(min_length=1, max_length=2_048)
+    owners: tuple[str, ...] = Field(min_length=1, max_length=128)
+    source_path: str = Field(min_length=1, max_length=2_048)
+    confidence: float = Field(ge=0, le=1)
+    explanation: str = Field(min_length=1, max_length=2_048)
+
+
+class ArchitectureBoundarySummary(IntelligenceModel):
+    boundary_id: str = Field(min_length=1, max_length=256)
+    name: str = Field(min_length=1, max_length=512)
+    boundary_type: Literal[
+        "layer",
+        "component",
+        "service",
+        "shared_library",
+        "generated",
+        "security_sensitive",
+        "forbidden_dependency",
+    ]
+    scope: tuple[str, ...] = Field(min_length=1, max_length=256)
+    confidence: float = Field(ge=0, le=1)
+    explanation: str = Field(min_length=1, max_length=2_048)
+    forbidden_targets: tuple[str, ...] = Field(default=(), max_length=256)
+
+
+class RepositoryOverview(IntelligenceModel):
+    snapshot_id: str = Field(min_length=1, max_length=256)
+    index_state: IndexState
+    projects: tuple[ProjectSummary, ...] = Field(
+        default=(),
+        max_length=_MAX_OVERVIEW_PROJECTS,
+    )
+    languages: tuple[LanguageSummary, ...] = Field(default=(), max_length=32)
+    modules: tuple[ModuleSummary, ...] = Field(
+        default=(),
+        max_length=_MAX_OVERVIEW_MODULES,
+    )
+    symbol_kind_counts: dict[str, int] = Field(default_factory=dict)
+    ownership_rules: tuple[OwnershipRuleSummary, ...] = Field(
+        default=(),
+        max_length=_MAX_OVERVIEW_RULES,
+    )
+    architecture_boundaries: tuple[ArchitectureBoundarySummary, ...] = Field(
+        default=(),
+        max_length=_MAX_OVERVIEW_RULES,
+    )
+    truncated: bool = False
     provider_calls: Literal[0] = 0
     network_calls: Literal[0] = 0
 
@@ -321,6 +408,119 @@ class RepositoryIntelligenceService:
             fresh=status.state == IndexState.CURRENT,
             schema_version=self.store.schema_version,
             status=status,
+        )
+
+    def overview(self) -> RepositoryOverview:
+        view = self._view()
+        files, modules, symbols, _edges = self._safe_records(view)
+        file_counts = Counter(item.project_id for item in files)
+        symbol_counts = Counter(item.project_id for item in symbols)
+        project_languages: dict[str, set[SourceLanguage]] = {}
+        for source in files:
+            if source.project_id is not None:
+                project_languages.setdefault(source.project_id, set()).add(
+                    source.language
+                )
+        projects = tuple(
+            ProjectSummary(
+                project_id=item.project_id,
+                name=item.name,
+                kind=item.kind,
+                root=item.root,
+                source_roots=item.source_roots,
+                test_roots=item.test_roots,
+                file_count=file_counts[item.project_id],
+                symbol_count=symbol_counts[item.project_id],
+                languages=tuple(
+                    sorted(
+                        project_languages.get(item.project_id, set()),
+                        key=lambda value: value.value,
+                    )
+                ),
+            )
+            for item in sorted(view.projects, key=lambda value: value.project_id)[
+                :_MAX_OVERVIEW_PROJECTS
+            ]
+        )
+        language_files = Counter(item.language for item in files)
+        language_symbols = Counter(item.language for item in symbols)
+        languages = tuple(
+            LanguageSummary(
+                language=language,
+                file_count=language_files[language],
+                symbol_count=language_symbols[language],
+            )
+            for language in sorted(
+                set(language_files) | set(language_symbols),
+                key=lambda value: value.value,
+            )
+        )
+        module_symbols = Counter(item.module_id for item in symbols)
+        module_summaries = tuple(
+            ModuleSummary(
+                module_id=item.module_id,
+                project_id=item.project_id,
+                name=item.name,
+                qualified_name=item.qualified_name,
+                relative_path=item.relative_path,
+                language=item.language,
+                public=item.public,
+                symbol_count=module_symbols[item.module_id],
+            )
+            for item in sorted(modules, key=lambda value: value.module_id)[
+                :_MAX_OVERVIEW_MODULES
+            ]
+        )
+        ownership = tuple(
+            OwnershipRuleSummary(
+                rule_id=item.rule_id,
+                pattern=item.pattern,
+                owners=item.owners,
+                source_path=item.source_path,
+                confidence=item.confidence,
+                explanation=item.explanation,
+            )
+            for item in sorted(view.ownership_rules, key=lambda value: value.rule_id)[
+                :_MAX_OVERVIEW_RULES
+            ]
+        )
+        boundaries = tuple(
+            ArchitectureBoundarySummary(
+                boundary_id=item.boundary_id,
+                name=item.name,
+                boundary_type=item.boundary_type,
+                scope=item.scope,
+                confidence=item.confidence,
+                explanation=item.explanation,
+                forbidden_targets=item.forbidden_targets,
+            )
+            for item in sorted(view.boundaries, key=lambda value: value.boundary_id)[
+                :_MAX_OVERVIEW_RULES
+            ]
+        )
+        return RepositoryOverview(
+            snapshot_id=view.snapshot.snapshot_id,
+            index_state=view.status.state,
+            projects=projects,
+            languages=languages,
+            modules=module_summaries,
+            symbol_kind_counts={
+                kind.value: count
+                for kind, count in sorted(
+                    Counter(item.kind for item in symbols).items(),
+                    key=lambda item: item[0].value,
+                )
+            },
+            ownership_rules=ownership,
+            architecture_boundaries=boundaries,
+            truncated=any(
+                (
+                    len(view.projects) > _MAX_OVERVIEW_PROJECTS,
+                    len(modules) > _MAX_OVERVIEW_MODULES,
+                    len(view.ownership_rules) > _MAX_OVERVIEW_RULES,
+                    len(view.boundaries) > _MAX_OVERVIEW_RULES,
+                )
+            ),
         )
 
     def clear(self) -> IndexClearReport:
@@ -1078,6 +1278,7 @@ def _optional_relative_path(value: str) -> str | None:
 
 
 __all__ = [
+    "ArchitectureBoundarySummary",
     "ContextCandidateSummary",
     "ContextPlanSummary",
     "GraphEdgeSummary",
@@ -1087,6 +1288,11 @@ __all__ = [
     "IndexGarbageCollectionReport",
     "IndexMutationReport",
     "IndexVerificationReport",
+    "LanguageSummary",
+    "ModuleSummary",
+    "OwnershipRuleSummary",
+    "ProjectSummary",
+    "RepositoryOverview",
     "RepositoryIntelligenceService",
     "RepositorySearchReport",
     "SearchMatch",
