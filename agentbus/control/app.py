@@ -94,6 +94,7 @@ from agentbus.control.models import (
     WorkspaceImpactRequest,
     WorkspaceImpactResponse,
     WorkspaceIndexActionRequest,
+    WorkspaceIndexAttachRequest,
     WorkspaceIndexCancellationResponse,
     WorkspaceIndexCreateRequest,
     WorkspaceIndexMutationResponse,
@@ -348,6 +349,15 @@ def create_app(
         request: WorkspaceIndexCreateRequest,
     ) -> WorkspaceIndexMutationResponse:
         return query_service.intelligence.build(request)
+
+    @app.post(
+        f"{API_PREFIX}/workspaces/index/attach",
+        response_model=WorkspaceIndexStatusResponse,
+    )
+    def attach_workspace_index(
+        request: WorkspaceIndexAttachRequest,
+    ) -> WorkspaceIndexStatusResponse:
+        return query_service.intelligence.attach(request)
 
     @app.get(
         f"{API_PREFIX}/workspaces/{{workspace_id}}/index",

@@ -154,6 +154,17 @@ def test_index_lifecycle_is_authenticated_trust_aware_and_contained(
     assert "repository-intelligence" in info.json()["capabilities"]
     assert not (repository / "repository-index.sqlite3").exists()
 
+    manager = client.app.state.query_service.intelligence
+    manager._services.clear()
+    restored = client.post(
+        "/api/v1/workspaces/index/attach",
+        headers=_auth(),
+        json={"workspace": str(repository)},
+    )
+    assert restored.status_code == 200
+    assert restored.json()["workspace_id"] == workspace_id
+    assert restored.json()["status"]["state"] == "current"
+
     calculator = repository / "calculator.py"
     calculator.write_text(
         calculator.read_text(encoding="utf-8") + "\nVALUE = 3\n",
@@ -376,6 +387,7 @@ def test_repository_intelligence_routes_are_additive_protocol_v1() -> None:
     paths = openapi["paths"]
     expected = {
         "/api/v1/workspaces/index",
+        "/api/v1/workspaces/index/attach",
         "/api/v1/workspaces/{workspace_id}/index",
         "/api/v1/workspaces/{workspace_id}/index/update",
         "/api/v1/workspaces/{workspace_id}/index/verify",

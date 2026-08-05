@@ -19,6 +19,7 @@ from agentbus.control.models import (
     WorkspaceImpactRequest,
     WorkspaceImpactResponse,
     WorkspaceIndexCancellationResponse,
+    WorkspaceIndexAttachRequest,
     WorkspaceIndexCreateRequest,
     WorkspaceIndexMutationResponse,
     WorkspaceIndexStatusResponse,
@@ -81,6 +82,13 @@ class ControlIntelligenceService:
             repository_id=service.repository.repository_id,
             result=result,
         )
+
+    def attach(
+        self,
+        request: WorkspaceIndexAttachRequest,
+    ) -> WorkspaceIndexStatusResponse:
+        service = self._register(request.workspace)
+        return self.status(service.workspace_identity.workspace_id)
 
     def status(self, workspace_id: str) -> WorkspaceIndexStatusResponse:
         service = self._get(workspace_id)

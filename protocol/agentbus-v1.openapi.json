@@ -8344,6 +8344,22 @@
         "title": "WorkspaceIndexActionRequest",
         "type": "object"
       },
+      "WorkspaceIndexAttachRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "workspace": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Workspace",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workspace"
+        ],
+        "title": "WorkspaceIndexAttachRequest",
+        "type": "object"
+      },
       "WorkspaceIndexCancellationResponse": {
         "additionalProperties": false,
         "properties": {
@@ -13795,6 +13811,104 @@
           }
         },
         "summary": "Build Workspace Index"
+      }
+    },
+    "/api/v1/workspaces/index/attach": {
+      "post": {
+        "operationId": "attach_workspace_index_api_v1_workspaces_index_attach_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceIndexAttachRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceIndexStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          }
+        },
+        "summary": "Attach Workspace Index"
       }
     },
     "/api/v1/workspaces/validate": {

@@ -1406,6 +1406,10 @@ export interface WorkspaceIndexActionRequest {
   "workspace_trusted"?: boolean;
 }
 
+export interface WorkspaceIndexAttachRequest {
+  "workspace": string;
+}
+
 export interface WorkspaceIndexCancellationResponse {
   "workspace_id": string;
   "repository_id": string;

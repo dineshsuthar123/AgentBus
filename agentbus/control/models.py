@@ -93,6 +93,10 @@ class WorkspaceIndexCreateRequest(ProtocolModel):
     workspace_trusted: bool = False
 
 
+class WorkspaceIndexAttachRequest(ProtocolModel):
+    workspace: str = Field(min_length=1, max_length=4_096)
+
+
 class WorkspaceIndexActionRequest(ProtocolModel):
     workspace_trusted: bool = False
 

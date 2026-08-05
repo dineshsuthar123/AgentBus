@@ -8732,6 +8732,22 @@
       "title": "WorkspaceIndexActionRequest",
       "type": "object"
     },
+    "WorkspaceIndexAttachRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "workspace": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Workspace",
+          "type": "string"
+        }
+      },
+      "required": [
+        "workspace"
+      ],
+      "title": "WorkspaceIndexAttachRequest",
+      "type": "object"
+    },
     "WorkspaceIndexCancellationResponse": {
       "additionalProperties": false,
       "properties": {
