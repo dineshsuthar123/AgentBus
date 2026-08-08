@@ -1121,6 +1121,10 @@ class ControlQueryService:
                 str(self._safe_trace_value(value))
                 for value in policy_drift
             ],
+            intelligence_drift=[
+                str(self._safe_trace_value(value.value))
+                for value in session.intelligence_drift
+            ],
             failure_category=(
                 str(self._safe_trace_value(session.failure_category))
                 if session.failure_category is not None

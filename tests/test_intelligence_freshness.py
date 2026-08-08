@@ -113,6 +113,31 @@ def test_freshness_detects_same_size_ownership_changes(
     )
 
 
+def test_freshness_accepts_unchanged_multi_rule_ownership(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "service.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (tmp_path / "CODEOWNERS").write_text(
+        "/services/python_service/ @python-team\n"
+        "/packages/web/ @frontend-team\n"
+        "/services/java/ @java-team\n"
+        "/services/go/ @go-team\n"
+        "/packages/shared_python/ @architecture-team\n",
+        encoding="utf-8",
+    )
+    indexer, checker = _components(tmp_path)
+
+    indexer.build()
+    status = checker.status()
+
+    assert status.state == IndexState.CURRENT
+    assert status.stale_paths == ()
+    assert not any(
+        item.code == "index.ownership_stale"
+        for item in status.diagnostics
+    )
+
+
 def test_freshness_excludes_protected_and_generated_files(
     tmp_path: Path,
 ) -> None:

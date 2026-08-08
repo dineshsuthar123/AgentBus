@@ -815,6 +815,7 @@ class ReplaySessionResponse(ProtocolModel):
     substitutions: list[str] = Field(default_factory=list, max_length=4096)
     missing_inputs: list[str] = Field(default_factory=list, max_length=4096)
     policy_drift: list[str] = Field(default_factory=list, max_length=1024)
+    intelligence_drift: list[str] = Field(default_factory=list, max_length=32)
     failure_category: str | None = Field(default=None, max_length=256)
     failure_message: str | None = Field(default=None, max_length=4000)
     provider_calls: int = Field(default=0, ge=0)

@@ -140,6 +140,9 @@ def test_index_lifecycle_is_authenticated_trust_aware_and_contained(
     assert unauthenticated.status_code == 403
     assert untrusted.status_code == 403
     assert built["result"]["status"]["state"] == "current"
+    progress = built["result"]["progress_events"]
+    assert progress[0]["phase"] == "discovery"
+    assert progress[-1]["phase"] == "completed"
     assert built["result"]["provider_calls"] == 0
     assert built["result"]["network_calls"] == 0
     assert status.status_code == 200

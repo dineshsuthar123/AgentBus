@@ -180,10 +180,16 @@ class IndexFreshnessChecker:
         diagnostics = list(inventory.diagnostics)
         ownership = CodeOwnershipExtractor().extract(inventory)
         diagnostics.extend(ownership.diagnostics)
-        stored_ownership = self.store.list_ownership_rules(
-            snapshot.snapshot_id
+        stored_ownership = tuple(
+            sorted(
+                self.store.list_ownership_rules(snapshot.snapshot_id),
+                key=lambda item: item.rule_id,
+            )
         )
-        if ownership.rules != stored_ownership:
+        current_ownership = tuple(
+            sorted(ownership.rules, key=lambda item: item.rule_id)
+        )
+        if current_ownership != stored_ownership:
             ownership_paths = {
                 item.source_path for item in stored_ownership
             }

@@ -53,6 +53,7 @@ from agentbus.intelligence.models import (
     _relative_path,
 )
 from agentbus.intelligence.search import RepositoryLexicalIndex
+from agentbus.intelligence.scheduler import IndexProgressEvent
 from agentbus.intelligence.storage import IndexStore
 from agentbus.intelligence.test_impact import TestImpactSelector
 from agentbus.intelligence.traversal import DependencyGraph, TraversalResult
@@ -97,6 +98,10 @@ class IndexMutationReport(IntelligenceModel):
     invalidated_paths: tuple[str, ...] = Field(
         default=(),
         max_length=_MAX_MAINTENANCE_PATHS,
+    )
+    progress_events: tuple[IndexProgressEvent, ...] = Field(
+        default=(),
+        max_length=1_000,
     )
     path_reporting_truncated: bool = False
     provider_calls: Literal[0] = 0
@@ -838,6 +843,7 @@ class RepositoryIntelligenceService:
             skipped_paths=result.skipped_paths[:_MAX_MAINTENANCE_PATHS],
             deleted_paths=result.deleted_paths[:_MAX_MAINTENANCE_PATHS],
             invalidated_paths=result.invalidated_paths[:_MAX_MAINTENANCE_PATHS],
+            progress_events=result.progress_events[:1_000],
             path_reporting_truncated=any(
                 len(items) > _MAX_MAINTENANCE_PATHS for items in path_groups
             ),

@@ -347,12 +347,26 @@ export interface IndexMutationReport {
   "skipped_paths"?: Array<string>;
   "deleted_paths"?: Array<string>;
   "invalidated_paths"?: Array<string>;
+  "progress_events"?: Array<IndexProgressEvent>;
   "path_reporting_truncated"?: boolean;
   "provider_calls"?: 0;
   "network_calls"?: 0;
 }
 
 export type IndexOperationKind = "build" | "update" | "repair";
+
+export interface IndexProgressEvent {
+  "operation_id": string;
+  "sequence": number;
+  "phase": IndexProgressPhase;
+  "completed_items": number;
+  "total_items": number;
+  "relative_path"?: string | null;
+  "message": string;
+  "dropped_events"?: number;
+}
+
+export type IndexProgressPhase = "discovery" | "indexing" | "invalidation" | "persistence" | "completed" | "paused" | "failed";
 
 export interface IndexSnapshot {
   "snapshot_id": string;
@@ -600,6 +614,7 @@ export interface ReplayAcceptedResponse {
   "substitutions"?: Array<string>;
   "missing_inputs"?: Array<string>;
   "policy_drift"?: Array<string>;
+  "intelligence_drift"?: Array<string>;
   "failure_category"?: string | null;
   "failure_message"?: string | null;
   "provider_calls"?: number;
@@ -651,6 +666,7 @@ export interface ReplaySessionResponse {
   "substitutions"?: Array<string>;
   "missing_inputs"?: Array<string>;
   "policy_drift"?: Array<string>;
+  "intelligence_drift"?: Array<string>;
   "failure_category"?: string | null;
   "failure_message"?: string | null;
   "provider_calls"?: number;

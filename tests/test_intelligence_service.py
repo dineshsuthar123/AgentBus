@@ -6,6 +6,7 @@ from pathlib import Path
 from agentbus.intelligence import (
     ContextRole,
     IndexOperationKind,
+    IndexProgressPhase,
     IndexState,
     RepositoryIntelligenceService,
 )
@@ -50,6 +51,11 @@ def test_service_build_update_verify_repair_gc_and_clear(tmp_path: Path) -> None
     assert built.operation == IndexOperationKind.BUILD
     assert built.status.state == IndexState.CURRENT
     assert built.snapshot.file_count == 2
+    assert built.progress_events[0].phase == IndexProgressPhase.DISCOVERY
+    assert built.progress_events[-1].phase == IndexProgressPhase.COMPLETED
+    assert tuple(item.sequence for item in built.progress_events) == tuple(
+        range(1, len(built.progress_events) + 1)
+    )
     assert built.provider_calls == 0
     assert built.network_calls == 0
     assert str(service.workspace) not in json.dumps(
@@ -70,6 +76,7 @@ def test_service_build_update_verify_repair_gc_and_clear(tmp_path: Path) -> None
 
     assert updated.operation == IndexOperationKind.UPDATE
     assert updated.status.state == IndexState.CURRENT
+    assert updated.progress_events[-1].phase == IndexProgressPhase.COMPLETED
     assert verified.valid is True
     assert verified.fresh is True
     assert repaired.operation == IndexOperationKind.REPAIR

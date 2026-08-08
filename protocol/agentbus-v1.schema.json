@@ -2172,6 +2172,15 @@
           "title": "Path Reporting Truncated",
           "type": "boolean"
         },
+        "progress_events": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/IndexProgressEvent"
+          },
+          "maxItems": 1000,
+          "title": "Progress Events",
+          "type": "array"
+        },
         "provider_calls": {
           "const": 0,
           "default": 0,
@@ -2244,6 +2253,85 @@
         "repair"
       ],
       "title": "IndexOperationKind",
+      "type": "string"
+    },
+    "IndexProgressEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "completed_items": {
+          "maximum": 1000000,
+          "minimum": 0,
+          "title": "Completed Items",
+          "type": "integer"
+        },
+        "dropped_events": {
+          "default": 0,
+          "maximum": 1000000,
+          "minimum": 0,
+          "title": "Dropped Events",
+          "type": "integer"
+        },
+        "message": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Message",
+          "type": "string"
+        },
+        "operation_id": {
+          "pattern": "^indexop_[a-f0-9]{32,64}$",
+          "title": "Operation Id",
+          "type": "string"
+        },
+        "phase": {
+          "$ref": "#/$defs/IndexProgressPhase"
+        },
+        "relative_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Relative Path"
+        },
+        "sequence": {
+          "maximum": 1000000,
+          "minimum": 1,
+          "title": "Sequence",
+          "type": "integer"
+        },
+        "total_items": {
+          "maximum": 1000000,
+          "minimum": 0,
+          "title": "Total Items",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "operation_id",
+        "sequence",
+        "phase",
+        "completed_items",
+        "total_items",
+        "message"
+      ],
+      "title": "IndexProgressEvent",
+      "type": "object"
+    },
+    "IndexProgressPhase": {
+      "enum": [
+        "discovery",
+        "indexing",
+        "invalidation",
+        "persistence",
+        "completed",
+        "paused",
+        "failed"
+      ],
+      "title": "IndexProgressPhase",
       "type": "string"
     },
     "IndexSnapshot": {
@@ -3674,6 +3762,14 @@
           "default": null,
           "title": "From Span Id"
         },
+        "intelligence_drift": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "title": "Intelligence Drift",
+          "type": "array"
+        },
         "isolated": {
           "default": false,
           "title": "Isolated",
@@ -4043,6 +4139,14 @@
           ],
           "default": null,
           "title": "From Span Id"
+        },
+        "intelligence_drift": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "title": "Intelligence Drift",
+          "type": "array"
         },
         "isolated": {
           "default": false,
