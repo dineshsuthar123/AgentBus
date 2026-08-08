@@ -68,4 +68,6 @@ agentbus = ["py.typed"]
   "*.json",
   "fixtures_data/**/*",
   "fixtures_data/generated-artifact/.gitignore",
+  "fixtures_data/repository-intelligence-mixed/.env",
+  "fixtures_data/repository-intelligence-mixed/.gitignore",
 ]

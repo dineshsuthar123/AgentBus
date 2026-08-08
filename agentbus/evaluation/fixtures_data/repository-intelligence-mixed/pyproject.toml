@@ -1,0 +1,6 @@
+[project]
+name = "intelligence-python-service"
+version = "0.1.0"
+
+[tool.pytest.ini_options]
+testpaths = ["services/python_service/tests"]

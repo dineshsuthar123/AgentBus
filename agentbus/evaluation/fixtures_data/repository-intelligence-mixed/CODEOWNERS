@@ -1,0 +1,5 @@
+/services/python_service/ @python-team
+/packages/web/ @frontend-team
+/services/java/ @java-team
+/services/go/ @go-team
+/packages/shared_python/ @architecture-team

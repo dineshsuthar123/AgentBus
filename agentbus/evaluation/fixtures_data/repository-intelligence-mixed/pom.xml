@@ -1,0 +1,6 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>dev.agentbus.fixture</groupId>
+  <artifactId>intelligence-java-service</artifactId>
+  <version>0.1.0</version>
+</project>
