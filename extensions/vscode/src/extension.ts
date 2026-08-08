@@ -7,6 +7,15 @@ import {
 import { ComparisonStore } from "./comparisonStore";
 import type { AgentBusClient } from "./apiClient";
 import { DaemonManager } from "./daemonManager";
+import { IntelligenceCommandController } from "./intelligenceCommands";
+import { IntelligenceDocumentProvider } from "./intelligenceDocuments";
+import { RepositoryIntelligenceState } from "./intelligenceState";
+import {
+  ContextPlanProvider,
+  ImpactAnalysisProvider,
+  RepositoryIntelligenceProvider,
+  SymbolExplorerProvider
+} from "./intelligenceViews";
 import {
   ChangeDocumentProvider,
   ReportDocumentProvider
@@ -69,6 +78,14 @@ export function activate(context: vscode.ExtensionContext): AgentBusExtensionApi
   const replays = new ReplaySessionsProvider(client);
   const comparisons = new ComparisonsProvider(client, comparisonStore);
   const mcpServers = new McpServersProvider(client);
+  const intelligenceState = new RepositoryIntelligenceState(client);
+  const intelligenceDocuments = new IntelligenceDocumentProvider();
+  const repositoryIntelligence = new RepositoryIntelligenceProvider(
+    intelligenceState
+  );
+  const symbolExplorer = new SymbolExplorerProvider(intelligenceState);
+  const impactAnalysis = new ImpactAnalysisProvider(intelligenceState);
+  const contextPlan = new ContextPlanProvider(intelligenceState);
   context.subscriptions.push(
     output,
     status,
@@ -86,6 +103,17 @@ export function activate(context: vscode.ExtensionContext): AgentBusExtensionApi
       comparisons
     ),
     vscode.window.registerTreeDataProvider("agentbus.mcp", mcpServers),
+    vscode.window.registerTreeDataProvider(
+      "agentbus.intelligence",
+      repositoryIntelligence
+    ),
+    vscode.window.registerTreeDataProvider("agentbus.symbols", symbolExplorer),
+    vscode.window.registerTreeDataProvider("agentbus.impact", impactAnalysis),
+    vscode.window.registerTreeDataProvider("agentbus.contextPlan", contextPlan),
+    vscode.workspace.registerTextDocumentContentProvider(
+      "agentbus-intelligence",
+      intelligenceDocuments
+    ),
     vscode.workspace.registerTextDocumentContentProvider(
       "agentbus-before",
       new ChangeDocumentProvider(client)
@@ -137,7 +165,13 @@ export function activate(context: vscode.ExtensionContext): AgentBusExtensionApi
     vscode.workspace.registerTextDocumentContentProvider(
       "agentbus-comparison-side",
       new ComparisonSideDocumentProvider(client)
-    )
+    ),
+    intelligenceState,
+    intelligenceDocuments,
+    repositoryIntelligence,
+    symbolExplorer,
+    impactAnalysis,
+    contextPlan
   );
   const controller = new CommandController(
     daemon,
@@ -154,13 +188,21 @@ export function activate(context: vscode.ExtensionContext): AgentBusExtensionApi
       providers,
       replays,
       comparisons,
-      mcpServers
+      mcpServers,
+      intelligenceState
     ],
     output,
     status
   );
   controller.register(context);
   context.subscriptions.push(controller);
+  const intelligenceController = new IntelligenceCommandController(
+    intelligenceState,
+    intelligenceDocuments,
+    output
+  );
+  intelligenceController.register(context);
+  context.subscriptions.push(intelligenceController);
   return {
     client,
     daemonId: () => daemon.current()?.entry.daemon_id,

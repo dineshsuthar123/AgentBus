@@ -31,6 +31,10 @@
     "onView:agentbus.comparisons",
     "onView:agentbus.tools",
     "onView:agentbus.mcp",
+    "onView:agentbus.intelligence",
+    "onView:agentbus.symbols",
+    "onView:agentbus.impact",
+    "onView:agentbus.contextPlan",
     "onCommand:agentbus.startTask"
   ],
   "contributes": {
@@ -152,6 +156,62 @@
         "title": "AgentBus: Check MCP Server"
       },
       {
+        "command": "agentbus.buildRepositoryIndex",
+        "title": "AgentBus: Build Repository Index"
+      },
+      {
+        "command": "agentbus.updateRepositoryIndex",
+        "title": "AgentBus: Update Repository Index"
+      },
+      {
+        "command": "agentbus.verifyRepositoryIndex",
+        "title": "AgentBus: Verify Repository Index"
+      },
+      {
+        "command": "agentbus.repairRepositoryIndex",
+        "title": "AgentBus: Repair Repository Index"
+      },
+      {
+        "command": "agentbus.cancelRepositoryIndex",
+        "title": "AgentBus: Cancel Repository Index"
+      },
+      {
+        "command": "agentbus.searchRepository",
+        "title": "AgentBus: Search Repository"
+      },
+      {
+        "command": "agentbus.findRepositorySymbol",
+        "title": "AgentBus: Find Symbol"
+      },
+      {
+        "command": "agentbus.openRepositorySymbol",
+        "title": "AgentBus: Open Repository Symbol"
+      },
+      {
+        "command": "agentbus.showRepositoryDependencies",
+        "title": "AgentBus: Show Dependencies"
+      },
+      {
+        "command": "agentbus.showRepositoryDependents",
+        "title": "AgentBus: Show Dependents"
+      },
+      {
+        "command": "agentbus.analyzeChangeImpact",
+        "title": "AgentBus: Analyze Change Impact"
+      },
+      {
+        "command": "agentbus.findRelevantTests",
+        "title": "AgentBus: Find Relevant Tests"
+      },
+      {
+        "command": "agentbus.previewAgentContext",
+        "title": "AgentBus: Preview Agent Context"
+      },
+      {
+        "command": "agentbus.openArchitectureBoundary",
+        "title": "AgentBus: Open Architecture Boundary"
+      },
+      {
         "command": "agentbus.showMcpServer",
         "title": "AgentBus: Show MCP Server"
       },
@@ -238,6 +298,22 @@
         {
           "id": "agentbus.mcp",
           "name": "MCP Servers"
+        },
+        {
+          "id": "agentbus.intelligence",
+          "name": "Repository Intelligence"
+        },
+        {
+          "id": "agentbus.symbols",
+          "name": "Symbol Explorer"
+        },
+        {
+          "id": "agentbus.impact",
+          "name": "Impact Analysis"
+        },
+        {
+          "id": "agentbus.contextPlan",
+          "name": "Context Plan"
         }
       ]
     },
@@ -247,6 +323,36 @@
           "command": "agentbus.refresh",
           "when": "view =~ /agentbus\\./",
           "group": "navigation"
+        },
+        {
+          "command": "agentbus.buildRepositoryIndex",
+          "when": "view == agentbus.intelligence",
+          "group": "navigation@1"
+        },
+        {
+          "command": "agentbus.updateRepositoryIndex",
+          "when": "view == agentbus.intelligence",
+          "group": "navigation@2"
+        },
+        {
+          "command": "agentbus.verifyRepositoryIndex",
+          "when": "view == agentbus.intelligence",
+          "group": "navigation@3"
+        },
+        {
+          "command": "agentbus.searchRepository",
+          "when": "view == agentbus.symbols",
+          "group": "navigation@1"
+        },
+        {
+          "command": "agentbus.analyzeChangeImpact",
+          "when": "view == agentbus.impact",
+          "group": "navigation@1"
+        },
+        {
+          "command": "agentbus.previewAgentContext",
+          "when": "view == agentbus.contextPlan",
+          "group": "navigation@1"
         }
       ],
       "view/item/context": [
@@ -349,6 +455,51 @@
           "command": "agentbus.checkMcpServer",
           "when": "viewItem == agentbusMcpServer",
           "group": "inline@2"
+        },
+        {
+          "command": "agentbus.buildRepositoryIndex",
+          "when": "viewItem == agentbusIntelligenceWorkspace",
+          "group": "navigation@1"
+        },
+        {
+          "command": "agentbus.updateRepositoryIndex",
+          "when": "viewItem == agentbusIntelligenceWorkspace",
+          "group": "navigation@2"
+        },
+        {
+          "command": "agentbus.verifyRepositoryIndex",
+          "when": "viewItem == agentbusIntelligenceWorkspace",
+          "group": "navigation@3"
+        },
+        {
+          "command": "agentbus.repairRepositoryIndex",
+          "when": "viewItem == agentbusIntelligenceWorkspace",
+          "group": "navigation@4"
+        },
+        {
+          "command": "agentbus.cancelRepositoryIndex",
+          "when": "viewItem == agentbusIntelligenceWorkspace",
+          "group": "navigation@5"
+        },
+        {
+          "command": "agentbus.showRepositoryDependencies",
+          "when": "viewItem == agentbusRepositorySymbol",
+          "group": "inline@1"
+        },
+        {
+          "command": "agentbus.showRepositoryDependents",
+          "when": "viewItem == agentbusRepositorySymbol",
+          "group": "inline@2"
+        },
+        {
+          "command": "agentbus.analyzeChangeImpact",
+          "when": "viewItem == agentbusRepositorySymbol",
+          "group": "navigation@1"
+        },
+        {
+          "command": "agentbus.openArchitectureBoundary",
+          "when": "viewItem == agentbusRepositoryBoundary || viewItem == agentbusRepositoryOwnership",
+          "group": "inline"
         }
       ]
     },
