@@ -156,7 +156,7 @@ class ReferenceResolver:
                     "The parser target identity exists in the current snapshot."
                 ),
             )
-        exact = self._unique_qualified(target)
+        exact = self._unique_qualified(target, source=source)
         if exact is not None:
             return _match(
                 exact,
@@ -173,7 +173,7 @@ class ReferenceResolver:
         if module is not None:
             relative = _relative_import_name(module.qualified_name, target)
             if relative is not None:
-                matched = self._unique_qualified(relative)
+                matched = self._unique_qualified(relative, source=source)
                 if matched is not None:
                     return _match(
                         matched,
@@ -185,7 +185,8 @@ class ReferenceResolver:
                     )
             if not target.startswith("."):
                 matched = self._unique_qualified(
-                    f"{module.qualified_name}.{target}"
+                    f"{module.qualified_name}.{target}",
+                    source=source,
                 )
                 if matched is not None:
                     return _match(
@@ -200,7 +201,8 @@ class ReferenceResolver:
             parts = source.qualified_name.split(".")
             for end in range(len(parts) - 1, 0, -1):
                 matched = self._unique_qualified(
-                    f"{'.'.join(parts[:end])}.{target}"
+                    f"{'.'.join(parts[:end])}.{target}",
+                    source=source,
                 )
                 if matched is not None:
                     return _match(
@@ -227,6 +229,11 @@ class ReferenceResolver:
                     for identity in imported_symbol_ids
                     if identity in self._symbols_by_id
                     and self._symbols_by_id[identity].name == simple_name
+                    and (
+                        source is None
+                        or self._symbols_by_id[identity].language
+                        == source.language
+                    )
                 ),
                 key=lambda item: item.symbol_id,
             )
@@ -241,7 +248,11 @@ class ReferenceResolver:
                 ),
             )
 
-        named = self._by_name.get(simple_name, ())
+        named = tuple(
+            item
+            for item in self._by_name.get(simple_name, ())
+            if source is None or item.language == source.language
+        )
         if source is not None and source.project_id is not None:
             project_matches = tuple(
                 item
@@ -348,8 +359,17 @@ class ReferenceResolver:
             explanation=explanation,
         )
 
-    def _unique_qualified(self, name: str) -> Symbol | None:
-        matches = self._by_qualified_name.get(name, ())
+    def _unique_qualified(
+        self,
+        name: str,
+        *,
+        source: Symbol | None,
+    ) -> Symbol | None:
+        matches = tuple(
+            item
+            for item in self._by_qualified_name.get(name, ())
+            if source is None or item.language == source.language
+        )
         return matches[0] if len(matches) == 1 else None
 
 

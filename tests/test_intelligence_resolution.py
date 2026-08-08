@@ -119,6 +119,49 @@ def test_unique_repository_name_is_an_explicit_low_confidence_heuristic(
     assert "heuristically" in call.explanation
 
 
+def test_unique_name_in_another_language_remains_unresolved(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "api.ts").write_text(
+        "export interface Calculation { left: number; }\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "calculator.py").write_text(
+        "def calculate(left: int) -> int:\n"
+        "    return left\n",
+        encoding="utf-8",
+    )
+    repository = repository_identity("fixtures/cross-language-resolution")
+    workspace = workspace_identity(repository.repository_id, [""])
+    store = IndexStore(tmp_path / ".agentbus-test" / "cross-language.sqlite3")
+    result = RepositoryIndexer(
+        tmp_path,
+        repository,
+        workspace,
+        store,
+    ).build()
+    symbols = store.list_symbols(result.snapshot.snapshot_id)
+    typescript_left = next(
+        item
+        for item in symbols
+        if item.name == "left" and item.location.relative_path == "api.ts"
+    )
+    python_references = [
+        item
+        for item in store.list_references(result.snapshot.snapshot_id)
+        if (
+            item.location.relative_path == "calculator.py"
+            and item.unresolved_target == "left"
+        )
+    ]
+
+    assert python_references
+    assert all(
+        item.target_symbol_id != typescript_left.symbol_id
+        for item in python_references
+    )
+
+
 def test_resolver_results_are_deterministic_for_reordered_records(
     tmp_path: Path,
 ) -> None:
