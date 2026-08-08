@@ -90,3 +90,23 @@ It is not an arbitrary command endpoint and is not under `/api/v1` because MCP
 uses its own negotiated protocol versions. It shares the daemon's numeric
 loopback binding and opaque bearer authentication. See
 [MCP Integration](mcp-integration.md) for its fixed tool list and limits.
+
+## Repository-intelligence endpoints
+
+Repository intelligence is an additive protocol v1 capability. Generated
+OpenAPI, JSON Schema, and TypeScript types cover workspace attach/build/status,
+update/verify/repair/cancel, bounded progress, search, symbols, dependency pages,
+impact, tests, and context plans.
+
+All routes require bearer authentication. Index mutations also require an
+explicit trusted-workspace assertion. Workspace and repository IDs, relative
+paths, query lengths, page sizes, graph depth, subjects, progress events,
+diagnostics, candidates, evidence, and drift categories are schema bounded.
+Responses are source-free and expose zero provider/network calls for local
+operations.
+
+Replay session responses may include `intelligence_drift` with bounded stable
+category strings. This optional field preserves compatibility with clients that
+predate repository intelligence. Regenerate artifacts with
+`agentbus control-schema export`; CI and `npm run protocol:check` reject stale
+checked-in protocol files.

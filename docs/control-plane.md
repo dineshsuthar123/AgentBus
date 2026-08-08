@@ -153,6 +153,33 @@ On restart, persisted cancellation is reloaded. Stale process-local operation
 markers are abandoned without being reported as completed, stale leases remain
 subject to fencing, and terminal successful tasks are not rerun.
 
+## Repository intelligence
+
+Control protocol v1 exposes additive authenticated routes for local repository
+intelligence:
+
+- `POST /api/v1/workspaces/index` and `/index/attach`;
+- `GET /api/v1/workspaces/{workspace_id}/index`;
+- `POST` update, verify, repair, and cancel operations under that index;
+- bounded search and symbol detail;
+- bounded dependencies and dependents;
+- impact analysis and relevant-test selection;
+- role-specific context-plan previews.
+
+Build, update, and repair require an explicit trusted-workspace assertion. The
+daemon canonicalizes and contains the workspace, binds it to a stable workspace
+identity, and keeps the index database beside daemon state. Unknown workspace
+IDs fail closed. Graph depth, result pages, queries, subjects, diagnostics, and
+progress events are schema bounded.
+
+Responses include paths, symbol metadata, hashes, confidence, uncertainty,
+state, and safe explanations. They omit raw source, prompts, secrets, API keys,
+bearer tokens, personal absolute paths, and embedding vectors. All normal
+repository-intelligence responses report zero provider and network calls.
+
+See [Repository Intelligence](repository-intelligence.md) and the generated
+[Control Protocol v1](protocol-v1.md).
+
 ## True offline acceptance
 
 Run:
@@ -170,5 +197,8 @@ invocation, provider cancellation, SSE replay, reports, changes, and diffs.
 It also verifies hierarchical traces, provenance, full and checkpoint replay,
 fork comparison, blob tamper detection, archive export and isolated import,
 fixture capture and execution, cooperative replay cancellation, and
-provider/network call counts. It verifies every started MCP fixture session is
-stopped and makes no external network or paid provider call.
+provider/network call counts. It also builds and incrementally updates a real
+mixed-language index, checks protected-path exclusion, executes an
+intelligence-guided run, detects replayed index drift, exercises index
+cancellation, and repairs after daemon restart. It verifies every started MCP
+fixture session is stopped and makes no external network or paid provider call.

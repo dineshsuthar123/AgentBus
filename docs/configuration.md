@@ -149,3 +149,30 @@ Evaluation uses `AGENTBUS_EVAL_RESULTS_DIR`,
 `AGENTBUS_EVAL_MAX_REQUESTS`, `AGENTBUS_EVAL_MAX_TOKENS`, and
 `AGENTBUS_EVAL_TIMEOUT_SECONDS`. Live access still requires `--live`; an
 environment value cannot silently opt in.
+
+## Repository intelligence
+
+Repository intelligence uses the resolved `workspace_dir` and stores
+`repository-index.sqlite3` beside the resolved AgentBus state database. The
+database is local runtime state and must not be committed. CLI commands accept
+explicit `--workspace`, `--index-db`, and portable `--repository-key` overrides:
+
+```powershell
+agentbus index build --config .agentbus\config.toml
+agentbus index status --workspace C:\src\sample --json
+agentbus search calculate_total --workspace C:\src\sample
+```
+
+An explicit workspace always wins for that command and is canonically contained
+before indexing. Runtime and replay resolve the index beside the selected run's
+state and exact workspace; they do not fall back to an index for a daemon default
+or parent repository.
+
+There are no Azure, Ollama, embedding, or network settings required for normal
+indexing. Optional semantic retrieval is a Python integration API, disabled by
+default. It requires an explicit local provider descriptor that declares source
+is not sent off-device. AgentBus does not download semantic models or silently
+enable remote embeddings.
+
+See [Repository Intelligence](repository-intelligence.md) and
+[Incremental Indexing](incremental-indexing.md).
