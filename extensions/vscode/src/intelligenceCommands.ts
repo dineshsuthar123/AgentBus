@@ -39,6 +39,17 @@ interface SymbolChoice extends vscode.QuickPickItem {
   symbol: SymbolSummary;
 }
 
+interface ImpactCommandInput {
+  workspaceId: string;
+  subjects: readonly string[];
+}
+
+interface ContextCommandInput {
+  workspaceId: string;
+  task: string;
+  role: ContextRole;
+}
+
 type ArchitectureChoice =
   | (vscode.QuickPickItem & {
       choiceType: "boundary";
@@ -60,7 +71,10 @@ export class IntelligenceCommandController implements vscode.Disposable {
   ) {}
 
   public register(context: vscode.ExtensionContext): void {
-    const command = (name: string, action: (...args: unknown[]) => Promise<void>) =>
+    const command = (
+      name: string,
+      action: (...args: unknown[]) => Promise<unknown>
+    ) =>
       this.disposables.push(
         vscode.commands.registerCommand(name, (...args) =>
           this.execute(() => action(...args))
@@ -120,7 +134,7 @@ export class IntelligenceCommandController implements vscode.Disposable {
   private async mutateIndex(
     operation: IndexMutation,
     argument: unknown
-  ): Promise<void> {
+  ): Promise<WorkspaceIndexMutationResponse | undefined> {
     const workspace = await this.workspaceFor(
       argument,
       true,
@@ -153,6 +167,7 @@ export class IntelligenceCommandController implements vscode.Disposable {
       this.output.appendLine(
         `[repository-index] ${operation} completed (${counts.snapshot.state}).`
       );
+      return result;
     } finally {
       this.mutationsInFlight.delete(workspace.canonicalPath);
       this.state.refresh();
@@ -273,7 +288,7 @@ export class IntelligenceCommandController implements vscode.Disposable {
     if (!response) return;
     this.state.recordSearch(workspace, response);
     const choices = symbolChoices(response.report.results ?? []);
-    if (choices.length === 0) {
+    if (choices.length === 0 || typeof argument === "string") {
       await showIntelligenceDocument(
         this.documents,
         "search",
@@ -376,36 +391,48 @@ export class IntelligenceCommandController implements vscode.Disposable {
   }
 
   private async previewContext(argument: unknown): Promise<void> {
-    const workspace = await this.workspaceFor(
-      argument,
-      false,
-      "preview agent context"
-    );
+    const supplied = contextCommandInput(argument);
+    const workspace = supplied
+      ? await this.state.find(supplied.workspaceId)
+      : await this.workspaceFor(argument, false, "preview agent context");
     if (!workspace || !(await this.queryable(workspace))) return;
-    const task = await vscode.window.showInputBox({
-      title: "Preview Agent Context",
-      prompt: "Describe the task. The text is sent only to the authenticated local daemon.",
-      placeHolder: "Change the calculator endpoint and update its tests",
-      validateInput: (value) =>
-        validateTask(value) ? undefined : "Task must be 1 to 20000 characters."
-    });
-    if (task === undefined) return;
-    const role = await vscode.window.showQuickPick<
-      vscode.QuickPickItem & { role: ContextRole }
-    >(
-      ["planner", "coder", "verifier", "reviewer"].map((value) => ({
-        label: titleCase(value),
-        role: value as ContextRole
-      })),
-      { title: "Select Agent Role" }
-    );
-    if (!role) return;
+    let task: string;
+    let role: ContextRole;
+    if (supplied) {
+      task = supplied.task.trim();
+      role = supplied.role;
+      if (!validateTask(task)) {
+        throw new Error("Task must be 1 to 20000 characters.");
+      }
+    } else {
+      const taskInput = await vscode.window.showInputBox({
+        title: "Preview Agent Context",
+        prompt:
+          "Describe the task. The text is sent only to the authenticated local daemon.",
+        placeHolder: "Change the calculator endpoint and update its tests",
+        validateInput: (value) =>
+          validateTask(value) ? undefined : "Task must be 1 to 20000 characters."
+      });
+      if (taskInput === undefined) return;
+      const roleChoice = await vscode.window.showQuickPick<
+        vscode.QuickPickItem & { role: ContextRole }
+      >(
+        ["planner", "coder", "verifier", "reviewer"].map((value) => ({
+          label: titleCase(value),
+          role: value as ContextRole
+        })),
+        { title: "Select Agent Role" }
+      );
+      if (!roleChoice) return;
+      task = taskInput.trim();
+      role = roleChoice.role;
+    }
     const changedPath = activeRelativePath(workspace);
     const response = await (
       await this.state.client()
     ).repositoryContextPlan(workspace.status!.workspace_id, {
-      task: task.trim(),
-      role: role.role,
+      task,
+      role,
       changed_paths: changedPath ? [changedPath] : [],
       byte_budget: 100_000,
       token_budget: 16_000,
@@ -415,7 +442,7 @@ export class IntelligenceCommandController implements vscode.Disposable {
     await showIntelligenceDocument(
       this.documents,
       "context",
-      `${role.role}-context-plan`,
+      `${role}-context-plan`,
       formatContextPlanDocument(response)
     );
   }
@@ -478,6 +505,15 @@ export class IntelligenceCommandController implements vscode.Disposable {
     argument: unknown,
     title: string
   ): Promise<{ workspace: IntelligenceWorkspaceState; subjects: string[] } | undefined> {
+    const supplied = impactCommandInput(argument);
+    if (supplied) {
+      const workspace = await this.state.find(supplied.workspaceId);
+      if (!workspace || !(await this.queryable(workspace))) return undefined;
+      return {
+        workspace,
+        subjects: parseImpactSubjects(supplied.subjects.join(","))
+      };
+    }
     const target = targetFromTreeItem(argument);
     const workspace = target
       ? await this.state.find(target.workspaceId)
@@ -624,13 +660,14 @@ export class IntelligenceCommandController implements vscode.Disposable {
     ].includes(status.state) && Boolean(status.snapshot_id);
   }
 
-  private async execute(action: () => Promise<void>): Promise<void> {
+  private async execute<T>(action: () => Promise<T>): Promise<T | undefined> {
     try {
-      await action();
+      return await action();
     } catch (error) {
       const message = safeError(error);
       this.output.appendLine(`[repository-intelligence] ${message}`);
       void vscode.window.showErrorMessage(message);
+      return undefined;
     }
   }
 }
@@ -694,6 +731,46 @@ function activeRelativePath(
 function validateTask(value: string): boolean {
   const task = value.trim();
   return Boolean(task && task.length <= 20_000 && !task.includes("\0"));
+}
+
+function impactCommandInput(value: unknown): ImpactCommandInput | undefined {
+  const record = objectRecord(value);
+  if (!record || typeof record.workspaceId !== "string") return undefined;
+  if (!Array.isArray(record.subjects)) return undefined;
+  const subjects = record.subjects.filter(
+    (subject): subject is string => typeof subject === "string"
+  );
+  if (subjects.length !== record.subjects.length) return undefined;
+  return { workspaceId: record.workspaceId, subjects };
+}
+
+function contextCommandInput(value: unknown): ContextCommandInput | undefined {
+  const record = objectRecord(value);
+  if (
+    !record ||
+    typeof record.workspaceId !== "string" ||
+    typeof record.task !== "string" ||
+    !isContextRole(record.role)
+  ) {
+    return undefined;
+  }
+  return {
+    workspaceId: record.workspaceId,
+    task: record.task,
+    role: record.role
+  };
+}
+
+function isContextRole(value: unknown): value is ContextRole {
+  return ["planner", "coder", "verifier", "reviewer"].includes(
+    String(value)
+  );
+}
+
+function objectRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
 }
 
 function titleCase(value: string): string {
