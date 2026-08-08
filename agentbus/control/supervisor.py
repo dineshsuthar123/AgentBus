@@ -43,6 +43,7 @@ from agentbus.git.repository import GitRepository, GitRepositoryError
 from agentbus.memory.run_log import RunLogger
 from agentbus.models.errors import ModelCancellationError
 from agentbus.runtime.loop import AgentLoop, ManagedToolApprovalRequired
+from agentbus.runtime.intelligence import load_repository_intelligence_source
 from agentbus.runtime.orchestrator import MultiAgentOrchestrator
 from agentbus.tools.protocol import ToolResourceBudget
 from agentbus.tools.runtime import build_managed_tool_runtime
@@ -108,6 +109,7 @@ class AgentBusRunBackend:
             state_store=self.store,
             logger=RunLogger(log_dir=config.runs_dir, run_id=run_id),
             cancellation_registry=self.cancellations,
+            intelligence_source=self._intelligence_source(config),
         ).resume_durable(run_id)
 
     def _config_for_persisted_run(self, run: RunRecord) -> AgentBusConfig:
@@ -248,6 +250,14 @@ class AgentBusRunBackend:
             open_pr=request.create_pr,
             cancellation=self.cancellations.get(run_id),
             cancellation_registry=self.cancellations,
+            intelligence_source=self._intelligence_source(config),
+        )
+
+    @staticmethod
+    def _intelligence_source(config: AgentBusConfig):
+        return load_repository_intelligence_source(
+            config.workspace_path,
+            config.state_database_path.parent / "repository-index.sqlite3",
         )
 
     def _execute_persisted_non_durable(

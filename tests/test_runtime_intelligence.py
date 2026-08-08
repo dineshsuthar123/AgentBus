@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -19,6 +20,7 @@ from agentbus.intelligence import (
     IndexState,
     Project,
     ProjectKind,
+    RepositoryIntelligenceService,
     SourceFile,
     SourceLanguage,
     Symbol,
@@ -34,11 +36,13 @@ from agentbus.intelligence import (
     workspace_identity,
 )
 from agentbus.runtime.intelligence import (
+    LocalRepositoryIntelligenceSource,
     PlannerDependencyEvidence,
     PlannerIntelligenceContext,
     PlannerScopeValidationError,
     PlannerScopeValidator,
     append_planner_intelligence,
+    load_repository_intelligence_source,
 )
 from agentbus.runtime.intelligence_guidance import (
     build_coder_intelligence,
@@ -469,6 +473,20 @@ def test_scope_validator_warns_for_safe_new_paths() -> None:
     )
 
 
+def test_scope_validator_accepts_indexed_file_identity_components() -> None:
+    fixture = _fixture()
+    context = replace(
+        fixture.context,
+        impact=fixture.context.impact.model_copy(
+            update={"affected_configurations": (fixture.source.file_id,)}
+        ),
+    )
+
+    result = PlannerScopeValidator().validate(_plan(fixture), context)
+
+    assert fixture.source.file_id in result.plan["expected_impacted_components"]
+
+
 def test_scope_validator_rejects_protected_derived_impact_evidence() -> None:
     fixture = _fixture()
     unsafe_impact = fixture.context.impact.model_copy(
@@ -686,3 +704,66 @@ def test_trace_evidence_is_sanitized_bounded_and_drift_comparable() -> None:
     assert IntelligenceDriftCategory.TEST_SELECTION in categories
     assert report.provider_calls == 0
     assert report.network_calls == 0
+
+
+def test_local_index_source_is_bounded_source_free_and_stale_aware(
+    tmp_path: Path,
+) -> None:
+    repository = tmp_path / "repository"
+    source_path = repository / "src" / "calculator.py"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text(
+        "def calculate_total(left: int, right: int) -> int:\n"
+        "    return left + right\n",
+        encoding="utf-8",
+    )
+    (repository / "pyproject.toml").write_text(
+        '[project]\nname = "planner-fixture"\nversion = "0.1.0"\n',
+        encoding="utf-8",
+    )
+    (repository / ".env").write_text(
+        "REAL_API_KEY=must-not-appear\n",
+        encoding="utf-8",
+    )
+    database = tmp_path / "state" / "repository-index.sqlite3"
+    service = RepositoryIntelligenceService(repository, database)
+    service.build()
+    source = LocalRepositoryIntelligenceSource(service)
+
+    current = source.planner_context("Update calculate_total safely")
+
+    assert current is not None
+    assert current.snapshot is not None
+    assert current.snapshot.state == IndexState.CURRENT
+    assert any(item.name == "calculate_total" for item in current.symbols)
+    assert current.context_plan is not None
+    assert all(item.content is None for item in current.context_plan.candidates)
+    rendered = current.render()
+    assert "REAL_API_KEY" not in rendered
+    assert "must-not-appear" not in rendered
+
+    source_path.write_text(
+        "def calculate_total(left: int, right: int) -> int:\n"
+        "    return left - right\n",
+        encoding="utf-8",
+    )
+
+    stale = source.planner_context("Update calculate_total safely")
+
+    assert stale is not None
+    assert stale.snapshot is not None
+    assert stale.snapshot.state == IndexState.STALE
+    assert stale.context_plan is not None
+    assert stale.context_plan.stale_warning is not None
+    assert '"state": "stale"' in stale.render()
+
+
+def test_loading_missing_local_index_has_no_side_effects(tmp_path: Path) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    database = tmp_path / "state" / "repository-index.sqlite3"
+
+    source = load_repository_intelligence_source(repository, database)
+
+    assert source is None
+    assert not database.exists()

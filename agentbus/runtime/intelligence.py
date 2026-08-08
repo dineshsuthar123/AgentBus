@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from functools import cached_property
+from pathlib import Path
 from typing import Iterable, Protocol, runtime_checkable
 
 from agentbus.agents.planner import PlannerOutput
 from agentbus.intelligence.discovery.ignore import glob_match
+from agentbus.intelligence.errors import RepositoryIntelligenceError
 from agentbus.intelligence.identities import stable_hash
 from agentbus.intelligence.models import (
     ArchitectureBoundary,
@@ -21,6 +23,17 @@ from agentbus.intelligence.models import (
     Symbol,
     _relative_path,
 )
+from agentbus.intelligence.service import (
+    ContextPlanSummary,
+    RepositoryIntelligenceService,
+    SearchMatch,
+)
+
+
+_PLANNER_SEARCH_LIMIT = 50
+_PLANNER_CONTEXT_BYTE_BUDGET = 64_000
+_PLANNER_CONTEXT_TOKEN_BUDGET = 12_000
+_PLANNER_IMPACT_SUBJECT_LIMIT = 8
 
 
 class PlannerScopeValidationError(ValueError):
@@ -442,6 +455,191 @@ class StaticPlannerIntelligenceSource:
 
 
 @dataclass(frozen=True)
+class LocalRepositoryIntelligenceSource:
+    """Read-only bridge from a local index to bounded planner evidence."""
+
+    service: RepositoryIntelligenceService
+
+    def planner_context(
+        self,
+        user_task: str,
+    ) -> PlannerIntelligenceContext | None:
+        task = user_task.strip()
+        if not task:
+            raise ValueError("planner task must not be empty")
+        try:
+            status = self.service.status()
+            if status.state in {
+                IndexState.ABSENT,
+                IndexState.CORRUPTED,
+                IndexState.INCOMPATIBLE,
+            } or status.snapshot_id is None:
+                return None
+            snapshot = self.service.store.get_snapshot(status.snapshot_id)
+            if snapshot.state != status.state:
+                snapshot = snapshot.model_copy(update={"state": status.state})
+            projects = self.service.store.list_projects(snapshot.snapshot_id)
+            files = self.service.store.list_files(snapshot.snapshot_id)
+            all_symbols = self.service.store.list_symbols(snapshot.snapshot_id)
+            boundaries = self.service.store.list_architecture_boundaries(
+                snapshot.snapshot_id
+            )
+            search = self.service.search(
+                task[:2_048],
+                limit=_PLANNER_SEARCH_LIMIT,
+            )
+            plan_summary = self.service.context_plan(
+                task,
+                byte_budget=_PLANNER_CONTEXT_BYTE_BUDGET,
+                token_budget=_PLANNER_CONTEXT_TOKEN_BUDGET,
+            )
+        except RepositoryIntelligenceError:
+            return None
+
+        context_plan = _planner_context_plan(plan_summary)
+        relevant_paths = _relevant_paths(search.results, plan_summary)
+        impact = None
+        if relevant_paths:
+            try:
+                impact = self.service.impact(
+                    relevant_paths[:_PLANNER_IMPACT_SUBJECT_LIMIT],
+                    max_depth=4,
+                    max_nodes=500,
+                )
+            except RepositoryIntelligenceError:
+                impact = None
+
+        symbol_ids = {
+            item.symbol.symbol_id
+            for item in search.results
+            if item.symbol is not None
+        }
+        symbol_ids.update(
+            item.symbol_id
+            for item in plan_summary.candidates
+            if item.symbol_id is not None
+        )
+        if impact is not None:
+            symbol_ids.update(
+                (
+                    *impact.changed_symbols,
+                    *impact.direct_dependents,
+                    *impact.transitive_dependents,
+                    *impact.affected_public_apis,
+                    *impact.affected_endpoints,
+                    *impact.affected_configurations,
+                    *impact.integration_hotspots,
+                )
+            )
+        protected_file_ids = {
+            item.file_id for item in files if item.protected
+        }
+        symbols = tuple(
+            item
+            for item in all_symbols
+            if item.symbol_id in symbol_ids or item.file_id in protected_file_ids
+        )
+        dependencies = _dependency_evidence(search.results)
+        return PlannerIntelligenceContext(
+            snapshot=snapshot,
+            projects=projects[:1_000],
+            files=files[:100_000],
+            symbols=symbols[:100_000],
+            dependency_paths=dependencies,
+            boundaries=boundaries[:2_000],
+            context_plan=context_plan,
+            impact=impact,
+            diagnostics=status.diagnostics,
+            risk_areas=relevant_paths[:2_000],
+        )
+
+
+def load_repository_intelligence_source(
+    workspace: str | Path,
+    database_path: str | Path,
+) -> LocalRepositoryIntelligenceSource | None:
+    """Load an existing local index without creating or repairing one."""
+
+    database = Path(database_path).expanduser().resolve()
+    if not database.is_file():
+        return None
+    try:
+        service = RepositoryIntelligenceService(workspace, database)
+    except RepositoryIntelligenceError:
+        return None
+    return LocalRepositoryIntelligenceSource(service)
+
+
+def _planner_context_plan(summary: ContextPlanSummary) -> ContextPlan:
+    return ContextPlan(
+        plan_id=summary.plan_id,
+        snapshot_id=summary.snapshot_id,
+        role=summary.role,
+        task_hash=summary.task_hash,
+        byte_budget=summary.byte_budget,
+        token_budget=summary.token_budget,
+        selected_bytes=summary.selected_bytes,
+        selected_tokens=summary.selected_tokens,
+        candidates=tuple(
+            ContextCandidate(
+                candidate_id=item.candidate_id,
+                relative_path=item.relative_path,
+                source_hash=item.source_hash,
+                symbol_id=item.symbol_id,
+                role=item.role,
+                score=item.score,
+                byte_count=item.byte_count,
+                estimated_tokens=item.estimated_tokens,
+                selected=item.selected,
+                reasons=item.reasons,
+                exclusion_reason=item.exclusion_reason,
+                content=None,
+            )
+            for item in summary.candidates
+        ),
+        stale_warning=summary.stale_warning,
+        plan_hash=summary.plan_hash,
+    )
+
+
+def _relevant_paths(
+    results: Iterable[SearchMatch],
+    summary: ContextPlanSummary,
+) -> tuple[str, ...]:
+    return tuple(
+        dict.fromkeys(
+            (
+                *(item.relative_path for item in results),
+                *(
+                    item.relative_path
+                    for item in summary.candidates
+                    if item.selected
+                ),
+            )
+        )
+    )
+
+
+def _dependency_evidence(
+    results: Iterable[SearchMatch],
+) -> tuple[PlannerDependencyEvidence, ...]:
+    paths: dict[tuple[str, ...], PlannerDependencyEvidence] = {}
+    for result in results:
+        nodes = tuple(result.dependency_path)
+        if (
+            not nodes
+            or len(nodes) > 64
+            or any(not node or len(node) > 256 for node in nodes)
+        ):
+            continue
+        paths.setdefault(
+            nodes,
+            PlannerDependencyEvidence(node_ids=nodes, confidence=1.0),
+        )
+    return tuple(paths.values())[:2_000]
+
+
+@dataclass(frozen=True)
 class PlannerValidationResult:
     plan: dict
     warnings: tuple[str, ...]
@@ -494,6 +692,7 @@ class PlannerScopeValidator:
             *(item.project_id for item in context.projects),
             *safe_symbols,
             *safe_files,
+            *(item.file_id for item in safe_files.values()),
             *boundaries,
         }
         warnings: list[str] = []

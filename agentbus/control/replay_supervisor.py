@@ -18,6 +18,7 @@ from agentbus.control.models import (
 from agentbus.control.services import ControlQueryService
 from agentbus.replay.forks import ForkRequest
 from agentbus.replay.service import TraceReplayService
+from agentbus.runtime.intelligence import load_repository_intelligence_source
 from agentbus.replay.session import (
     ReplayRequest,
     ReplaySessionStatus,
@@ -61,7 +62,7 @@ class BackgroundReplaySupervisor:
             )
         self.query_service = query_service
         self.max_background_replays = max_background_replays
-        self._service_factory = service_factory or self._default_service
+        self._service_factory = service_factory
         self._executor = ThreadPoolExecutor(
             max_workers=max_background_replays,
             thread_name_prefix="agentbus-replay",
@@ -83,7 +84,11 @@ class BackgroundReplaySupervisor:
                 )
             trace = self.query_service.trace(run_id)
             cancelled = threading.Event()
-            service = self._service_factory(cancelled.is_set)
+            service = (
+                self._service_factory(cancelled.is_set)
+                if self._service_factory is not None
+                else self._default_service(cancelled.is_set, run_id)
+            )
             replay_request, fork_request = self._domain_requests(
                 trace,
                 request,
@@ -176,11 +181,20 @@ class BackgroundReplaySupervisor:
     def _default_service(
         self,
         cancelled: Callable[[], bool],
+        run_id: str,
     ) -> TraceReplayService:
+        run = self.query_service.get_run(run_id)
+        config = self.query_service.config.with_overrides(
+            workspace_dir=run.workspace
+        )
         return TraceReplayService(
-            self.query_service.config,
+            config,
             state_store=self.query_service.store,
             cancelled=cancelled,
+            intelligence_source=load_repository_intelligence_source(
+                config.workspace_path,
+                config.state_database_path.parent / "repository-index.sqlite3",
+            ),
         )
 
     @staticmethod
