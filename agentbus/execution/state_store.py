@@ -4694,7 +4694,7 @@ def _validate_replay_session_update(
         raise ReplaySessionConflictError(
             "Recorded replay span results cannot be rewritten."
         )
-    for field in ("substitutions", "policy_drift"):
+    for field in ("substitutions", "policy_drift", "intelligence_drift"):
         if not _is_prefix(getattr(previous, field), getattr(current, field)):
             raise ReplaySessionConflictError(
                 f"Recorded replay {field.replace('_', ' ')} cannot be rewritten."

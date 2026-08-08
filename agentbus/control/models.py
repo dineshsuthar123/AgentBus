@@ -8,6 +8,23 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from agentbus.control.version import API_PREFIX, CONTROL_PROTOCOL_VERSION
+from agentbus.intelligence.models import (
+    ImpactResult,
+    IndexStatus,
+    SourceLanguage,
+    SymbolKind,
+    TestImpactResult,
+)
+from agentbus.intelligence.service import (
+    ContextPlanSummary,
+    GraphEdgeSummary,
+    GraphNodeSummary,
+    IndexMutationReport,
+    IndexVerificationReport,
+    RepositoryOverview,
+    RepositorySearchReport,
+    SymbolSummary,
+)
 from agentbus.tools.protocol import (
     ToolAuditRecord,
     ToolCapability,
@@ -69,6 +86,153 @@ class WorkspaceValidationResponse(ProtocolModel):
     git_top_level: str | None = None
     is_git_repository: bool = False
     message: str | None = None
+
+
+class WorkspaceIndexCreateRequest(ProtocolModel):
+    workspace: str = Field(min_length=1, max_length=4_096)
+    workspace_trusted: bool = False
+
+
+class WorkspaceIndexAttachRequest(ProtocolModel):
+    workspace: str = Field(min_length=1, max_length=4_096)
+
+
+class WorkspaceIndexActionRequest(ProtocolModel):
+    workspace_trusted: bool = False
+
+
+class WorkspaceIndexMutationResponse(ProtocolModel):
+    workspace_id: str = Field(min_length=1, max_length=256)
+    repository_id: str = Field(min_length=1, max_length=256)
+    result: IndexMutationReport
+
+
+class WorkspaceIndexStatusResponse(ProtocolModel):
+    workspace_id: str = Field(min_length=1, max_length=256)
+    repository_id: str = Field(min_length=1, max_length=256)
+    status: IndexStatus
+    overview: RepositoryOverview | None = None
+    provider_calls: Literal[0] = 0
+    network_calls: Literal[0] = 0
+
+
+class WorkspaceIndexVerificationResponse(ProtocolModel):
+    workspace_id: str = Field(min_length=1, max_length=256)
+    repository_id: str = Field(min_length=1, max_length=256)
+    result: IndexVerificationReport
+
+
+class WorkspaceIndexCancellationResponse(ProtocolModel):
+    workspace_id: str = Field(min_length=1, max_length=256)
+    repository_id: str = Field(min_length=1, max_length=256)
+    cancellation_requested: bool
+    operation_id: str | None = Field(default=None, max_length=128)
+    operation_state: str | None = Field(default=None, max_length=64)
+    provider_calls: Literal[0] = 0
+    network_calls: Literal[0] = 0
+
+
+class WorkspaceSearchRequest(ProtocolModel):
+    query: str = Field(min_length=1, max_length=2_048)
+    projects: list[str] = Field(default_factory=list, max_length=128)
+    languages: list[SourceLanguage] = Field(default_factory=list, max_length=32)
+    symbol_kinds: list[SymbolKind] = Field(default_factory=list, max_length=64)
+    path_prefixes: list[str] = Field(default_factory=list, max_length=128)
+    test_only: bool = False
+    offset: int = Field(default=0, ge=0, le=100_000)
+    limit: int = Field(default=25, ge=1, le=200)
+    include_evidence: bool = False
+
+    @field_validator("projects", "path_prefixes")
+    @classmethod
+    def search_filters_are_bounded(cls, values: list[str]) -> list[str]:
+        if any(not item.strip() or len(item) > 2_048 for item in values):
+            raise ValueError("repository search filters must be bounded text")
+        return values
+
+
+class WorkspaceSearchResponse(ProtocolModel):
+    workspace_id: str = Field(min_length=1, max_length=256)
+    report: RepositorySearchReport
+
+
+class WorkspaceSymbolResponse(ProtocolModel):
+    workspace_id: str = Field(min_length=1, max_length=256)
+    snapshot_id: str = Field(min_length=1, max_length=256)
+    index_state: str = Field(min_length=1, max_length=64)
+    symbol: SymbolSummary
+    provider_calls: Literal[0] = 0
+    network_calls: Literal[0] = 0
+
+
+class WorkspaceGraphResponse(ProtocolModel):
+    workspace_id: str = Field(min_length=1, max_length=256)
+    snapshot_id: str = Field(min_length=1, max_length=256)
+    index_state: str = Field(min_length=1, max_length=64)
+    direction: Literal["dependencies", "dependents"]
+    subject: SymbolSummary
+    nodes: list[GraphNodeSummary] = Field(default_factory=list, max_length=1_001)
+    edges: list[GraphEdgeSummary] = Field(default_factory=list, max_length=500)
+    offset: int = Field(ge=0)
+    limit: int = Field(ge=1, le=500)
+    total_edges: int = Field(ge=0)
+    next_offset: int | None = Field(default=None, ge=0)
+    maximum_depth_reached: int = Field(ge=0, le=16)
+    truncated: bool = False
+    provider_calls: Literal[0] = 0
+    network_calls: Literal[0] = 0
+
+
+class WorkspaceImpactRequest(ProtocolModel):
+    subjects: list[str] = Field(min_length=1, max_length=256)
+    projects: list[str] = Field(default_factory=list, max_length=128)
+    languages: list[SourceLanguage] = Field(default_factory=list, max_length=32)
+    max_depth: int = Field(default=4, ge=0, le=8)
+    max_nodes: int = Field(default=500, ge=1, le=2_000)
+    include_evidence: bool = False
+
+    @field_validator("subjects", "projects")
+    @classmethod
+    def impact_values_are_bounded(cls, values: list[str]) -> list[str]:
+        if any(not item.strip() or len(item) > 2_048 for item in values):
+            raise ValueError("repository impact values must be bounded text")
+        return values
+
+
+class WorkspaceImpactResponse(ProtocolModel):
+    workspace_id: str = Field(min_length=1, max_length=256)
+    result: ImpactResult
+    provider_calls: Literal[0] = 0
+    network_calls: Literal[0] = 0
+
+
+class WorkspaceTestsResponse(ProtocolModel):
+    workspace_id: str = Field(min_length=1, max_length=256)
+    result: TestImpactResult
+    provider_calls: Literal[0] = 0
+    network_calls: Literal[0] = 0
+
+
+class WorkspaceContextPlanRequest(ProtocolModel):
+    task: str = Field(min_length=1, max_length=20_000)
+    role: Literal["planner", "coder", "verifier", "reviewer"] = "planner"
+    projects: list[str] = Field(default_factory=list, max_length=128)
+    changed_paths: list[str] = Field(default_factory=list, max_length=1_000)
+    byte_budget: int = Field(default=100_000, ge=1, le=1_000_000)
+    token_budget: int = Field(default=16_000, ge=1, le=200_000)
+    include_evidence: bool = False
+
+    @field_validator("projects", "changed_paths")
+    @classmethod
+    def context_filters_are_bounded(cls, values: list[str]) -> list[str]:
+        if any(not item.strip() or len(item) > 2_048 for item in values):
+            raise ValueError("repository context filters must be bounded text")
+        return values
+
+
+class WorkspaceContextPlanResponse(ProtocolModel):
+    workspace_id: str = Field(min_length=1, max_length=256)
+    result: ContextPlanSummary
 
 
 class RoleModelOverrides(ProtocolModel):
@@ -651,6 +815,7 @@ class ReplaySessionResponse(ProtocolModel):
     substitutions: list[str] = Field(default_factory=list, max_length=4096)
     missing_inputs: list[str] = Field(default_factory=list, max_length=4096)
     policy_drift: list[str] = Field(default_factory=list, max_length=1024)
+    intelligence_drift: list[str] = Field(default_factory=list, max_length=32)
     failure_category: str | None = Field(default=None, max_length=256)
     failure_message: str | None = Field(default=None, max_length=4000)
     provider_calls: int = Field(default=0, ge=0)

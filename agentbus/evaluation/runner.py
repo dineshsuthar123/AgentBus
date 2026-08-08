@@ -147,7 +147,14 @@ class EvaluationRunner:
         if suite.metadata.get("release_surface_checks"):
             run.metadata["release_acceptance"] = _release_surface_checks()
         self.storage.save_run(run)
-        backend = self.live_backend if live else self.offline_backend
+        if suite.metadata.get("repository_intelligence_backend"):
+            from agentbus.evaluation.intelligence import (
+                RepositoryIntelligenceEvaluationBackend,
+            )
+
+            backend = RepositoryIntelligenceEvaluationBackend()
+        else:
+            backend = self.live_backend if live else self.offline_backend
         for case in selected:
             fixture = self.fixture_manager.create(case, run.evaluation_run_id)
             budget = EvaluationBudget(
@@ -256,7 +263,11 @@ class EvaluationRunner:
         artifacts = [
             EvaluationArtifact(
                 artifact_type="fixture_repository",
-                identifier=str(fixture.repository if retain else fixture.source),
+                identifier=(
+                    str(fixture.repository)
+                    if retain
+                    else f"fixture:{case.case_id}"
+                ),
                 retained=retain,
                 metadata={"owned": retain},
             )

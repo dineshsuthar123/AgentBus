@@ -30,6 +30,29 @@
   an absolute executable identity, separate arguments, a sanitized environment,
   `shell=False`, bounded resources, and process-tree cleanup.
 
+## Repository-index security
+
+Repository indexing remains inside the daemon's loopback, bearer-authenticated,
+workspace-scoped boundary. Mutating index operations require Workspace Trust.
+The daemon uses the same contained-path resolver as managed filesystem tools and
+rejects traversal, symlinks/junctions, device and UNC paths, alternate data
+streams, protected files, and cross-workspace identity reuse.
+
+Parsers read bounded text statically. They never import Python modules, execute
+`setup.py`, invoke package managers or build tools, or evaluate JavaScript, Java,
+or Go code. SQLite writes are parameterized and atomically publish immutable
+snapshots. Search does not interpolate user input into SQL or FTS syntax; graph
+depth, pages, context, progress, and diagnostics are bounded.
+
+Index records and API evidence contain metadata and hashes, not source
+snapshots, prompts, secrets, personal absolute paths, or embedding vectors.
+Optional semantic retrieval is disabled by default and rejects providers that
+declare off-device source transfer. `repository-index.sqlite3`, WAL/SHM files,
+and local semantic caches are runtime artifacts and must not be packaged or
+committed.
+
+See [Repository Intelligence](repository-intelligence.md).
+
 This is a local authenticated policy boundary, not a VM, container, firewall,
 restricted OS token, or perfect sandbox isolation. See
 [Sandbox Security](sandbox-security.md) and [MCP Integration](mcp-integration.md).

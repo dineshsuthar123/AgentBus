@@ -25,7 +25,12 @@ from agentbus.replay import ReplayMode, ReplaySession
 from agentbus.sandbox.platform import ExecutableCatalog
 from agentbus.tools.protocol import ToolCapabilityName
 from agentbus.tools.runtime import build_managed_tool_runtime
-from agentbus.trace import RuntimeTrace, TraceSpanType, TraceStatus
+from agentbus.trace import (
+    IntelligenceDriftCategory,
+    RuntimeTrace,
+    TraceSpanType,
+    TraceStatus,
+)
 from agentbus.trace.redaction import canonical_json_bytes
 from agentbus.trace.sealing import seal_run_provenance
 
@@ -538,11 +543,13 @@ def test_replay_response_exposes_isolation_scope_without_private_path(
             source_run_id="run-1",
             mode=ReplayMode.OFFLINE,
             isolated_workspace=str(tmp_path / "private-replay-worktree"),
+            intelligence_drift=[IntelligenceDriftCategory.INDEX_SNAPSHOT],
         )
     )
 
     assert response.isolated is True
     assert response.isolation_scope == "daemon_managed_temporary_workspace"
+    assert response.intelligence_drift == ["index_snapshot_drift"]
     assert "isolated_workspace" not in response.model_dump(mode="json")
     assert str(tmp_path) not in response.model_dump_json()
 

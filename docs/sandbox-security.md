@@ -166,6 +166,18 @@ back completed filesystem, Git, process, MCP, or network side effects. Reports
 list retained files and safe cleanup guidance. AgentBus never runs automatic
 `git reset`, `git clean`, recursive deletion, or destructive rollback.
 
+## Static repository indexing
+
+The repository-intelligence indexer does not use the process sandbox because it
+does not execute repository-controlled commands. It statically parses bounded
+contained files and manifest text. Python setup files, Node scripts, Maven or
+Gradle tasks, Go tooling, language servers, and compiler plugins are not run.
+
+Discovery excludes protected, generated, and vendor paths and rejects links,
+devices, UNC paths, alternate streams, and root escape before reading. Parser
+failures, oversized files, limit exhaustion, and malformed syntax produce
+bounded diagnostics or partial state; they do not trigger fallback execution.
+
 ## Known limitations
 
 - There is no kernel-grade isolation or malicious-code containment claim.

@@ -1,7 +1,7 @@
 import json
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from agentbus.agents.base import BaseAgent
 from agentbus.config import AgentBusConfig
@@ -24,6 +24,13 @@ class ReviewerOutput(BaseModel):
     issues: list[ReviewIssue]
     summary: str
     required_fixes: list[str]
+    unplanned_affected_components: list[str] = Field(
+        default_factory=list,
+        max_length=2_000,
+    )
+    missing_tests: list[str] = Field(default_factory=list, max_length=2_000)
+    boundary_violations: list[str] = Field(default_factory=list, max_length=256)
+    index_uncertainty: list[str] = Field(default_factory=list, max_length=256)
 
 
 class ReviewerAgent(BaseAgent):
@@ -52,6 +59,7 @@ class ReviewerAgent(BaseAgent):
         generated_artifacts: list[str] | None = None,
         ignored_files: list[str] | None = None,
         tracked_generated_artifacts: list[str] | None = None,
+        repository_intelligence: str | None = None,
     ) -> dict:
         prompt = f"""
 You are the AgentBus Reviewer Agent.
@@ -66,7 +74,11 @@ Return ONLY valid JSON with this shape:
     }}
   ],
   "summary": "...",
-  "required_fixes": ["..."]
+  "required_fixes": ["..."],
+  "unplanned_affected_components": ["..."],
+  "missing_tests": ["..."],
+  "boundary_violations": ["..."],
+  "index_uncertainty": ["..."]
 }}
 
 Original user task:
@@ -81,8 +93,16 @@ Git diff:
 Repository change classification:
 {_artifact_note(relevant_changed_files, generated_artifacts, ignored_files, tracked_generated_artifacts)}
 
+Repository intelligence review evidence:
+{_intelligence_note(repository_intelligence)}
+
 Test output:
 {test_output or "No test output available."}
+
+Compare actual changes with planned files and impacted components. Check likely
+tests and architecture constraints against the diff and test output. Report
+stale-index uncertainty. Intelligence candidates are heuristics, not proof, so
+do not reject solely because a candidate is listed without corroborating evidence.
 """
         output = self.generate_json(prompt, schema=ReviewerOutput)
         return ReviewerOutput(**output).model_dump()
@@ -100,6 +120,7 @@ Test output:
         generated_artifacts: list[str] | None = None,
         ignored_files: list[str] | None = None,
         tracked_generated_artifacts: list[str] | None = None,
+        repository_intelligence: str | None = None,
     ) -> dict:
         prompt = f"""
 You are the AgentBus task-level Reviewer Agent.
@@ -114,7 +135,11 @@ Return ONLY valid JSON with this shape:
     }}
   ],
   "summary": "...",
-  "required_fixes": ["..."]
+  "required_fixes": ["..."],
+  "unplanned_affected_components": ["..."],
+  "missing_tests": ["..."],
+  "boundary_violations": ["..."],
+  "index_uncertainty": ["..."]
 }}
 
 Review only the current task against its own expected outputs and done criteria.
@@ -138,11 +163,18 @@ Repository change classification:
 Current task diff and observations:
 {task_diff}
 
+Current task repository intelligence review evidence:
+{_intelligence_note(repository_intelligence)}
+
 Coder summary:
 {coder_summary}
 
 Current task verifier result:
 {json.dumps(verifier_result, indent=2)}
+
+Treat intelligence candidates as heuristics, not proof. Corroborate unplanned
+effects, missing tests, and boundary violations with this task's diff and
+verifier output, and report stale-index uncertainty explicitly.
 """
         output = self.generate_json(prompt, schema=ReviewerOutput)
         return ReviewerOutput(**output).model_dump()
@@ -178,3 +210,9 @@ def _artifact_note(
         },
         indent=2,
     )
+
+
+def _intelligence_note(value: str | None) -> str:
+    if not value:
+        return "No repository intelligence evidence is available."
+    return value[:12_000]

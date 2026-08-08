@@ -234,6 +234,24 @@ uncaptured side effects are not exactly replayable. Reports retain this
 limitation instead of treating a matching final status as proof of identical
 execution.
 
+## Repository-intelligence drift
+
+When a run used repository intelligence, its trace captures source-free
+snapshot, graph, retrieval, context-plan, and context hashes. Offline replay
+reuses this captured evidence without provider or network calls. If the exact
+local workspace index is available, replay may also compare current evidence and
+report bounded drift categories:
+
+- `index_snapshot_drift`;
+- `graph_drift`;
+- `retrieval_result_drift`;
+- `context_plan_drift`.
+
+Drift does not mutate the original trace, rerun a provider, or silently replace
+captured evidence. An unavailable current index leaves captured evidence usable
+and reports that comparison was unavailable. A different workspace index is
+never substituted. See [Context Planning](context-planning.md).
+
 ## Related documents
 
 - [Execution Tracing](execution-tracing.md)

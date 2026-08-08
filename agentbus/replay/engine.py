@@ -41,6 +41,14 @@ from agentbus.replay.tools import (
     load_tool_envelope,
 )
 from agentbus.trace.models import ReplayMode, Trace, TraceSpan, TraceSpanType, utc_now
+from agentbus.trace.intelligence import (
+    REPOSITORY_INTELLIGENCE_COMPONENT,
+    RepositoryIntelligenceReplayReport,
+    RepositoryIntelligenceTraceEvidence,
+    compare_repository_intelligence,
+    reuse_captured_repository_intelligence,
+    unavailable_current_repository_intelligence,
+)
 from agentbus.trace.provenance import ReplayabilityLevel
 from agentbus.trace.redaction import canonical_json_bytes, sanitize_document
 from agentbus.trace.storage import ContentAddressedStore
@@ -50,6 +58,10 @@ Schema = type[BaseModel] | dict[str, Any]
 PolicyEvaluator = Callable[[TraceSpan, list[Any]], dict[str, Any]]
 Verifier = Callable[[TraceSpan, list[Any]], dict[str, Any]]
 ToolExecutor = Callable[[TraceSpan, list[Any], Path], dict[str, Any]]
+RepositoryIntelligenceResolver = Callable[
+    [RepositoryIntelligenceTraceEvidence],
+    RepositoryIntelligenceTraceEvidence | None,
+]
 
 
 class ReplayEngine:
@@ -69,6 +81,8 @@ class ReplayEngine:
         checkpoint_manager: CheckpointManager | None = None,
         isolation_manager: ReplayIsolationManager | None = None,
         source_workspace: str | Path | None = None,
+        repository_intelligence_resolver: RepositoryIntelligenceResolver
+        | None = None,
         cancelled: Callable[[], bool] | None = None,
         clock: Callable = utc_now,
     ):
@@ -87,6 +101,7 @@ class ReplayEngine:
             if source_workspace is not None
             else None
         )
+        self.repository_intelligence_resolver = repository_intelligence_resolver
         self.cancelled = cancelled or (lambda: False)
         self.clock = clock
 
@@ -119,6 +134,7 @@ class ReplayEngine:
             isolated_workspace=_safe_workspace_label(request.isolated_workspace),
             missing_inputs=classification.missing_input_hashes,
         )
+        repository_intelligence = None
         try:
             effective_request = self._prepare_partial_replay(
                 trace,
@@ -139,7 +155,23 @@ class ReplayEngine:
                 session.span_results.append(result)
                 if result.action == ReplaySpanAction.SUBSTITUTED:
                     session.substitutions.append(span.span_id)
-                session.policy_drift.extend(result.drift)
+                intelligence_span = (
+                    span.span_type == TraceSpanType.CUSTOM
+                    and span.attributes.get("component")
+                    == REPOSITORY_INTELLIGENCE_COMPONENT
+                )
+                if not intelligence_span:
+                    session.policy_drift.extend(result.drift)
+                if intelligence_span and component_result is not None:
+                    repository_intelligence = (
+                        RepositoryIntelligenceReplayReport.model_validate(
+                            component_result
+                        )
+                    )
+                    session.intelligence_drift.extend(
+                        item.category
+                        for item in repository_intelligence.findings
+                    )
                 if span.span_type == TraceSpanType.VERIFIER:
                     verifier_result = component_result
                 elif span.span_type == TraceSpanType.REVIEWER:
@@ -189,6 +221,11 @@ class ReplayEngine:
                     ],
                     "verifier": verifier_result,
                     "reviewer": reviewer_result,
+                    "repository_intelligence": (
+                        repository_intelligence.model_dump(mode="json")
+                        if repository_intelligence is not None
+                        else None
+                    ),
                 }
             )
         ).hexdigest()
@@ -199,6 +236,7 @@ class ReplayEngine:
             result_sha256=result_sha256,
             verifier_result=verifier_result,
             reviewer_result=reviewer_result,
+            repository_intelligence=repository_intelligence,
         )
 
     def _prepare_partial_replay(
@@ -256,6 +294,26 @@ class ReplayEngine:
         loaded_outputs = [
             _load_reference(inputs, item) for item in span.output_references
         ]
+        if (
+            span.span_type == TraceSpanType.CUSTOM
+            and span.attributes.get("component")
+            == REPOSITORY_INTELLIGENCE_COMPONENT
+        ):
+            report = self._replay_repository_intelligence(loaded_outputs)
+            drift = [item.category.value for item in report.findings]
+            return (
+                _span_result(
+                    span,
+                    ReplaySpanAction.REUSED,
+                    (
+                        "Captured repository intelligence snapshot reused; "
+                        "current local evidence compared when available."
+                    ),
+                    payload=report.model_dump(mode="json"),
+                    drift=drift,
+                ),
+                report.model_dump(mode="json"),
+            )
         if span.span_type in {
             TraceSpanType.PROVIDER_REQUEST,
             TraceSpanType.PROVIDER_RESPONSE,
@@ -396,6 +454,32 @@ class ReplayEngine:
             ),
             None,
         )
+
+    def _replay_repository_intelligence(
+        self,
+        loaded_outputs: list[Any],
+    ) -> RepositoryIntelligenceReplayReport:
+        if not loaded_outputs:
+            raise ReplayInputUnavailableError(
+                "Repository intelligence replay has no captured evidence."
+            )
+        try:
+            captured = RepositoryIntelligenceTraceEvidence.model_validate(
+                loaded_outputs[-1]
+            )
+        except ValueError as exc:
+            raise ReplayInputUnavailableError(
+                "Captured repository intelligence evidence is invalid."
+            ) from exc
+        if self.repository_intelligence_resolver is None:
+            return reuse_captured_repository_intelligence(captured)
+        try:
+            current = self.repository_intelligence_resolver(captured)
+        except Exception:
+            current = None
+        if current is None:
+            return unavailable_current_repository_intelligence(captured)
+        return compare_repository_intelligence(captured, current)
 
     def _replay_tool(
         self,

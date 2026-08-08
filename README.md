@@ -78,6 +78,36 @@ See [Execution Tracing](docs/execution-tracing.md),
 [Regression Fixtures](docs/regression-fixtures.md), and
 [ADR 0010](docs/adr/0010-deterministic-replay-and-provenance.md).
 
+## Repository Intelligence
+
+AgentBus v0.5 adds an optional, local, providerless repository index for Python,
+TypeScript/JavaScript, Java, and Go projects. It persists bounded symbol and
+typed dependency metadata, ownership and architecture evidence, incremental
+freshness, deterministic search, change impact, relevant tests, and role-specific
+context plans. It does not execute setup files, package managers, build tools,
+or repository code, and it does not upload source.
+
+```powershell
+agentbus index build --workspace C:\src\sample
+agentbus search calculate_total --workspace C:\src\sample --evidence
+agentbus impact services/api/calculator.py --workspace C:\src\sample
+agentbus tests-for services/api/calculator.py --workspace C:\src\sample
+agentbus context-plan "Change calculator rounding" --role reviewer --workspace C:\src\sample
+```
+
+The index is additive. If it is absent or unavailable, the existing scanner and
+bounded context-pack path remains active. Stale, partial, incompatible, and
+truncated evidence is reported rather than represented as complete. Optional
+semantic retrieval requires an explicitly configured local provider and never
+downloads or calls a remote embedding model automatically.
+
+See [Repository Intelligence](docs/repository-intelligence.md),
+[Incremental Indexing](docs/incremental-indexing.md),
+[Hybrid Retrieval](docs/hybrid-retrieval.md),
+[Change Impact Analysis](docs/change-impact-analysis.md),
+[Context Planning](docs/context-planning.md), and
+[ADR 0011](docs/adr/0011-repository-intelligence-engine.md).
+
 ## Quick Start
 
 Install from a source checkout with standard Python packaging:

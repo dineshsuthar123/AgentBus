@@ -380,6 +380,28 @@ def render_run(run: EvaluationRun) -> str:
         f"Result: {'PASS' if run.passed else 'FAIL'}",
     ]
     for case in run.case_results:
+        intelligence = case.raw_metrics.get("repository_intelligence")
+        if isinstance(intelligence, dict):
+            measured = [
+                f"files={intelligence.get('indexed_files', 0)}",
+                f"symbols={intelligence.get('indexed_symbols', 0)}",
+                f"build={float(intelligence.get('build_latency_seconds', 0)):.3f}s",
+                f"storage={int(intelligence.get('storage_bytes', 0))}B",
+                "provider/network=0/0",
+            ]
+            for label, key in (
+                ("index", "indexing_correctness"),
+                ("symbols", "symbol_precision"),
+                ("references", "reference_precision"),
+                ("retrieval", "retrieval_precision"),
+                ("impact", "impact_recall"),
+                ("tests", "test_impact_recall"),
+                ("context", "context_budget_adherence"),
+            ):
+                value = intelligence.get(key)
+                if isinstance(value, (int, float)):
+                    measured.append(f"{label}={float(value):.0%}")
+            lines.append(f"Intelligence {case.case_id}: " + ", ".join(measured))
         if case.passed:
             continue
         lines.append(f"Failed case: {case.case_id} ({case.run_status})")
@@ -403,7 +425,23 @@ def render_run(run: EvaluationRun) -> str:
                 "  Runtime debug: python -m agentbus.main --show-run "
                 f"{case.runtime_run_id} --workspace <retained-fixture-repo>"
             )
+    if run.suite_id == "repository-intelligence":
+        lines.append("Note: " + _repository_intelligence_interpretation(run))
     return "\n".join(lines)
+
+
+def _repository_intelligence_interpretation(run: EvaluationRun) -> str:
+    for case in run.case_results:
+        metrics = case.raw_metrics.get("repository_intelligence")
+        if isinstance(metrics, dict) and isinstance(
+            metrics.get("interpretation_note"),
+            str,
+        ):
+            return metrics["interpretation_note"]
+    return (
+        "Deterministic synthetic-fixture measurements only; these small "
+        "samples do not establish statistical significance."
+    )
 
 
 def render_comparison(comparison) -> str:

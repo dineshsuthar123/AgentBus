@@ -4,6 +4,7 @@ import base64
 import hashlib
 import io
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -16,6 +17,12 @@ import requests
 
 from agentbus.config import AgentBusConfig
 from agentbus.execution.state_store import RunNotFoundError, StateStore
+from agentbus.intelligence import (
+    IndexOperationKind,
+    IndexOperationLease,
+    IndexOperationState,
+    RepositoryIntelligenceService,
+)
 from agentbus.replay.service import TraceReplayService
 from agentbus.replay.session import ReplayRequest, ReplaySessionStatus
 from agentbus.security.redaction import safe_child_environment
@@ -29,6 +36,7 @@ _CANCELLATION_EVENT = "cancellation_cleanup_completed"
 _DELETE_TARGET = "deterministic deletion target\n"
 _DELETE_TARGET_SHA256 = hashlib.sha256(_DELETE_TARGET.encode("utf-8")).hexdigest()
 _MCP_ECHO_MARKER = "deterministic MCP hello"
+_INDEX_SECRET_MARKER = "acceptance-index-private-marker"
 
 
 def main() -> int:
@@ -36,6 +44,7 @@ def main() -> int:
         root = Path(temporary)
         workspace = _initialize_repository(root / "repo")
         state_path = root / "state.db"
+        index_database = root / "repository-index.sqlite3"
         runs_dir = root / "runs"
         registry = root / "daemons.json"
         mcp_fixture = (
@@ -78,6 +87,17 @@ def main() -> int:
             assert validated["valid"] is True
             print("acceptance: daemon ready", flush=True)
 
+            workspace_id, intelligence_observed = (
+                _assert_repository_intelligence_lifecycle(
+                    base,
+                    headers,
+                    workspace,
+                    index_database=index_database,
+                )
+            )
+            observed_payloads.extend(intelligence_observed)
+            print("acceptance: repository intelligence lifecycle passed", flush=True)
+
             tool_run = _submit_run(
                 base,
                 headers,
@@ -101,6 +121,28 @@ def main() -> int:
                 _assert_tool_lifecycle(base, headers, workspace, tool_run, tool_events)
             )
             print("acceptance: tool lifecycle passed", flush=True)
+
+            observed_payloads.extend(
+                _assert_intelligence_guided_lifecycle(
+                    base,
+                    headers,
+                    workspace=workspace,
+                    workspace_id=workspace_id,
+                    state_path=state_path,
+                )
+            )
+            print("acceptance: intelligence-guided replay passed", flush=True)
+
+            observed_payloads.extend(
+                _assert_index_cancellation(
+                    base,
+                    headers,
+                    workspace,
+                    workspace_id,
+                    index_database,
+                )
+            )
+            print("acceptance: index cancellation passed", flush=True)
 
             successful_run = _submit_run(
                 base,
@@ -453,22 +495,36 @@ def main() -> int:
             )
             print("acceptance: deterministic replay lifecycle passed", flush=True)
 
+            assert process.wait(timeout=30) == 0
+            assert process.stderr is not None
+            stderr = process.stderr.read()
+            assert token not in stderr
+            assert _INDEX_SECRET_MARKER not in stderr
+
+            observed_payloads.extend(
+                _assert_index_restart_repair(
+                    workspace=workspace,
+                    workspace_id=workspace_id,
+                    state_path=state_path,
+                    runs_dir=runs_dir,
+                    registry=registry,
+                    mcp_fixture=mcp_fixture,
+                    mcp_lifecycle_dir=mcp_lifecycle_dir,
+                    mcp_environment_marker=mcp_environment_marker,
+                )
+            )
+            print("acceptance: index restart and repair passed", flush=True)
+
             serialized = json.dumps(observed_payloads, sort_keys=True)
             assert token not in serialized
             assert cancellation_marker not in serialized
             assert traversal_marker not in serialized
             assert mcp_environment_marker not in serialized
+            assert _INDEX_SECRET_MARKER not in serialized
             assert str(mcp_fixture) not in serialized
-            assert (
-                json.dumps(str(mcp_fixture))[1:-1]
-                not in serialized
-            )
+            assert json.dumps(str(mcp_fixture))[1:-1] not in serialized
             assert _MCP_ECHO_MARKER not in serialized
             assert token not in registry.read_text(encoding="utf-8")
-            assert process.wait(timeout=30) == 0
-            assert process.stderr is not None
-            stderr = process.stderr.read()
-            assert token not in stderr
             registry_payload = json.loads(registry.read_text(encoding="utf-8"))
             assert registry_payload["daemons"] == []
         finally:
@@ -479,11 +535,31 @@ def main() -> int:
     return 0
 
 
-def _initialize_repository(workspace: Path) -> Path:
+def _initialize_repository(
+    workspace: Path,
+    *,
+    mixed_language: bool = True,
+) -> Path:
     workspace.mkdir()
     _git(workspace, "init")
     _git(workspace, "config", "user.email", "acceptance@agentbus.invalid")
     _git(workspace, "config", "user.name", "AgentBus Acceptance")
+    if mixed_language:
+        fixture = (
+            Path(__file__).resolve().parents[1]
+            / "evaluation"
+            / "fixtures_data"
+            / "repository-intelligence-mixed"
+        )
+        shutil.copytree(fixture, workspace, dirs_exist_ok=True)
+        (workspace / "pyproject.toml").write_text(
+            '[project]\nname = "control-acceptance-monorepo"\nversion = "0.1.0"\n',
+            encoding="utf-8",
+        )
+        (workspace / ".env").write_text(
+            f"ACCEPTANCE_PRIVATE={_INDEX_SECRET_MARKER}\n",
+            encoding="utf-8",
+        )
     (workspace / "README.md").write_text(
         "# Offline acceptance workspace\n",
         encoding="utf-8",
@@ -495,15 +571,339 @@ def _initialize_repository(workspace: Path) -> Path:
         encoding="utf-8",
     )
     (workspace / "delete_me.txt").write_bytes(_DELETE_TARGET.encode("utf-8"))
-    _git(
-        workspace,
-        "add",
-        "README.md",
-        "test_acceptance_tool.py",
-        "delete_me.txt",
-    )
+    _git(workspace, "add", "--all")
     _git(workspace, "commit", "-m", "initial")
     return workspace.resolve()
+
+
+def _assert_repository_intelligence_lifecycle(
+    base: str,
+    headers: dict[str, str],
+    workspace: Path,
+    *,
+    index_database: Path,
+) -> tuple[str, list[Any]]:
+    built = _request(
+        "POST",
+        f"{base}/api/v1/workspaces/index",
+        headers=headers,
+        json={"workspace": str(workspace), "workspace_trusted": True},
+    ).json()
+    workspace_id = str(built["workspace_id"])
+    build_result = built["result"]
+    progress = build_result["progress_events"]
+    assert build_result["status"]["state"] == "current"
+    assert progress
+    assert [item["sequence"] for item in progress] == list(
+        range(1, len(progress) + 1)
+    )
+    assert progress[0]["phase"] == "discovery"
+    assert progress[-1]["phase"] == "completed"
+
+    status = _request(
+        "GET",
+        f"{base}/api/v1/workspaces/{workspace_id}/index",
+        headers=headers,
+    ).json()
+    overview = status["overview"]
+    languages = {item["language"] for item in overview["languages"]}
+    assert {"python", "typescript", "java", "go"} <= languages
+    assert len(overview["projects"]) >= 4
+    assert overview["symbols"]
+
+    search = _request(
+        "POST",
+        f"{base}/api/v1/workspaces/{workspace_id}/search",
+        headers=headers,
+        json={"query": "calculate endpoint", "limit": 25},
+    ).json()
+    endpoint = next(
+        item["symbol"]
+        for item in search["report"]["results"]
+        if item["symbol"] is not None
+        and item["symbol"]["name"] == "calculate_endpoint"
+    )
+    symbol = _request(
+        "GET",
+        (
+            f"{base}/api/v1/workspaces/{workspace_id}/symbols/"
+            f"{endpoint['symbol_id']}"
+        ),
+        headers=headers,
+    ).json()
+    dependencies = _request(
+        "GET",
+        (
+            f"{base}/api/v1/workspaces/{workspace_id}/dependencies/"
+            f"{endpoint['symbol_id']}?depth=4&limit=100"
+        ),
+        headers=headers,
+    ).json()
+    assert symbol["symbol"]["relative_path"] == "services/python_service/app.py"
+    assert dependencies["edges"]
+    assert any(
+        "calculate_total" in item["label"] for item in dependencies["nodes"]
+    )
+
+    implementation = workspace / "services" / "python_service" / "pricing.py"
+    implementation.write_text(
+        implementation.read_text(encoding="utf-8")
+        + "\nACCEPTANCE_INCREMENTAL_MARKER = True\n",
+        encoding="utf-8",
+    )
+    stale = _request(
+        "GET",
+        f"{base}/api/v1/workspaces/{workspace_id}/index",
+        headers=headers,
+    ).json()
+    assert stale["status"]["state"] == "stale"
+    assert "services/python_service/pricing.py" in stale["status"]["stale_paths"]
+
+    updated = _request(
+        "POST",
+        f"{base}/api/v1/workspaces/{workspace_id}/index/update",
+        headers=headers,
+        json={"workspace_trusted": True},
+    ).json()
+    update_result = updated["result"]
+    assert update_result["status"]["state"] == "current"
+    assert "services/python_service/pricing.py" in update_result["indexed_paths"]
+    assert "packages/web/src/api.ts" not in update_result["indexed_paths"]
+    assert "packages/web/src/api.ts" in update_result["reused_paths"]
+    assert update_result["reused_count"] > 0
+    assert update_result["progress_events"][-1]["phase"] == "completed"
+
+    impact = _request(
+        "POST",
+        f"{base}/api/v1/workspaces/{workspace_id}/impact",
+        headers=headers,
+        json={"subjects": ["services/python_service/pricing.py"], "max_depth": 4},
+    ).json()
+    tests = _request(
+        "POST",
+        f"{base}/api/v1/workspaces/{workspace_id}/tests",
+        headers=headers,
+        json={"subjects": ["services/python_service/pricing.py"], "max_depth": 4},
+    ).json()
+    context = _request(
+        "POST",
+        f"{base}/api/v1/workspaces/{workspace_id}/context-plan",
+        headers=headers,
+        json={
+            "task": "Update Python pricing and verify the calculate endpoint",
+            "role": "reviewer",
+            "byte_budget": 20_000,
+            "token_budget": 4_000,
+            "changed_paths": ["services/python_service/pricing.py"],
+        },
+    ).json()
+    assert impact["result"]["affected_projects"]
+    assert "services/python_service/tests/test_calculator.py" in (
+        tests["result"]["selected_tests"]
+    )
+    assert context["result"]["role"] == "reviewer"
+    assert context["result"]["selected_bytes"] <= 20_000
+    assert context["result"]["selected_tokens"] <= 4_000
+    assert any(item["selected"] for item in context["result"]["candidates"])
+
+    serialized = json.dumps(
+        [built, status, search, symbol, dependencies, stale, updated, impact, tests, context],
+        sort_keys=True,
+    )
+    assert _INDEX_SECRET_MARKER not in serialized
+    assert '"content"' not in serialized
+    assert str(workspace) not in serialized
+    assert _INDEX_SECRET_MARKER.encode("utf-8") not in index_database.read_bytes()
+    _git(workspace, "add", "services/python_service/pricing.py")
+    _git(workspace, "commit", "-m", "acceptance incremental change")
+    return workspace_id, [
+        built,
+        status,
+        search,
+        symbol,
+        dependencies,
+        stale,
+        updated,
+        impact,
+        tests,
+        context,
+    ]
+
+
+def _refresh_repository_index(
+    base: str,
+    headers: dict[str, str],
+    workspace_id: str,
+) -> dict[str, Any]:
+    refreshed = _request(
+        "POST",
+        f"{base}/api/v1/workspaces/{workspace_id}/index/update",
+        headers=headers,
+        json={"workspace_trusted": True},
+    ).json()
+    assert refreshed["result"]["status"]["state"] == "current"
+    return refreshed
+
+
+def _assert_index_cancellation(
+    base: str,
+    headers: dict[str, str],
+    workspace: Path,
+    workspace_id: str,
+    index_database: Path,
+) -> list[Any]:
+    service = RepositoryIntelligenceService(workspace, index_database)
+    lease = IndexOperationLease(
+        service.store,
+        service.repository,
+        IndexOperationKind.BUILD,
+    )
+    lease.acquire()
+    try:
+        duplicate = _request_expect_status(
+            "POST",
+            f"{base}/api/v1/workspaces/index",
+            409,
+            headers=headers,
+            json={"workspace": str(workspace), "workspace_trusted": True},
+        ).json()
+        cancelled = _request(
+            "POST",
+            f"{base}/api/v1/workspaces/{workspace_id}/index/cancel",
+            headers=headers,
+        ).json()
+        assert duplicate["error"]["code"] == "conflict"
+        assert cancelled["cancellation_requested"] is True
+        assert lease.checkpoint(force=True).cancellation_requested is True
+    finally:
+        lease.finish(IndexOperationState.CANCELLED)
+    return [duplicate, cancelled]
+
+
+def _assert_intelligence_guided_lifecycle(
+    base: str,
+    headers: dict[str, str],
+    *,
+    workspace: Path,
+    workspace_id: str,
+    state_path: Path,
+) -> list[Any]:
+    refreshed = _refresh_repository_index(base, headers, workspace_id)
+    run_id = _submit_run(
+        base,
+        headers,
+        workspace,
+        task="Inspect the indexed calculate endpoint and repository README safely.",
+        profile="tool-safe-read",
+        latency_seconds=0,
+        latency_roles=[],
+        parallel=False,
+        commit_changes=False,
+    )
+    summary = _wait_for_terminal_run(base, headers, run_id)
+    assert summary["status"] == "succeeded"
+
+    store = StateStore(state_path)
+    run = store.get_run(run_id)
+    assert run.metadata["repository_intelligence"]["snapshot_id"]
+    assert run.planner_output["intelligence_scope_validated"] is True
+    assert run.planner_output["intelligence_context_hash"] == (
+        run.metadata["repository_intelligence"]["context_hash"]
+    )
+    attempts = store.list_attempts(run_id)
+    assert len(attempts) == 1
+    runtime_evidence = attempts[0].metadata["repository_intelligence"]
+    assert runtime_evidence["coder_guidance_used"] is True
+    assert runtime_evidence["reviewer_guidance_used"] is True
+    assert runtime_evidence["context_hash"] == (
+        run.metadata["repository_intelligence"]["context_hash"]
+    )
+    assert "index_uncertainty" in attempts[0].metadata["task_review"]
+
+    trace = _request(
+        "GET",
+        f"{base}/api/v1/runs/{run_id}/trace",
+        headers=headers,
+    ).json()
+    spans = _request(
+        "GET",
+        f"{base}/api/v1/runs/{run_id}/trace/spans",
+        headers=headers,
+        params={"limit": 500},
+    ).json()
+    intelligence_detail = None
+    for item in spans["spans"]:
+        if item["span_type"] != "custom":
+            continue
+        detail = _request(
+            "GET",
+            f"{base}/api/v1/runs/{run_id}/trace/spans/{item['span_id']}",
+            headers=headers,
+        ).json()
+        if detail["attributes"].get("component") == "repository_intelligence":
+            intelligence_detail = detail
+            break
+    assert intelligence_detail is not None
+    assert intelligence_detail["output_count"] == 1
+    assert intelligence_detail["attributes"]["snapshot_id"] == (
+        run.metadata["repository_intelligence"]["snapshot_id"]
+    )
+    provenance = _wait_for_provenance(base, headers, run_id)
+    assert provenance["trace_id"] == trace["trace_id"]
+
+    no_drift_accepted = _request(
+        "POST",
+        f"{base}/api/v1/runs/{run_id}/replays",
+        headers=headers,
+        json={"mode": "offline"},
+    ).json()
+    no_drift = _wait_for_terminal_replay(
+        base,
+        headers,
+        no_drift_accepted["replay_id"],
+    )
+    _assert_providerless_replay(no_drift, isolated=False)
+    assert no_drift["intelligence_drift"] == []
+
+    implementation = workspace / "services" / "python_service" / "calculator.py"
+    implementation.write_text(
+        implementation.read_text(encoding="utf-8")
+        + "\nACCEPTANCE_REPLAY_DRIFT = True\n",
+        encoding="utf-8",
+    )
+    drift_update = _refresh_repository_index(base, headers, workspace_id)
+    drift_accepted = _request(
+        "POST",
+        f"{base}/api/v1/runs/{run_id}/replays",
+        headers=headers,
+        json={"mode": "offline"},
+    ).json()
+    drift = _wait_for_terminal_replay(
+        base,
+        headers,
+        drift_accepted["replay_id"],
+    )
+    _assert_providerless_replay(drift, isolated=False)
+    assert "index_snapshot_drift" in drift["intelligence_drift"]
+    assert any(
+        category in drift["intelligence_drift"]
+        for category in {"graph_drift", "retrieval_result_drift", "context_plan_drift"}
+    )
+    _git(workspace, "add", "services/python_service/calculator.py")
+    _git(workspace, "commit", "-m", "acceptance replay drift")
+    return [
+        refreshed,
+        summary,
+        trace,
+        spans,
+        intelligence_detail,
+        provenance,
+        no_drift_accepted,
+        no_drift,
+        drift_update,
+        drift_accepted,
+        drift,
+    ]
 
 
 def _launch_daemon(
@@ -552,6 +952,73 @@ def _launch_daemon(
         shell=False,
         env=environment,
     )
+
+
+def _assert_index_restart_repair(
+    *,
+    workspace: Path,
+    workspace_id: str,
+    state_path: Path,
+    runs_dir: Path,
+    registry: Path,
+    mcp_fixture: Path,
+    mcp_lifecycle_dir: Path,
+    mcp_environment_marker: str,
+) -> list[Any]:
+    process = _launch_daemon(
+        workspace=workspace,
+        state_path=state_path,
+        runs_dir=runs_dir,
+        registry=registry,
+        mcp_fixture=mcp_fixture,
+        mcp_lifecycle_dir=mcp_lifecycle_dir,
+        mcp_environment_marker=mcp_environment_marker,
+    )
+    token = ""
+    try:
+        handshake = _read_handshake(process)
+        token = handshake["bearer_token"]
+        base = f"http://127.0.0.1:{handshake['port']}"
+        headers = {"Authorization": f"Bearer {token}"}
+        attached = _request(
+            "POST",
+            f"{base}/api/v1/workspaces/index/attach",
+            headers=headers,
+            json={"workspace": str(workspace)},
+        ).json()
+        assert attached["workspace_id"] == workspace_id
+        repaired = _request(
+            "POST",
+            f"{base}/api/v1/workspaces/{workspace_id}/index/repair",
+            headers=headers,
+            json={"workspace_trusted": True},
+        ).json()
+        verified = _request(
+            "POST",
+            f"{base}/api/v1/workspaces/{workspace_id}/index/verify",
+            headers=headers,
+        ).json()
+        assert repaired["result"]["operation"] == "repair"
+        assert repaired["result"]["status"]["state"] == "current"
+        assert repaired["result"]["progress_events"][-1]["phase"] == "completed"
+        assert verified["result"]["valid"] is True
+        assert verified["result"]["fresh"] is True
+        serialized = json.dumps([attached, repaired, verified], sort_keys=True)
+        assert token not in serialized
+        assert _INDEX_SECRET_MARKER not in serialized
+        assert str(workspace) not in serialized
+        assert process.wait(timeout=30) == 0
+        assert process.stderr is not None
+        stderr = process.stderr.read()
+        assert token not in stderr
+        assert _INDEX_SECRET_MARKER not in stderr
+        registry_payload = json.loads(registry.read_text(encoding="utf-8"))
+        assert registry_payload["daemons"] == []
+        return [attached, repaired, verified]
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            process.wait(timeout=10)
 
 
 def _read_handshake(process: subprocess.Popen[str]) -> dict[str, Any]:
@@ -713,6 +1180,28 @@ def _wait_for_terminal_replay(
             return replay
         time.sleep(0.02)
     raise TimeoutError(f"Replay {replay_id} did not reach a terminal state.")
+
+
+def _wait_for_provenance(
+    base: str,
+    headers: dict[str, str],
+    run_id: str,
+    *,
+    timeout_seconds: float = 30,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        response = requests.get(
+            f"{base}/api/v1/runs/{run_id}/provenance",
+            headers=headers,
+            timeout=10,
+        )
+        if response.status_code == 404:
+            time.sleep(0.02)
+            continue
+        response.raise_for_status()
+        return response.json()
+    raise TimeoutError(f"Run {run_id} did not produce sealed provenance.")
 
 
 def _wait_for_pending_tool_approval(
@@ -1966,7 +2455,10 @@ def _assert_isolated_archive_import(
     expected_provenance_root: str,
     mcp_fixture: Path,
 ) -> list[Any]:
-    workspace = _initialize_repository(root / "import-repo")
+    workspace = _initialize_repository(
+        root / "import-repo",
+        mixed_language=False,
+    )
     state_path = root / "import-state.db"
     runs_dir = root / "import-runs"
     registry = root / "import-daemons.json"

@@ -15,20 +15,21 @@ async function main(): Promise<void> {
   const source = resolve(__dirname, "..", "..");
   const repositoryRoot = resolve(source, "..", "..");
   const stagingRoot = process.platform === "win32" ? "C:\\tmp" : "/tmp";
-  const extensionDevelopmentPath = join(
+  const sessionRoot = join(
     stagingRoot,
-    "agentbus-vscode-integration"
+    `agentbus-vscode-integration-${process.pid}`
   );
-  const workspacePath = join(stagingRoot, "agentbus-vscode-workspace");
-  const userDataPath = join(stagingRoot, "agentbus-vscode-user");
-  const extensionsPath = join(stagingRoot, "agentbus-vscode-extensions");
-  const registryPath = join(stagingRoot, "agentbus-vscode-daemons.json");
-  const configPath = join(stagingRoot, "agentbus-vscode-config.json");
-  const statePath = join(stagingRoot, "agentbus-vscode-state.db");
-  const runsPath = join(stagingRoot, "agentbus-vscode-runs");
-  const worktreesPath = join(stagingRoot, "agentbus-vscode-worktrees");
-  const mcpLifecyclePath = join(stagingRoot, "agentbus-vscode-mcp-lifecycle");
-  const artifactPath = join(stagingRoot, "agentbus-vscode-artifacts");
+  const extensionDevelopmentPath = join(sessionRoot, "extension");
+  const workspacePath = join(sessionRoot, "workspace");
+  const userDataPath = join(sessionRoot, "user-data");
+  const extensionsPath = join(sessionRoot, "extensions");
+  const registryPath = join(sessionRoot, "daemons.json");
+  const configPath = join(sessionRoot, "config.json");
+  const statePath = join(sessionRoot, "state.db");
+  const runsPath = join(sessionRoot, "runs");
+  const worktreesPath = join(sessionRoot, "worktrees");
+  const mcpLifecyclePath = join(sessionRoot, "mcp-lifecycle");
+  const artifactPath = join(sessionRoot, "artifacts");
   const mcpFixturePath = resolve(
     repositoryRoot,
     "tests",
@@ -36,25 +37,19 @@ async function main(): Promise<void> {
     "mcp",
     "fake_server.py"
   );
+  const repositoryFixturePath = resolve(
+    repositoryRoot,
+    "agentbus",
+    "evaluation",
+    "fixtures_data",
+    "repository-intelligence-mixed"
+  );
   const mcpPrivateMarker = "vscode-e2e-private-mcp-marker";
   const pythonPath = await findPython(repositoryRoot);
   await access(mcpFixturePath);
+  await access(repositoryFixturePath);
   await mkdir(stagingRoot, { recursive: true });
-  await cleanup([
-    extensionDevelopmentPath,
-    workspacePath,
-    userDataPath,
-    extensionsPath,
-    registryPath,
-    configPath,
-    statePath,
-    `${statePath}-shm`,
-    `${statePath}-wal`,
-    runsPath,
-    worktreesPath,
-    mcpLifecyclePath,
-    artifactPath
-  ]);
+  await cleanup([sessionRoot]);
   await mkdir(mcpLifecyclePath, { recursive: true });
   await mkdir(artifactPath, { recursive: true });
   await writeDaemonConfig({
@@ -74,7 +69,7 @@ async function main(): Promise<void> {
       !path.includes(".vscode-test") &&
       !path.endsWith(".vsix")
   });
-  await initializeRepository(workspacePath);
+  await initializeRepository(workspacePath, repositoryFixturePath);
   const electronRunAsNode = process.env.ELECTRON_RUN_AS_NODE;
   const removedSecrets = removeProviderSecrets();
   let integrationCompleted = false;
@@ -121,38 +116,40 @@ async function main(): Promise<void> {
         process.env.ELECTRON_RUN_AS_NODE = electronRunAsNode;
       }
       restoreEnvironment(removedSecrets);
-      const cleanupPaths = [
-        extensionDevelopmentPath,
-        userDataPath,
-        extensionsPath,
-        artifactPath
-      ];
-      if (runtimeCleanupVerified) {
-        cleanupPaths.push(
-          workspacePath,
-          registryPath,
-          configPath,
-          statePath,
-          `${statePath}-shm`,
-          `${statePath}-wal`,
-          runsPath,
-          worktreesPath,
-          mcpLifecyclePath
-        );
-      }
+      const cleanupPaths = runtimeCleanupVerified
+        ? [sessionRoot]
+        : [
+            extensionDevelopmentPath,
+            userDataPath,
+            extensionsPath,
+            artifactPath
+          ];
       await cleanup(cleanupPaths);
     }
   }
 }
 
-async function initializeRepository(workspacePath: string): Promise<void> {
-  await mkdir(workspacePath, { recursive: true });
+async function initializeRepository(
+  workspacePath: string,
+  repositoryFixturePath: string
+): Promise<void> {
+  await cp(repositoryFixturePath, workspacePath, { recursive: true });
+  await writeFile(
+    join(workspacePath, ".env"),
+    "AGENTBUS_E2E_PRIVATE=vscode-e2e-private-repository-marker\n",
+    "utf8"
+  );
   git(workspacePath, "init");
   git(workspacePath, "config", "user.email", "vscode-e2e@agentbus.invalid");
   git(workspacePath, "config", "user.name", "AgentBus VS Code E2E");
   await writeFile(
     join(workspacePath, "README.md"),
     "# AgentBus VS Code integration workspace\n",
+    "utf8"
+  );
+  await writeFile(
+    join(workspacePath, "pyproject.toml"),
+    "[project]\nname = \"agentbus-vscode-integration\"\nversion = \"0.1.0\"\n",
     "utf8"
   );
   await writeFile(
@@ -165,13 +162,7 @@ async function initializeRepository(workspacePath: string): Promise<void> {
     "deterministic deletion target\n",
     "utf8"
   );
-  git(
-    workspacePath,
-    "add",
-    "README.md",
-    "test_acceptance_tool.py",
-    "delete_me.txt"
-  );
+  git(workspacePath, "add", "--all");
   git(workspacePath, "commit", "-m", "initial");
 }
 

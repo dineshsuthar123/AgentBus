@@ -99,6 +99,24 @@ from agentbus.trace.spans import (
 )
 from agentbus.trace.storage import ContentAddressedStore
 from agentbus.trace.runtime import RuntimeTrace
+from agentbus.trace.intelligence import (
+    REPOSITORY_INTELLIGENCE_COMPONENT,
+    REPOSITORY_INTELLIGENCE_EVIDENCE_MEDIA_TYPE,
+    REPOSITORY_INTELLIGENCE_EVIDENCE_SCHEMA_VERSION,
+    ArchitectureBoundaryTraceEvidence,
+    ImpactTraceEvidence,
+    IndexSnapshotTraceEvidence,
+    IntelligenceDriftCategory,
+    IntelligenceDriftFinding,
+    RepositoryIntelligenceReplayReport,
+    RepositoryIntelligenceTraceEvidence,
+    RetrievalTraceEvidence,
+    TestSelectionTraceEvidence,
+    build_repository_intelligence_trace_evidence,
+    compare_repository_intelligence,
+    reuse_captured_repository_intelligence,
+    unavailable_current_repository_intelligence,
+)
 
 __all__ = [
     "ReplayMode",
@@ -130,6 +148,18 @@ __all__ = [
     "RedactionMetadata",
     "ReplayabilityLevel",
     "RuntimeTrace",
+    "REPOSITORY_INTELLIGENCE_COMPONENT",
+    "REPOSITORY_INTELLIGENCE_EVIDENCE_MEDIA_TYPE",
+    "REPOSITORY_INTELLIGENCE_EVIDENCE_SCHEMA_VERSION",
+    "ArchitectureBoundaryTraceEvidence",
+    "ImpactTraceEvidence",
+    "IndexSnapshotTraceEvidence",
+    "IntelligenceDriftCategory",
+    "IntelligenceDriftFinding",
+    "RepositoryIntelligenceReplayReport",
+    "RepositoryIntelligenceTraceEvidence",
+    "RetrievalTraceEvidence",
+    "TestSelectionTraceEvidence",
     "RetentionClass",
     "StoredBlob",
     "StateStoreTraceSink",
@@ -184,4 +214,8 @@ __all__ = [
     "verify_provenance",
     "verify_provenance_core",
     "verify_provenance_root",
+    "build_repository_intelligence_trace_evidence",
+    "compare_repository_intelligence",
+    "reuse_captured_repository_intelligence",
+    "unavailable_current_repository_intelligence",
 ]

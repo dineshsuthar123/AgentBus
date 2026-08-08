@@ -15,6 +15,16 @@ from agentbus.evaluation.models import (
 def builtin_variants() -> dict[str, EvaluationVariant]:
     variants = [
         EvaluationVariant(
+            variant_id="deterministic",
+            title="Providerless deterministic repository intelligence",
+            provider="fake",
+            durable=False,
+            metadata={
+                "providerless": True,
+                "repository_intelligence": True,
+            },
+        ),
+        EvaluationVariant(
             variant_id="single-fake",
             title="Single-agent deterministic fake",
             workflow=WorkflowMode.SINGLE,
@@ -86,10 +96,12 @@ def builtin_variants() -> dict[str, EvaluationVariant]:
 
 def builtin_suites() -> dict[str, EvaluationSuite]:
     from agentbus.evaluation.benchmarks import load_manifest, suite_from_manifest
+    from agentbus.evaluation.intelligence import repository_intelligence_suite
 
     suites = [
         core_offline_suite(),
         release_offline_suite(),
+        repository_intelligence_suite(),
         azure_smoke_suite(),
         release_azure_smoke_suite(),
         suite_from_manifest(load_manifest()),

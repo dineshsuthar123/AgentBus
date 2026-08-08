@@ -23,6 +23,7 @@ env/
 # Logs / local runs
 runs/
 .agentbus/
+repository-index.sqlite3*
 *.log
 
 # Local conversation notes

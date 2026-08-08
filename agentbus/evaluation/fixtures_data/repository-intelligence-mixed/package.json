@@ -1,0 +1,5 @@
+{
+  "name": "intelligence-monorepo",
+  "private": true,
+  "workspaces": ["packages/*"]
+}

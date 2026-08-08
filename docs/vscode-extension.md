@@ -134,6 +134,37 @@ Multi-root workspaces always require an explicit repository selection.
 Rejection, cancellation, and read-only doctor, tool, policy, MCP, and artifact
 diagnostics remain available in untrusted workspaces.
 
+## Repository intelligence
+
+Trusted repository folders gain four native tree views:
+
+- `Repository Intelligence` shows lifecycle state, projects, languages,
+  diagnostics, ownership, and architecture evidence.
+- `Symbol Explorer` shows indexed modules and symbols and records bounded search
+  results.
+- `Impact Analysis` shows risk, dependents, endpoints, tests, ownership, and
+  uncertainty.
+- `Context Plan` shows role, selected candidates, reasons, hashes, and byte/token
+  budget accounting.
+
+Commands build, update, verify, repair, or cancel the index; search and open a
+symbol; inspect dependencies or dependents; analyze impact; find relevant tests;
+and preview agent context. Index mutations use cancellable native progress and
+show indexed/reused/skipped counts. Search, graph, impact, test, architecture,
+and context details open as bounded read-only native Markdown documents, not
+webviews.
+
+Index mutation is blocked when Workspace Trust is unavailable. Query documents
+redact secret-like text and personal paths. The extension does not persist
+source, semantic vectors, or bearer tokens in view state. Daemon restart
+reattaches the exact workspace index, while stale state remains visible until
+update or repair.
+
+The Electron suite opens a real mixed-language workspace and validates this
+lifecycle against the real local daemon. See
+[Repository Intelligence](repository-intelligence.md) and
+[Context Planning](context-planning.md).
+
 Package locally with `npm run package`, then run `npm run package:audit`. The
 audit rejects `.env` files, credentials, databases, bytecode, logs,
 `node_modules`, nested VSIX files, and runtime state from the archive. Packaging

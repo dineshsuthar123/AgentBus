@@ -9,8 +9,18 @@ from agentbus.execution.models import FailureCategory
 from agentbus.execution.state_store import StateStore, StateStoreError
 from agentbus.models.errors import ModelAuthenticationError
 from agentbus.replay.checkpoints import CheckpointKind, CheckpointManager
+from agentbus.runtime.intelligence import (
+    PlannerIntelligenceContext,
+    StaticPlannerIntelligenceSource,
+)
 from agentbus.runtime.orchestrator import MultiAgentOrchestrator
-from agentbus.trace import TraceSpanType, TraceStatus
+from agentbus.trace import (
+    REPOSITORY_INTELLIGENCE_COMPONENT,
+    ContentAddressedStore,
+    RepositoryIntelligenceTraceEvidence,
+    TraceSpanType,
+    TraceStatus,
+)
 from agentbus.tools.protocol import ToolResourceBudget
 
 
@@ -49,11 +59,19 @@ class FakeCoder:
     def __init__(self):
         self.calls = []
 
-    def execute(self, user_task, plan, reviewer_feedback=None):
+    def execute(
+        self,
+        user_task,
+        plan,
+        reviewer_feedback=None,
+        repository_intelligence=None,
+    ):
         self.calls.append(
             {
                 "task_id": plan["steps"][0]["id"],
                 "reviewer_feedback": reviewer_feedback,
+                "plan": plan,
+                "repository_intelligence": repository_intelligence,
             }
         )
         return f"implemented {plan['steps'][0]['id']}"
@@ -91,22 +109,37 @@ class FakeReviewer:
     def __init__(self, approved=True):
         self.approved = approved
         self.calls = 0
+        self.repository_intelligence = []
+        self.findings = {}
 
-    def review(self, user_task, plan, git_diff, test_output=None):
+    def review(
+        self,
+        user_task,
+        plan,
+        git_diff,
+        test_output=None,
+        repository_intelligence=None,
+    ):
         self.calls += 1
+        self.repository_intelligence.append(repository_intelligence)
         return {
             "approved": self.approved,
             "issues": [] if self.approved else [{"message": "Needs correction"}],
             "summary": "Approved" if self.approved else "Rejected",
             "required_fixes": [] if self.approved else ["Fix implementation"],
+            **self.findings,
         }
 
     def review_task(self, **kwargs):
+        self.repository_intelligence.append(
+            kwargs.get("repository_intelligence")
+        )
         return {
             "approved": True,
             "issues": [],
             "summary": "Current task approved",
             "required_fixes": [],
+            **self.findings,
         }
 
 
@@ -225,6 +258,109 @@ def test_durable_mode_persists_validated_planner_graph_before_execution(tmp_path
 
     assert report.status == RunStatus.SUCCEEDED
     assert [call["task_id"] for call in coder.calls] == ["step-1", "step-2"]
+
+
+def test_durable_mode_persists_validated_repository_intelligence(tmp_path):
+    intelligence_plan = {
+        **PLAN,
+        "targeted_files": ["calculator.py"],
+        "steps": [
+            {
+                **PLAN["steps"][0],
+                "targeted_files": ["calculator.py"],
+            },
+            {
+                **PLAN["steps"][1],
+                "targeted_files": ["tests/test_calculator.py"],
+                "proposed_tests": ["tests/test_calculator.py"],
+            },
+        ],
+    }
+    planner = FakePlanner(intelligence_plan)
+    coder = FakeCoder()
+    reviewer = FakeReviewer()
+    reviewer.findings = {
+        "unplanned_affected_components": ["symbol_unplanned"],
+        "missing_tests": ["tests/test_missing.py"],
+        "boundary_violations": ["boundary_candidate"],
+        "index_uncertainty": ["repository_index_state:stale"],
+    }
+    intelligence = PlannerIntelligenceContext(
+        risk_areas=("calculator.py",),
+    )
+    runner, store = orchestrator(
+        tmp_path,
+        planner=planner,
+        coder=coder,
+        reviewer=reviewer,
+        intelligence_source=StaticPlannerIntelligenceSource(intelligence),
+    )
+
+    run_id = runner.create_durable_run("Create calculator")
+    snapshot = store.load_snapshot(run_id)
+
+    assert "Repository Intelligence Context" in planner.context_pack
+    assert snapshot.run.planner_output["intelligence_scope_validated"] is True
+    assert snapshot.run.planner_output["intelligence_context_hash"] == (
+        intelligence.context_hash
+    )
+    assert snapshot.run.metadata["repository_intelligence"] == (
+        intelligence.safe_metadata()
+    )
+    assert all(
+        task.spec.metadata["intelligence_scope_validated"] is True
+        for task in snapshot.tasks
+    )
+    assert all(
+        task.spec.metadata["intelligence_context_hash"]
+        == intelligence.context_hash
+        for task in snapshot.tasks
+    )
+
+    report = runner.run_durable(run_id)
+
+    assert report.status == RunStatus.SUCCEEDED
+    assert all(
+        "Coder Repository Intelligence" in call["repository_intelligence"]
+        for call in coder.calls
+    )
+    assert coder.calls[0]["plan"]["steps"][0]["targeted_files"] == [
+        "calculator.py"
+    ]
+    assert any(
+        value and "Reviewer Repository Intelligence" in value
+        for value in reviewer.repository_intelligence
+    )
+    task_review = store.list_attempts(run_id, "step-1")[0].metadata[
+        "task_review"
+    ]
+    final_review = store.get_run(run_id).metadata["final_review"]
+    trace = store.get_run_trace(run_id)
+    intelligence_span = next(
+        span
+        for span in trace.spans
+        if span.attributes.get("component")
+        == REPOSITORY_INTELLIGENCE_COMPONENT
+    )
+    object_store = ContentAddressedStore(
+        runner.config.trace_store_path,
+        private_roots=(runner.workspace,),
+    )
+    trace_evidence = RepositoryIntelligenceTraceEvidence.model_validate_json(
+        object_store.get(intelligence_span.output_references[0].sha256).data
+    )
+    assert task_review["unplanned_affected_components"] == [
+        "symbol_unplanned"
+    ]
+    assert task_review["missing_tests"] == ["tests/test_missing.py"]
+    assert final_review["boundary_violations"] == ["boundary_candidate"]
+    assert final_review["index_uncertainty"] == [
+        "repository_index_state:stale"
+    ]
+    assert len(intelligence_span.input_references) == 1
+    assert len(intelligence_span.output_references) == 1
+    assert trace_evidence.context_hash == intelligence.context_hash
+    assert trace_evidence.search_query == "Create calculator"
 
 
 def test_durable_run_records_hierarchical_trace_and_final_review_order(

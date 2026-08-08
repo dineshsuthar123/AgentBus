@@ -129,3 +129,39 @@ def test_planner_capability_requirements_persist_in_task_metadata():
         "filesystem.write",
         "filesystem.create",
     ]
+
+
+def test_repository_intelligence_claims_persist_in_task_metadata():
+    planned = step("write", dependencies=[])
+    planned.update(
+        {
+            "targeted_files": ["src/service.py"],
+            "targeted_symbols": ["symbol_service"],
+            "expected_impacted_components": ["project_service"],
+            "proposed_tests": ["tests/test_service.py"],
+            "architecture_constraints": ["boundary_service"],
+        }
+    )
+    output = planner_output([planned])
+    output.update(
+        {
+            "intelligence_snapshot_id": "snapshot_123",
+            "intelligence_context_hash": "a" * 64,
+            "intelligence_warnings": ["index.stale"],
+            "intelligence_scope_validated": True,
+        }
+    )
+
+    task = TaskGraph.from_planner_output(output).tasks[0]
+
+    assert task.metadata["targeted_files"] == ["src/service.py"]
+    assert task.metadata["targeted_symbols"] == ["symbol_service"]
+    assert task.metadata["expected_impacted_components"] == [
+        "project_service"
+    ]
+    assert task.metadata["proposed_tests"] == ["tests/test_service.py"]
+    assert task.metadata["architecture_constraints"] == ["boundary_service"]
+    assert task.metadata["intelligence_snapshot_id"] == "snapshot_123"
+    assert task.metadata["intelligence_context_hash"] == "a" * 64
+    assert task.metadata["intelligence_warnings"] == ["index.stale"]
+    assert task.metadata["intelligence_scope_validated"] is True

@@ -14,6 +14,7 @@ from agentbus.trace.models import (
     TraceSpan,
     TraceSpanType,
 )
+from agentbus.trace.intelligence import REPOSITORY_INTELLIGENCE_COMPONENT
 from agentbus.trace.provenance import ReplayabilityLevel
 
 
@@ -262,6 +263,33 @@ class ReplayabilityClassifier:
                 ReplayabilityLevel.PARTIALLY_REPLAYABLE,
                 ["The orchestration span lacks complete captured outputs."],
                 required=required,
+            )
+        if (
+            span.span_type == TraceSpanType.CUSTOM
+            and span.attributes.get("component")
+            == REPOSITORY_INTELLIGENCE_COMPONENT
+        ):
+            replayable_outputs = [
+                reference
+                for reference in span.output_references
+                if reference.replayable and reference.sha256 in available
+            ]
+            if not replayable_outputs:
+                return _result(
+                    span,
+                    ReplayabilityLevel.NON_REPLAYABLE,
+                    ["Captured repository intelligence evidence is unavailable."],
+                    required=required,
+                )
+            return _result(
+                span,
+                ReplayabilityLevel.DETERMINISTICALLY_SUBSTITUTABLE,
+                [
+                    "Captured repository intelligence can be reused and compared "
+                    "without providers."
+                ],
+                required=required,
+                substitutions=["repository_intelligence_snapshot"],
             )
         return _result(
             span,

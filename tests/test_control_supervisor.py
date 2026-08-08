@@ -15,6 +15,7 @@ from agentbus.control.models import RunCreateRequest
 from agentbus.control.supervisor import AgentBusRunBackend, BackgroundRunSupervisor
 from agentbus.execution.cancellation import CancellationState
 from agentbus.execution.models import RunRecord, RunStatus, utc_now
+from agentbus.intelligence import RepositoryIntelligenceService
 from agentbus.tools.protocol import ToolResourceBudget
 
 
@@ -234,3 +235,84 @@ def test_run_backend_restores_deterministic_routing_for_resume(
     assert restored.deterministic_failure_kind == "timeout"
     assert restored.deterministic_failure_calls == (2,)
     assert restored.deterministic_failure_roles == ("reviewer",)
+
+
+def test_run_backend_binds_intelligence_to_explicit_workspace(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "README.md").write_text("# Indexed workspace\n", encoding="utf-8")
+    base = AgentBusConfig(
+        workspace_dir=str(tmp_path / "daemon-default"),
+        state_dir=str(tmp_path / "state"),
+    )
+    index_database = (
+        base.state_database_path.parent / "repository-index.sqlite3"
+    )
+    RepositoryIntelligenceService(workspace, index_database).build()
+    backend = AgentBusRunBackend(base)
+    request = RunCreateRequest(
+        task="Inspect the indexed workspace",
+        workspace=str(workspace.resolve()),
+        provider="deterministic",
+        deterministic={"profile": "tool-safe-read"},
+    )
+    run_id = "workspace-intelligence"
+    backend.prepare(run_id)
+
+    orchestrator = backend._orchestrator(
+        backend._config_for(request),
+        request,
+        run_id,
+    )
+
+    assert orchestrator.intelligence_source is not None
+    assert orchestrator.intelligence_source.service.workspace == workspace.resolve()
+
+
+def test_run_backend_restores_intelligence_for_resume(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "README.md").write_text("# Resume workspace\n", encoding="utf-8")
+    config = AgentBusConfig(
+        workspace_dir=str(tmp_path / "daemon-default"),
+        state_dir=str(tmp_path / "state"),
+    )
+    RepositoryIntelligenceService(
+        workspace,
+        config.state_database_path.parent / "repository-index.sqlite3",
+    ).build()
+    backend = AgentBusRunBackend(config)
+    backend.store.create_run(
+        RunRecord(
+            run_id="resume-intelligence",
+            original_task="Resume with repository evidence",
+            model="deterministic-v1",
+            workspace=str(workspace.resolve()),
+            graph_data={"version": 1, "tasks": []},
+        )
+    )
+    captured = {}
+
+    class RecordingOrchestrator:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def resume_durable(self, run_id: str) -> None:
+            captured["run_id"] = run_id
+
+    monkeypatch.setattr(
+        "agentbus.control.supervisor.MultiAgentOrchestrator",
+        RecordingOrchestrator,
+    )
+
+    backend.resume("resume-intelligence")
+
+    source = captured["intelligence_source"]
+    assert source is not None
+    assert source.service.workspace == workspace.resolve()
+    assert captured["run_id"] == "resume-intelligence"

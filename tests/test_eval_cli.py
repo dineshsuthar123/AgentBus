@@ -61,6 +61,7 @@ def test_list_supports_human_and_json_output(tmp_path, capsys):
         "release-offline",
         "release-azure-smoke",
         "real-repos",
+        "repository-intelligence",
     }
 
 

@@ -1,6 +1,7 @@
 import inspect
 import threading
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -39,14 +40,26 @@ from agentbus.models.errors import ModelCancellationError
 from agentbus.repo.context_pack import ContextPackBuilder
 from agentbus.repo.scanner import RepoScanner
 from agentbus.repo.test_detection import TestCommandDetector
-from agentbus.runtime.verifier import Verifier
 from agentbus.runtime.durable_workflow import MultiAgentTaskExecutor
+from agentbus.runtime.intelligence import (
+    PlannerIntelligenceContext,
+    PlannerIntelligenceSource,
+    PlannerScopeValidator,
+    append_planner_intelligence,
+)
+from agentbus.runtime.intelligence_guidance import (
+    build_coder_intelligence,
+    build_reviewer_intelligence,
+)
+from agentbus.runtime.verifier import Verifier
 from agentbus.trace import (
+    REPOSITORY_INTELLIGENCE_COMPONENT,
     RuntimeTrace,
     Trace,
     TraceFailure,
     TraceSpanType,
     TraceStatus,
+    build_repository_intelligence_trace_evidence,
 )
 from agentbus.trace.errors import TraceIntegrityError
 from agentbus.trace.sealing import (
@@ -113,6 +126,8 @@ class MultiAgentOrchestrator:
         lease_clock: Callable[[], datetime] | None = None,
         cancellation: CancellationToken | None = None,
         cancellation_registry: CancellationRegistry | None = None,
+        intelligence_source: PlannerIntelligenceSource | None = None,
+        planner_scope_validator: PlannerScopeValidator | None = None,
     ):
         self.config = config or AgentBusConfig.from_env()
         self.workspace = self.config.workspace_path
@@ -168,8 +183,17 @@ class MultiAgentOrchestrator:
         self.lease_clock = lease_clock
         self._explicit_cancellation = cancellation
         self._cancellation_registry = cancellation_registry
+        self.intelligence_source = intelligence_source
+        self.planner_scope_validator = (
+            planner_scope_validator or PlannerScopeValidator()
+        )
         self._trace_guard = threading.RLock()
+        self._intelligence_guard = threading.RLock()
         self._runtime_traces: dict[str, RuntimeTrace] = {}
+        self._intelligence_contexts: OrderedDict[
+            str,
+            PlannerIntelligenceContext,
+        ] = OrderedDict()
 
     def run(self, user_task: str) -> OrchestrationResult:
         cancellation = self._explicit_cancellation
@@ -183,13 +207,14 @@ class MultiAgentOrchestrator:
         )
 
         git_branch = self._prepare_git_workflow(user_task)
-        context_pack = self._build_context_pack(user_task)
+        context_pack, intelligence_context = self._planner_context(user_task)
         self.logger.log("planner_started", {})
         with model_request_context(
             run_id=self.logger.run_id,
             cancellation=cancellation,
         ):
             plan = self.planner.plan(user_task, context_pack=context_pack)
+        plan = self._validate_planner_scope(plan, intelligence_context)
         self._checkpoint_optional(cancellation, "after-planner")
         self.logger.log("planner_output", _plan_log_metadata(plan))
 
@@ -204,6 +229,7 @@ class MultiAgentOrchestrator:
                     user_task,
                     plan,
                     cancellation=cancellation,
+                    intelligence_context=intelligence_context,
                 )
             )
 
@@ -212,7 +238,12 @@ class MultiAgentOrchestrator:
         self._checkpoint_optional(cancellation, "after-verifier")
         self.logger.log("verifier_output", _verifier_log_metadata(verifier_result))
 
-        reviewer_result = self._review(user_task, plan, verifier_result)
+        reviewer_result = self._review(
+            user_task,
+            plan,
+            verifier_result,
+            intelligence_context=intelligence_context,
+        )
         retry_performed = False
 
         if not reviewer_result["approved"]:
@@ -237,6 +268,7 @@ class MultiAgentOrchestrator:
                         plan,
                         reviewer_feedback=reviewer_result,
                         cancellation=cancellation,
+                        intelligence_context=intelligence_context,
                     )
                 )
             self._checkpoint_optional(cancellation, "before-retry-verifier")
@@ -246,7 +278,12 @@ class MultiAgentOrchestrator:
                 "verifier_output",
                 _verifier_log_metadata(verifier_result),
             )
-            reviewer_result = self._review(user_task, plan, verifier_result)
+            reviewer_result = self._review(
+                user_task,
+                plan,
+                verifier_result,
+                intelligence_context=intelligence_context,
+            )
 
         approved = bool(reviewer_result["approved"])
         changed_files, commit_hash, pr_url, pr_error = self._finalize_git_workflow(
@@ -348,11 +385,12 @@ class MultiAgentOrchestrator:
         if self._git_workflow_requested() and self.git_repository.is_git_repo():
             initial_head = base_commit or self.git_repository.head_commit(short=False)
 
-        context_pack = self._build_context_pack(user_task)
+        context_pack, intelligence_context = self._planner_context(user_task)
         cancellation.checkpoint("orchestrator", stage="before-planner")
         self.logger.log("planner_started", {})
         with model_request_context(run_id=run_id, cancellation=cancellation):
             plan = self.planner.plan(user_task, context_pack=context_pack)
+        plan = self._validate_planner_scope(plan, intelligence_context)
         cancellation.checkpoint("orchestrator", stage="after-planner")
         self.logger.log("planner_output", _plan_log_metadata(plan))
         metadata = {
@@ -393,6 +431,10 @@ class MultiAgentOrchestrator:
                 "integration_order": [],
             },
         }
+        if intelligence_context is not None:
+            metadata["repository_intelligence"] = (
+                intelligence_context.safe_metadata()
+            )
         engine = self._durable_engine(
             run_id,
             executor=False,
@@ -434,6 +476,11 @@ class MultiAgentOrchestrator:
             runtime_trace.finish_span(
                 planning_span,
                 output_references=[plan_output] if plan_output is not None else [],
+            )
+            self._record_repository_intelligence_trace(
+                runtime_trace,
+                user_task,
+                intelligence_context,
             )
             runtime_trace.replay_checkpoint(
                 "plan_created",
@@ -543,6 +590,7 @@ class MultiAgentOrchestrator:
         task_executor = None
         if executor:
             cancellation = self._cancellation_for(run_id)
+            persisted = self.state_store.get_run(run_id)
             task_executor = MultiAgentTaskExecutor(
                 coder=self.coder,
                 verifier=self.verifier,
@@ -559,6 +607,10 @@ class MultiAgentOrchestrator:
                     mcp_server_configs=self.config.mcp_server_configs,
                     mcp_run_id=run_id,
                     runtime_trace=self._trace_for_run(run_id),
+                ),
+                intelligence_context=self._intelligence_context_for_plan(
+                    persisted.original_task,
+                    persisted.planner_output,
                 ),
             )
         return DurableExecutionEngine(
@@ -662,6 +714,13 @@ class MultiAgentOrchestrator:
             ),
         )
         repository = GitRepository(str(workspace))
+        intelligence_context = None
+        if run_id is not None:
+            persisted = self.state_store.get_run(run_id)
+            intelligence_context = self._intelligence_context_for_plan(
+                persisted.original_task,
+                persisted.planner_output,
+            )
         return MultiAgentTaskExecutor(
             coder=CoderAgent(config=config, model_router=router),
             verifier=Verifier(config=config, cancellation=cancellation),
@@ -690,6 +749,7 @@ class MultiAgentOrchestrator:
                     else None
                 ),
             ),
+            intelligence_context=intelligence_context,
         )
 
     def _trace_for_run(
@@ -942,6 +1002,10 @@ class MultiAgentOrchestrator:
                             verifier_result.get("reason")
                             or "Make the final verification command pass."
                         ],
+                        "unplanned_affected_components": [],
+                        "missing_tests": [],
+                        "boundary_violations": [],
+                        "index_uncertainty": [],
                     }
                 },
                 event_type="final_verification_failed",
@@ -1001,6 +1065,19 @@ class MultiAgentOrchestrator:
                     "summary": reviewer_result.get("summary", ""),
                     "issues": reviewer_result.get("issues", []),
                     "required_fixes": reviewer_result.get("required_fixes", []),
+                    "unplanned_affected_components": reviewer_result.get(
+                        "unplanned_affected_components",
+                        [],
+                    ),
+                    "missing_tests": reviewer_result.get("missing_tests", []),
+                    "boundary_violations": reviewer_result.get(
+                        "boundary_violations",
+                        [],
+                    ),
+                    "index_uncertainty": reviewer_result.get(
+                        "index_uncertainty",
+                        [],
+                    ),
                 },
                 "final_reviewer_model_result": _last_model_result(self.reviewer),
             },
@@ -1152,6 +1229,10 @@ class MultiAgentOrchestrator:
                             verifier_result.get("reason")
                             or "Make integrated verification pass."
                         ],
+                        "unplanned_affected_components": [],
+                        "missing_tests": [],
+                        "boundary_violations": [],
+                        "index_uncertainty": [],
                     },
                 },
                 event_type="final_integration_verification_failed",
@@ -1207,6 +1288,19 @@ class MultiAgentOrchestrator:
                     "summary": reviewer_result.get("summary", ""),
                     "issues": reviewer_result.get("issues", []),
                     "required_fixes": reviewer_result.get("required_fixes", []),
+                    "unplanned_affected_components": reviewer_result.get(
+                        "unplanned_affected_components",
+                        [],
+                    ),
+                    "missing_tests": reviewer_result.get("missing_tests", []),
+                    "boundary_violations": reviewer_result.get(
+                        "boundary_violations",
+                        [],
+                    ),
+                    "index_uncertainty": reviewer_result.get(
+                        "index_uncertainty",
+                        [],
+                    ),
                 },
             },
             event_type="final_integration_review_completed",
@@ -1741,8 +1835,23 @@ class MultiAgentOrchestrator:
         test_output: str | None,
         changes: RepositoryChangeSet,
         reviewer=None,
+        intelligence_context: PlannerIntelligenceContext | None = None,
+        task_id: str | None = None,
     ) -> dict[str, Any]:
         selected_reviewer = reviewer or self.reviewer
+        if intelligence_context is None:
+            intelligence_context = self._intelligence_context_for_plan(
+                user_task,
+                plan,
+            )
+        repository_intelligence = None
+        if intelligence_context is not None:
+            repository_intelligence = build_reviewer_intelligence(
+                intelligence_context,
+                plan,
+                changes.review_files,
+                task_id=task_id,
+            ).render()
         arguments = {
             "user_task": user_task,
             "plan": plan,
@@ -1752,6 +1861,7 @@ class MultiAgentOrchestrator:
             "generated_artifacts": changes.generated_files,
             "ignored_files": changes.ignored_files,
             "tracked_generated_artifacts": changes.tracked_generated_files,
+            "repository_intelligence": repository_intelligence,
         }
         parameters = inspect.signature(selected_reviewer.review).parameters.values()
         if not any(
@@ -1773,12 +1883,22 @@ class MultiAgentOrchestrator:
         *,
         reviewer_feedback: dict[str, Any] | None = None,
         cancellation: CancellationToken | None = None,
+        intelligence_context: PlannerIntelligenceContext | None = None,
+        task_id: str | None = None,
     ) -> str:
+        repository_intelligence = None
+        if intelligence_context is not None:
+            repository_intelligence = build_coder_intelligence(
+                intelligence_context,
+                plan,
+                task_id=task_id,
+            ).render()
         arguments = {
             "user_task": user_task,
             "plan": plan,
             "reviewer_feedback": reviewer_feedback,
             "cancellation": cancellation,
+            "repository_intelligence": repository_intelligence,
         }
         parameters = inspect.signature(self.coder.execute).parameters.values()
         if not any(
@@ -1990,11 +2110,203 @@ class MultiAgentOrchestrator:
         )
         return context_pack
 
+    def _planner_context(
+        self,
+        user_task: str,
+    ) -> tuple[str, PlannerIntelligenceContext | None]:
+        context_pack = self._build_context_pack(user_task)
+        if self.intelligence_source is None:
+            return context_pack, None
+        intelligence = self.intelligence_source.planner_context(user_task)
+        if intelligence is None:
+            self.logger.log(
+                "planner_intelligence_unavailable",
+                {"reason": "source_returned_no_context"},
+            )
+            return context_pack, None
+        if not isinstance(intelligence, PlannerIntelligenceContext):
+            raise TypeError(
+                "Planner intelligence sources must return "
+                "PlannerIntelligenceContext or None."
+            )
+        self.logger.log(
+            "planner_intelligence_context",
+            intelligence.safe_metadata(),
+        )
+        self._cache_intelligence_context(intelligence)
+        return (
+            append_planner_intelligence(context_pack, intelligence),
+            intelligence,
+        )
+
+    def _validate_planner_scope(
+        self,
+        plan: dict[str, Any],
+        intelligence: PlannerIntelligenceContext | None,
+    ) -> dict[str, Any]:
+        if intelligence is None:
+            unvalidated = dict(plan)
+            intelligence_fields = (
+                "targeted_files",
+                "targeted_symbols",
+                "expected_impacted_components",
+                "proposed_tests",
+                "architecture_constraints",
+            )
+            for field_name in intelligence_fields:
+                unvalidated.pop(field_name, None)
+            steps = unvalidated.get("steps")
+            if isinstance(steps, list):
+                unvalidated["steps"] = []
+                for raw_step in steps:
+                    if not isinstance(raw_step, dict):
+                        unvalidated["steps"].append(raw_step)
+                        continue
+                    step = dict(raw_step)
+                    for field_name in intelligence_fields:
+                        step.pop(field_name, None)
+                    unvalidated["steps"].append(step)
+            for field_name in (
+                "intelligence_snapshot_id",
+                "intelligence_context_hash",
+                "intelligence_warnings",
+                "intelligence_scope_validated",
+            ):
+                unvalidated.pop(field_name, None)
+            return unvalidated
+        result = self.planner_scope_validator.validate(plan, intelligence)
+        self.logger.log(
+            "planner_intelligence_validated",
+            {
+                "context_hash": intelligence.context_hash,
+                "snapshot_id": (
+                    intelligence.snapshot.snapshot_id
+                    if intelligence.snapshot is not None
+                    else None
+                ),
+                "warning_count": len(result.warnings),
+            },
+        )
+        return result.plan
+
+    def _record_repository_intelligence_trace(
+        self,
+        runtime_trace: RuntimeTrace,
+        user_task: str,
+        intelligence: PlannerIntelligenceContext | None,
+    ) -> None:
+        if intelligence is None:
+            return
+        span = None
+        try:
+            evidence = build_repository_intelligence_trace_evidence(
+                user_task,
+                intelligence,
+                private_roots=(self.workspace,),
+            )
+            span = runtime_trace.start_span(
+                TraceSpanType.CUSTOM,
+                "repository intelligence",
+                attributes={
+                    "component": REPOSITORY_INTELLIGENCE_COMPONENT,
+                    "evidence_schema_version": evidence.schema_version,
+                    "context_hash": evidence.context_hash,
+                    "snapshot_id": (
+                        evidence.snapshot.snapshot_id
+                        if evidence.snapshot is not None
+                        else None
+                    ),
+                    "context_plan_hash": evidence.context_plan_hash,
+                    "impact_result_id": (
+                        evidence.impact_result.result_id
+                        if evidence.impact_result is not None
+                        else None
+                    ),
+                    "test_selection_result_id": (
+                        evidence.test_selection_result.result_id
+                        if evidence.test_selection_result is not None
+                        else None
+                    ),
+                },
+            )
+            query_input = runtime_trace.capture_json_input(
+                span,
+                "repository.intelligence.query",
+                {
+                    "search_query": evidence.search_query,
+                    "search_query_sha256": evidence.search_query_sha256,
+                },
+            )
+            evidence_output = runtime_trace.capture_json_output(
+                span,
+                "repository.intelligence.evidence",
+                evidence.model_dump(mode="json"),
+            )
+            runtime_trace.finish_span(
+                span,
+                input_references=[query_input] if query_input is not None else [],
+                output_references=(
+                    [evidence_output] if evidence_output is not None else []
+                ),
+            )
+        except Exception as exc:
+            runtime_trace.fail_span(span, exc)
+            runtime_trace.recording_failed("repository_intelligence", exc)
+
+    def _intelligence_context_for_plan(
+        self,
+        user_task: str,
+        plan: dict[str, Any],
+    ) -> PlannerIntelligenceContext | None:
+        expected_hash = plan.get("intelligence_context_hash")
+        if not isinstance(expected_hash, str) or not expected_hash:
+            return None
+        with self._intelligence_guard:
+            cached = self._intelligence_contexts.get(expected_hash)
+            if cached is not None:
+                self._intelligence_contexts.move_to_end(expected_hash)
+        if cached is not None:
+            return cached
+        if self.intelligence_source is None:
+            return None
+        intelligence = self.intelligence_source.planner_context(user_task)
+        if intelligence is None:
+            return None
+        if not isinstance(intelligence, PlannerIntelligenceContext):
+            raise TypeError(
+                "Planner intelligence sources must return "
+                "PlannerIntelligenceContext or None."
+            )
+        if intelligence.context_hash != expected_hash:
+            self.logger.log(
+                "repository_intelligence_context_unavailable",
+                {
+                    "reason": "context_hash_mismatch",
+                    "expected_context_hash": expected_hash,
+                    "actual_context_hash": intelligence.context_hash,
+                },
+            )
+            return None
+        self._cache_intelligence_context(intelligence)
+        return intelligence
+
+    def _cache_intelligence_context(
+        self,
+        intelligence: PlannerIntelligenceContext,
+    ) -> None:
+        with self._intelligence_guard:
+            self._intelligence_contexts[intelligence.context_hash] = intelligence
+            self._intelligence_contexts.move_to_end(intelligence.context_hash)
+            while len(self._intelligence_contexts) > 16:
+                self._intelligence_contexts.popitem(last=False)
+
     def _review(
         self,
         user_task: str,
         plan: dict[str, Any],
         verifier_result: dict[str, Any],
+        *,
+        intelligence_context: PlannerIntelligenceContext | None = None,
     ) -> dict[str, Any]:
         self._checkpoint_optional(
             self._explicit_cancellation,
@@ -2013,6 +2325,7 @@ class MultiAgentOrchestrator:
                 git_diff=git_diff,
                 test_output=verifier_result.get("output"),
                 changes=changes,
+                intelligence_context=intelligence_context,
             )
         self._checkpoint_optional(
             self._explicit_cancellation,

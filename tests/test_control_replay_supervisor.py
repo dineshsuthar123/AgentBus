@@ -12,16 +12,19 @@ from agentbus.control.replay_supervisor import BackgroundReplaySupervisor
 from agentbus.control.services import ControlQueryService
 from agentbus.execution.models import RunRecord
 from agentbus.execution.state_store import StateStore
+from agentbus.intelligence import RepositoryIntelligenceService
 from agentbus.replay.service import TraceReplayService
 from agentbus.trace import RuntimeTrace, TraceSpanType, TraceStatus
 from agentbus.trace.sealing import seal_run_provenance
 
 
 def _query_with_trace(tmp_path: Path):
+    daemon_workspace = tmp_path / "daemon-workspace"
+    daemon_workspace.mkdir()
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     config = AgentBusConfig(
-        workspace_dir=str(workspace),
+        workspace_dir=str(daemon_workspace),
         state_db=str(tmp_path / "state.db"),
     )
     store = StateStore(config.state_database_path)
@@ -64,6 +67,31 @@ def _query_with_trace(tmp_path: Path):
         final_repository_tree_sha256="d" * 64,
     )
     return config, store, ControlQueryService(config, store), trace
+
+
+def test_default_replay_service_uses_run_workspace_intelligence(
+    tmp_path: Path,
+) -> None:
+    config, _store, query, trace = _query_with_trace(tmp_path)
+    run_workspace = Path(query.get_run(trace.run_id).workspace)
+    (run_workspace / "README.md").write_text(
+        "# Replay index\n",
+        encoding="utf-8",
+    )
+    RepositoryIntelligenceService(
+        run_workspace,
+        config.state_database_path.parent / "repository-index.sqlite3",
+    ).build()
+    supervisor = BackgroundReplaySupervisor(query)
+    try:
+        service = supervisor._default_service(lambda: False, trace.run_id)
+    finally:
+        supervisor.shutdown()
+
+    assert service.config.workspace_path == run_workspace.resolve()
+    assert service.intelligence_source is not None
+    assert service.intelligence_source.service.workspace == run_workspace.resolve()
+    assert service.config.workspace_path != config.workspace_path
 
 
 def test_background_replay_runs_real_providerless_engine(tmp_path: Path) -> None:

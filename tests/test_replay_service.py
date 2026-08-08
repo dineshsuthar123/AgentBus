@@ -19,6 +19,7 @@ from agentbus.replay.service import (
     TraceReplayService,
     _CachedToolReplayPlanner,
 )
+from agentbus.runtime.intelligence import PlannerIntelligenceContext
 from agentbus.sandbox.platform import ExecutableCatalog
 from agentbus.tools import builtin_tool_registry
 from agentbus.tools.capabilities import derive_required_capabilities
@@ -28,10 +29,13 @@ from agentbus.tools.protocol import (
     ToolInvocationContext,
 )
 from agentbus.trace import (
+    IntelligenceDriftCategory,
+    REPOSITORY_INTELLIGENCE_COMPONENT,
     ReplayMode,
     RuntimeTrace,
     TraceSpanType,
     TraceStatus,
+    build_repository_intelligence_trace_evidence,
 )
 from agentbus.trace.sealing import seal_run_provenance
 
@@ -51,6 +55,8 @@ def _record_run(
     config: AgentBusConfig,
     store: StateStore,
     run_id: str,
+    *,
+    intelligence_context: PlannerIntelligenceContext | None = None,
 ):
     store.create_run(
         RunRecord(
@@ -74,6 +80,32 @@ def _record_run(
             lambda: {"passed": True, "exit_code": 0},
             capture="json",
         )
+        if intelligence_context is not None:
+            evidence = build_repository_intelligence_trace_evidence(
+                f"Replay {run_id}",
+                intelligence_context,
+                private_roots=(config.workspace_path,),
+            )
+            span = runtime.start_span(
+                TraceSpanType.CUSTOM,
+                "repository intelligence",
+                attributes={"component": REPOSITORY_INTELLIGENCE_COMPONENT},
+            )
+            query_input = runtime.capture_json_input(
+                span,
+                "repository.intelligence.query",
+                {"search_query": evidence.search_query},
+            )
+            evidence_output = runtime.capture_json_output(
+                span,
+                "repository.intelligence.evidence",
+                evidence.model_dump(mode="json"),
+            )
+            runtime.finish_span(
+                span,
+                input_references=[query_input],
+                output_references=[evidence_output],
+            )
         runtime.call(
             TraceSpanType.REVIEWER,
             "final reviewer",
@@ -202,6 +234,54 @@ def test_service_verifies_replays_and_persists_terminal_session(
     assert result.session.provider_calls == 0
     assert result.session.network_calls == 0
     assert store.get_replay_result(request.replay_id) == result
+
+
+def test_service_reuses_capture_when_current_local_index_is_unavailable(
+    tmp_path,
+) -> None:
+    config, store, _ = _service(tmp_path)
+    captured_context = PlannerIntelligenceContext()
+    trace, _ = _record_run(
+        config,
+        store,
+        "run-intelligence-replay",
+        intelligence_context=captured_context,
+    )
+
+    class UnavailableLocalIntelligence:
+        def __init__(self):
+            self.queries = []
+
+        def planner_context(self, user_task):
+            self.queries.append(user_task)
+            return None
+
+    source = UnavailableLocalIntelligence()
+    service = TraceReplayService(
+        config,
+        state_store=store,
+        intelligence_source=source,
+    )
+    result = service.replay(
+        trace.run_id,
+        ReplayRequest(
+            replay_id="replay-intelligence-service",
+            source_trace_id=trace.trace_id,
+            source_run_id=trace.run_id,
+            mode=ReplayMode.OFFLINE,
+        ),
+    )
+
+    assert result.session.status == ReplaySessionStatus.SUCCEEDED
+    assert source.queries == ["Replay run-intelligence-replay"]
+    assert result.repository_intelligence.captured_evidence_reused is True
+    assert result.repository_intelligence.captured_snapshot_reused is False
+    assert result.repository_intelligence.compared_current is True
+    assert result.repository_intelligence.findings[0].category == (
+        IntelligenceDriftCategory.CURRENT_INDEX_UNAVAILABLE
+    )
+    assert result.session.provider_calls == 0
+    assert result.session.network_calls == 0
 
 
 def test_service_replays_managed_tool_through_current_policy_once(

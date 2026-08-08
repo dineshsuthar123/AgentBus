@@ -18,7 +18,8 @@ import type {
   RunSummary,
   TraceArchiveExportResponse,
   TraceArchiveImportResponse,
-  ToolInvocationSummary
+  ToolInvocationSummary,
+  WorkspaceIndexMutationResponse
 } from "../../generated/protocol";
 
 type DeterministicProfile = NonNullable<
@@ -86,11 +87,22 @@ export async function run(): Promise<void> {
   assert.ok(commands.includes("agentbus.importTrace"));
   assert.ok(commands.includes("agentbus.captureRegressionFixture"));
   assert.ok(commands.includes("agentbus.openProvenanceManifest"));
+  assert.ok(commands.includes("agentbus.buildRepositoryIndex"));
+  assert.ok(commands.includes("agentbus.updateRepositoryIndex"));
+  assert.ok(commands.includes("agentbus.searchRepository"));
+  assert.ok(commands.includes("agentbus.showRepositoryDependencies"));
+  assert.ok(commands.includes("agentbus.analyzeChangeImpact"));
+  assert.ok(commands.includes("agentbus.findRelevantTests"));
+  assert.ok(commands.includes("agentbus.previewAgentContext"));
 
   const client = await api.client();
   const initialDaemon = api.daemonId();
   assert.ok(initialDaemon, "AgentBus daemon did not start");
   await waitFor(() => (api.eventStreamConnected() ? true : undefined));
+  const intelligenceLifecycle = await exerciseRepositoryIntelligence(
+    client,
+    workspace
+  );
   const toolRun = await submitAfterWorkspaceRelease(
     runRequest(
       workspace,
@@ -206,6 +218,11 @@ export async function run(): Promise<void> {
     artifactRoot,
     mcpPrivateMarker
   });
+  await exerciseIntelligenceGuidedRun(
+    client,
+    workspace,
+    intelligenceLifecycle.workspaceId
+  );
 
   const approvalRun = await submitAfterWorkspaceRelease(
     runRequest(
@@ -390,6 +407,12 @@ export async function run(): Promise<void> {
   assert.match(mcpCheckDocument.getText(), /Cleanup completed \| yes/);
   assert.doesNotMatch(mcpCheckDocument.getText(), new RegExp(mcpPrivateMarker));
 
+  const restartIndex = await vscode.commands.executeCommand<
+    WorkspaceIndexMutationResponse
+  >("agentbus.updateRepositoryIndex");
+  assert.ok(restartIndex, "Repository index did not refresh before restart");
+  assert.equal(restartIndex.result.status.state, "current");
+
   await vscode.commands.executeCommand("agentbus.restartDaemon");
   await waitFor(() => {
     const current = api.daemonId();
@@ -414,6 +437,33 @@ export async function run(): Promise<void> {
     "cancelled"
   );
   const recoveredClient = await api.client();
+  const recoveredIndex = await recoveredClient.attachWorkspaceIndex({ workspace });
+  assert.equal(
+    recoveredIndex.status.snapshot_id,
+    restartIndex.result.snapshot.snapshot_id
+  );
+  assert.equal(recoveredIndex.status.state, "current");
+  assert.equal(recoveredIndex.workspace_id, intelligenceLifecycle.workspaceId);
+  const staleSource = join(
+    workspace,
+    "services",
+    "python_service",
+    "calculator.py"
+  );
+  await writeFile(
+    staleSource,
+    `${await readFile(staleSource, "utf8")}\nE2E_RESTART_STALE = true\n`,
+    "utf8"
+  );
+  const staleIndex = await recoveredClient.workspaceIndexStatus(
+    intelligenceLifecycle.workspaceId
+  );
+  assert.equal(staleIndex.status.state, "stale");
+  assert.ok(
+    staleIndex.status.stale_paths?.includes(
+      "services/python_service/calculator.py"
+    )
+  );
   const recoveredReplays = await recoveredClient.listReplays(
     replayLifecycle.traceId,
     undefined,
@@ -460,6 +510,264 @@ export async function run(): Promise<void> {
   );
   assert.equal((await recoveredClient.mcpServers()).servers[0]?.server_id, "fixture");
   await vscode.commands.executeCommand("agentbus.stopDaemon");
+}
+
+interface RepositoryIntelligenceLifecycle {
+  workspaceId: string;
+  snapshotId: string;
+}
+
+async function exerciseRepositoryIntelligence(
+  client: AgentBusClient,
+  workspace: string
+): Promise<RepositoryIntelligenceLifecycle> {
+  const built = await vscode.commands.executeCommand<
+    WorkspaceIndexMutationResponse
+  >("agentbus.buildRepositoryIndex");
+  assert.ok(built, "Repository index build command returned no result");
+  assert.equal(built.result.operation, "build");
+  assert.equal(built.result.status.state, "current");
+  const progress = built.result.progress_events ?? [];
+  assert.ok(progress.length >= 3, "Repository index progress was not captured");
+  assert.equal(progress[0]?.phase, "discovery");
+  assert.equal(progress.at(-1)?.phase, "completed");
+  progress.forEach((event, index) => assert.equal(event.sequence, index + 1));
+
+  const status = await client.workspaceIndexStatus(built.workspace_id);
+  assert.equal(status.status.state, "current");
+  assert.ok((status.overview?.projects?.length ?? 0) >= 4);
+  assert.deepEqual(
+    new Set(status.overview?.languages?.map((item) => item.language) ?? []),
+    new Set(["python", "typescript", "java", "go"])
+  );
+  const protectedSource = await readFile(join(workspace, ".env"), "utf8");
+  const protectedMarker = protectedSource.trim().split("=", 2).at(-1) ?? "";
+  assert.ok(protectedMarker);
+  assert.doesNotMatch(JSON.stringify(status), new RegExp(protectedMarker));
+  assert.doesNotMatch(JSON.stringify(status), /\.env/);
+
+  await vscode.commands.executeCommand("agentbus.intelligence.focus");
+  await vscode.commands.executeCommand("agentbus.symbols.focus");
+  await vscode.commands.executeCommand(
+    "agentbus.searchRepository",
+    "calculate_endpoint"
+  );
+  const searchDocument = await waitFor(() =>
+    vscode.workspace.textDocuments.find(
+      (document) =>
+        document.uri.scheme === "agentbus-intelligence" &&
+        document.uri.path.startsWith("/search/")
+    )
+  );
+  assert.match(searchDocument.getText(), /calculate.*endpoint/);
+  assert.doesNotMatch(searchDocument.getText(), new RegExp(protectedMarker));
+  assert.equal(searchDocument.getText().includes(workspace), false);
+
+  const search = await client.searchRepository(built.workspace_id, {
+    query: "calculate_endpoint",
+    limit: 25,
+    include_evidence: true
+  });
+  const symbol = search.report.results?.find(
+    (result) => result.symbol?.name === "calculate_endpoint"
+  )?.symbol;
+  assert.ok(symbol, "Indexed endpoint symbol was not searchable");
+  const target = {
+    kind: "symbol" as const,
+    workspaceId: built.workspace_id,
+    symbolId: symbol.symbol_id
+  };
+  await vscode.commands.executeCommand("agentbus.openRepositorySymbol", target);
+  const symbolDocument = await waitFor(() =>
+    vscode.workspace.textDocuments.find(
+      (document) =>
+        document.uri.scheme === "agentbus-intelligence" &&
+        document.uri.path.startsWith("/symbol/")
+    )
+  );
+  assert.match(symbolDocument.getText(), /\/calculate/);
+  await vscode.commands.executeCommand(
+    "agentbus.showRepositoryDependencies",
+    target
+  );
+  const dependencyDocument = await waitFor(() =>
+    vscode.workspace.textDocuments.find(
+      (document) =>
+        document.uri.scheme === "agentbus-intelligence" &&
+        document.uri.path.startsWith("/dependencies/")
+    )
+  );
+  assert.match(dependencyDocument.getText(), /calculate.*total/);
+
+  const implementation = join(
+    workspace,
+    "services",
+    "python_service",
+    "calculator.py"
+  );
+  const originalImplementation = await readFile(implementation, "utf8");
+  await writeFile(
+    implementation,
+    `${originalImplementation}\nE2E_INDEX_UPDATE = True\n`,
+    "utf8"
+  );
+  const stale = await client.workspaceIndexStatus(built.workspace_id);
+  assert.equal(stale.status.state, "stale");
+  assert.ok(
+    stale.status.stale_paths?.includes("services/python_service/calculator.py")
+  );
+
+  const updated = await vscode.commands.executeCommand<
+    WorkspaceIndexMutationResponse
+  >("agentbus.updateRepositoryIndex");
+  assert.ok(updated, "Repository index update command returned no result");
+  assert.equal(updated.result.status.state, "current");
+  assert.ok(
+    updated.result.indexed_paths?.includes(
+      "services/python_service/calculator.py"
+    )
+  );
+  assert.ok(updated.result.reused_paths?.includes("packages/web/src/api.ts"));
+  assert.equal(updated.result.progress_events?.at(-1)?.phase, "completed");
+
+  const subject = "services/python_service/calculator.py";
+  const subjects = [subject];
+  const impact = await client.analyzeRepositoryImpact(built.workspace_id, {
+    subjects,
+    max_depth: 4,
+    max_nodes: 500,
+    include_evidence: true
+  });
+  assert.ok(impact.result.changed_paths?.includes(subject));
+  assert.ok((impact.result.affected_endpoints?.length ?? 0) > 0);
+  await vscode.commands.executeCommand("agentbus.impact.focus");
+  await vscode.commands.executeCommand("agentbus.analyzeChangeImpact", {
+    workspaceId: built.workspace_id,
+    subjects
+  });
+  const impactDocument = await waitFor(() =>
+    vscode.workspace.textDocuments.find(
+      (document) =>
+        document.uri.scheme === "agentbus-intelligence" &&
+        document.uri.path.startsWith("/impact/")
+    )
+  );
+  assert.match(impactDocument.getText(), /Affected Endpoints/);
+
+  const tests = await client.repositoryTests(built.workspace_id, {
+    subjects,
+    max_depth: 4,
+    max_nodes: 500,
+    include_evidence: true
+  });
+  assert.ok(
+    tests.result.selected_tests?.some((path) => path.includes("test_calculator"))
+  );
+  await vscode.commands.executeCommand("agentbus.findRelevantTests", {
+    workspaceId: built.workspace_id,
+    subjects
+  });
+  const testsDocument = await waitFor(() =>
+    vscode.workspace.textDocuments.find(
+      (document) =>
+        document.uri.scheme === "agentbus-intelligence" &&
+        document.uri.path.startsWith("/tests/")
+    )
+  );
+  assert.match(testsDocument.getText(), /test.*calculator/);
+
+  await vscode.commands.executeCommand("agentbus.contextPlan.focus");
+  await vscode.commands.executeCommand("agentbus.previewAgentContext", {
+    workspaceId: built.workspace_id,
+    task: "Inspect the calculate endpoint and its relevant tests.",
+    role: "planner"
+  });
+  const contextDocument = await waitFor(() =>
+    vscode.workspace.textDocuments.find(
+      (document) =>
+        document.uri.scheme === "agentbus-intelligence" &&
+        document.uri.path.startsWith("/context/")
+    )
+  );
+  assert.match(contextDocument.getText(), /Planner/);
+  assert.match(contextDocument.getText(), /services\/python.*service/);
+
+  await writeFile(implementation, originalImplementation, "utf8");
+  const cleanIndex = await vscode.commands.executeCommand<
+    WorkspaceIndexMutationResponse
+  >("agentbus.updateRepositoryIndex");
+  assert.ok(cleanIndex, "Repository index did not restore its clean fixture state");
+  assert.equal(cleanIndex.result.status.state, "current");
+
+  return {
+    workspaceId: built.workspace_id,
+    snapshotId: cleanIndex.result.snapshot.snapshot_id
+  };
+}
+
+async function exerciseIntelligenceGuidedRun(
+  client: AgentBusClient,
+  workspace: string,
+  workspaceId: string
+): Promise<void> {
+  const refreshed = await vscode.commands.executeCommand<
+    WorkspaceIndexMutationResponse
+  >("agentbus.updateRepositoryIndex");
+  assert.ok(refreshed, "Repository index did not refresh before guided execution");
+  assert.equal(refreshed.workspace_id, workspaceId);
+  assert.equal(refreshed.result.status.state, "current");
+  const run = await submitAfterWorkspaceRelease(
+    runRequest(
+      workspace,
+      "tool-safe-read",
+      0,
+      [],
+      "Inspect the indexed calculate endpoint and repository README safely.",
+      false
+    )
+  );
+  const completed = await waitForRun(client, run.run_id, "succeeded");
+  assert.equal(completed.reviewer_status, "approved");
+  const spans = await client.traceSpans(run.run_id, 0, 500);
+  let intelligenceSpan: Awaited<ReturnType<AgentBusClient["traceSpan"]>> | undefined;
+  for (const span of spans.spans.filter((item) => item.span_type === "custom")) {
+    const detail = await client.traceSpan(run.run_id, span.span_id);
+    if (detail.attributes?.component === "repository_intelligence") {
+      intelligenceSpan = detail;
+      break;
+    }
+  }
+  assert.ok(intelligenceSpan, "Run trace omitted repository intelligence evidence");
+  assert.equal(intelligenceSpan.output_count, 1);
+  assert.equal(
+    intelligenceSpan.attributes?.snapshot_id,
+    refreshed.result.snapshot.snapshot_id
+  );
+  await vscode.commands.executeCommand("agentbus.showExecutionTimeline");
+  await vscode.commands.executeCommand("agentbus.showSpan", {
+    value: spans.spans.find((span) => span.span_id === intelligenceSpan?.span_id)
+  });
+  const intelligenceSpanDocument = await waitFor(() =>
+    vscode.workspace.textDocuments.find(
+      (document) =>
+        document.uri.scheme === "agentbus-span" &&
+        document.uri.path.includes(intelligenceSpan.span_id)
+    )
+  );
+  assert.match(intelligenceSpanDocument.getText(), /repository.*intelligence/);
+  await vscode.commands.executeCommand("agentbus.openRunReport");
+  const reportDocument = await waitFor(() =>
+    vscode.workspace.textDocuments.find(
+      (document) =>
+        document.uri.scheme === "agentbus-report" &&
+        document.getText().includes(`AgentBus Run ${run.run_id}`) &&
+        document.getText().includes("**Status:** succeeded")
+    )
+  );
+  const protectedSource = await readFile(join(workspace, ".env"), "utf8");
+  const protectedMarker = protectedSource.trim().split("=", 2).at(-1) ?? "";
+  assert.ok(protectedMarker);
+  assert.doesNotMatch(reportDocument.getText(), new RegExp(protectedMarker));
 }
 
 interface ReplayLifecycleInput {
@@ -967,12 +1275,19 @@ async function waitForRun(
   expected: string
 ): Promise<RunSummary> {
   return waitFor(async () => {
+    let run: RunSummary;
     try {
-      const run = await client.run(runId);
-      return run.status === expected ? run : undefined;
+      run = await client.run(runId);
     } catch {
       return undefined;
     }
+    if (run.status === expected) return run;
+    if (["succeeded", "failed", "cancelled"].includes(run.status)) {
+      throw new Error(
+        `Run ${runId} reached ${run.status} instead of ${expected}: ${run.failure_reason ?? "no failure reason"}`
+      );
+    }
+    return undefined;
   }, 90_000);
 }
 

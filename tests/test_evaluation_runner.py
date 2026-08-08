@@ -102,6 +102,9 @@ def test_runner_executes_cases_in_fresh_repositories_and_persists_result(tmp_pat
     assert (source / "seed.txt").read_text(encoding="utf-8") == "unchanged\n"
     assert not (source / "result.txt").exists()
     assert not any((runner.fixture_manager.owned_root).rglob("repo"))
+    assert [
+        item.artifacts[0].identifier for item in run.case_results
+    ] == ["fixture:case-0", "fixture:case-1"]
 
 
 def test_runner_fail_fast_persists_partial_suite(tmp_path):
@@ -138,6 +141,9 @@ def test_runner_preserves_owned_fixture_only_when_requested(tmp_path):
     assert result.retained_fixture_path is not None
     assert Path(result.retained_fixture_path).is_dir()
     assert Path(result.retained_fixture_path).is_relative_to(
+        runner.fixture_manager.owned_root
+    )
+    assert Path(result.artifacts[0].identifier).is_relative_to(
         runner.fixture_manager.owned_root
     )
 

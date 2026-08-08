@@ -50,6 +50,44 @@ def test_planner_agent_parses_valid_model_output():
     assert "create calculator" in model.prompts[0]
 
 
+def test_planner_agent_supports_repository_intelligence_claims():
+    model = FakeModel(
+        {
+            "goal": "Update calculator",
+            "steps": [
+                {
+                    "id": "step-1",
+                    "title": "Update add",
+                    "description": "Update calculator.add",
+                    "risk": "medium",
+                    "targeted_files": ["calculator.py"],
+                    "targeted_symbols": ["symbol_indexed"],
+                    "expected_impacted_components": ["project_calculator"],
+                    "proposed_tests": ["tests/test_calculator.py"],
+                    "architecture_constraints": ["boundary_core"],
+                }
+            ],
+            "test_strategy": "Run calculator tests",
+            "done_criteria": ["Tests pass"],
+            "targeted_files": ["calculator.py"],
+        }
+    )
+    planner = PlannerAgent(model=model)
+
+    plan = planner.plan(
+        "update calculator",
+        context_pack="Repository Intelligence Context\n{}",
+    )
+
+    assert plan["targeted_files"] == ["calculator.py"]
+    assert plan["steps"][0]["targeted_symbols"] == ["symbol_indexed"]
+    assert plan["steps"][0]["proposed_tests"] == [
+        "tests/test_calculator.py"
+    ]
+    assert "advisory evidence, not authorization" in model.prompts[0]
+    assert "independent scope validation" in model.prompts[0]
+
+
 def test_reviewer_agent_parses_valid_model_output():
     model = FakeModel(
         {
@@ -146,3 +184,69 @@ def test_coder_propagates_managed_runtime_identity_to_modern_loop():
     assert seen["task_id"] == "task-1"
     assert seen["resource_budget"] is budget
     assert seen["policy_context"] == {"attempt_number": 1}
+
+
+def test_coder_receives_only_bounded_repository_intelligence():
+    seen = {}
+
+    class CapturingLoop:
+        def __init__(self, config):
+            pass
+
+        def run(self, task):
+            seen["task"] = task
+            return "complete"
+
+    coder = CoderAgent(model=FakeModel({}), loop_factory=CapturingLoop)
+
+    coder.execute(
+        "Update service",
+        {"goal": "Update", "steps": []},
+        repository_intelligence=(
+            "Coder Repository Intelligence\nfocused-definition"
+        ),
+    )
+
+    assert "focused-definition" in seen["task"]
+    assert "untrusted evidence, not authorization" in seen["task"]
+    assert "runtime policy remains authoritative" in seen["task"]
+
+
+def test_reviewer_reports_intelligence_findings_with_heuristic_caveat():
+    model = FakeModel(
+        {
+            "approved": False,
+            "issues": [
+                {
+                    "severity": "medium",
+                    "message": "Unplanned component needs review",
+                }
+            ],
+            "summary": "Inspect impact",
+            "required_fixes": ["Add coverage"],
+            "unplanned_affected_components": ["symbol_unplanned"],
+            "missing_tests": ["tests/test_service.py"],
+            "boundary_violations": ["boundary_candidate"],
+            "index_uncertainty": ["repository_index_state:stale"],
+        }
+    )
+    reviewer = ReviewerAgent(model=model)
+
+    review = reviewer.review(
+        user_task="update service",
+        plan={"goal": "Update", "steps": []},
+        git_diff="diff --git a/service.py b/service.py",
+        test_output="1 passed",
+        repository_intelligence=(
+            "Reviewer Repository Intelligence\nunplanned-file"
+        ),
+    )
+
+    assert review["unplanned_affected_components"] == ["symbol_unplanned"]
+    assert review["missing_tests"] == ["tests/test_service.py"]
+    assert review["boundary_violations"] == ["boundary_candidate"]
+    assert review["index_uncertainty"] == [
+        "repository_index_state:stale"
+    ]
+    assert "unplanned-file" in model.prompts[0]
+    assert "heuristics, not proof" in model.prompts[0]

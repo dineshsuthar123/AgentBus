@@ -183,6 +183,121 @@ test("trace client routes encode identifiers and bound span pages", async () => 
   assert.throws(() => client.traceSpans("run", 0, 501), /bounded/);
 });
 
+test("repository intelligence client routes are encoded bounded and abortable", async () => {
+  const requests: Array<{
+    url: string;
+    method: string;
+    body: unknown;
+  }> = [];
+  const client = new AgentBusClient(
+    "http://127.0.0.1:43123",
+    token,
+    async (input, init) => {
+      requests.push({
+        url: String(input),
+        method: init?.method ?? "GET",
+        body: init?.body ? JSON.parse(String(init.body)) : undefined
+      });
+      return Response.json({});
+    }
+  );
+
+  await client.attachWorkspaceIndex({ workspace: "C:/repo" });
+  await client.buildWorkspaceIndex({
+    workspace: "C:/repo",
+    workspace_trusted: true
+  });
+  await client.workspaceIndexStatus("workspace one");
+  await client.updateWorkspaceIndex("workspace one", {
+    workspace_trusted: true
+  });
+  await client.verifyWorkspaceIndex("workspace one");
+  await client.repairWorkspaceIndex("workspace one", {
+    workspace_trusted: true
+  });
+  await client.cancelWorkspaceIndex("workspace one");
+  await client.searchRepository("workspace one", {
+    query: "calculate",
+    limit: 25
+  });
+  await client.repositorySymbol("workspace one", "symbol:add", true);
+  await client.repositoryGraph(
+    "workspace one",
+    "symbol:add",
+    "dependencies",
+    { depth: 3, offset: 5, limit: 20, includeEvidence: true }
+  );
+  await client.analyzeRepositoryImpact("workspace one", {
+    subjects: ["calculator.py"]
+  });
+  await client.repositoryTests("workspace one", {
+    subjects: ["calculator.py"]
+  });
+  await client.repositoryContextPlan("workspace one", {
+    task: "Change calculate safely"
+  });
+
+  assert.equal(
+    requests[0]?.url.endsWith("/api/v1/workspaces/index/attach"),
+    true
+  );
+  assert.equal(requests[1]?.url.endsWith("/api/v1/workspaces/index"), true);
+  assert.equal(
+    requests[2]?.url.endsWith("/api/v1/workspaces/workspace%20one/index"),
+    true
+  );
+  assert.equal(
+    requests[3]?.url.endsWith(
+      "/api/v1/workspaces/workspace%20one/index/update"
+    ),
+    true
+  );
+  assert.equal(
+    requests[5]?.url.endsWith(
+      "/api/v1/workspaces/workspace%20one/index/repair"
+    ),
+    true
+  );
+  assert.equal(
+    requests[8]?.url.endsWith(
+      "/api/v1/workspaces/workspace%20one/symbols/symbol%3Aadd?include_evidence=true"
+    ),
+    true
+  );
+  assert.equal(
+    requests[9]?.url.endsWith(
+      "/api/v1/workspaces/workspace%20one/dependencies/symbol%3Aadd?depth=3&offset=5&limit=20&include_unresolved=false&include_evidence=true"
+    ),
+    true
+  );
+  assert.deepEqual(requests[10]?.body, { subjects: ["calculator.py"] });
+  assert.throws(
+    () =>
+      client.repositoryGraph("workspace", "symbol", "dependents", {
+        depth: 9
+      }),
+    /bounded/
+  );
+
+  const cancelled = new AbortController();
+  cancelled.abort(new Error("index cancelled"));
+  const aborting = new AgentBusClient(
+    "http://127.0.0.1:43123",
+    token,
+    async (_input, init) => {
+      assert.equal(init?.signal?.aborted, true);
+      throw init?.signal?.reason;
+    }
+  );
+  await assert.rejects(
+    aborting.buildWorkspaceIndex(
+      { workspace: "C:/repo", workspace_trusted: true },
+      cancelled.signal
+    ),
+    /index cancelled/
+  );
+});
+
 test("replay client routes are explicit bounded and command-free", async () => {
   const requests: Array<{
     url: string;

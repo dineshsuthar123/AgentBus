@@ -86,6 +86,14 @@ from agentbus.replay.service import (
 )
 from agentbus.trace.provenance import ReplayabilityLevel
 from agentbus.trace.models import ReplayMode
+from agentbus.trace.intelligence import (
+    IntelligenceDriftCategory,
+    IntelligenceDriftFinding,
+    RepositoryIntelligenceReplayReport,
+    RepositoryIntelligenceTraceEvidence,
+    compare_repository_intelligence,
+    reuse_captured_repository_intelligence,
+)
 from agentbus.replay.substitutions import (
     MODEL_ENVELOPE_MEDIA_TYPE,
     MODEL_ENVELOPE_VERSION,
@@ -143,6 +151,10 @@ __all__ = [
     "ReplayIsolation",
     "ReplayIsolationManager",
     "ReplayMode",
+    "IntelligenceDriftCategory",
+    "IntelligenceDriftFinding",
+    "RepositoryIntelligenceReplayReport",
+    "RepositoryIntelligenceTraceEvidence",
     "ReplayIsolationError",
     "ReplayabilityClassifier",
     "ReplayabilityLevel",
@@ -173,6 +185,7 @@ __all__ = [
     "capture_regression_fixture",
     "capture_model_envelope",
     "compare_traces",
+    "compare_repository_intelligence",
     "derive_fixture_assertions",
     "environment_drift",
     "environment_fingerprint",
@@ -188,4 +201,5 @@ __all__ = [
     "capture_tool_envelope",
     "load_tool_envelope",
     "replay_regression_fixture",
+    "reuse_captured_repository_intelligence",
 ]

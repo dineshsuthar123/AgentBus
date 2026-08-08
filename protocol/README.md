@@ -32,6 +32,12 @@ run-scoped tool cancellation, and configured local MCP diagnostics. It does not
 expose arbitrary command execution, raw environment values, subprocess handles,
 or model-controlled MCP server configuration.
 
+Repository intelligence is an additive protocol v1 capability. Authenticated
+workspace endpoints expose trust-gated, fenced, and cancellable index mutation;
+bounded status and verification; paginated search and dependency reads; and
+source-free symbol, impact, test-selection, and context-plan evidence. The API
+does not expose raw SQLite records or unrestricted source content.
+
 Authenticated `POST /mcp` is a constrained MCP JSON-RPC endpoint and therefore
 is documented separately from the REST OpenAPI paths. It shares the same local
 daemon authentication and response sanitization. See

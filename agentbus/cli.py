@@ -30,6 +30,14 @@ COMMANDS = (
     "trace",
     "replay",
     "compare",
+    "index",
+    "search",
+    "symbols",
+    "dependencies",
+    "dependents",
+    "impact",
+    "tests-for",
+    "context-plan",
     "evaluate",
     "release-report",
     "version",
@@ -78,6 +86,19 @@ def main(argv: list[str] | None = None) -> int:
             "compare": compare_command,
         }
         return operations[command](rest)
+    if command in {
+        "index",
+        "search",
+        "symbols",
+        "dependencies",
+        "dependents",
+        "impact",
+        "tests-for",
+        "context-plan",
+    }:
+        from agentbus.intelligence.commands import intelligence_command
+
+        return intelligence_command(command, rest)
     if command == "evaluate":
         from agentbus.eval import main as evaluation_main
 
@@ -132,6 +153,14 @@ def _root_parser() -> argparse.ArgumentParser:
         "trace": "Inspect, verify, capture, export, import, or retain traces.",
         "replay": "Replay a run or archive without providers.",
         "compare": "Compare two persisted execution traces.",
+        "index": "Build, inspect, verify, repair, or retain a local index.",
+        "search": "Search indexed repository files and symbols.",
+        "symbols": "Inspect bounded symbol metadata for a file or symbol.",
+        "dependencies": "Query bounded symbol dependencies.",
+        "dependents": "Query bounded symbol dependents.",
+        "impact": "Analyze bounded change impact for paths or symbols.",
+        "tests-for": "Select evidence-backed tests for paths or symbols.",
+        "context-plan": "Build a deterministic, budgeted context plan.",
         "evaluate": "Run the evaluation harness.",
         "release-report": "Generate evidence-based release reports.",
         "version": "Print version metadata.",
