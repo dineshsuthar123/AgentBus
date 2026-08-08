@@ -130,6 +130,12 @@ def test_service_queries_are_explainable_bounded_and_source_free(
     assert overview.languages[0].language.value == "python"
     assert overview.symbol_kind_counts["function"] == 2
     assert overview.symbol_kind_counts["test"] >= 1
+    assert {item.name for item in overview.symbols} >= {
+        "add",
+        "calculate",
+        "test_add",
+    }
+    assert all(item.signature is None for item in overview.symbols)
     assert overview.provider_calls == 0
     assert overview.network_calls == 0
     payload = json.dumps(

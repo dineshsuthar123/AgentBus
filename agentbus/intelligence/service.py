@@ -62,6 +62,7 @@ _MAX_MAINTENANCE_PATHS = 1_000
 _MAX_QUERY_RESULTS = 200
 _MAX_OVERVIEW_PROJECTS = 256
 _MAX_OVERVIEW_MODULES = 1_000
+_MAX_OVERVIEW_SYMBOLS = 2_000
 _MAX_OVERVIEW_RULES = 500
 
 
@@ -178,6 +179,10 @@ class RepositoryOverview(IntelligenceModel):
     modules: tuple[ModuleSummary, ...] = Field(
         default=(),
         max_length=_MAX_OVERVIEW_MODULES,
+    )
+    symbols: tuple[SymbolSummary, ...] = Field(
+        default=(),
+        max_length=_MAX_OVERVIEW_SYMBOLS,
     )
     symbol_kind_counts: dict[str, int] = Field(default_factory=dict)
     ownership_rules: tuple[OwnershipRuleSummary, ...] = Field(
@@ -471,6 +476,12 @@ class RepositoryIntelligenceService:
                 :_MAX_OVERVIEW_MODULES
             ]
         )
+        symbol_summaries = tuple(
+            _symbol_summary(item).model_copy(update={"signature": None})
+            for item in sorted(symbols, key=lambda value: value.symbol_id)[
+                :_MAX_OVERVIEW_SYMBOLS
+            ]
+        )
         ownership = tuple(
             OwnershipRuleSummary(
                 rule_id=item.rule_id,
@@ -504,6 +515,7 @@ class RepositoryIntelligenceService:
             projects=projects,
             languages=languages,
             modules=module_summaries,
+            symbols=symbol_summaries,
             symbol_kind_counts={
                 kind.value: count
                 for kind, count in sorted(
@@ -517,6 +529,7 @@ class RepositoryIntelligenceService:
                 (
                     len(view.projects) > _MAX_OVERVIEW_PROJECTS,
                     len(modules) > _MAX_OVERVIEW_MODULES,
+                    len(symbols) > _MAX_OVERVIEW_SYMBOLS,
                     len(view.ownership_rules) > _MAX_OVERVIEW_RULES,
                     len(view.boundaries) > _MAX_OVERVIEW_RULES,
                 )

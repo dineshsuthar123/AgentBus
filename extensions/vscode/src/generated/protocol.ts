@@ -672,6 +672,7 @@ export interface RepositoryOverview {
   "projects"?: Array<ProjectSummary>;
   "languages"?: Array<LanguageSummary>;
   "modules"?: Array<ModuleSummary>;
+  "symbols"?: Array<SymbolSummary>;
   "symbol_kind_counts"?: Record<string, number>;
   "ownership_rules"?: Array<OwnershipRuleSummary>;
   "architecture_boundaries"?: Array<ArchitectureBoundarySummary>;

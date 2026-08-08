@@ -45,6 +45,22 @@ import type {
   ToolListResponse,
   ToolPolicyResponse,
   UsageResponse,
+  WorkspaceContextPlanRequest,
+  WorkspaceContextPlanResponse,
+  WorkspaceGraphResponse,
+  WorkspaceImpactRequest,
+  WorkspaceImpactResponse,
+  WorkspaceIndexActionRequest,
+  WorkspaceIndexAttachRequest,
+  WorkspaceIndexCancellationResponse,
+  WorkspaceIndexCreateRequest,
+  WorkspaceIndexMutationResponse,
+  WorkspaceIndexStatusResponse,
+  WorkspaceIndexVerificationResponse,
+  WorkspaceSearchRequest,
+  WorkspaceSearchResponse,
+  WorkspaceSymbolResponse,
+  WorkspaceTestsResponse,
   WorkspaceValidationRequest,
   WorkspaceValidationResponse,
   WorktreeListResponse
@@ -55,6 +71,13 @@ export type FetchLike = (
   input: string | URL,
   init?: RequestInit
 ) => Promise<Response>;
+
+interface RequestOptions {
+  signal?: AbortSignal;
+  timeoutMilliseconds?: number;
+}
+
+const INDEX_OPERATION_TIMEOUT_MILLISECONDS = 15 * 60 * 1000;
 
 export class AgentBusApiError extends Error {
   public constructor(
@@ -90,6 +113,153 @@ export class AgentBusClient {
     body: WorkspaceValidationRequest
   ): Promise<WorkspaceValidationResponse> {
     return this.request("POST", "/api/v1/workspaces/validate", body);
+  }
+
+  public attachWorkspaceIndex(
+    body: WorkspaceIndexAttachRequest
+  ): Promise<WorkspaceIndexStatusResponse> {
+    return this.request("POST", "/api/v1/workspaces/index/attach", body);
+  }
+
+  public buildWorkspaceIndex(
+    body: WorkspaceIndexCreateRequest,
+    signal?: AbortSignal
+  ): Promise<WorkspaceIndexMutationResponse> {
+    return this.request("POST", "/api/v1/workspaces/index", body, {
+      signal,
+      timeoutMilliseconds: INDEX_OPERATION_TIMEOUT_MILLISECONDS
+    });
+  }
+
+  public workspaceIndexStatus(
+    workspaceId: string
+  ): Promise<WorkspaceIndexStatusResponse> {
+    return this.request(
+      "GET",
+      `/api/v1/workspaces/${safeSegment(workspaceId)}/index`
+    );
+  }
+
+  public updateWorkspaceIndex(
+    workspaceId: string,
+    body: WorkspaceIndexActionRequest,
+    signal?: AbortSignal
+  ): Promise<WorkspaceIndexMutationResponse> {
+    return this.indexMutation(workspaceId, "update", body, signal);
+  }
+
+  public repairWorkspaceIndex(
+    workspaceId: string,
+    body: WorkspaceIndexActionRequest,
+    signal?: AbortSignal
+  ): Promise<WorkspaceIndexMutationResponse> {
+    return this.indexMutation(workspaceId, "repair", body, signal);
+  }
+
+  public verifyWorkspaceIndex(
+    workspaceId: string
+  ): Promise<WorkspaceIndexVerificationResponse> {
+    return this.request(
+      "POST",
+      `/api/v1/workspaces/${safeSegment(workspaceId)}/index/verify`
+    );
+  }
+
+  public cancelWorkspaceIndex(
+    workspaceId: string
+  ): Promise<WorkspaceIndexCancellationResponse> {
+    return this.request(
+      "POST",
+      `/api/v1/workspaces/${safeSegment(workspaceId)}/index/cancel`
+    );
+  }
+
+  public searchRepository(
+    workspaceId: string,
+    body: WorkspaceSearchRequest
+  ): Promise<WorkspaceSearchResponse> {
+    return this.request(
+      "POST",
+      `/api/v1/workspaces/${safeSegment(workspaceId)}/search`,
+      body
+    );
+  }
+
+  public repositorySymbol(
+    workspaceId: string,
+    symbolId: string,
+    includeEvidence = false
+  ): Promise<WorkspaceSymbolResponse> {
+    return this.request(
+      "GET",
+      `/api/v1/workspaces/${safeSegment(workspaceId)}/symbols/${safeSegment(
+        symbolId
+      )}?include_evidence=${includeEvidence}`
+    );
+  }
+
+  public repositoryGraph(
+    workspaceId: string,
+    symbolId: string,
+    direction: "dependencies" | "dependents",
+    options: {
+      depth?: number;
+      offset?: number;
+      limit?: number;
+      includeUnresolved?: boolean;
+      includeEvidence?: boolean;
+    } = {}
+  ): Promise<WorkspaceGraphResponse> {
+    const depth = options.depth ?? 2;
+    const offset = options.offset ?? 0;
+    const limit = options.limit ?? 100;
+    validateGraphPage(depth, offset, limit);
+    const query = new URLSearchParams({
+      depth: String(depth),
+      offset: String(offset),
+      limit: String(limit),
+      include_unresolved: String(options.includeUnresolved ?? false),
+      include_evidence: String(options.includeEvidence ?? false)
+    });
+    return this.request(
+      "GET",
+      `/api/v1/workspaces/${safeSegment(workspaceId)}/${direction}/${safeSegment(
+        symbolId
+      )}?${query.toString()}`
+    );
+  }
+
+  public analyzeRepositoryImpact(
+    workspaceId: string,
+    body: WorkspaceImpactRequest
+  ): Promise<WorkspaceImpactResponse> {
+    return this.request(
+      "POST",
+      `/api/v1/workspaces/${safeSegment(workspaceId)}/impact`,
+      body
+    );
+  }
+
+  public repositoryTests(
+    workspaceId: string,
+    body: WorkspaceImpactRequest
+  ): Promise<WorkspaceTestsResponse> {
+    return this.request(
+      "POST",
+      `/api/v1/workspaces/${safeSegment(workspaceId)}/tests`,
+      body
+    );
+  }
+
+  public repositoryContextPlan(
+    workspaceId: string,
+    body: WorkspaceContextPlanRequest
+  ): Promise<WorkspaceContextPlanResponse> {
+    return this.request(
+      "POST",
+      `/api/v1/workspaces/${safeSegment(workspaceId)}/context-plan`,
+      body
+    );
   }
 
   public providers(): Promise<ProviderListResponse> {
@@ -439,26 +609,52 @@ export class AgentBusClient {
     return `Bearer ${this.token}`;
   }
 
+  private indexMutation(
+    workspaceId: string,
+    operation: "update" | "repair",
+    body: WorkspaceIndexActionRequest,
+    signal?: AbortSignal
+  ): Promise<WorkspaceIndexMutationResponse> {
+    return this.request(
+      "POST",
+      `/api/v1/workspaces/${safeSegment(workspaceId)}/index/${operation}`,
+      body,
+      {
+        signal,
+        timeoutMilliseconds: INDEX_OPERATION_TIMEOUT_MILLISECONDS
+      }
+    );
+  }
+
   private async request<T>(
     method: string,
     path: string,
-    body?: unknown
+    body?: unknown,
+    options: RequestOptions = {}
   ): Promise<T> {
     const url = new URL(path, this.baseUrl);
-    const response = await this.fetcher(url, {
-      method,
-      headers: {
-        Accept: "application/json",
-        Authorization: this.authorizationHeader(),
-        ...(body === undefined ? {} : { "Content-Type": "application/json" })
-      },
-      body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(30_000)
-    });
-    if (!response.ok) {
-      throw await mapError(response);
+    const bounded = boundedSignal(
+      options.signal,
+      options.timeoutMilliseconds ?? 30_000
+    );
+    try {
+      const response = await this.fetcher(url, {
+        method,
+        headers: {
+          Accept: "application/json",
+          Authorization: this.authorizationHeader(),
+          ...(body === undefined ? {} : { "Content-Type": "application/json" })
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal: bounded.signal
+      });
+      if (!response.ok) {
+        throw await mapError(response);
+      }
+      return (await response.json()) as T;
+    } finally {
+      bounded.dispose();
     }
-    return (await response.json()) as T;
   }
 }
 
@@ -511,6 +707,50 @@ function validatePage(after: number, limit: number): void {
   ) {
     throw new Error("AgentBus pagination is outside the bounded range.");
   }
+}
+
+function validateGraphPage(depth: number, offset: number, limit: number): void {
+  if (
+    !Number.isSafeInteger(depth) ||
+    depth < 0 ||
+    depth > 8 ||
+    !Number.isSafeInteger(offset) ||
+    offset < 0 ||
+    offset > 100_000 ||
+    !Number.isSafeInteger(limit) ||
+    limit < 1 ||
+    limit > 500
+  ) {
+    throw new Error("AgentBus graph pagination is outside the bounded range.");
+  }
+}
+
+function boundedSignal(
+  external: AbortSignal | undefined,
+  timeoutMilliseconds: number
+): { signal: AbortSignal; dispose(): void } {
+  if (
+    !Number.isSafeInteger(timeoutMilliseconds) ||
+    timeoutMilliseconds < 1 ||
+    timeoutMilliseconds > INDEX_OPERATION_TIMEOUT_MILLISECONDS
+  ) {
+    throw new Error("AgentBus request timeout is outside the bounded range.");
+  }
+  const controller = new AbortController();
+  const abort = (): void => controller.abort(external?.reason);
+  if (external?.aborted) {
+    abort();
+  } else {
+    external?.addEventListener("abort", abort, { once: true });
+  }
+  const timer = setTimeout(() => controller.abort(), timeoutMilliseconds);
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      clearTimeout(timer);
+      external?.removeEventListener("abort", abort);
+    }
+  };
 }
 
 const REPLAY_STATUSES = new Set([

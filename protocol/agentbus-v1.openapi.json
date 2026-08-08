@@ -4005,6 +4005,15 @@
             "title": "Symbol Kind Counts",
             "type": "object"
           },
+          "symbols": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/SymbolSummary"
+            },
+            "maxItems": 2000,
+            "title": "Symbols",
+            "type": "array"
+          },
           "truncated": {
             "default": false,
             "title": "Truncated",
