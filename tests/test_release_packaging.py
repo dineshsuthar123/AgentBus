@@ -76,14 +76,12 @@ def test_package_data_contains_offline_fixtures_and_manifest():
     assert (package_data / "fixtures_data" / "python-feature" / "calculator.py").is_file()
     assert (package_data / "fixtures_data" / "generated-artifact" / ".gitignore").is_file()
     mixed = package_data / "fixtures_data" / "repository-intelligence-mixed"
-    assert (mixed / ".env").read_text(encoding="utf-8") == (
-        "# Intentionally empty protected-file fixture.\n"
-    )
+    assert not (mixed / ".env").exists()
     assert (mixed / ".gitignore").is_file()
     assert (
         mixed / "services" / "python_service" / "broken.py.fixture"
     ).is_file()
-    assert "fixtures_data/repository-intelligence-mixed/.env" in patterns
+    assert "fixtures_data/repository-intelligence-mixed/.env" not in patterns
     assert "fixtures_data/repository-intelligence-mixed/.gitignore" in patterns
 
 

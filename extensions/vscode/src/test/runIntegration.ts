@@ -134,6 +134,11 @@ async function initializeRepository(
   repositoryFixturePath: string
 ): Promise<void> {
   await cp(repositoryFixturePath, workspacePath, { recursive: true });
+  await writeFile(
+    join(workspacePath, ".env"),
+    "AGENTBUS_E2E_PRIVATE=vscode-e2e-private-repository-marker\n",
+    "utf8"
+  );
   git(workspacePath, "init");
   git(workspacePath, "config", "user.email", "vscode-e2e@agentbus.invalid");
   git(workspacePath, "config", "user.name", "AgentBus VS Code E2E");
