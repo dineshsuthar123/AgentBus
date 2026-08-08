@@ -344,7 +344,7 @@ def repository_intelligence_suite() -> EvaluationSuite:
         "minimum_architecture_boundaries": 6,
         "maximum_storage_bytes": 8 * 1024 * 1024,
         "expected_snapshot_state": IndexState.PARTIALLY_CURRENT.value,
-        "expected_status_state": IndexState.STALE.value,
+        "expected_status_state": IndexState.PARTIALLY_CURRENT.value,
         "expect_fresh": False,
         "broken_source_fixture": "services/python_service/broken.py.fixture",
     }

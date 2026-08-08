@@ -32,7 +32,7 @@ jobs:
         run: python -m pytest
       - name: Run deterministic core evaluation
         run: python -m agentbus.eval run --suite core-offline --variant durable-parallel-fake
-      - name: Run true offline control-plane lifecycle
+      - name: Run true offline intelligence-enabled control-plane lifecycle
         if: matrix.python == '3.12'
         run: python -m agentbus.control.acceptance
       - name: Check patch whitespace
@@ -82,7 +82,7 @@ jobs:
           tests/test_mcp_http_transport.py
           tests/test_mcp_tools.py
           tests/test_agentbus_mcp_server.py
-      - name: Run real offline tool-enabled control acceptance
+      - name: Run real offline tool and intelligence control acceptance
         run: python -m agentbus.control.acceptance
       - name: Check patch whitespace
         run: git diff --check
@@ -142,6 +142,83 @@ jobs:
       - name: Check patch whitespace
         run: git diff --check
 
+  repository-intelligence:
+    name: Repository intelligence / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install offline intelligence dependencies
+        run: python -m pip install -e ".[dev,ide]"
+      - name: Verify multilingual parsers and monorepo discovery
+        run: >-
+          python -m pytest
+          tests/test_intelligence_parser_base.py
+          tests/test_intelligence_parser_registry.py
+          tests/test_intelligence_parser_python_symbols.py
+          tests/test_intelligence_parser_python_references.py
+          tests/test_intelligence_parser_python_frameworks.py
+          tests/test_intelligence_parser_typescript_symbols.py
+          tests/test_intelligence_parser_typescript_references.py
+          tests/test_intelligence_parser_typescript_frameworks.py
+          tests/test_intelligence_parser_java_symbols.py
+          tests/test_intelligence_parser_java_references.py
+          tests/test_intelligence_parser_java_frameworks.py
+          tests/test_intelligence_parser_go_symbols.py
+          tests/test_intelligence_parser_go_references.py
+          tests/test_intelligence_parser_go_frameworks.py
+          tests/test_intelligence_discovery_inventory.py
+          tests/test_intelligence_discovery_monorepo.py
+      - name: Verify migrations incremental invalidation and freshness
+        run: >-
+          python -m pytest
+          tests/test_intelligence_storage.py
+          tests/test_intelligence_migrations.py
+          tests/test_intelligence_indexer.py
+          tests/test_intelligence_indexer_operations.py
+          tests/test_intelligence_incremental_indexer.py
+          tests/test_intelligence_invalidation.py
+          tests/test_intelligence_freshness.py
+          tests/test_intelligence_watcher.py
+          tests/test_intelligence_operations.py
+          tests/test_intelligence_operation_lease.py
+      - name: Verify graph retrieval impact and test selection
+        run: >-
+          python -m pytest
+          tests/test_intelligence_graph.py
+          tests/test_intelligence_resolution.py
+          tests/test_intelligence_architecture.py
+          tests/test_intelligence_ownership.py
+          tests/test_intelligence_search.py
+          tests/test_intelligence_semantic.py
+          tests/test_intelligence_hybrid.py
+          tests/test_intelligence_context.py
+          tests/test_intelligence_impact.py
+          tests/test_intelligence_test_impact.py
+      - name: Verify path security control APIs runtime and protocol freshness
+        run: >-
+          python -m pytest
+          tests/test_intelligence_traversal.py
+          tests/test_intelligence_service.py
+          tests/test_control_intelligence.py
+          tests/test_runtime_intelligence.py
+          tests/test_control_protocol.py
+      - name: Run deterministic multilingual intelligence evaluation
+        run: >-
+          python -m agentbus.eval run
+          --suite repository-intelligence
+          --variant deterministic
+      - name: Check patch whitespace
+        run: git diff --check
+
   vscode:
     name: VS Code extension
     runs-on: ubuntu-latest
@@ -174,7 +251,7 @@ jobs:
       - name: Run extension unit tests
         working-directory: extensions/vscode
         run: npm test
-      - name: Run real replay-enabled VS Code Electron integration
+      - name: Run real intelligence and replay VS Code Electron integration
         working-directory: extensions/vscode
         run: xvfb-run -a npm run test:integration
       - name: Package VSIX without publishing
