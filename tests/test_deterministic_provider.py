@@ -89,6 +89,30 @@ def test_deterministic_coder_sequence_is_scoped_and_repeatable():
     assert first.provider_metadata["runtime"] == "offline"
 
 
+def test_default_deterministic_profile_uses_standard_library_tests():
+    provider = DeterministicProvider(role=ModelRole.CODER)
+    metadata = {"run_id": "run-1", "task_id": "step-1"}
+
+    provider.generate_json("write source", schema=AgentAction, metadata=metadata)
+    test_write = provider.generate_json(
+        "write test",
+        schema=AgentAction,
+        metadata=metadata,
+    ).json_value()
+    test_run = provider.generate_json(
+        "run test",
+        schema=AgentAction,
+        metadata=metadata,
+    ).json_value()
+
+    assert "unittest" in test_write["tool_call"]["arguments"]["content"]
+    assert test_run["tool_call"]["tool_name"] == "test.execute"
+    assert test_run["tool_call"]["arguments"] == {
+        "executable": "python",
+        "arguments": ["-B", "-m", "unittest", "discover", "-q"],
+    }
+
+
 def test_deterministic_latency_and_failure_injection_are_explicit():
     sleeps: list[float] = []
     provider = DeterministicProvider(
