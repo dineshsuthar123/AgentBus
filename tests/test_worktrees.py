@@ -128,6 +128,7 @@ def test_dirty_cleanup_refused_and_explicit_clean_cleanup_succeeds(tmp_path):
     manager = GitWorktreeManager(source, tmp_path / "worktrees", store)
     dirty = manager.create_task_worktree("run-1", "task-a", base, "worker-1")
     (manager.validate(dirty) / "dirty.txt").write_text("keep me\n", encoding="utf-8")
+    assert manager.is_clean(dirty) is False
     manager.mark_cleanup_pending(dirty.worktree_id)
 
     with pytest.raises(WorktreeDirtyError):
@@ -135,6 +136,7 @@ def test_dirty_cleanup_refused_and_explicit_clean_cleanup_succeeds(tmp_path):
     assert (manager.validate(dirty) / "dirty.txt").exists()
 
     clean = manager.create_task_worktree("run-1", "task-b", base, "worker-2")
+    assert manager.is_clean(clean) is True
     manager.mark_cleanup_pending(clean.worktree_id)
     removed = manager.remove(clean.worktree_id)
     assert removed.status == WorktreeStatus.REMOVED

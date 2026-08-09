@@ -183,6 +183,14 @@ class GitWorktreeManager:
             event_type="worktree_cleanup_requested",
         )
 
+    def is_clean(self, record: WorktreeRecord) -> bool:
+        path = self.validate(record)
+        status = self._run_git(
+            ["status", "--porcelain=v1", "--untracked-files=all"],
+            cwd=path,
+        )
+        return not status
+
     def remove(self, worktree_id: str) -> WorktreeRecord:
         try:
             record = self.store.get_worktree(worktree_id)
@@ -195,10 +203,7 @@ class GitWorktreeManager:
                 "Worktree must be explicitly marked cleanup_pending before removal."
             )
         path = self.validate(record)
-        status = self._run_git(
-            ["status", "--porcelain=v1", "--untracked-files=all"], cwd=path
-        )
-        if status:
+        if not self.is_clean(record):
             raise WorktreeDirtyError(
                 f"Refusing to remove dirty worktree '{worktree_id}'."
             )
