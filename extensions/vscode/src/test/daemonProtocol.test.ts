@@ -19,7 +19,7 @@ test("startup handshake validates protocol and delivery mode", () => {
       port: 43123,
       daemon_id: "daemon-1",
       pid: 42,
-      agentbus_version: "0.2",
+      agentbus_version: "0.6.0b1",
       registry_path: "registry.json",
       bearer_token: token,
       token_delivery: "parent_process_stdout"
@@ -40,7 +40,7 @@ test("startup handshake rejects downgrade and malformed token", () => {
           port: 43123,
           daemon_id: "daemon-1",
           pid: 42,
-          agentbus_version: "0.2",
+          agentbus_version: "0.6.0b1",
           registry_path: "registry.json",
           bearer_token: "short",
           token_delivery: "parent_process_stdout"
@@ -48,6 +48,24 @@ test("startup handshake rejects downgrade and malformed token", () => {
       ),
     /incompatible/
   );
+});
+
+test("startup handshake explains old and new daemon versions", () => {
+  const handshake = (agentbusVersion: string) =>
+    JSON.stringify({
+      protocol_version: "1.0",
+      host: "127.0.0.1",
+      port: 43123,
+      daemon_id: "daemon-1",
+      pid: 42,
+      agentbus_version: agentbusVersion,
+      registry_path: "registry.json",
+      bearer_token: token,
+      token_delivery: "parent_process_stdout"
+    });
+
+  assert.throws(() => parseReadyHandshake(handshake("0.5.9")), /too old/i);
+  assert.throws(() => parseReadyHandshake(handshake("0.7.0")), /newer/i);
 });
 
 test("registry parser rejects secret fields", () => {

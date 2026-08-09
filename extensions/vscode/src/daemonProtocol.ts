@@ -1,10 +1,7 @@
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import {
-  CONTROL_PROTOCOL_VERSION,
-  type DaemonRegistryEntry,
-  type ReadyHandshake
-} from "./generated/protocol";
+import type { DaemonRegistryEntry, ReadyHandshake } from "./generated/protocol";
+import { assessDaemonCompatibility } from "./compatibility";
 
 export interface RegistryDocument {
   version: number;
@@ -52,8 +49,14 @@ export function parseReadyHandshake(line: string): ReadyHandshake {
       throw new Error(`AgentBus startup handshake is missing ${key}.`);
     }
   }
+  const compatibility = assessDaemonCompatibility(
+    String(value.agentbus_version),
+    String(value.protocol_version)
+  );
+  if (!compatibility.compatible) {
+    throw new Error(compatibility.message);
+  }
   if (
-    value.protocol_version !== CONTROL_PROTOCOL_VERSION ||
     value.token_delivery !== "parent_process_stdout" ||
     typeof value.port !== "number" ||
     !Number.isInteger(value.port) ||

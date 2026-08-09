@@ -11,8 +11,9 @@ import {
   parseRegistry,
   type LaunchSettings
 } from "./daemonProtocol";
-import { CONTROL_PROTOCOL_VERSION, type DaemonRegistryEntry } from "./generated/protocol";
+import type { DaemonRegistryEntry } from "./generated/protocol";
 import { waitForChildExit } from "./processLifecycle";
+import { assessDaemonCompatibility } from "./compatibility";
 import { redactText, safeError } from "./redaction";
 
 const secretPrefix = "agentbus.daemonToken.";
@@ -71,7 +72,12 @@ export class DaemonManager implements vscode.Disposable {
       return undefined;
     }
     for (const entry of [...registry.daemons].reverse()) {
-      if (entry.protocol_version !== CONTROL_PROTOCOL_VERSION) {
+      const compatibility = assessDaemonCompatibility(
+        entry.agentbus_version ?? "",
+        entry.protocol_version ?? ""
+      );
+      if (!compatibility.compatible) {
+        this.output.appendLine(`Daemon ${entry.daemon_id}: ${compatibility.message}`);
         continue;
       }
       const token = await this.context.secrets.get(`${secretPrefix}${entry.daemon_id}`);
@@ -81,10 +87,18 @@ export class DaemonManager implements vscode.Disposable {
       try {
         const client = new AgentBusClient(daemonBaseUrl(entry), token);
         const info = await client.info();
-        if (
-          info.daemon_id !== entry.daemon_id ||
-          info.protocol_version !== CONTROL_PROTOCOL_VERSION
-        ) {
+        const infoCompatibility = assessDaemonCompatibility(
+          info.agentbus_version,
+          info.protocol_version ?? ""
+        );
+        if (info.daemon_id !== entry.daemon_id) {
+          this.output.appendLine(
+            `Daemon ${entry.daemon_id}: daemon identity did not match the registry.`
+          );
+          continue;
+        }
+        if (!infoCompatibility.compatible) {
+          this.output.appendLine(`Daemon ${entry.daemon_id}: ${infoCompatibility.message}`);
           continue;
         }
         this.connection = { entry, client };
@@ -142,13 +156,21 @@ export class DaemonManager implements vscode.Disposable {
       handshake.bearer_token
     );
     const info = await client.info();
+    const compatibility = assessDaemonCompatibility(
+      info.agentbus_version,
+      info.protocol_version ?? ""
+    );
     if (
       info.daemon_id !== handshake.daemon_id ||
-      info.protocol_version !== CONTROL_PROTOCOL_VERSION
+      !compatibility.compatible
     ) {
       await this.context.secrets.delete(`${secretPrefix}${handshake.daemon_id}`);
       child.kill();
-      throw new Error("Started AgentBus daemon failed protocol identity validation.");
+      throw new Error(
+        info.daemon_id !== handshake.daemon_id
+          ? "Started AgentBus daemon failed identity validation."
+          : compatibility.message
+      );
     }
     this.connection = { entry, client };
     child.stdout.on("data", (data: Buffer) => {
