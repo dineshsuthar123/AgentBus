@@ -27,6 +27,7 @@ import { ProvenanceDocumentProvider } from "./provenanceDocuments";
 import { ToolArtifactDocumentProvider } from "./artifactDocuments";
 import { McpServerDocumentProvider } from "./mcpDocuments";
 import { OnboardingController } from "./onboarding";
+import type { OnboardingState } from "./onboardingPresentation";
 import { SpanDocumentProvider } from "./traceDocuments";
 import {
   ToolInvocationDocumentProvider,
@@ -52,6 +53,7 @@ export interface AgentBusExtensionApi {
   daemonId(): string | undefined;
   eventStreamConnected(): boolean;
   events(): readonly EventEnvelope[];
+  onboardingState(): Promise<OnboardingState | undefined>;
   runs(): RunSummary[];
 }
 
@@ -212,6 +214,10 @@ export function activate(context: vscode.ExtensionContext): AgentBusExtensionApi
     daemonId: () => daemon.current()?.entry.daemon_id,
     eventStreamConnected: () => controller.eventStreamConnected(),
     events: () => store.events(),
+    onboardingState: async () => {
+      await onboarding.whenReady();
+      return onboarding.currentState();
+    },
     runs: () => store.runs()
   };
 }

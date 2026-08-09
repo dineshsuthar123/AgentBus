@@ -19,11 +19,15 @@ import { redactText, safeError } from "./redaction";
 import { ensureWorkspaceTrust } from "./workspace";
 
 const ONBOARDING_STATE_KEY = "agentbus.onboarding.lastShownVersion";
+const ONBOARDING_MARKER_FILE = "onboarding-version";
+const MAX_ONBOARDING_MARKER_BYTES = 128;
 const DOCUMENTATION_URL =
   "https://github.com/dineshsuthar123/AgentBus/blob/main/docs/getting-started.md";
 
 export class OnboardingController implements vscode.Disposable {
   private readonly disposables: vscode.Disposable[] = [];
+  private readyPromise: Promise<void> = Promise.resolve();
+  private detectedState: OnboardingState | undefined;
 
   public constructor(
     private readonly context: vscode.ExtensionContext,
@@ -40,9 +44,17 @@ export class OnboardingController implements vscode.Disposable {
     this.command("agentbus.openResolvedConfiguration", () =>
       this.openResolvedConfiguration()
     );
-    void this.showFirstRun().catch((error: unknown) => {
+    this.readyPromise = this.initializeFirstRun().catch((error: unknown) => {
       this.output.appendLine(`Onboarding detection failed: ${safeError(error)}`);
     });
+  }
+
+  public async whenReady(): Promise<void> {
+    await this.readyPromise;
+  }
+
+  public currentState(): OnboardingState | undefined {
+    return this.detectedState;
   }
 
   public dispose(): void {
@@ -63,16 +75,58 @@ export class OnboardingController implements vscode.Disposable {
     );
   }
 
-  private async showFirstRun(): Promise<void> {
+  private async initializeFirstRun(): Promise<void> {
     const enabled = vscode.workspace
       .getConfiguration("agentbus")
       .get<boolean>("showWelcomeOnStartup", true);
-    const lastShown = this.context.globalState.get<string>(ONBOARDING_STATE_KEY);
+    const lastShown = await this.lastShownVersion();
     if (!shouldShowOnboarding(enabled, lastShown)) return;
-    await this.context.globalState.update(ONBOARDING_STATE_KEY, ONBOARDING_VERSION);
+    await this.markOnboardingShown();
     const state = await this.detectState();
+    this.detectedState = state;
     const summary = formatOnboardingSummary(state);
     this.output.appendLine(summary);
+    void this.showFirstRunPrompt(summary).catch((error: unknown) => {
+      this.output.appendLine(`Onboarding prompt failed: ${safeError(error)}`);
+    });
+  }
+
+  private async lastShownVersion(): Promise<string | undefined> {
+    const persisted = this.context.globalState.get<string>(ONBOARDING_STATE_KEY);
+    if (persisted === ONBOARDING_VERSION) return persisted;
+    const marker = vscode.Uri.joinPath(
+      this.context.globalStorageUri,
+      ONBOARDING_MARKER_FILE
+    );
+    try {
+      const metadata = await vscode.workspace.fs.stat(marker);
+      if (metadata.size > MAX_ONBOARDING_MARKER_BYTES) return undefined;
+      const value = new TextDecoder().decode(
+        await vscode.workspace.fs.readFile(marker)
+      ).trim();
+      if (value === ONBOARDING_VERSION) return value;
+      return (persisted ?? value) || undefined;
+    } catch {
+      return persisted;
+    }
+  }
+
+  private async markOnboardingShown(): Promise<void> {
+    await this.context.globalState.update(ONBOARDING_STATE_KEY, ONBOARDING_VERSION);
+    try {
+      await vscode.workspace.fs.createDirectory(this.context.globalStorageUri);
+      await vscode.workspace.fs.writeFile(
+        vscode.Uri.joinPath(this.context.globalStorageUri, ONBOARDING_MARKER_FILE),
+        new TextEncoder().encode(ONBOARDING_VERSION)
+      );
+    } catch (error) {
+      this.output.appendLine(
+        `Onboarding marker persistence failed: ${safeError(error)}`
+      );
+    }
+  }
+
+  private async showFirstRunPrompt(summary: string): Promise<void> {
     const action = await vscode.window.showInformationMessage(
       summary,
       "Get Started",

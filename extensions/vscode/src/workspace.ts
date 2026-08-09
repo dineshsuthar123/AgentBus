@@ -54,13 +54,27 @@ export async function canonicalWorkspacePath(
   folder: vscode.WorkspaceFolder
 ): Promise<string> {
   const canonical = await realpath(folder.uri.fsPath);
-  const configured = vscode.workspace.getWorkspaceFolder(
-    vscode.Uri.file(canonical)
-  );
-  if (!configured || configured.index !== folder.index) {
+  const matches: vscode.WorkspaceFolder[] = [];
+  for (const candidate of vscode.workspace.workspaceFolders ?? []) {
+    let candidateCanonical: string;
+    try {
+      candidateCanonical = await realpath(candidate.uri.fsPath);
+    } catch (error) {
+      if (candidate.index === folder.index) throw error;
+      continue;
+    }
+    if (pathKey(candidateCanonical) === pathKey(canonical)) {
+      matches.push(candidate);
+    }
+  }
+  if (matches.length !== 1 || matches[0]?.index !== folder.index) {
     throw new Error(
       "Selected repository does not resolve to the selected VS Code workspace folder."
     );
   }
   return canonical;
+}
+
+function pathKey(value: string): string {
+  return process.platform === "win32" ? value.toLowerCase() : value;
 }

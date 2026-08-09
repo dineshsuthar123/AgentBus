@@ -15,7 +15,11 @@ interface ProductManifest {
     configuration: { properties: Record<string, Setting> };
     walkthroughs: Array<{
       id: string;
-      steps: Array<{ completionEvents?: string[]; description: string }>;
+      steps: Array<{
+        completionEvents?: string[];
+        description: string;
+        media?: { image?: string; altText?: string };
+      }>;
     }>;
   };
 }
@@ -46,6 +50,8 @@ test("product onboarding commands and native walkthrough are contributed", () =>
   assert.equal(
     walkthrough.steps.every((step) =>
       step.description.includes("command:agentbus.") &&
+      step.media?.image === "media/agentbus.svg" &&
+      Boolean(step.media.altText) &&
       (step.completionEvents?.length ?? 0) > 0
     ),
     true

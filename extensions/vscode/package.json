@@ -287,6 +287,10 @@
             "id": "agentbus.gettingStarted.check",
             "title": "Check the installation",
             "description": "Run [AgentBus: Check Installation](command:agentbus.checkInstallation) for offline package, compatibility, repository, and environment diagnostics.",
+            "media": {
+              "image": "media/agentbus.svg",
+              "altText": "AgentBus local execution graph"
+            },
             "completionEvents": [
               "onCommand:agentbus.checkInstallation"
             ]
@@ -295,6 +299,10 @@
             "id": "agentbus.gettingStarted.setup",
             "title": "Configure safe defaults",
             "description": "Run [AgentBus: Run Setup](command:agentbus.runSetup) to configure the deterministic provider and local runtime without contacting a live service.",
+            "media": {
+              "image": "media/agentbus.svg",
+              "altText": "AgentBus deterministic setup"
+            },
             "completionEvents": [
               "onCommand:agentbus.runSetup"
             ]
@@ -303,6 +311,10 @@
             "id": "agentbus.gettingStarted.quickstart",
             "title": "Complete an offline first task",
             "description": "Run [AgentBus: Run Quickstart](command:agentbus.runQuickstart) in a temporary demo repository. AgentBus cleans its temporary state when the run finishes.",
+            "media": {
+              "image": "media/agentbus.svg",
+              "altText": "AgentBus offline quickstart"
+            },
             "completionEvents": [
               "onCommand:agentbus.runQuickstart"
             ]
@@ -311,6 +323,10 @@
             "id": "agentbus.gettingStarted.configuration",
             "title": "Inspect resolved configuration",
             "description": "Open [resolved safe configuration](command:agentbus.openResolvedConfiguration) with source precedence and credential values redacted.",
+            "media": {
+              "image": "media/agentbus.svg",
+              "altText": "AgentBus resolved configuration"
+            },
             "completionEvents": [
               "onCommand:agentbus.openResolvedConfiguration"
             ]
@@ -319,6 +335,10 @@
             "id": "agentbus.gettingStarted.docs",
             "title": "Learn the workflows",
             "description": "Open the [AgentBus documentation](command:agentbus.openDocumentation) for installation, repository indexing, task, replay, and troubleshooting workflows.",
+            "media": {
+              "image": "media/agentbus.svg",
+              "altText": "AgentBus workflow documentation"
+            },
             "completionEvents": [
               "onCommand:agentbus.openDocumentation"
             ]
@@ -680,6 +700,7 @@
     "lint": "eslint src --max-warnings=0",
     "test": "npm run compile && node --test out/test/*.test.js scripts/audit-vsix.test.mjs",
     "test:integration": "npm run compile && node out/test/runIntegration.js",
+    "test:product": "npm run package && npm run package:audit && node out/test/runFreshProfile.js",
     "protocol:check": "node scripts/check-protocol.mjs",
     "package": "npm run compile && vsce package --no-dependencies -o agentbus-vscode.vsix",
     "package:audit": "node scripts/audit-vsix.mjs agentbus-vscode.vsix"
