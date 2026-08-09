@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from agentbus.config import AgentBusConfig
+from agentbus.cli import main
 from agentbus.control.models import DaemonRegistryEntry
 from agentbus.control.registry import (
     DaemonRegistry,
@@ -253,3 +255,71 @@ def _git(path: Path, *arguments: str) -> str:
         check=True,
         shell=False,
     ).stdout.strip()
+
+
+def test_cleanup_cli_dry_run_is_machine_readable(tmp_path, capsys):
+    config, registry_path, _workspace, terminal, _active, _unknown = _runtime(
+        tmp_path
+    )
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "workspace_dir": config.workspace_dir,
+                "state_dir": config.state_dir,
+                "state_db": config.state_db,
+                "runs_dir": config.runs_dir,
+                "provider_name": "deterministic",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "cleanup",
+            "--config",
+            str(config_path),
+            "--registry-path",
+            str(registry_path),
+            "--stale",
+            "--dry-run",
+            "--json",
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True
+    assert payload["dry_run"] is True
+    assert payload["network_used"] is False
+    assert terminal.is_file()
+
+
+def test_cleanup_cli_requires_confirmation_for_all_runtime_state(tmp_path, capsys):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "workspace_dir": str(tmp_path),
+                "state_dir": str(tmp_path / "runtime"),
+                "provider_name": "deterministic",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "cleanup",
+            "--config",
+            str(config_path),
+            "--all-runtime-state",
+            "--json",
+        ]
+    )
+
+    assert exit_code == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert "requires --yes" in payload["error"]
