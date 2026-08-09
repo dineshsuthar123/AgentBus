@@ -29,6 +29,7 @@ COMMANDS = (
     "cleanup",
     "logs",
     "support-bundle",
+    "benchmark",
     "doctor",
     "migrate",
     "upgrade-check",
@@ -128,6 +129,8 @@ def main(argv: list[str] | None = None) -> int:
         return _logs_command(rest)
     if command == "support-bundle":
         return _support_bundle_command(rest)
+    if command == "benchmark":
+        return _benchmark_command(rest)
     if command == "doctor":
         return _doctor_command(rest)
     if command == "migrate":
@@ -176,6 +179,7 @@ def _root_parser() -> argparse.ArgumentParser:
         "cleanup": "Remove only proven AgentBus-owned stale runtime artifacts.",
         "logs": "Inspect bounded redacted product and run logs.",
         "support-bundle": "Create a sanitized local diagnostic ZIP.",
+        "benchmark": "Measure bounded offline product performance.",
         "doctor": "Run offline environment diagnostics.",
         "migrate": "Inspect and apply safe local database migrations.",
         "upgrade-check": "Check local package, schema, config, and extension compatibility.",
@@ -1143,6 +1147,77 @@ def _support_bundle_command(arguments: list[str]) -> int:
             + ("included with consent" if result.source_derived_included else "excluded")
         )
     return 0
+
+
+def _benchmark_command(arguments: list[str]) -> int:
+    from agentbus.product.benchmark import (
+        BENCHMARK_GROUPS,
+        run_benchmark,
+        write_benchmark_report,
+    )
+    from agentbus.product.synthetic import SYNTHETIC_SIZES
+
+    parser = argparse.ArgumentParser(prog="agentbus benchmark")
+    parser.add_argument(
+        "group",
+        nargs="?",
+        choices=(*BENCHMARK_GROUPS, "all"),
+        default="all",
+    )
+    parser.add_argument("--size", choices=tuple(SYNTHETIC_SIZES), default="small")
+    parser.add_argument("--files", type=int)
+    parser.add_argument("--iterations", type=int, default=5)
+    parser.add_argument("--seed", type=int, default=2026)
+    parser.add_argument("--output", help="Write an atomic JSON benchmark report.")
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args(arguments)
+    try:
+        report = run_benchmark(
+            args.group,
+            profile=args.size,
+            file_count=args.files,
+            iterations=args.iterations,
+            seed=args.seed,
+        )
+        report_path = (
+            write_benchmark_report(report, args.output) if args.output else None
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        payload = {"ok": False, "error": str(exc), "network_used": False}
+        print(
+            json.dumps(payload, indent=2, sort_keys=True)
+            if args.json
+            else f"Benchmark error: {exc}"
+        )
+        return 2
+    payload = report.to_dict()
+    payload["report_path"] = str(report_path) if report_path else None
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        repository = payload["repository"]
+        print(
+            "AgentBus benchmark "
+            f"({args.group}, {repository['file_count']} generated files)"
+        )
+        for operation in report.operations:
+            if operation.status == "skipped":
+                print(f"  [SKIP] {operation.name}: {operation.detail}")
+                continue
+            print(
+                f"  [{'OK' if operation.budget_passed else 'FAIL'}] "
+                f"{operation.name}: median={operation.median_ms:.3f}ms "
+                f"p95={operation.p95_ms:.3f}ms max={operation.max_ms:.3f}ms "
+                f"n={operation.operation_count} budget={operation.budget_ms:.0f}ms"
+            )
+        print(f"Environment: {report.environment_fingerprint}")
+        print(
+            f"Peak memory: {report.peak_memory_bytes} / "
+            f"{report.memory_budget_bytes} bytes"
+        )
+        if report_path:
+            print(f"Report: {report_path}")
+    return 0 if report.passed else 1
 
 
 if __name__ == "__main__":

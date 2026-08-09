@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+from agentbus.cli import main
 from agentbus.product.benchmark import run_benchmark, write_benchmark_report
 
 
@@ -73,3 +74,28 @@ def test_benchmark_report_write_is_atomic_and_machine_readable(tmp_path):
     assert payload["selected_group"] == "tools"
     assert payload["network_used"] is False
     assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_benchmark_cli_reports_offline_metrics_and_output(tmp_path, capsys):
+    output = tmp_path / "startup-benchmark.json"
+
+    exit_code = main(
+        [
+            "benchmark",
+            "startup",
+            "--iterations",
+            "1",
+            "--output",
+            str(output),
+            "--json",
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True
+    assert payload["selected_group"] == "startup"
+    assert payload["operations"][0]["operation_count"] == 1
+    assert payload["network_used"] is False
+    assert payload["report_path"] == str(output)
+    assert output.is_file()
