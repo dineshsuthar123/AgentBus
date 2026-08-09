@@ -76,6 +76,19 @@ def test_log_reader_filters_runs_and_bounds_output(tmp_path):
     assert "private" not in str([entry.to_dict() for entry in entries])
 
 
+def test_log_reader_can_exclude_source_derived_run_logs(tmp_path):
+    config = _config(tmp_path)
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    (runs / "20260101_000000_run-1.jsonl").write_text(
+        '{"timestamp":"2026-01-01T00:00:00+00:00","run_id":"run-1",'
+        '"type":"private-task"}\n',
+        encoding="utf-8",
+    )
+
+    assert read_product_logs(config, include_run_logs=False) == ()
+
+
 def test_log_reader_never_follows_run_log_symlink(tmp_path):
     config = _config(tmp_path)
     runs = tmp_path / "runs"

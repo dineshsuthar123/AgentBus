@@ -124,13 +124,20 @@ def read_product_logs(
     *,
     tail: int = 100,
     run_id: str | None = None,
+    include_run_logs: bool = True,
 ) -> tuple[ProductLogEntry, ...]:
     if tail < 1 or tail > 10_000:
         raise ValueError("Log tail must be between 1 and 10000 lines.")
     safe_run_id = _safe_identifier(run_id)
     if run_id is not None and safe_run_id != run_id:
         raise ValueError("Run ID contains unsupported log-filter characters.")
-    files = _selected_log_files(config, run_id=safe_run_id)
+    if safe_run_id is not None and not include_run_logs:
+        raise ValueError("Run filtering requires source-derived run logs to be enabled.")
+    files = _selected_log_files(
+        config,
+        run_id=safe_run_id,
+        include_run_logs=include_run_logs,
+    )
     entries: list[ProductLogEntry] = []
     per_file = min(tail, 2_000)
     for source, path in files:
@@ -149,6 +156,7 @@ def _selected_log_files(
     config: AgentBusConfig,
     *,
     run_id: str | None,
+    include_run_logs: bool,
 ) -> tuple[tuple[str, Path], ...]:
     files: list[tuple[str, Path]] = []
     if run_id is None:
@@ -158,7 +166,7 @@ def _selected_log_files(
             if path.is_file() and not path.is_symlink():
                 files.append((source, path))
     runs_root = Path(config.runs_dir).expanduser().resolve()
-    if runs_root.is_dir():
+    if include_run_logs and runs_root.is_dir():
         pattern = f"*_{run_id}.jsonl" if run_id is not None else "*.jsonl"
         candidates = [
             path
