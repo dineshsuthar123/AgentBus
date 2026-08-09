@@ -87,6 +87,20 @@ def test_release_security_audits_archive_paths_and_content(tmp_path):
     assert token not in json.dumps(report.to_dict())
 
 
+def test_release_security_distinguishes_package_worktrees_from_runtime_data(tmp_path):
+    archive = tmp_path / "safe.whl"
+    with zipfile.ZipFile(archive, "w") as output:
+        output.writestr("agentbus/worktrees/manager.py", "SAFE = True\n")
+
+    report = audit_release_security(
+        tmp_path,
+        tracked_paths=(),
+        artifacts=(archive,),
+    )
+
+    assert report.ok is True
+
+
 def test_release_security_cli_is_machine_readable(tmp_path, capsys):
     (tmp_path / "safe.txt").write_text("safe\n", encoding="utf-8")
 

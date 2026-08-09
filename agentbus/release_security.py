@@ -269,8 +269,11 @@ def _safe_relative_path(value: str | Path) -> Path:
     return path
 
 
-def _audit_path(location: str) -> list[SecurityFinding]:
-    path = PurePosixPath(location.replace("\\", "/"))
+def _audit_path(
+    location: str,
+    inspected_path: str | None = None,
+) -> list[SecurityFinding]:
+    path = PurePosixPath((inspected_path or location).replace("\\", "/"))
     lowered_parts = tuple(part.lower() for part in path.parts)
     name = path.name.lower()
     findings: list[SecurityFinding] = []
@@ -534,7 +537,7 @@ def _audit_archive_name(location: str, name: str) -> list[SecurityFinding]:
                 "Archive entry is absolute or escapes its archive root.",
             )
         ]
-    return _audit_path(location)
+    return _audit_path(location, normalized)
 
 
 if __name__ == "__main__":
