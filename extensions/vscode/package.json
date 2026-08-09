@@ -587,7 +587,7 @@
     "compile": "node scripts/clean-output.mjs && tsc -p .",
     "watch": "tsc -p . --watch",
     "lint": "eslint src --max-warnings=0",
-    "test": "npm run compile && node --test out/test/*.test.js",
+    "test": "npm run compile && node --test out/test/*.test.js scripts/audit-vsix.test.mjs",
     "test:integration": "npm run compile && node out/test/runIntegration.js",
     "protocol:check": "node scripts/check-protocol.mjs",
     "package": "npm run compile && vsce package --no-dependencies -o agentbus-vscode.vsix",
