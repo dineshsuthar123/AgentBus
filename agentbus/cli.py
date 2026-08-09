@@ -23,6 +23,7 @@ COMMANDS = (
     "config",
     "init",
     "doctor",
+    "migrate",
     "serve",
     "daemon",
     "control-schema",
@@ -109,6 +110,8 @@ def main(argv: list[str] | None = None) -> int:
         return _init_command(rest)
     if command == "doctor":
         return _doctor_command(rest)
+    if command == "migrate":
+        return _migration_command(rest)
     if command == "serve":
         return _serve_command(rest)
     if command == "daemon":
@@ -146,6 +149,7 @@ def _root_parser() -> argparse.ArgumentParser:
         "config": "Show, validate, or locate resolved configuration.",
         "init": "Create safe first-run configuration and state.",
         "doctor": "Run offline environment diagnostics.",
+        "migrate": "Inspect and apply safe local database migrations.",
         "serve": "Start the authenticated local control-plane daemon.",
         "daemon": "Inspect or safely manage local daemons.",
         "control-schema": "Export generated control-protocol artifacts.",
@@ -469,6 +473,59 @@ def _doctor_command(arguments: list[str]) -> int:
         return 2
     print(json.dumps(report.to_dict(), indent=2, sort_keys=True) if args.json else render_doctor(report))
     return 1 if report.status == CheckStatus.FAIL else 0
+
+
+def _migration_command(arguments: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="agentbus migrate")
+    commands = parser.add_subparsers(dest="migration_command", required=True)
+    for name in ("status", "plan", "verify"):
+        command = commands.add_parser(name)
+        command.add_argument("--config")
+        command.add_argument("--workspace")
+        command.add_argument("--json", action="store_true")
+    apply = commands.add_parser("apply")
+    apply.add_argument("--config")
+    apply.add_argument("--workspace")
+    apply.add_argument("--dry-run", action="store_true")
+    apply.add_argument("--json", action="store_true")
+    args = parser.parse_args(arguments)
+    try:
+        from agentbus.product.migrations import MigrationCoordinator
+
+        resolved = resolve_configuration(
+            config_file=args.config,
+            cli_overrides={"workspace_dir": args.workspace},
+            workspace=args.workspace,
+        )
+        coordinator = MigrationCoordinator(resolved.config)
+        if args.migration_command == "status":
+            report = coordinator.status()
+        elif args.migration_command == "plan":
+            report = coordinator.plan()
+        elif args.migration_command == "verify":
+            report = coordinator.verify()
+        else:
+            report = coordinator.apply(dry_run=args.dry_run)
+    except (OSError, RuntimeError, ValueError) as exc:
+        payload = {"ok": False, "error": str(exc), "network_used": False}
+        print(json.dumps(payload, indent=2, sort_keys=True) if args.json else f"Migration error: {exc}")
+        return 2
+    payload = report.to_dict()
+    payload["network_used"] = False
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(f"Migration {report.operation}: {'OK' if report.ok else 'FAILED'}")
+        for target in report.targets:
+            version = "absent" if target.current_version is None else target.current_version
+            print(
+                f"  {target.name}: {target.state.value} "
+                f"({version} -> {target.target_version})"
+            )
+            print(f"    {target.message}")
+        for backup in report.backups:
+            print(f"  Backup: {backup}")
+    return 0 if report.ok else 2
 
 
 def _serve_command(arguments: list[str]) -> int:
