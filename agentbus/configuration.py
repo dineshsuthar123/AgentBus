@@ -25,6 +25,7 @@ ENVIRONMENT_FIELDS: dict[str, str] = {
     "AGENTBUS_MAX_STEPS": "max_steps",
     "AGENTBUS_COMMAND_TIMEOUT": "command_timeout_seconds",
     "AGENTBUS_MAX_HISTORY_CHARS": "max_history_chars",
+    "AGENTBUS_DURABLE_EXECUTION": "durable_execution",
     "AGENTBUS_PARALLEL_EXECUTION": "parallel_execution",
     "AGENTBUS_MAX_WORKERS": "max_workers",
     "AGENTBUS_WORKER_LEASE_SECONDS": "worker_lease_seconds",
@@ -32,6 +33,14 @@ ENVIRONMENT_FIELDS: dict[str, str] = {
     "AGENTBUS_WORKTREE_ROOT": "worktree_root",
     "AGENTBUS_KEEP_WORKTREES": "keep_worktrees",
     "AGENTBUS_INTEGRATION_STRATEGY": "integration_strategy",
+    "AGENTBUS_POLICY_MODE": "policy_mode",
+    "AGENTBUS_REPOSITORY_INTELLIGENCE": "repository_intelligence",
+    "AGENTBUS_SEMANTIC_RETRIEVAL": "semantic_retrieval",
+    "AGENTBUS_TRACE_RETENTION_DAYS": "trace_retention_days",
+    "AGENTBUS_DAEMON_AUTO_START": "daemon_auto_start",
+    "AGENTBUS_DAEMON_IDLE_TIMEOUT_SECONDS": "daemon_idle_timeout_seconds",
+    "AGENTBUS_LOG_LEVEL": "log_level",
+    "AGENTBUS_LOG_RETENTION_FILES": "log_retention_files",
     "AGENTBUS_PROVIDER": "provider_name",
     "AGENTBUS_FALLBACK_PROVIDER": "fallback_provider_name",
     "AGENTBUS_ENABLE_PROVIDER_FALLBACK": "enable_provider_fallback",
@@ -57,9 +66,13 @@ ENVIRONMENT_FIELDS: dict[str, str] = {
 }
 
 _BOOLEAN_FIELDS = {
+    "durable_execution",
     "parallel_execution",
     "keep_worktrees",
     "enable_provider_fallback",
+    "repository_intelligence",
+    "semantic_retrieval",
+    "daemon_auto_start",
 }
 _INTEGER_FIELDS = {
     "max_steps",
@@ -68,6 +81,9 @@ _INTEGER_FIELDS = {
     "max_workers",
     "model_max_retries",
     "azure_openai_max_retries",
+    "trace_retention_days",
+    "daemon_idle_timeout_seconds",
+    "log_retention_files",
 }
 _FLOAT_FIELDS = {
     "worker_lease_seconds",
@@ -83,6 +99,8 @@ _LOWERCASE_FIELDS = {
     "integration_strategy",
     "azure_openai_auth_mode",
     "azure_openai_api_mode",
+    "policy_mode",
+    "log_level",
 }
 
 
