@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
+from agentbus.cli import main
 from agentbus.product import quickstart
 
 
@@ -71,4 +73,22 @@ def test_quickstart_failure_is_sanitized_and_cleans_owned_state(tmp_path, monkey
     assert result.error["category"] == "INDEX_ERROR"
     assert "secret-value" not in str(result.to_dict())
     assert unrelated.read_text(encoding="utf-8") == "preserve me\n"
+    assert list(tmp_path.glob("agentbus-quickstart-*")) == []
+
+
+def test_quickstart_cli_json_reports_success_and_cleanup(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(quickstart.tempfile, "gettempdir", lambda: str(tmp_path))
+
+    exit_code = main(["quickstart", "--json"])
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True
+    assert payload["provider"] == "deterministic"
+    assert payload["cleaned"] is True
+    assert payload["network_used"] is False
+    assert payload["changed_files"] == [
+        "agentbus_result.py",
+        "test_agentbus_result.py",
+    ]
     assert list(tmp_path.glob("agentbus-quickstart-*")) == []
