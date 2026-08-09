@@ -2,7 +2,7 @@
   "name": "agentbus-vscode",
   "displayName": "AgentBus",
   "description": "Native local control-plane integration for AgentBus",
-  "version": "0.2.0-alpha.0",
+  "version": "0.6.0-beta.1",
   "publisher": "agentbus",
   "license": "MIT",
   "repository": {
@@ -10,6 +10,11 @@
     "url": "https://github.com/dineshsuthar123/AgentBus.git"
   },
   "private": true,
+  "agentbusCompatibility": {
+    "python": ">=0.6.0b1,<0.7.0",
+    "controlProtocol": "1.0",
+    "stateSchema": 6
+  },
   "engines": {
     "vscode": "^1.96.0"
   },

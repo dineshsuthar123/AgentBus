@@ -616,10 +616,19 @@ def _version_command(arguments: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="agentbus version")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(arguments)
+    from agentbus.product.compatibility import compatibility_manifest
+
+    payload = compatibility_manifest().to_dict()
     if args.json:
-        print(json.dumps({"package": "agentbus", "version": __version__}, sort_keys=True))
+        print(json.dumps(payload, indent=2, sort_keys=True))
     else:
-        print(f"agentbus {__version__}")
+        print(f"agentbus {payload['version']}")
+        print("Supported Python: " + ", ".join(payload["supported_python"]))
+        print(f"Control protocol: {payload['protocols']['control']}")
+        print(f"Tool protocol: {payload['protocols']['tool']}")
+        print(f"State schema: {payload['schemas']['state']}")
+        print(f"Trace schema: {payload['schemas']['trace']}")
+        print(f"Extension compatibility: {payload['extension_compatibility']}")
     return 0
 
 

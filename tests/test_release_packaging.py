@@ -54,7 +54,7 @@ def test_version_is_shared_by_evaluation_and_durable_runtime(tmp_path):
         agentbus_commit_sha="abc",
         configuration_fingerprint="fingerprint",
     )
-    assert run.agentbus_version == __version__ == "0.1.0a1"
+    assert run.agentbus_version == __version__ == "0.6.0b1"
 
     store = StateStore(tmp_path / "state.db")
     created = DurableExecutionEngine(store).create_run(

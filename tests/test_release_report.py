@@ -156,7 +156,7 @@ def test_release_report_cli_writes_markdown_and_json(tmp_path, capsys):
         == 0
     )
     payload = json.loads(json_output.read_text(encoding="utf-8"))
-    assert payload["version"] == "0.1.0a1"
+    assert payload["version"] == "0.6.0b1"
     assert payload["ready"] is False
     assert markdown.read_text(encoding="utf-8").startswith("# AgentBus")
-    assert json.loads(capsys.readouterr().out)["version"] == "0.1.0a1"
+    assert json.loads(capsys.readouterr().out)["version"] == "0.6.0b1"
