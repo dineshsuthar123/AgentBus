@@ -31,6 +31,7 @@ COMMANDS = (
     "support-bundle",
     "benchmark",
     "soak",
+    "release-check",
     "doctor",
     "migrate",
     "upgrade-check",
@@ -134,6 +135,8 @@ def main(argv: list[str] | None = None) -> int:
         return _benchmark_command(rest)
     if command == "soak":
         return _soak_command(rest)
+    if command == "release-check":
+        return _release_check_command(rest)
     if command == "doctor":
         return _doctor_command(rest)
     if command == "migrate":
@@ -184,6 +187,7 @@ def _root_parser() -> argparse.ArgumentParser:
         "support-bundle": "Create a sanitized local diagnostic ZIP.",
         "benchmark": "Measure bounded offline product performance.",
         "soak": "Exercise bounded offline reliability and leak checks.",
+        "release-check": "Run non-publishing public beta release gates.",
         "doctor": "Run offline environment diagnostics.",
         "migrate": "Inspect and apply safe local database migrations.",
         "upgrade-check": "Check local package, schema, config, and extension compatibility.",
@@ -1276,6 +1280,40 @@ def _soak_command(arguments: list[str]) -> int:
         )
         if report.stopped_by_duration:
             print("  duration limit stopped scheduling additional cycles")
+    return 0 if report.ok else 1
+
+
+def _release_check_command(arguments: list[str]) -> int:
+    from agentbus.product.release_check import run_release_check
+
+    parser = argparse.ArgumentParser(prog="agentbus release-check")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--fast", action="store_true")
+    mode.add_argument("--full", action="store_true")
+    parser.add_argument("--root", default=".")
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args(arguments)
+    selected = "full" if args.full else "fast"
+    try:
+        report = run_release_check(mode=selected, root=args.root)
+    except (OSError, RuntimeError, ValueError) as exc:
+        payload = {"ok": False, "error": str(exc), "network_used": False}
+        print(
+            json.dumps(payload, indent=2, sort_keys=True)
+            if args.json
+            else f"Release-check error: {exc}"
+        )
+        return 2
+    if args.json:
+        print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
+    else:
+        print(
+            f"AgentBus {report.version} release-check ({report.mode}): "
+            f"{'PASS' if report.ok else 'FAIL'}"
+        )
+        for gate in report.gates:
+            print(f"  [{gate.status.value.upper()}] {gate.title}: {gate.summary}")
+        print("No artifacts were published and no network provider was used.")
     return 0 if report.ok else 1
 
 
