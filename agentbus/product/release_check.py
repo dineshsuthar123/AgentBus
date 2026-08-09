@@ -184,7 +184,13 @@ def release_check_commands(
             CommandSpec(
                 "python-tests",
                 "Complete Python test suite",
-                (python, "-m", "pytest"),
+                (
+                    python,
+                    "-m",
+                    "pytest",
+                    "--basetemp",
+                    str(temporary_root / "pytest"),
+                ),
                 root,
                 1_200,
             ),
