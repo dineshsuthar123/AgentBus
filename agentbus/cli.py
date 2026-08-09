@@ -22,6 +22,7 @@ COMMANDS = (
     "providers",
     "config",
     "init",
+    "setup",
     "doctor",
     "migrate",
     "upgrade-check",
@@ -109,6 +110,8 @@ def main(argv: list[str] | None = None) -> int:
         return _config_command(rest)
     if command == "init":
         return _init_command(rest)
+    if command == "setup":
+        return _setup_command(rest)
     if command == "doctor":
         return _doctor_command(rest)
     if command == "migrate":
@@ -151,6 +154,7 @@ def _root_parser() -> argparse.ArgumentParser:
         "providers": "Inspect or explicitly check providers.",
         "config": "Show, validate, or locate resolved configuration.",
         "init": "Create safe first-run configuration and state.",
+        "setup": "Guide first-run product configuration with an offline default.",
         "doctor": "Run offline environment diagnostics.",
         "migrate": "Inspect and apply safe local database migrations.",
         "upgrade-check": "Check local package, schema, config, and extension compatibility.",
@@ -725,6 +729,61 @@ def _version_command(arguments: list[str]) -> int:
         print(f"State schema: {payload['schemas']['state']}")
         print(f"Trace schema: {payload['schemas']['trace']}")
         print(f"Extension compatibility: {payload['extension_compatibility']}")
+    return 0
+
+
+def _setup_command(arguments: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="agentbus setup")
+    parser.add_argument("--workspace", default=".")
+    parser.add_argument("--provider", choices=SUPPORTED_PROVIDERS)
+    parser.add_argument("--scope", choices=("user", "workspace"), default="user")
+    parser.add_argument("--root", help="Explicit configuration root for automation.")
+    parser.add_argument("--non-interactive", action="store_true")
+    parser.add_argument("--json", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--force", action="store_true")
+    parser.add_argument("--no-durable", action="store_true")
+    parser.add_argument("--no-index", action="store_true")
+    parser.add_argument("--mcp", action="store_true")
+    parser.add_argument("--cleanup-worktrees", action="store_true")
+    args = parser.parse_args(arguments)
+    provider = args.provider
+    if provider is None and not args.non_interactive:
+        answer = input("Provider [deterministic/ollama/azure] (deterministic): ").strip().lower()
+        provider = answer or "deterministic"
+    provider = provider or "deterministic"
+    try:
+        from agentbus.product.setup import run_setup
+
+        result = run_setup(
+            workspace=args.workspace,
+            provider=provider,
+            scope=args.scope,
+            durable=not args.no_durable,
+            repository_index=not args.no_index,
+            enable_mcp=args.mcp,
+            keep_worktrees=not args.cleanup_worktrees,
+            config_root=args.root,
+            dry_run=args.dry_run,
+            force=args.force,
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        payload = {"ok": False, "error": str(exc), "network_used": False}
+        print(json.dumps(payload, indent=2, sort_keys=True) if args.json else f"Setup error: {exc}")
+        return 2
+    payload = result.to_dict()
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        action = "Would configure" if result.dry_run else "Configured"
+        if result.existing_configuration_preserved:
+            action = "Preserved existing configuration at"
+        print(f"{action} {result.config_file}")
+        print(f"Provider: {result.provider} (no live request performed)")
+        for detection in result.detections:
+            label = "OK" if detection.available else ("OPTIONAL" if detection.optional else "MISSING")
+            print(f"  [{label}] {detection.name}: {detection.detail}")
+        print("Next: run `agentbus doctor`, then `agentbus quickstart`.")
     return 0
 
 

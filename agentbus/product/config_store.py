@@ -139,6 +139,17 @@ def read_config_document(path: str | Path) -> dict[str, Any]:
     return dict(document)
 
 
+def write_config_document(
+    path: str | Path,
+    document: Mapping[str, Any],
+) -> Path:
+    target = Path(path).expanduser()
+    for key in document:
+        _validate_key(str(key))
+    _atomic_write_validated(target, document)
+    return target.resolve()
+
+
 def ensure_safe_config_target(
     path: str | Path,
     *,
