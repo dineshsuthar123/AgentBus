@@ -56,7 +56,7 @@ export class DaemonManager implements vscode.Disposable {
   }
 
   public async discover(): Promise<DaemonConnection | undefined> {
-    const settings = this.settings();
+    const settings = this.launchSettings();
     const registryPath = buildLaunchSpec(settings).registryPath;
     let content: string;
     try {
@@ -114,13 +114,18 @@ export class DaemonManager implements vscode.Disposable {
   }
 
   public async start(): Promise<DaemonConnection> {
+    if (!vscode.workspace.isTrusted) {
+      throw new Error(
+        "AgentBus daemon startup is disabled until the workspace is trusted."
+      );
+    }
     if (this.child) {
       if (this.child.exitCode === null && this.child.signalCode === null) {
         throw new Error("An AgentBus daemon process is already running.");
       }
       this.child = undefined;
     }
-    const spec = buildLaunchSpec(this.settings());
+    const spec = buildLaunchSpec(this.launchSettings());
     const child = spawn(spec.command, spec.args, {
       cwd: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
       env: process.env,
@@ -197,7 +202,7 @@ export class DaemonManager implements vscode.Disposable {
       return;
     }
     const ownedChild = this.child;
-    const spec = buildStopSpec(this.settings(), connection.entry.daemon_id);
+    const spec = buildStopSpec(this.launchSettings(), connection.entry.daemon_id);
     const result = await runChild(spec.command, spec.args);
     if (result.exitCode !== 0) {
       throw new Error(
@@ -243,7 +248,7 @@ export class DaemonManager implements vscode.Disposable {
     return this.start();
   }
 
-  private settings(): LaunchSettings {
+  public launchSettings(): LaunchSettings {
     const configuration = vscode.workspace.getConfiguration("agentbus");
     return {
       executablePath: configuration.get<string>("executablePath") || undefined,

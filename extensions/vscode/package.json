@@ -45,6 +45,30 @@
   "contributes": {
     "commands": [
       {
+        "command": "agentbus.getStarted",
+        "title": "AgentBus: Get Started"
+      },
+      {
+        "command": "agentbus.runSetup",
+        "title": "AgentBus: Run Setup"
+      },
+      {
+        "command": "agentbus.runQuickstart",
+        "title": "AgentBus: Run Quickstart"
+      },
+      {
+        "command": "agentbus.checkInstallation",
+        "title": "AgentBus: Check Installation"
+      },
+      {
+        "command": "agentbus.openDocumentation",
+        "title": "AgentBus: Open Documentation"
+      },
+      {
+        "command": "agentbus.openResolvedConfiguration",
+        "title": "AgentBus: Open Resolved Configuration"
+      },
+      {
         "command": "agentbus.startTask",
         "title": "AgentBus: Start Task"
       },
@@ -251,6 +275,55 @@
       {
         "command": "agentbus.refresh",
         "title": "AgentBus: Refresh"
+      }
+    ],
+    "walkthroughs": [
+      {
+        "id": "agentbus.gettingStarted",
+        "title": "Get Started with AgentBus",
+        "description": "Install, verify, and run a complete network-free AgentBus task.",
+        "steps": [
+          {
+            "id": "agentbus.gettingStarted.check",
+            "title": "Check the installation",
+            "description": "Run [AgentBus: Check Installation](command:agentbus.checkInstallation) for offline package, compatibility, repository, and environment diagnostics.",
+            "completionEvents": [
+              "onCommand:agentbus.checkInstallation"
+            ]
+          },
+          {
+            "id": "agentbus.gettingStarted.setup",
+            "title": "Configure safe defaults",
+            "description": "Run [AgentBus: Run Setup](command:agentbus.runSetup) to configure the deterministic provider and local runtime without contacting a live service.",
+            "completionEvents": [
+              "onCommand:agentbus.runSetup"
+            ]
+          },
+          {
+            "id": "agentbus.gettingStarted.quickstart",
+            "title": "Complete an offline first task",
+            "description": "Run [AgentBus: Run Quickstart](command:agentbus.runQuickstart) in a temporary demo repository. AgentBus cleans its temporary state when the run finishes.",
+            "completionEvents": [
+              "onCommand:agentbus.runQuickstart"
+            ]
+          },
+          {
+            "id": "agentbus.gettingStarted.configuration",
+            "title": "Inspect resolved configuration",
+            "description": "Open [resolved safe configuration](command:agentbus.openResolvedConfiguration) with source precedence and credential values redacted.",
+            "completionEvents": [
+              "onCommand:agentbus.openResolvedConfiguration"
+            ]
+          },
+          {
+            "id": "agentbus.gettingStarted.docs",
+            "title": "Learn the workflows",
+            "description": "Open the [AgentBus documentation](command:agentbus.openDocumentation) for installation, repository indexing, task, replay, and troubleshooting workflows.",
+            "completionEvents": [
+              "onCommand:agentbus.openDocumentation"
+            ]
+          }
+        ]
       }
     ],
     "viewsContainers": {
@@ -514,21 +587,25 @@
         "agentbus.executablePath": {
           "type": "string",
           "default": "",
-          "description": "Explicit AgentBus executable path."
+          "scope": "machine",
+          "description": "Absolute path to a trusted AgentBus executable. Leave empty to use the Python path or the agentbus command from PATH."
         },
         "agentbus.pythonPath": {
           "type": "string",
           "default": "",
-          "description": "Python executable used with -m agentbus.cli when no AgentBus executable is set."
+          "scope": "machine",
+          "description": "Absolute path to a trusted Python executable used with -m agentbus.cli when no AgentBus executable path is set."
         },
         "agentbus.configPath": {
           "type": "string",
           "default": "",
-          "description": "Explicit AgentBus JSON or TOML configuration file passed to the local daemon."
+          "scope": "machine",
+          "description": "Absolute path to a trusted AgentBus JSON or TOML configuration file. Explicit CLI values and environment variables retain their documented precedence."
         },
         "agentbus.autoStartDaemon": {
           "type": "boolean",
-          "default": true
+          "default": true,
+          "description": "Start a loopback-only AgentBus daemon when no compatible daemon is available. Startup is always blocked in untrusted workspaces."
         },
         "agentbus.defaultProvider": {
           "type": "string",
@@ -537,7 +614,8 @@
             "azure",
             "deterministic"
           ],
-          "default": "ollama"
+          "default": "deterministic",
+          "description": "Provider selected for new tasks. Deterministic is built in and network-free; live providers require separate explicit configuration."
         },
         "agentbus.defaultWorkflow": {
           "type": "string",
@@ -545,25 +623,30 @@
             "single",
             "multi"
           ],
-          "default": "multi"
+          "default": "multi",
+          "description": "Use the single-agent or planner/coder/verifier/reviewer workflow for new tasks."
         },
         "agentbus.defaultDurable": {
           "type": "boolean",
-          "default": true
+          "default": true,
+          "description": "Persist new task execution so interrupted runs can be inspected and resumed safely."
         },
         "agentbus.defaultParallel": {
           "type": "boolean",
-          "default": false
+          "default": false,
+          "description": "Allow independent durable graph tasks to run concurrently within the configured worker bound."
         },
         "agentbus.maxWorkers": {
           "type": "integer",
           "minimum": 1,
           "maximum": 32,
-          "default": 4
+          "default": 4,
+          "description": "Maximum number of bounded durable workers used for parallel graph execution."
         },
         "agentbus.keepWorktrees": {
           "type": "boolean",
-          "default": true
+          "default": true,
+          "description": "Retain AgentBus-owned task worktrees for inspection after completion; cleanup remains explicit."
         },
         "agentbus.logLevel": {
           "type": "string",
@@ -572,12 +655,20 @@
             "warning",
             "info"
           ],
-          "default": "warning"
+          "default": "warning",
+          "description": "Minimum severity written to the bounded local daemon log."
         },
         "agentbus.registryPath": {
           "type": "string",
           "default": "",
-          "description": "Optional daemon registry path. This file contains metadata only, never tokens."
+          "scope": "machine",
+          "description": "Absolute path to the trusted local daemon metadata registry. Authentication tokens remain in VS Code SecretStorage and are never written here."
+        },
+        "agentbus.showWelcomeOnStartup": {
+          "type": "boolean",
+          "default": true,
+          "scope": "machine",
+          "description": "Show the concise AgentBus onboarding prompt once for each supported product minor release."
         }
       }
     }

@@ -26,6 +26,7 @@ import { ReplayPlanDocumentProvider } from "./replayPlanDocuments";
 import { ProvenanceDocumentProvider } from "./provenanceDocuments";
 import { ToolArtifactDocumentProvider } from "./artifactDocuments";
 import { McpServerDocumentProvider } from "./mcpDocuments";
+import { OnboardingController } from "./onboarding";
 import { SpanDocumentProvider } from "./traceDocuments";
 import {
   ToolInvocationDocumentProvider,
@@ -196,6 +197,9 @@ export function activate(context: vscode.ExtensionContext): AgentBusExtensionApi
   );
   controller.register(context);
   context.subscriptions.push(controller);
+  const onboarding = new OnboardingController(context, daemon, output);
+  onboarding.register();
+  context.subscriptions.push(onboarding);
   const intelligenceController = new IntelligenceCommandController(
     intelligenceState,
     intelligenceDocuments,
