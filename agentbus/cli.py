@@ -259,21 +259,112 @@ def _worktrees_command(arguments: list[str]) -> int:
 def _config_command(arguments: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="agentbus config")
     commands = parser.add_subparsers(dest="config_command", required=True)
-    for name in ("show", "validate", "paths"):
+    for name in ("show", "validate", "path", "paths"):
         command = commands.add_parser(name)
         command.add_argument("--config")
+        command.add_argument("--workspace")
+        command.add_argument("--scope", choices=("user", "workspace"), default="user")
         command.add_argument("--json", action="store_true")
+    for name in ("get", "explain"):
+        command = commands.add_parser(name)
+        command.add_argument("key")
+        command.add_argument("--config")
+        command.add_argument("--workspace")
+        command.add_argument("--json", action="store_true")
+    setting = commands.add_parser("set")
+    setting.add_argument("key")
+    setting.add_argument("value")
+    setting.add_argument("--config")
+    setting.add_argument("--workspace")
+    setting.add_argument("--scope", choices=("user", "workspace"), default="user")
+    setting.add_argument("--json", action="store_true")
+    unsetting = commands.add_parser("unset")
+    unsetting.add_argument("key")
+    unsetting.add_argument("--config")
+    unsetting.add_argument("--workspace")
+    unsetting.add_argument("--scope", choices=("user", "workspace"), default="user")
+    unsetting.add_argument("--json", action="store_true")
     args = parser.parse_args(arguments)
     try:
-        resolved = resolve_configuration(config_file=args.config)
+        from agentbus.product.config_store import (
+            config_target_path,
+            ensure_safe_config_target,
+            parse_config_value,
+            set_config_value,
+            unset_config_value,
+        )
+
+        workspace = args.workspace or "."
+        overrides = {"workspace_dir": args.workspace}
+        if args.config_command in {"set", "unset"}:
+            target = Path(args.config).expanduser() if args.config else config_target_path(
+                args.scope,
+                workspace=workspace,
+            )
+            target = ensure_safe_config_target(
+                target,
+                workspace=workspace if args.scope == "workspace" and not args.config else None,
+            )
+            if args.config_command == "set":
+                mutation = set_config_value(
+                    target,
+                    args.key,
+                    parse_config_value(args.key, args.value),
+                )
+            else:
+                mutation = unset_config_value(target, args.key)
+            payload = {
+                "ok": True,
+                "operation": args.config_command,
+                "key": args.key,
+                "path": str(mutation.path),
+                "changed": mutation.changed,
+            }
+            if args.json:
+                print(json.dumps(payload, indent=2, sort_keys=True))
+            else:
+                state = "Updated" if mutation.changed else "Unchanged"
+                print(f"{state}: {args.key} ({mutation.path})")
+            return 0
+
+        resolved = resolve_configuration(
+            config_file=args.config,
+            cli_overrides=overrides,
+            workspace=args.workspace,
+        )
         if args.config_command == "show":
             payload = {
                 "valid": True,
                 "config_file": str(resolved.config_file) if resolved.config_file else None,
                 "values": resolved.safe_values(),
             }
-        elif args.config_command == "paths":
+        elif args.config_command in {"path", "paths"}:
             payload = configuration_paths(resolved)
+            payload["selected_scope"] = args.scope
+            payload["selected_path"] = str(
+                Path(args.config).expanduser().absolute()
+                if args.config
+                else config_target_path(args.scope, workspace=workspace)
+            )
+        elif args.config_command in {"get", "explain"}:
+            values = resolved.safe_values()
+            if args.key not in values:
+                raise ValueError(f"Unsupported AgentBus configuration key: {args.key}")
+            item = values[args.key]
+            payload = {
+                "key": args.key,
+                "value": item["value"],
+                "source": item["source"],
+            }
+            if args.config_command == "explain":
+                payload["precedence"] = [
+                    "default",
+                    "user",
+                    "workspace",
+                    "explicit",
+                    "cli",
+                    "environment",
+                ]
         else:
             payload = {
                 "valid": True,
@@ -289,9 +380,15 @@ def _config_command(arguments: list[str]) -> int:
     elif args.config_command == "show":
         for name, item in payload["values"].items():
             print(f"{name} = {item['value']!r}  ({item['source']})")
-    elif args.config_command == "paths":
+    elif args.config_command in {"path", "paths"}:
         for name, value in payload.items():
             print(f"{name}: {value or '[not configured]'}")
+    elif args.config_command == "get":
+        print(repr(payload["value"]))
+    elif args.config_command == "explain":
+        print(f"{payload['key']} = {payload['value']!r}")
+        print(f"Source: {payload['source']}")
+        print("Precedence: " + " < ".join(payload["precedence"]))
     else:
         print("PASS: " + payload["message"])
     return 0
