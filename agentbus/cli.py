@@ -1310,23 +1310,35 @@ def _release_check_command(arguments: list[str]) -> int:
         report = run_release_check(mode=selected, root=args.root)
     except (OSError, RuntimeError, ValueError) as exc:
         payload = {"ok": False, "error": str(exc), "network_used": False}
-        print(
-            json.dumps(payload, indent=2, sort_keys=True)
-            if args.json
-            else f"Release-check error: {exc}"
-        )
+        if args.json:
+            print(json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            _print_console_safe(f"Release-check error: {exc}")
         return 2
     if args.json:
         print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
     else:
-        print(
+        _print_console_safe(
             f"AgentBus {report.version} release-check ({report.mode}): "
             f"{'PASS' if report.ok else 'FAIL'}"
         )
         for gate in report.gates:
-            print(f"  [{gate.status.value.upper()}] {gate.title}: {gate.summary}")
-        print("No artifacts were published and no network provider was used.")
+            _print_console_safe(
+                f"  [{gate.status.value.upper()}] {gate.title}: {gate.summary}"
+            )
+        _print_console_safe(
+            "No artifacts were published and no network provider was used."
+        )
     return 0 if report.ok else 1
+
+
+def _print_console_safe(value: str) -> None:
+    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    try:
+        rendered = value.encode(encoding, errors="backslashreplace").decode(encoding)
+    except (LookupError, UnicodeError):
+        rendered = value.encode("ascii", errors="backslashreplace").decode("ascii")
+    print(rendered)
 
 
 if __name__ == "__main__":

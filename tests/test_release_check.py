@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import io
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 from agentbus.cli import main
@@ -109,6 +111,42 @@ def test_release_check_cli_renders_json(monkeypatch, capsys):
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is True
     assert payload["published"] is False
+
+
+def test_release_check_cli_safely_renders_unicode_on_cp1252(monkeypatch):
+    class LegacyConsole(io.StringIO):
+        @property
+        def encoding(self):
+            return "cp1252"
+
+        def write(self, value):
+            value.encode(self.encoding)
+            return super().write(value)
+
+    report = ReleaseReadinessReport(
+        mode="full",
+        version="0.6.0b1",
+        duration_seconds=0.1,
+        gates=(
+            ReleaseGate(
+                "vscode-electron",
+                "Fresh-profile VS Code acceptance",
+                GateStatus.FAILED,
+                "npm reported \u221a before the safe failure",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        "agentbus.product.release_check.run_release_check",
+        lambda **_kwargs: report,
+    )
+    console = LegacyConsole()
+    monkeypatch.setattr(sys, "stdout", console)
+
+    exit_code = main(["release-check", "--full"])
+
+    assert exit_code == 1
+    assert "npm reported \\u221a before the safe failure" in console.getvalue()
 
 
 def test_release_check_environment_strips_credentials_and_blocks_remote_network(
