@@ -1,0 +1,38 @@
+name: Repository-intelligence problem
+description: Report parser, index, search, impact, or context-plan behavior.
+title: "intelligence: "
+labels: [repository-intelligence]
+body:
+  - type: markdown
+    attributes:
+      value: Use a generated minimal fixture. Never attach a full private repository, index database, source archive, credentials, or private CODEOWNERS data.
+  - type: input
+    id: version
+    attributes:
+      label: AgentBus, OS, and Python versions
+    validations:
+      required: true
+  - type: dropdown
+    id: language
+    attributes:
+      label: Primary language
+      options: [Python, TypeScript or JavaScript, Java, Go, Mixed, Other]
+    validations:
+      required: true
+  - type: textarea
+    id: fixture
+    attributes:
+      label: Minimal generated fixture and command
+    validations:
+      required: true
+  - type: textarea
+    id: status
+    attributes:
+      label: Sanitized index status or verification output
+      render: json
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual evidence
+    validations:
+      required: true

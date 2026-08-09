@@ -1,0 +1,46 @@
+name: Bug report
+description: Report a reproducible AgentBus defect without private data.
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Never include API keys, bearer tokens, .env files, private repositories, prompts, provider responses, databases, or unredacted logs.
+  - type: input
+    id: version
+    attributes:
+      label: AgentBus version
+      description: Output of agentbus version --json.
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Use a disposable repository and remove all private source and credentials.
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Sanitized doctor output
+      description: Paste reviewed agentbus doctor --json output only.
+      render: json
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
