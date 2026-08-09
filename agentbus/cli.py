@@ -24,6 +24,7 @@ COMMANDS = (
     "config",
     "init",
     "setup",
+    "quickstart",
     "demo",
     "doctor",
     "migrate",
@@ -114,6 +115,8 @@ def main(argv: list[str] | None = None) -> int:
         return _init_command(rest)
     if command == "setup":
         return _setup_command(rest)
+    if command == "quickstart":
+        return _quickstart_command(rest)
     if command == "demo":
         return _demo_command(rest)
     if command == "doctor":
@@ -159,6 +162,7 @@ def _root_parser() -> argparse.ArgumentParser:
         "config": "Show, validate, or locate resolved configuration.",
         "init": "Create safe first-run configuration and state.",
         "setup": "Guide first-run product configuration with an offline default.",
+        "quickstart": "Complete a temporary deterministic first task offline.",
         "demo": "List, create, or preflight compact AgentBus demo repositories.",
         "doctor": "Run offline environment diagnostics.",
         "migrate": "Inspect and apply safe local database migrations.",
@@ -924,6 +928,44 @@ def _demo_command(arguments: list[str]) -> int:
         if payload["test_executed"]:
             print(f"Intentional initial test exit code: {payload['test_exit_code']}")
     return 0
+
+
+def _quickstart_command(arguments: list[str]) -> int:
+    from agentbus.product.quickstart import run_quickstart
+
+    parser = argparse.ArgumentParser(prog="agentbus quickstart")
+    parser.add_argument(
+        "--keep-demo",
+        action="store_true",
+        help="Retain the temporary demo repository and runtime state for inspection.",
+    )
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args(arguments)
+    result = run_quickstart(keep_demo=args.keep_demo)
+    payload = result.to_dict()
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print("AgentBus deterministic quickstart")
+        for step in result.steps:
+            label = {
+                "passed": "OK",
+                "skipped": "SKIP",
+                "failed": "ERROR",
+            }.get(step.status, step.status.upper())
+            print(f"  [{label}] {step.name}: {step.detail}")
+        if result.changed_files:
+            print("Changed files: " + ", ".join(result.changed_files))
+        if result.report:
+            print("Report: " + result.report)
+        if result.kept_demo and result.workspace:
+            print(f"Demo retained at: {result.workspace}")
+        elif result.cleaned:
+            print("Temporary demo and runtime state were removed.")
+        if result.error:
+            print(f"{result.error['code']}: {result.error['message']}")
+            print("Recommended action: " + str(result.error["recommended_action"]))
+    return 0 if result.ok else 2
 
 
 if __name__ == "__main__":
