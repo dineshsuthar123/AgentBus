@@ -58,3 +58,19 @@ def test_security_and_pull_request_guidance_forbid_sensitive_artifacts() -> None
     assert "shell=False" in security
     assert "No credentials" in pull_request
     assert "No automatic destructive rollback" in pull_request
+
+
+def test_release_checklist_matches_executable_public_beta_gates() -> None:
+    checklist = (ROOT / "RELEASE_CHECKLIST.md").read_text(encoding="utf-8")
+    for command in (
+        "python -m agentbus.product_acceptance",
+        "python -m agentbus.beta_acceptance",
+        "python -m agentbus.control.acceptance",
+        "python -m agentbus.release_security",
+        "agentbus release-check --full",
+        "npm run test:product",
+        "npm run package:audit",
+    ):
+        assert command in checklist
+    assert "never publish, tag, push, merge" in checklist
+    assert "not reset or roll back repository files" in checklist
