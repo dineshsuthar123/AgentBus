@@ -467,6 +467,10 @@ def _doctor_command(arguments: list[str]) -> int:
     parser.add_argument("--config")
     parser.add_argument("--workspace")
     parser.add_argument("--live-provider", choices=SUPPORTED_PROVIDERS)
+    parser.add_argument("--provider", choices=SUPPORTED_PROVIDERS)
+    parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--repair", action="store_true")
+    parser.add_argument("--registry-path")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(arguments)
     try:
@@ -474,12 +478,22 @@ def _doctor_command(arguments: list[str]) -> int:
             config_file=args.config,
             cli_overrides={"workspace_dir": args.workspace},
         )
-        report = run_doctor(resolved.config, live_provider=args.live_provider)
+        report = run_doctor(
+            resolved.config,
+            live_provider=args.live_provider,
+            provider=args.provider,
+            repair=args.repair,
+            registry_path=args.registry_path,
+        )
     except (OSError, ValueError) as exc:
         payload = {"status": "FAIL", "error": str(exc), "network_used": False}
         print(json.dumps(payload, indent=2, sort_keys=True) if args.json else f"Doctor error: {exc}")
         return 2
-    print(json.dumps(report.to_dict(), indent=2, sort_keys=True) if args.json else render_doctor(report))
+    print(
+        json.dumps(report.to_dict(), indent=2, sort_keys=True)
+        if args.json
+        else render_doctor(report, verbose=args.verbose)
+    )
     return 1 if report.status == CheckStatus.FAIL else 0
 
 

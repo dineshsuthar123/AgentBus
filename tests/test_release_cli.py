@@ -391,4 +391,4 @@ def test_config_paths_and_doctor_json_are_machine_readable(tmp_path, capsys):
     assert cli.main(["doctor", "--config", str(config_file), "--json"]) == 0
     doctor = json.loads(capsys.readouterr().out)
     assert doctor["network_used"] is False
-    assert doctor["status"] in {"PASS", "WARN"}
+    assert doctor["status"] in {"OK", "WARNING"}

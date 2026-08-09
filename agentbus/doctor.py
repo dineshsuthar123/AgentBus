@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import importlib.util
 import shutil
 import sqlite3
 import subprocess
@@ -25,9 +26,16 @@ from agentbus.security.redaction import sanitize_json
 
 
 class CheckStatus(str, Enum):
-    PASS = "PASS"
-    WARN = "WARN"
-    FAIL = "FAIL"
+    OK = "OK"
+    WARNING = "WARNING"
+    ERROR = "ERROR"
+    NOT_CONFIGURED = "NOT_CONFIGURED"
+    OPTIONAL = "OPTIONAL"
+    REPAIRABLE = "REPAIRABLE"
+
+    PASS = "OK"
+    WARN = "WARNING"
+    FAIL = "ERROR"
 
 
 @dataclass(frozen=True)
@@ -49,11 +57,11 @@ class DoctorReport:
     @property
     def status(self) -> CheckStatus:
         statuses = {item.status for item in self.checks}
-        if CheckStatus.FAIL in statuses:
-            return CheckStatus.FAIL
-        if CheckStatus.WARN in statuses:
-            return CheckStatus.WARN
-        return CheckStatus.PASS
+        if CheckStatus.ERROR in statuses:
+            return CheckStatus.ERROR
+        if CheckStatus.WARNING in statuses or CheckStatus.REPAIRABLE in statuses:
+            return CheckStatus.WARNING
+        return CheckStatus.OK
 
     def to_dict(self) -> dict[str, Any]:
         return sanitize_json(
@@ -80,14 +88,18 @@ def run_doctor(
     config: AgentBusConfig,
     *,
     live_provider: str | None = None,
+    provider: str | None = None,
+    repair: bool = False,
+    registry_path: str | Path | None = None,
 ) -> DoctorReport:
     workspace = config.workspace_path
     checks: list[DoctorCheck] = []
     checks.extend(_platform_checks())
-    checks.extend(_provider_checks(config))
+    checks.extend(_provider_checks(config, selected_provider=provider))
     repository, repository_checks = _repository_checks(workspace)
     checks.extend(repository_checks)
     checks.extend(_runtime_checks(config, workspace, repository))
+    checks.extend(_product_checks(config, repair=repair, registry_path=registry_path))
     if live_provider:
         checks.append(_live_provider_check(config, live_provider))
     return DoctorReport(
@@ -98,7 +110,7 @@ def run_doctor(
     )
 
 
-def render_doctor(report: DoctorReport) -> str:
+def render_doctor(report: DoctorReport, *, verbose: bool = False) -> str:
     lines = [
         f"AgentBus doctor {report.version}",
         f"Overall: {report.status.value}",
@@ -109,6 +121,9 @@ def render_doctor(report: DoctorReport) -> str:
         lines.append(f"[{check.status.value}] {check.name}: {check.summary}")
         if check.remediation:
             lines.append(f"  Remediation: {check.remediation}")
+        if verbose and check.details:
+            for name, value in sorted(check.details.items()):
+                lines.append(f"  {name}: {value}")
     return "\n".join(lines)
 
 
@@ -163,7 +178,11 @@ def _platform_checks() -> list[DoctorCheck]:
     ]
 
 
-def _provider_checks(config: AgentBusConfig) -> list[DoctorCheck]:
+def _provider_checks(
+    config: AgentBusConfig,
+    *,
+    selected_provider: str | None = None,
+) -> list[DoctorCheck]:
     checks: list[DoctorCheck] = []
     try:
         config.validate_provider_configuration("ollama")
@@ -206,6 +225,13 @@ def _provider_checks(config: AgentBusConfig) -> list[DoctorCheck]:
         )
     checks.append(
         DoctorCheck(
+            "provider:deterministic",
+            CheckStatus.OK,
+            "Deterministic provider is built in, configured, and network-free.",
+        )
+    )
+    checks.append(
+        DoctorCheck(
             "provider:fallback",
             CheckStatus.PASS,
             (
@@ -215,7 +241,251 @@ def _provider_checks(config: AgentBusConfig) -> list[DoctorCheck]:
             ),
         )
     )
+    if selected_provider:
+        selected = next(
+            (item for item in checks if item.name == f"provider:{selected_provider}"),
+            None,
+        )
+        if selected is None:
+            checks.append(
+                DoctorCheck(
+                    "provider:selected",
+                    CheckStatus.ERROR,
+                    f"Unsupported provider selection: {selected_provider}",
+                )
+            )
+        else:
+            checks.append(
+                DoctorCheck(
+                    "provider:selected",
+                    selected.status,
+                    f"Selected {selected_provider}: {selected.summary}",
+                    selected.remediation,
+                )
+            )
     return checks
+
+
+def _product_checks(
+    config: AgentBusConfig,
+    *,
+    repair: bool,
+    registry_path: str | Path | None,
+) -> list[DoctorCheck]:
+    from agentbus.control.registry import DaemonRegistry, process_matches
+    from agentbus.control.version import CONTROL_PROTOCOL_VERSION
+    from agentbus.product.compatibility import validate_extension_package
+    from agentbus.product.migrations import MigrationCoordinator, MigrationState
+
+    checks: list[DoctorCheck] = [
+        DoctorCheck(
+            "configuration",
+            CheckStatus.OK,
+            "Resolved configuration is valid and credential values are not persisted by AgentBus config commands.",
+            details={
+                "provider": config.provider_name,
+                "policy_mode": config.policy_mode,
+                "log_level": config.log_level,
+            },
+        ),
+        DoctorCheck(
+            "policy",
+            CheckStatus.OK if config.policy_mode == "enforce" else CheckStatus.ERROR,
+            f"Tool policy mode is {config.policy_mode}.",
+            None if config.policy_mode == "enforce" else "Use policy_mode = 'enforce'.",
+        ),
+        DoctorCheck(
+            "tool-runtime",
+            CheckStatus.OK,
+            "Managed capability tools and resource budgets are configured.",
+            details={
+                "invocations_per_task": config.tool_resource_budget.invocations_per_task,
+                "invocations_per_run": config.tool_resource_budget.invocations_per_run,
+            },
+        ),
+        DoctorCheck(
+            "mcp",
+            CheckStatus.OK if config.mcp_server_configs else CheckStatus.NOT_CONFIGURED,
+            (
+                f"{len(config.mcp_server_configs)} MCP server(s) are configured."
+                if config.mcp_server_configs
+                else "No MCP servers are configured; MCP is optional."
+            ),
+        ),
+    ]
+    for name, module, extra in (
+        ("extra:ide", "fastapi", "ide"),
+        ("extra:mcp", "httpx", "mcp"),
+        ("extra:azure", "openai", "azure"),
+    ):
+        installed = importlib.util.find_spec(module) is not None
+        checks.append(
+            DoctorCheck(
+                name,
+                CheckStatus.OK if installed else CheckStatus.OPTIONAL,
+                f"Optional {extra} extra is {'available' if installed else 'not installed'}.",
+                None if installed else f"Install with `pip install \"agentbus[{extra}]\"` when needed.",
+            )
+        )
+    migration = MigrationCoordinator(config).status()
+    for target in migration.targets:
+        if target.state == MigrationState.CURRENT:
+            status = CheckStatus.OK
+        elif target.state == MigrationState.REQUIRED:
+            status = CheckStatus.REPAIRABLE
+        elif target.state == MigrationState.ABSENT:
+            status = CheckStatus.NOT_CONFIGURED
+        else:
+            status = CheckStatus.ERROR
+        checks.append(
+            DoctorCheck(
+                f"migration:{target.name}",
+                status,
+                target.message,
+                (
+                    "Run `agentbus migrate plan`, then `agentbus migrate apply`."
+                    if status == CheckStatus.REPAIRABLE
+                    else None
+                ),
+            )
+        )
+    runtime_directories = (
+        Path(config.runs_dir).expanduser().resolve(),
+        config.state_database_path.expanduser().resolve().parent,
+        config.trace_store_path.expanduser().resolve(),
+    )
+    missing = [path for path in runtime_directories if not path.exists()]
+    repaired: list[str] = []
+    if repair:
+        for path in missing:
+            path.mkdir(parents=True, exist_ok=True)
+            repaired.append(str(path))
+        missing = [path for path in runtime_directories if not path.exists()]
+    checks.append(
+        DoctorCheck(
+            "runtime-directories",
+            CheckStatus.REPAIRABLE if missing else CheckStatus.OK,
+            (
+                f"{len(missing)} runtime directorie(s) are missing."
+                if missing
+                else "Runtime directories are present."
+            ),
+            "Run `agentbus doctor --repair` to create missing runtime directories."
+            if missing
+            else None,
+            details={"repaired": repaired},
+        )
+    )
+    registry = DaemonRegistry(registry_path)
+    entries = registry.list()
+    stale = [entry for entry in entries if not process_matches(entry)]
+    removed: list[str] = []
+    if repair and stale:
+        removed = registry.cleanup_stale()
+        entries = registry.list()
+        stale = [entry for entry in entries if not process_matches(entry)]
+    incompatible = [
+        entry.daemon_id
+        for entry in entries
+        if entry.protocol_version != CONTROL_PROTOCOL_VERSION
+    ]
+    daemon_status = (
+        CheckStatus.ERROR
+        if incompatible
+        else CheckStatus.REPAIRABLE
+        if stale
+        else CheckStatus.OK
+        if entries
+        else CheckStatus.NOT_CONFIGURED
+    )
+    checks.append(
+        DoctorCheck(
+            "daemon-registry",
+            daemon_status,
+            (
+                f"{len(entries)} registered daemon(s), {len(stale)} stale, "
+                f"{len(incompatible)} incompatible."
+            ),
+            "Run `agentbus doctor --repair` or `agentbus daemon cleanup-stale`."
+            if stale
+            else "Restart AgentBus with matching package and protocol versions."
+            if incompatible
+            else None,
+            details={
+                "registry": str(registry.path),
+                "removed": removed,
+                "active": sum(process_matches(entry) for entry in entries),
+            },
+        )
+    )
+    index_path = config.state_database_path.expanduser().resolve().parent / "repository-index.sqlite3"
+    checks.append(
+        DoctorCheck(
+            "repository-index",
+            CheckStatus.OK if index_path.is_file() else CheckStatus.NOT_CONFIGURED,
+            (
+                f"Repository index is present ({index_path.stat().st_size} bytes)."
+                if index_path.is_file()
+                else "Repository index has not been built."
+            ),
+            None if index_path.is_file() else "Run `agentbus index build` when repository intelligence is desired.",
+        )
+    )
+    trace_path = config.trace_store_path.expanduser().resolve()
+    trace_size = _directory_size(trace_path)
+    checks.append(
+        DoctorCheck(
+            "trace-storage",
+            CheckStatus.OK if trace_path.is_dir() else CheckStatus.NOT_CONFIGURED,
+            f"Trace storage uses {trace_size} bytes.",
+            details={"path": str(trace_path), "bytes": trace_size},
+        )
+    )
+    state_root = config.state_database_path.expanduser().resolve().parent
+    checks.append(
+        DoctorCheck(
+            "storage-size",
+            CheckStatus.OK,
+            f"AgentBus state uses {_directory_size(state_root)} bytes.",
+            details={"path": str(state_root)},
+        )
+    )
+    extension = Path(__file__).resolve().parents[1] / "extensions" / "vscode" / "package.json"
+    if extension.is_file():
+        issues = validate_extension_package(extension)
+        checks.append(
+            DoctorCheck(
+                "vscode-extension",
+                CheckStatus.ERROR if issues else CheckStatus.OK,
+                "; ".join(issues) if issues else "Source extension metadata is compatible.",
+            )
+        )
+    else:
+        checks.append(
+            DoctorCheck(
+                "vscode-extension",
+                CheckStatus.OPTIONAL,
+                "VS Code extension metadata was not found in this installation.",
+            )
+        )
+    return checks
+
+
+def _directory_size(path: Path, *, max_entries: int = 100_000) -> int:
+    if not path.is_dir():
+        return 0
+    total = 0
+    seen = 0
+    for item in path.rglob("*"):
+        if seen >= max_entries:
+            break
+        seen += 1
+        try:
+            if item.is_file() and not item.is_symlink():
+                total += item.stat().st_size
+        except OSError:
+            continue
+    return total
 
 
 def _repository_checks(
