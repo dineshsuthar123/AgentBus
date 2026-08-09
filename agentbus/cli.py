@@ -26,6 +26,7 @@ COMMANDS = (
     "setup",
     "quickstart",
     "demo",
+    "cleanup",
     "doctor",
     "migrate",
     "upgrade-check",
@@ -119,6 +120,8 @@ def main(argv: list[str] | None = None) -> int:
         return _quickstart_command(rest)
     if command == "demo":
         return _demo_command(rest)
+    if command == "cleanup":
+        return _cleanup_command(rest)
     if command == "doctor":
         return _doctor_command(rest)
     if command == "migrate":
@@ -164,6 +167,7 @@ def _root_parser() -> argparse.ArgumentParser:
         "setup": "Guide first-run product configuration with an offline default.",
         "quickstart": "Complete a temporary deterministic first task offline.",
         "demo": "List, create, or preflight compact AgentBus demo repositories.",
+        "cleanup": "Remove only proven AgentBus-owned stale runtime artifacts.",
         "doctor": "Run offline environment diagnostics.",
         "migrate": "Inspect and apply safe local database migrations.",
         "upgrade-check": "Check local package, schema, config, and extension compatibility.",
@@ -966,6 +970,70 @@ def _quickstart_command(arguments: list[str]) -> int:
             print(f"{result.error['code']}: {result.error['message']}")
             print("Recommended action: " + str(result.error["recommended_action"]))
     return 0 if result.ok else 2
+
+
+def _cleanup_command(arguments: list[str]) -> int:
+    from agentbus.product.cleanup import CleanupMode, RuntimeCleanup
+
+    parser = argparse.ArgumentParser(prog="agentbus cleanup")
+    parser.add_argument("--config")
+    parser.add_argument("--registry-path")
+    parser.add_argument("--dry-run", action="store_true")
+    scope = parser.add_mutually_exclusive_group()
+    scope.add_argument("--stale", action="store_true")
+    scope.add_argument("--all-runtime-state", action="store_true")
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Confirm execution of --all-runtime-state cleanup.",
+    )
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args(arguments)
+    if args.all_runtime_state and not args.dry_run and not args.yes:
+        message = (
+            "--all-runtime-state requires --yes when cleanup is not a dry-run. "
+            "No files were removed."
+        )
+        if args.json:
+            print(json.dumps({"ok": False, "error": message, "network_used": False}))
+        else:
+            print(f"Cleanup refused: {message}")
+        return 2
+    if args.yes and not args.all_runtime_state:
+        parser.error("--yes is only valid with --all-runtime-state")
+    mode = (
+        CleanupMode.ALL_RUNTIME_STATE
+        if args.all_runtime_state
+        else CleanupMode.STALE
+        if args.stale
+        else CleanupMode.NORMAL
+    )
+    try:
+        config = resolve_configuration(config_file=args.config).config
+        result = RuntimeCleanup(
+            config,
+            registry_path=args.registry_path,
+        ).run(mode=mode, dry_run=args.dry_run)
+    except (OSError, RuntimeError, ValueError) as exc:
+        payload = {"ok": False, "error": str(exc), "network_used": False}
+        print(json.dumps(payload, indent=2, sort_keys=True) if args.json else f"Cleanup error: {exc}")
+        return 2
+    payload = result.to_dict()
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        operation = "Cleanup plan" if result.dry_run else "Cleanup result"
+        print(f"{operation} ({result.mode.value})")
+        if not result.items:
+            print("  No eligible AgentBus runtime artifacts found.")
+        for item in result.items:
+            location = f" at {item.location}" if item.location else ""
+            print(
+                f"  [{item.status.upper()}] {item.category}:{item.identifier}"
+                f"{location} - {item.reason}"
+            )
+        print("Protected: " + ", ".join(result.protected_data))
+    return 0 if result.ok else 1
 
 
 if __name__ == "__main__":
