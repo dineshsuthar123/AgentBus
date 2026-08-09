@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from agentbus import __version__
+from agentbus.release_packaging import audit_distributions
 from agentbus.security.redaction import redact_text
 
 
@@ -65,6 +66,7 @@ class CleanInstallAcceptanceReport:
             "error": self.error,
             "fresh_virtual_environment": True,
             "wheel_install": True,
+            "package_audit": self.kind == AcceptanceKind.BETA,
             "editable_install": False,
             "dependency_extras": list(_PRODUCT_EXTRAS),
             "repository_pythonpath_used": False,
@@ -103,7 +105,30 @@ def acceptance_step_names(kind: AcceptanceKind | str) -> tuple[str, ...]:
     )
     if selected == AcceptanceKind.PRODUCT:
         return common
-    return common
+    return (
+        "package_build",
+        "package_audit",
+        "fresh_environment",
+        "wheel_install",
+        "installed_origin",
+        "version",
+        "doctor",
+        "setup",
+        "demo_repository",
+        "daemon_start",
+        "repository_index",
+        "quickstart",
+        "deterministic_task",
+        "managed_tool_approval",
+        "final_report",
+        "offline_replay",
+        "support_bundle",
+        "benchmark_smoke",
+        "daemon_stop",
+        "cleanup",
+        "leak_check",
+        "uninstall",
+    )
 
 
 def run_clean_install_acceptance(
@@ -168,6 +193,7 @@ class _CleanInstallRunner:
         self.config_file = self.product_state / "config.toml"
         self.registry = temporary_root / "daemon-registry.json"
         self.wheel: Path | None = None
+        self.artifacts: tuple[Path, ...] = ()
         self.python: Path | None = None
         self.agentbus: Path | None = None
         self.daemon_id: str | None = None
@@ -181,6 +207,7 @@ class _CleanInstallRunner:
     def run(self) -> None:
         actions: dict[str, Callable[[], str]] = {
             "package_build": self._build_package,
+            "package_audit": self._audit_package,
             "fresh_environment": self._create_environment,
             "wheel_install": self._install_wheel,
             "installed_origin": self._verify_installed_origin,
@@ -192,8 +219,11 @@ class _CleanInstallRunner:
             "repository_index": self._build_index,
             "quickstart": self._quickstart,
             "deterministic_task": self._run_task,
+            "managed_tool_approval": self._managed_tool_approval,
             "final_report": self._show_report,
             "offline_replay": self._replay,
+            "support_bundle": self._support_bundle,
+            "benchmark_smoke": self._benchmark_smoke,
             "daemon_stop": self._stop_daemon,
             "cleanup": self._cleanup,
             "leak_check": self._leak_check,
@@ -246,16 +276,32 @@ class _CleanInstallRunner:
             "-m",
             "build",
             "--no-isolation",
-            "--wheel",
             "--outdir",
             str(self.distributions),
         ]
+        if self.kind == AcceptanceKind.PRODUCT:
+            arguments.insert(4, "--wheel")
         self._command(arguments, cwd=self.repository, timeout=600)
         wheels = tuple(self.distributions.glob("agentbus-*.whl"))
         if len(wheels) != 1:
             raise RuntimeError("Package build did not produce exactly one wheel.")
         self.wheel = wheels[0].resolve(strict=True)
-        return "Built one local wheel without publishing."
+        self.artifacts = tuple(sorted(path.resolve() for path in self.distributions.iterdir()))
+        expected = 1 if self.kind == AcceptanceKind.PRODUCT else 2
+        if len(self.artifacts) != expected:
+            raise RuntimeError("Package build produced an unexpected artifact set.")
+        return (
+            "Built one local wheel without publishing."
+            if self.kind == AcceptanceKind.PRODUCT
+            else "Built one local wheel and source distribution without publishing."
+        )
+
+    def _audit_package(self) -> str:
+        report = audit_distributions(self.artifacts, root=self.repository)
+        if not report.ok or {item.kind for item in report.artifacts} != {"wheel", "sdist"}:
+            codes = ", ".join(sorted({item.code for item in report.findings})[:10])
+            raise RuntimeError("Distribution audit failed" + (f": {codes}" if codes else "."))
+        return "Audited wheel and source distribution contents, metadata, and secrets."
 
     def _create_environment(self) -> str:
         venv.EnvBuilder(with_pip=True).create(self.environment_root)
@@ -457,6 +503,34 @@ class _CleanInstallRunner:
             raise RuntimeError("The durable final report omitted required task evidence.")
         return "Inspected the persisted final report, review, and scoped file evidence."
 
+    def _managed_tool_approval(self) -> str:
+        python = self._required(self.python, "fresh Python")
+        payload = self._json_command(
+            [
+                str(python),
+                "-m",
+                "agentbus.product.acceptance_probe",
+                "--root",
+                str(self.root / "managed-tool-probe"),
+            ],
+            cwd=self.root,
+        )
+        required = {
+            "ok": True,
+            "tool_name": "filesystem.delete",
+            "approval_requested": True,
+            "approval_approved": True,
+            "tool_status": "succeeded",
+            "target_deleted": True,
+            "provider_calls": 0,
+            "network_used": False,
+        }
+        if any(payload.get(key) != value for key, value in required.items()):
+            raise RuntimeError("Managed tool approval probe omitted required evidence.")
+        if payload.get("invocation_count") != 1 or payload.get("audit_count", 0) < 1:
+            raise RuntimeError("Managed tool approval audit evidence was incomplete.")
+        return "Approved and resumed one exact managed filesystem tool invocation."
+
     def _replay(self) -> str:
         run_id = self._required(self.run_id, "durable run ID")
         payload = self._agentbus_json(
@@ -475,6 +549,39 @@ class _CleanInstallRunner:
         if session.get("provider_calls") != 0 or session.get("network_calls") != 0:
             raise RuntimeError("Offline replay attempted provider or network access.")
         return "Replayed the persisted run offline with zero provider and network calls."
+
+    def _support_bundle(self) -> str:
+        output = self.root / "agentbus-support.zip"
+        payload = self._agentbus_json(
+            "support-bundle",
+            "--config",
+            str(self.config_file),
+            "--registry-path",
+            str(self.registry),
+            "--output",
+            str(output),
+            "--json",
+        )
+        if not payload.get("ok") or not output.is_file():
+            raise RuntimeError("Sanitized support bundle was not created.")
+        if payload.get("source_derived_included") is not False:
+            raise RuntimeError("Support bundle included source-derived data without consent.")
+        if payload.get("network_used") is not False:
+            raise RuntimeError("Support bundle did not remain offline.")
+        return "Created a bounded sanitized support bundle without source-derived data."
+
+    def _benchmark_smoke(self) -> str:
+        payload = self._agentbus_json(
+            "benchmark",
+            "startup",
+            "--iterations",
+            "1",
+            "--json",
+            timeout=180,
+        )
+        if payload.get("ok") is not True or payload.get("network_used") is not False:
+            raise RuntimeError("Offline startup benchmark did not pass its broad budget.")
+        return "Ran the startup benchmark smoke within its broad regression budget."
 
     def _stop_daemon(self) -> str:
         if self.daemon_id is None:
