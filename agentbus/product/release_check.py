@@ -302,7 +302,7 @@ def release_check_commands(
             CommandSpec(
                 "vscode-electron",
                 "Fresh-profile VS Code acceptance",
-                (npm, "run", "test:integration"),
+                (npm, "run", "test:product"),
                 extension,
                 600,
             ),

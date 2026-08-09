@@ -69,6 +69,8 @@ def test_full_release_plan_contains_every_public_beta_gate(tmp_path):
     vsix = next(command for command in commands if command.gate_id == "vsix-package")
     assert vsix.command[0] == "node"
     assert vsix.command[1].replace("\\", "/").endswith("/@vscode/vsce/vsce")
+    electron = next(command for command in commands if command.gate_id == "vscode-electron")
+    assert electron.command[-1] == "test:product"
 
 
 def test_release_check_records_safe_command_failure(tmp_path):
