@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+from agentbus.cli import main
 from agentbus.config import AgentBusConfig
 from agentbus.product.logging import ProductLogWriter, read_product_logs
 
@@ -88,3 +89,83 @@ def test_log_reader_never_follows_run_log_symlink(tmp_path):
         return
 
     assert read_product_logs(config, run_id="run-1") == ()
+
+
+def test_logs_cli_filters_run_and_returns_redacted_json(tmp_path, capsys):
+    config = _config(tmp_path)
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    (runs / "20260101_000000_run-1.jsonl").write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-01-01T00:00:00+00:00",
+                "run_id": "run-1",
+                "type": "completed",
+                "data": {"authorization": "Bearer private-token"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "workspace_dir": config.workspace_dir,
+                "state_dir": config.state_dir,
+                "state_db": config.state_db,
+                "runs_dir": config.runs_dir,
+                "provider_name": "deterministic",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "logs",
+            "--config",
+            str(config_path),
+            "--run",
+            "run-1",
+            "--tail",
+            "1",
+            "--json",
+        ]
+    )
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    payload = json.loads(output)
+    assert len(payload["entries"]) == 1
+    assert payload["entries"][0]["run_id"] == "run-1"
+    assert "private-token" not in output
+    assert payload["network_used"] is False
+
+
+def test_logs_cli_rejects_unsafe_run_identifier(tmp_path, capsys):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "workspace_dir": str(tmp_path),
+                "state_dir": str(tmp_path / "state"),
+                "provider_name": "deterministic",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "logs",
+            "--config",
+            str(config_path),
+            "--run",
+            "../outside",
+            "--json",
+        ]
+    )
+
+    assert exit_code == 2
+    assert "unsupported" in json.loads(capsys.readouterr().out)["error"]
