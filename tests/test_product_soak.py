@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
+from agentbus.cli import main
 from agentbus.product.soak import run_soak
 
 
@@ -60,3 +63,28 @@ def test_soak_runner_rejects_unbounded_or_invalid_options(keyword, value):
 
     with pytest.raises(ValueError):
         run_soak(**options)
+
+
+def test_soak_cli_emits_machine_readable_offline_report(capsys):
+    exit_code = main(
+        [
+            "soak",
+            "--duration",
+            "30",
+            "--runs",
+            "1",
+            "--parallelism",
+            "1",
+            "--seed",
+            "23",
+            "--json",
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True
+    assert payload["completed_runs"] == 1
+    assert payload["operations"]["worktree_cleanups"] == 1
+    assert payload["resources"]["event_gap_count"] == 0
+    assert payload["network_used"] is False

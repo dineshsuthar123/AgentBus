@@ -30,6 +30,7 @@ COMMANDS = (
     "logs",
     "support-bundle",
     "benchmark",
+    "soak",
     "doctor",
     "migrate",
     "upgrade-check",
@@ -131,6 +132,8 @@ def main(argv: list[str] | None = None) -> int:
         return _support_bundle_command(rest)
     if command == "benchmark":
         return _benchmark_command(rest)
+    if command == "soak":
+        return _soak_command(rest)
     if command == "doctor":
         return _doctor_command(rest)
     if command == "migrate":
@@ -180,6 +183,7 @@ def _root_parser() -> argparse.ArgumentParser:
         "logs": "Inspect bounded redacted product and run logs.",
         "support-bundle": "Create a sanitized local diagnostic ZIP.",
         "benchmark": "Measure bounded offline product performance.",
+        "soak": "Exercise bounded offline reliability and leak checks.",
         "doctor": "Run offline environment diagnostics.",
         "migrate": "Inspect and apply safe local database migrations.",
         "upgrade-check": "Check local package, schema, config, and extension compatibility.",
@@ -1218,6 +1222,61 @@ def _benchmark_command(arguments: list[str]) -> int:
         if report_path:
             print(f"Report: {report_path}")
     return 0 if report.passed else 1
+
+
+def _soak_command(arguments: list[str]) -> int:
+    from agentbus.product.soak import run_soak
+
+    parser = argparse.ArgumentParser(prog="agentbus soak")
+    parser.add_argument("--duration", type=float, default=30.0, metavar="SECONDS")
+    parser.add_argument("--runs", type=int, default=10)
+    parser.add_argument("--parallelism", type=int, default=2)
+    parser.add_argument("--seed", type=int, default=2026)
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args(arguments)
+    try:
+        report = run_soak(
+            duration_seconds=args.duration,
+            runs=args.runs,
+            parallelism=args.parallelism,
+            seed=args.seed,
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        payload = {"ok": False, "error": str(exc), "network_used": False}
+        print(
+            json.dumps(payload, indent=2, sort_keys=True)
+            if args.json
+            else f"Soak error: {exc}"
+        )
+        return 2
+    payload = report.to_dict()
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(
+            f"AgentBus offline soak: {report.completed_runs}/{report.requested_runs} "
+            f"cycles in {report.duration_seconds:.3f}s"
+        )
+        print(
+            f"  successful={report.successful_runs} "
+            f"cancelled={report.intentional_cancellations} failed={report.failed_runs}"
+        )
+        print(
+            f"  events={report.event_count} gaps={report.event_gap_count} "
+            f"stale_leases={report.stale_lease_count}"
+        )
+        print(
+            f"  leaked_worktrees={report.leaked_worktree_count} "
+            f"leaked_processes={report.leaked_process_count} "
+            f"cleanup_failures={report.failed_cleanup_count}"
+        )
+        print(
+            f"  memory_growth={report.memory_growth_bytes} "
+            f"budget={report.memory_budget_bytes} bytes"
+        )
+        if report.stopped_by_duration:
+            print("  duration limit stopped scheduling additional cycles")
+    return 0 if report.ok else 1
 
 
 if __name__ == "__main__":
