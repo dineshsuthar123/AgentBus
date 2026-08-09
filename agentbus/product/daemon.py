@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -73,6 +75,7 @@ def start_daemon(
     server_level = "info" if selected_level in {"debug", "trace"} else selected_level
     log_path.parent.mkdir(parents=True, exist_ok=True)
     before = {entry.daemon_id for entry in registry.list()}
+    startup_daemon_id = uuid.uuid4().hex
     command = [
         sys.executable,
         "-m",
@@ -81,6 +84,8 @@ def start_daemon(
         "--json-ready",
         "--registry-path",
         str(registry.path),
+        "--daemon-id",
+        startup_daemon_id,
         "--idle-timeout",
         str(timeout),
         "--log-level",
@@ -94,10 +99,12 @@ def start_daemon(
         creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
     diagnostic = tempfile.TemporaryFile(mode="w+b")
     try:
+        child_environment = os.environ.copy()
+        child_environment["AGENTBUS_DAEMON_STARTUP_DIAGNOSTICS"] = "1"
         process = subprocess.Popen(
             command,
             cwd=config.workspace_path,
-            env=os.environ.copy(),
+            env=child_environment,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=diagnostic,
@@ -108,22 +115,26 @@ def start_daemon(
         )
         deadline = time.monotonic() + startup_timeout
         entry: DaemonRegistryEntry | None = None
+        registration_identity_mismatch = False
         while time.monotonic() < deadline:
             if process.poll() is not None:
                 break
-            candidates = [
+            registered = [
                 item
                 for item in registry.list()
                 if item.daemon_id not in before
-                and item.pid == process.pid
-                and process_matches(item)
+                and item.daemon_id == startup_daemon_id
             ]
+            candidates = [item for item in registered if process_matches(item)]
+            registration_identity_mismatch = bool(registered and not candidates)
             if candidates:
                 entry = candidates[-1]
                 break
             time.sleep(0.05)
         if entry is None:
-            if process.poll() is None:
+            child_was_active = process.poll() is None
+            registry_diagnostic = _startup_registry_diagnostic(registry.path)
+            if child_was_active:
                 process.terminate()
                 try:
                     process.wait(timeout=5)
@@ -137,6 +148,18 @@ def start_daemon(
             )
             if detail:
                 message += f" Safe diagnostic: {detail}"
+            if registry_diagnostic != "registry-missing":
+                message += f" Registry diagnostic: {registry_diagnostic}."
+            elif registration_identity_mismatch:
+                message += (
+                    " Safe diagnostic: the child registered, but its process "
+                    "identity could not be verified."
+                )
+            elif child_was_active:
+                message += (
+                    " Safe diagnostic: the child remained active without "
+                    "registering before the startup deadline."
+                )
             raise RuntimeError(message)
     finally:
         diagnostic.close()
@@ -277,3 +300,20 @@ def _read_startup_diagnostic(handle) -> str:
     if len(safe) <= 500:
         return safe
     return "[truncated]\n" + safe[-488:]
+
+
+def _startup_registry_diagnostic(path: Path) -> str:
+    if not path.is_file():
+        return "registry-missing"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return "registry-invalid-json"
+    if payload.get("version") != 1 or not isinstance(payload.get("daemons"), list):
+        return "registry-invalid-schema"
+    entries = payload["daemons"]
+    try:
+        validated = [DaemonRegistryEntry.model_validate(item) for item in entries]
+    except (ValueError, TypeError):
+        return f"registry-entry-invalid-count-{len(entries)}"
+    return f"registry-valid-count-{len(validated)}"

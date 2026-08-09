@@ -627,6 +627,7 @@ def _serve_command(arguments: list[str]) -> int:
     parser.add_argument("--idle-timeout", type=float, default=86_400)
     parser.add_argument("--foreground", action="store_true")
     parser.add_argument("--registry-path")
+    parser.add_argument("--daemon-id", help=argparse.SUPPRESS)
     parser.add_argument(
         "--log-level",
         choices=["critical", "error", "warning", "info"],
@@ -638,9 +639,12 @@ def _serve_command(arguments: list[str]) -> int:
     if args.idle_timeout < 0:
         parser.error("--idle-timeout must not be negative")
     try:
+        _daemon_startup_stage("configuration-resolving")
         config = resolve_configuration(config_file=args.config).config
+        _daemon_startup_stage("configuration-ready")
         from agentbus.control.server import serve
 
+        _daemon_startup_stage("control-server-imported")
         return serve(
             config=config,
             host=args.host,
@@ -648,12 +652,20 @@ def _serve_command(arguments: list[str]) -> int:
             json_ready=args.json_ready,
             idle_timeout=args.idle_timeout,
             registry_path=args.registry_path,
+            daemon_id=args.daemon_id,
             log_level=args.log_level,
         )
     except (OSError, RuntimeError, ValueError) as exc:
         stream = sys.stderr if args.json_ready else sys.stdout
         print(f"Control-plane error: {exc}", file=stream)
         return 2
+
+
+def _daemon_startup_stage(stage: str) -> None:
+    import os
+
+    if os.environ.get("AGENTBUS_DAEMON_STARTUP_DIAGNOSTICS") == "1":
+        print(f"agentbus-daemon-stage:{stage}", file=sys.stderr, flush=True)
 
 
 def _daemon_command(arguments: list[str]) -> int:

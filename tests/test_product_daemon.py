@@ -6,6 +6,7 @@ from pathlib import Path
 
 from agentbus.config import AgentBusConfig
 from agentbus.control.models import DaemonRegistryEntry
+from agentbus.control.server import _validated_daemon_id
 from agentbus.control.registry import (
     DaemonRegistry,
     executable_identity,
@@ -126,3 +127,18 @@ def test_daemon_startup_diagnostic_is_bounded_and_redacted():
     assert len(detail) <= 500
     assert "private-value" not in detail
     assert "final failure" in detail
+
+
+def test_daemon_startup_id_is_exact_and_non_secret():
+    selected = _validated_daemon_id("a" * 32)
+
+    assert selected == "a" * 32
+    assert len(_validated_daemon_id(None)) == 32
+
+    for invalid in ("", "A" * 32, "a" * 31, "../daemon"):
+        try:
+            _validated_daemon_id(invalid)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("unsafe daemon startup ID was accepted")
