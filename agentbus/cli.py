@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -23,6 +24,7 @@ COMMANDS = (
     "config",
     "init",
     "setup",
+    "demo",
     "doctor",
     "migrate",
     "upgrade-check",
@@ -112,6 +114,8 @@ def main(argv: list[str] | None = None) -> int:
         return _init_command(rest)
     if command == "setup":
         return _setup_command(rest)
+    if command == "demo":
+        return _demo_command(rest)
     if command == "doctor":
         return _doctor_command(rest)
     if command == "migrate":
@@ -155,6 +159,7 @@ def _root_parser() -> argparse.ArgumentParser:
         "config": "Show, validate, or locate resolved configuration.",
         "init": "Create safe first-run configuration and state.",
         "setup": "Guide first-run product configuration with an offline default.",
+        "demo": "List, create, or preflight compact AgentBus demo repositories.",
         "doctor": "Run offline environment diagnostics.",
         "migrate": "Inspect and apply safe local database migrations.",
         "upgrade-check": "Check local package, schema, config, and extension compatibility.",
@@ -859,6 +864,65 @@ def _setup_command(arguments: list[str]) -> int:
             label = "OK" if detection.available else ("OPTIONAL" if detection.optional else "MISSING")
             print(f"  [{label}] {detection.name}: {detection.detail}")
         print("Next: run `agentbus doctor`, then `agentbus quickstart`.")
+    return 0
+
+
+def _demo_command(arguments: list[str]) -> int:
+    from agentbus.product.demos import DEMO_LANGUAGES, create_demo, demo_definitions, run_demo
+
+    parser = argparse.ArgumentParser(prog="agentbus demo")
+    commands = parser.add_subparsers(dest="demo_command", required=True)
+    listing = commands.add_parser("list")
+    listing.add_argument("--json", action="store_true")
+    creating = commands.add_parser("create")
+    creating.add_argument("language", choices=DEMO_LANGUAGES)
+    creating.add_argument("--output")
+    creating.add_argument("--force", action="store_true")
+    creating.add_argument("--json", action="store_true")
+    running = commands.add_parser("run")
+    running.add_argument("language", choices=DEMO_LANGUAGES)
+    running.add_argument("--workspace")
+    running.add_argument("--timeout", type=float, default=60.0)
+    running.add_argument("--json", action="store_true")
+    args = parser.parse_args(arguments)
+    if args.demo_command == "list":
+        payload = {
+            "demos": [
+                {
+                    "language": item.language,
+                    "title": item.title,
+                    "task": item.task,
+                }
+                for item in demo_definitions().values()
+            ],
+            "network_used": False,
+        }
+    else:
+        try:
+            if args.demo_command == "create":
+                output = args.output or f"agentbus-{args.language}-demo"
+                result = create_demo(args.language, output, force=args.force)
+            else:
+                result = run_demo(
+                    args.language,
+                    workspace=args.workspace,
+                    timeout_seconds=args.timeout,
+                )
+            payload = result.to_dict()
+        except (OSError, RuntimeError, subprocess.SubprocessError, ValueError) as exc:
+            print(json.dumps({"ok": False, "error": str(exc)}) if args.json else f"Demo error: {exc}")
+            return 2
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    elif args.demo_command == "list":
+        for item in payload["demos"]:
+            print(f"{item['language']}: {item['title']} - {item['task']}")
+    else:
+        print(f"Demo: {payload['language']} at {payload['workspace']}")
+        print("Task: " + demo_definitions()[payload["language"]].task)
+        print("Test: " + " ".join(payload["test_command"]))
+        if payload["test_executed"]:
+            print(f"Intentional initial test exit code: {payload['test_exit_code']}")
     return 0
 
 
