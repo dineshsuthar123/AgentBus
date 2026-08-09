@@ -24,6 +24,7 @@ COMMANDS = (
     "init",
     "doctor",
     "migrate",
+    "upgrade-check",
     "serve",
     "daemon",
     "control-schema",
@@ -112,6 +113,8 @@ def main(argv: list[str] | None = None) -> int:
         return _doctor_command(rest)
     if command == "migrate":
         return _migration_command(rest)
+    if command == "upgrade-check":
+        return _upgrade_check_command(rest)
     if command == "serve":
         return _serve_command(rest)
     if command == "daemon":
@@ -150,6 +153,7 @@ def _root_parser() -> argparse.ArgumentParser:
         "init": "Create safe first-run configuration and state.",
         "doctor": "Run offline environment diagnostics.",
         "migrate": "Inspect and apply safe local database migrations.",
+        "upgrade-check": "Check local package, schema, config, and extension compatibility.",
         "serve": "Start the authenticated local control-plane daemon.",
         "daemon": "Inspect or safely manage local daemons.",
         "control-schema": "Export generated control-protocol artifacts.",
@@ -525,6 +529,41 @@ def _migration_command(arguments: list[str]) -> int:
             print(f"    {target.message}")
         for backup in report.backups:
             print(f"  Backup: {backup}")
+    return 0 if report.ok else 2
+
+
+def _upgrade_check_command(arguments: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="agentbus upgrade-check")
+    parser.add_argument("--config")
+    parser.add_argument("--workspace")
+    parser.add_argument("--extension-package")
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args(arguments)
+    try:
+        from agentbus.product.upgrade import run_upgrade_check
+
+        resolved = resolve_configuration(
+            config_file=args.config,
+            cli_overrides={"workspace_dir": args.workspace},
+            workspace=args.workspace,
+        )
+        report = run_upgrade_check(
+            resolved.config,
+            extension_package=args.extension_package,
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        payload = {"ok": False, "error": str(exc), "network_used": False}
+        print(json.dumps(payload, indent=2, sort_keys=True) if args.json else f"Upgrade check error: {exc}")
+        return 2
+    payload = report.to_dict()
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(f"AgentBus upgrade check: {'OK' if report.ok else 'FAILED'}")
+        for check in report.checks:
+            print(f"  [{check.status.value}] {check.name}: {check.message}")
+            if check.action:
+                print(f"    Action: {check.action}")
     return 0 if report.ok else 2
 
 
