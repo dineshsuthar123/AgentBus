@@ -28,6 +28,7 @@ COMMANDS = (
     "demo",
     "cleanup",
     "logs",
+    "support-bundle",
     "doctor",
     "migrate",
     "upgrade-check",
@@ -125,6 +126,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cleanup_command(rest)
     if command == "logs":
         return _logs_command(rest)
+    if command == "support-bundle":
+        return _support_bundle_command(rest)
     if command == "doctor":
         return _doctor_command(rest)
     if command == "migrate":
@@ -172,6 +175,7 @@ def _root_parser() -> argparse.ArgumentParser:
         "demo": "List, create, or preflight compact AgentBus demo repositories.",
         "cleanup": "Remove only proven AgentBus-owned stale runtime artifacts.",
         "logs": "Inspect bounded redacted product and run logs.",
+        "support-bundle": "Create a sanitized local diagnostic ZIP.",
         "doctor": "Run offline environment diagnostics.",
         "migrate": "Inspect and apply safe local database migrations.",
         "upgrade-check": "Check local package, schema, config, and extension compatibility.",
@@ -1088,6 +1092,56 @@ def _logs_command(arguments: list[str]) -> int:
                 f"{timestamp} {entry.level.upper():<7} {entry.component}"
                 f"{context}: {entry.message}"
             )
+    return 0
+
+
+def _support_bundle_command(arguments: list[str]) -> int:
+    from agentbus.product.support import create_support_bundle
+
+    parser = argparse.ArgumentParser(prog="agentbus support-bundle")
+    parser.add_argument("--config")
+    parser.add_argument("--output")
+    parser.add_argument("--registry-path")
+    parser.add_argument(
+        "--include-run",
+        metavar="RUN_ID",
+        help="Include a bounded sanitized run-log tail after explicit consent.",
+    )
+    parser.add_argument(
+        "--consent-source-derived",
+        action="store_true",
+        help="Consent to include potentially source-derived run metadata.",
+    )
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args(arguments)
+    try:
+        config = resolve_configuration(config_file=args.config).config
+        result = create_support_bundle(
+            config,
+            output=args.output,
+            include_run=args.include_run,
+            consent_source_derived=args.consent_source_derived,
+            registry_path=args.registry_path,
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        payload = {"ok": False, "error": str(exc), "network_used": False}
+        print(
+            json.dumps(payload, indent=2, sort_keys=True)
+            if args.json
+            else f"Support bundle error: {exc}"
+        )
+        return 2
+    payload = result.to_dict()
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(f"Support bundle: {result.output}")
+        print(f"Entries: {len(result.entries)}; bytes: {result.byte_size}")
+        print(f"SHA-256: {result.sha256}")
+        print(
+            "Source-derived run metadata: "
+            + ("included with consent" if result.source_derived_included else "excluded")
+        )
     return 0
 
 

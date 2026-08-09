@@ -5,6 +5,7 @@ import zipfile
 
 import pytest
 
+from agentbus.cli import main
 from agentbus.config import AgentBusConfig
 from agentbus.product.logging import ProductLogWriter
 from agentbus.product.support import create_support_bundle
@@ -112,3 +113,42 @@ def test_support_bundle_refuses_existing_output(tmp_path):
         create_support_bundle(config, output=output)
 
     assert output.read_bytes() == b"user data"
+
+
+def test_support_bundle_cli_creates_private_json_report(tmp_path, capsys):
+    config = _config(tmp_path)
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "workspace_dir": config.workspace_dir,
+                "state_dir": config.state_dir,
+                "state_db": config.state_db,
+                "runs_dir": config.runs_dir,
+                "provider_name": "deterministic",
+            }
+        ),
+        encoding="utf-8",
+    )
+    output = tmp_path / "cli-support.zip"
+
+    exit_code = main(
+        [
+            "support-bundle",
+            "--config",
+            str(config_path),
+            "--registry-path",
+            str(tmp_path / "registry.json"),
+            "--output",
+            str(output),
+            "--json",
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True
+    assert payload["output"] == str(output)
+    assert payload["source_derived_included"] is False
+    assert payload["network_used"] is False
+    assert output.is_file()
