@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -11,9 +12,11 @@ from agentbus.control.registry import (
     executable_identity,
     process_start_identity,
 )
-from agentbus.execution.models import RunRecord, RunStatus
+from agentbus.execution.models import RunRecord, RunStatus, TaskSpec
 from agentbus.execution.state_store import StateStore
 from agentbus.product.cleanup import CleanupMode, RuntimeCleanup
+from agentbus.replay.session import ReplaySessionStatus
+from agentbus.worktrees.manager import GitWorktreeManager
 
 
 def _config(root: Path, workspace: Path) -> AgentBusConfig:
@@ -128,3 +131,125 @@ def test_normal_cleanup_does_not_remove_run_logs(tmp_path):
 
     assert terminal.is_file() and active.is_file() and unknown.is_file()
     assert not any(item.category == "run_log" for item in result.items)
+
+
+def test_cleanup_removes_clean_terminal_worktree_but_preserves_dirty_one(tmp_path):
+    repository = tmp_path / "repo"
+    repository.mkdir()
+    _git(repository, "init", "-q")
+    _git(repository, "config", "user.name", "AgentBus Test")
+    _git(repository, "config", "user.email", "agentbus@example.invalid")
+    (repository / "tracked.txt").write_text("baseline\n", encoding="utf-8")
+    _git(repository, "add", "tracked.txt")
+    _git(repository, "commit", "-q", "-m", "baseline")
+    base = _git(repository, "rev-parse", "HEAD")
+    root = tmp_path / "runtime"
+    config = AgentBusConfig(
+        workspace_dir=str(repository),
+        state_dir=str(root),
+        state_db="state.db",
+        runs_dir=str(root / "runs"),
+        worktree_root=str(tmp_path / "worktrees"),
+        provider_name="deterministic",
+    )
+    store = StateStore(config.state_database_path)
+    old = datetime.now(UTC) - timedelta(days=60)
+    store.create_run_with_tasks(
+        _run("terminal-run", repository, RunStatus.SUCCEEDED, old),
+        [
+            TaskSpec(task_id="clean", title="Clean", description="Clean worktree"),
+            TaskSpec(task_id="dirty", title="Dirty", description="Dirty worktree"),
+        ],
+    )
+    manager = GitWorktreeManager(repository, config.worktree_root_path, store)
+    clean = manager.create_task_worktree(
+        "terminal-run", "clean", base, "worker-clean"
+    )
+    dirty = manager.create_task_worktree(
+        "terminal-run", "dirty", base, "worker-dirty"
+    )
+    (Path(dirty.path) / "untracked.txt").write_text("preserve\n", encoding="utf-8")
+    assert _git(Path(clean.path), "status", "--porcelain=v1") == ""
+
+    result = RuntimeCleanup(
+        config,
+        registry_path=root / "daemons.json",
+    ).run(mode=CleanupMode.STALE)
+
+    items = {
+        item.identifier: item
+        for item in result.items
+        if item.category == "worktree"
+    }
+    assert items[clean.worktree_id].status == "removed", items[clean.worktree_id]
+    assert items[dirty.worktree_id].status == "protected"
+    assert Path(clean.path).exists() is False
+    assert (Path(dirty.path) / "untracked.txt").read_text(encoding="utf-8") == (
+        "preserve\n"
+    )
+    assert (repository / "tracked.txt").read_text(encoding="utf-8") == "baseline\n"
+
+
+def test_terminal_replay_cleanup_refuses_unknown_files(tmp_path):
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    root = tmp_path / ".agentbus-replays" / workspace.name
+    known = root / "replay-known"
+    unknown = root / "replay-unknown"
+    known.mkdir(parents=True)
+    unknown.mkdir()
+    (known / "state.db").write_bytes(b"known-state")
+    (unknown / "state.db").write_bytes(b"known-state")
+    (unknown / "notes.txt").write_text("user data\n", encoding="utf-8")
+    terminal = type(
+        "Replay",
+        (),
+        {
+            "replay_id": "replay-known",
+            "source_run_id": "run-1",
+            "status": ReplaySessionStatus.SUCCEEDED,
+        },
+    )()
+    protected = type(
+        "Replay",
+        (),
+        {
+            "replay_id": "replay-unknown",
+            "source_run_id": "run-1",
+            "status": terminal.status,
+        },
+    )()
+
+    class Store:
+        def list_replay_sessions(self, *, limit):
+            assert limit == 1_000
+            return [terminal, protected]
+
+        def get_run(self, run_id):
+            assert run_id == "run-1"
+            return type("Run", (), {"workspace": str(workspace)})()
+
+        def get_replay_session(self, replay_id):
+            return terminal if replay_id == terminal.replay_id else protected
+
+    config = _config(tmp_path / "runtime", workspace)
+    cleanup = RuntimeCleanup(config, registry_path=tmp_path / "registry.json")
+
+    items = cleanup._clean_replay_workspaces(Store(), dry_run=False)
+
+    indexed = {item.identifier: item for item in items}
+    assert indexed["replay-known"].status == "removed"
+    assert indexed["replay-unknown"].status == "protected"
+    assert known.exists() is False
+    assert (unknown / "notes.txt").read_text(encoding="utf-8") == "user data\n"
+
+
+def _git(path: Path, *arguments: str) -> str:
+    return subprocess.run(
+        ["git", *arguments],
+        cwd=path,
+        capture_output=True,
+        text=True,
+        check=True,
+        shell=False,
+    ).stdout.strip()
