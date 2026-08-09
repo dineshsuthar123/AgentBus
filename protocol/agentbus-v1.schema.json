@@ -1312,6 +1312,24 @@
           "title": "Host",
           "type": "string"
         },
+        "idle_timeout_seconds": {
+          "default": 86400,
+          "minimum": 0,
+          "title": "Idle Timeout Seconds",
+          "type": "number"
+        },
+        "log_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Log Path"
+        },
         "pid": {
           "minimum": 1,
           "title": "Pid",

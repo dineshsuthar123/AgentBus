@@ -86,6 +86,8 @@ def serve(
         heartbeat_at=started_at,
         state_database=context.state_database,
         registry_path=str(registry.path),
+        idle_timeout_seconds=idle_timeout,
+        log_path=str(config.state_database_path.resolve().parent / "logs" / "daemon.log"),
     )
     registry.register(entry)
     heartbeat = DaemonHeartbeat(registry, daemon_id)

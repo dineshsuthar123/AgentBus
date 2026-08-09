@@ -1246,6 +1246,8 @@ class DaemonRegistryEntry(ProtocolModel):
     heartbeat_at: datetime
     state_database: str
     registry_path: str
+    idle_timeout_seconds: float = Field(default=86_400, ge=0)
+    log_path: str | None = None
 
 
 class ReadyHandshake(ProtocolModel):

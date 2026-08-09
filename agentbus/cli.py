@@ -628,21 +628,74 @@ def _daemon_command(arguments: list[str]) -> int:
     parser.add_argument("--registry-path")
     parser.add_argument("--json", action="store_true")
     commands = parser.add_subparsers(dest="daemon_command", required=True)
-    commands.add_parser("status")
+    status = commands.add_parser("status")
+    status.add_argument("--config")
+    status.add_argument("--workspace")
+    start = commands.add_parser("start")
+    start.add_argument("--config")
+    start.add_argument("--workspace")
+    start.add_argument("--idle-timeout", type=float)
+    start.add_argument("--log-level", choices=("error", "warning", "info", "debug", "trace"))
+    restart = commands.add_parser("restart")
+    restart.add_argument("daemon_id", nargs="?")
+    restart.add_argument("--config")
+    restart.add_argument("--workspace")
+    restart.add_argument("--idle-timeout", type=float)
+    restart.add_argument("--log-level", choices=("error", "warning", "info", "debug", "trace"))
     stop = commands.add_parser("stop")
     stop.add_argument("daemon_id", nargs="?")
     commands.add_parser("registry")
     commands.add_parser("cleanup-stale")
+    logs = commands.add_parser("logs")
+    logs.add_argument("--tail", type=int, default=100)
+    logs.add_argument("--config")
+    logs.add_argument("--workspace")
     args = parser.parse_args(arguments)
-    from agentbus.control.registry import (
-        DaemonRegistry,
-        process_matches,
-        terminate_registered_daemon,
-        wait_for_registered_daemon_exit,
+    from agentbus.control.registry import DaemonRegistry, process_matches
+    from agentbus.product.daemon import (
+        daemon_status,
+        read_daemon_logs,
+        restart_daemon,
+        start_daemon,
+        stop_daemon,
     )
 
     registry = DaemonRegistry(args.registry_path)
-    if args.daemon_command == "cleanup-stale":
+    if args.daemon_command in {"start", "restart"}:
+        try:
+            resolved = resolve_configuration(
+                config_file=args.config,
+                cli_overrides={"workspace_dir": args.workspace},
+                workspace=args.workspace,
+            )
+            operation = start_daemon if args.daemon_command == "start" else restart_daemon
+            kwargs = {
+                "config_file": args.config,
+                "registry_path": registry.path,
+                "idle_timeout": args.idle_timeout,
+                "log_level": args.log_level,
+            }
+            if args.daemon_command == "restart":
+                kwargs["daemon_id"] = args.daemon_id
+            result = operation(resolved.config, **kwargs)
+            payload = result.to_dict()
+        except (OSError, RuntimeError, ValueError) as exc:
+            print(f"Daemon {args.daemon_command} refused: {exc}", file=sys.stderr)
+            return 2
+    elif args.daemon_command == "logs":
+        try:
+            resolved = resolve_configuration(
+                config_file=args.config,
+                cli_overrides={"workspace_dir": args.workspace},
+                workspace=args.workspace,
+            )
+            log_path = resolved.config.state_database_path.resolve().parent / "logs" / "daemon.log"
+            lines = read_daemon_logs(log_path, tail=args.tail)
+            payload = {"log_path": str(log_path), "lines": lines, "count": len(lines)}
+        except (OSError, ValueError) as exc:
+            print(f"Daemon logs error: {exc}", file=sys.stderr)
+            return 2
+    elif args.daemon_command == "cleanup-stale":
         removed = registry.cleanup_stale()
         payload = {"removed": removed, "count": len(removed)}
     elif args.daemon_command == "registry":
@@ -658,8 +711,7 @@ def _daemon_command(arguments: list[str]) -> int:
             "registry_path": str(registry.path),
             "daemons": [
                 {
-                    **item.model_dump(mode="json", exclude_none=True),
-                    "process_matches": process_matches(item),
+                    **daemon_status(item),
                 }
                 for item in registry.list()
             ],
@@ -679,8 +731,7 @@ def _daemon_command(arguments: list[str]) -> int:
                 return 2
             daemon_id = active[0].daemon_id
         try:
-            terminate_registered_daemon(registry, daemon_id)
-            wait_for_registered_daemon_exit(registry, daemon_id)
+            stop_daemon(registry_path=registry.path, daemon_id=daemon_id)
         except (OSError, RuntimeError) as exc:
             print(f"Daemon stop refused: {exc}", file=sys.stderr)
             return 2
@@ -691,15 +742,25 @@ def _daemon_command(arguments: list[str]) -> int:
         print(f"Registry: {payload['registry_path']}")
         print(f"Registered daemons: {payload['count']}")
         for item in payload["daemons"]:
-            state = "active" if item["process_matches"] else "stale"
+            state = item["lifecycle"]
             print(
                 f"{item['daemon_id']}  {state}  pid={item['pid']}  "
-                f"{item['host']}:{item['port']}"
+                f"{item['bound_address']}  uptime={item['uptime_seconds']:.1f}s  "
+                f"runs={item['active_runs']} indexes={item['active_index_jobs']}"
             )
     elif args.daemon_command == "registry":
         print(json.dumps(payload, indent=2, sort_keys=True))
     elif args.daemon_command == "cleanup-stale":
         print(f"Removed stale daemon registrations: {payload['count']}")
+    elif args.daemon_command in {"start", "restart"}:
+        state = "Started" if payload["started"] else "Already running"
+        print(f"{state}: {payload['daemon']['daemon_id']}")
+        print(f"Bound: {payload['daemon']['bound_address']}")
+        print(f"Logs: {payload['log_path']}")
+    elif args.daemon_command == "logs":
+        print(f"Daemon log: {payload['log_path']}")
+        for line in payload["lines"]:
+            print(line)
     else:
         print(f"Stop signal sent to daemon: {payload['stopped']}")
     return 0
