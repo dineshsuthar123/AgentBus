@@ -95,3 +95,17 @@ def test_registry_entry_records_idle_and_log_metadata(tmp_path):
 
     assert payload["idle_timeout_seconds"] == 300
     assert payload["log_path"].endswith("daemon.log")
+
+
+def test_daemon_lifecycle_log_uses_structured_rotating_schema(tmp_path):
+    from agentbus.product.daemon import _append_lifecycle_log
+
+    path = tmp_path / "daemon.log"
+    _append_lifecycle_log(path, "started", daemon_id="daemon-1", token="private")
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["level"] == "info"
+    assert payload["component"] == "daemon"
+    assert payload["message"] == "started"
+    assert payload["fields"]["daemon_id"] == "daemon-1"
+    assert payload["fields"]["token"] == "[REDACTED]"

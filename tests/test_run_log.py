@@ -18,10 +18,26 @@ def test_run_log_writes_valid_json_lines(tmp_path):
 
     for line in lines:
         event = json.loads(line)
+        assert event["level"] == "info"
+        assert event["component"] == "runtime"
         assert event["run_id"] == "test-run"
         assert event["type"] in {"run_started", "run_finished"}
         assert isinstance(event["data"], dict)
         datetime.fromisoformat(event["timestamp"])
+
+
+def test_run_log_includes_safe_task_and_invocation_context(tmp_path):
+    logger = RunLogger(log_dir=str(tmp_path), run_id="context-run")
+
+    logger.log(
+        "tool_failed",
+        {"task_id": "step-1", "invocation_id": "invoke-1", "error": "safe"},
+    )
+
+    event = json.loads(logger.log_file.read_text(encoding="utf-8"))
+    assert event["level"] == "error"
+    assert event["task_id"] == "step-1"
+    assert event["invocation_id"] == "invoke-1"
 
 
 def test_run_log_redacts_secret_shaped_values(tmp_path):

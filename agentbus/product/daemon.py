@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import sqlite3
 import subprocess
@@ -20,6 +19,7 @@ from agentbus.control.registry import (
     wait_for_registered_daemon_exit,
 )
 from agentbus.control.version import CONTROL_PROTOCOL_VERSION
+from agentbus.product.logging import ProductLogWriter
 from agentbus.security.redaction import redact_text
 
 
@@ -240,13 +240,9 @@ def _count_query(path: Path, query: str) -> int:
 
 
 def _append_lifecycle_log(path: Path, event: str, **fields: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "timestamp": datetime.now(UTC).isoformat(),
-        "component": "daemon",
-        "event": event,
-        **fields,
-    }
-    safe = redact_text(json.dumps(payload, sort_keys=True), max_chars=4_000) or ""
-    with path.open("a", encoding="utf-8", newline="\n") as handle:
-        handle.write(safe + "\n")
+    ProductLogWriter(path).write(
+        level="error" if event.endswith("failed") else "info",
+        component="daemon",
+        message=event,
+        fields=fields,
+    )
