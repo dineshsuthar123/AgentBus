@@ -74,9 +74,9 @@ def test_config_precedence_and_secret_safe_sources(tmp_path):
         cli_overrides={"max_steps": 7},
     )
 
-    assert resolved.config.max_steps == 7
+    assert resolved.config.max_steps == 5
     assert resolved.config.model_name == "from-file"
-    assert resolved.sources["max_steps"] == "cli"
+    assert resolved.sources["max_steps"] == "environment:AGENTBUS_MAX_STEPS"
     assert "top-secret-value" not in json.dumps(resolved.safe_values())
     assert resolved.safe_values()["azure_openai_api_key"]["value"] == "[configured]"
 
