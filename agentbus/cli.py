@@ -27,6 +27,7 @@ COMMANDS = (
     "quickstart",
     "demo",
     "cleanup",
+    "logs",
     "doctor",
     "migrate",
     "upgrade-check",
@@ -122,6 +123,8 @@ def main(argv: list[str] | None = None) -> int:
         return _demo_command(rest)
     if command == "cleanup":
         return _cleanup_command(rest)
+    if command == "logs":
+        return _logs_command(rest)
     if command == "doctor":
         return _doctor_command(rest)
     if command == "migrate":
@@ -168,6 +171,7 @@ def _root_parser() -> argparse.ArgumentParser:
         "quickstart": "Complete a temporary deterministic first task offline.",
         "demo": "List, create, or preflight compact AgentBus demo repositories.",
         "cleanup": "Remove only proven AgentBus-owned stale runtime artifacts.",
+        "logs": "Inspect bounded redacted product and run logs.",
         "doctor": "Run offline environment diagnostics.",
         "migrate": "Inspect and apply safe local database migrations.",
         "upgrade-check": "Check local package, schema, config, and extension compatibility.",
@@ -1034,6 +1038,57 @@ def _cleanup_command(arguments: list[str]) -> int:
             )
         print("Protected: " + ", ".join(result.protected_data))
     return 0 if result.ok else 1
+
+
+def _logs_command(arguments: list[str]) -> int:
+    from agentbus.product.logging import read_product_logs
+
+    parser = argparse.ArgumentParser(prog="agentbus logs")
+    parser.add_argument("--config")
+    parser.add_argument(
+        "--tail",
+        nargs="?",
+        const=100,
+        default=100,
+        type=int,
+        help="Show the last N bounded records (default: 100).",
+    )
+    parser.add_argument("--run", help="Show records for one validated run ID.")
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args(arguments)
+    try:
+        config = resolve_configuration(config_file=args.config).config
+        entries = read_product_logs(config, tail=args.tail, run_id=args.run)
+    except (OSError, ValueError) as exc:
+        payload = {"ok": False, "error": str(exc), "network_used": False}
+        print(json.dumps(payload, indent=2, sort_keys=True) if args.json else f"Logs error: {exc}")
+        return 2
+    payload = {
+        "ok": True,
+        "tail": args.tail,
+        "run_id": args.run,
+        "entries": [entry.to_dict() for entry in entries],
+        "truncated": len(entries) >= args.tail,
+        "network_used": False,
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    elif not entries:
+        print("No matching AgentBus logs found.")
+    else:
+        for entry in entries:
+            identifiers = "/".join(
+                value
+                for value in (entry.run_id, entry.task_id, entry.invocation_id)
+                if value
+            )
+            context = f" {identifiers}" if identifiers else ""
+            timestamp = entry.timestamp or "[time unavailable]"
+            print(
+                f"{timestamp} {entry.level.upper():<7} {entry.component}"
+                f"{context}: {entry.message}"
+            )
+    return 0
 
 
 if __name__ == "__main__":
