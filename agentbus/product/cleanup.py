@@ -13,8 +13,12 @@ from agentbus.execution.models import RunStatus
 from agentbus.execution.state_store import StateStore
 from agentbus.intelligence.service import RepositoryIntelligenceService
 from agentbus.replay.service import TraceReplayService
+from agentbus.replay.session import ReplaySessionStatus
 from agentbus.security.redaction import redact_text
 from agentbus.trace.retention import TraceRetentionPolicy
+from agentbus.worktrees.errors import WorktreeError
+from agentbus.worktrees.manager import GitWorktreeManager
+from agentbus.worktrees.models import WorktreeStatus
 
 
 _RUN_LOG = re.compile(
@@ -25,6 +29,13 @@ _TERMINAL_RUNS = {
     RunStatus.FAILED,
     RunStatus.CANCELLED,
 }
+_TERMINAL_REPLAYS = {
+    ReplaySessionStatus.SUCCEEDED,
+    ReplaySessionStatus.FAILED,
+    ReplaySessionStatus.CANCELLED,
+    ReplaySessionStatus.INCOMPATIBLE,
+}
+_REPLAY_COMPONENT = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 class CleanupMode(StrEnum):
@@ -118,6 +129,10 @@ class RuntimeCleanup:
                     mode=selected,
                     dry_run=dry_run,
                 )
+            )
+            items.extend(self._clean_worktrees(store, dry_run=dry_run))
+            items.extend(
+                self._clean_replay_workspaces(store, dry_run=dry_run)
             )
         items.extend(self._clean_index(mode=selected, dry_run=dry_run))
         items.extend(self._clean_traces(store, mode=selected, dry_run=dry_run))
@@ -323,6 +338,190 @@ class RuntimeCleanup:
         except Exception as exc:
             return [_refused("repository_index", "current", self.index_database, exc)]
 
+    def _clean_worktrees(
+        self,
+        store: StateStore | None,
+        *,
+        dry_run: bool,
+    ) -> list[CleanupItem]:
+        if store is None:
+            return []
+        root = self.config.worktree_root_path.resolve()
+        items: list[CleanupItem] = []
+        for record in store.list_worktrees():
+            if record.status == WorktreeStatus.REMOVED:
+                continue
+            path = Path(record.path).expanduser().resolve()
+            try:
+                run = store.get_run(record.run_id)
+            except Exception as exc:
+                items.append(_refused("worktree", record.worktree_id, path, exc))
+                continue
+            if run.status not in _TERMINAL_RUNS:
+                items.append(
+                    CleanupItem(
+                        category="worktree",
+                        identifier=record.worktree_id,
+                        location=str(path),
+                        status="protected",
+                        reason=f"Owning run is active: {run.status.value}.",
+                    )
+                )
+                continue
+            if not _is_strict_child(path, root):
+                items.append(
+                    CleanupItem(
+                        category="worktree",
+                        identifier=record.worktree_id,
+                        location=str(path),
+                        status="protected",
+                        reason="Persisted worktree is outside the configured AgentBus root.",
+                    )
+                )
+                continue
+            try:
+                manager = GitWorktreeManager(record.repository_root, root, store)
+                if not manager.is_clean(record):
+                    items.append(
+                        CleanupItem(
+                            category="worktree",
+                            identifier=record.worktree_id,
+                            location=str(path),
+                            status="protected",
+                            reason="Worktree contains uncommitted changes.",
+                        )
+                    )
+                    continue
+                if dry_run:
+                    items.append(
+                        CleanupItem(
+                            category="worktree",
+                            identifier=record.worktree_id,
+                            location=str(path),
+                            status="planned",
+                            reason="Clean worktree for a terminal run would be removed.",
+                        )
+                    )
+                    continue
+                current_run = store.get_run(record.run_id)
+                if current_run.status not in _TERMINAL_RUNS:
+                    items.append(
+                        CleanupItem(
+                            category="worktree",
+                            identifier=record.worktree_id,
+                            location=str(path),
+                            status="protected",
+                            reason="Owning run became active during cleanup.",
+                        )
+                    )
+                    continue
+                manager.mark_cleanup_pending(record.worktree_id)
+                manager.remove(record.worktree_id)
+                items.append(
+                    CleanupItem(
+                        category="worktree",
+                        identifier=record.worktree_id,
+                        location=str(path),
+                        status="removed",
+                        reason="Removed a clean, validated AgentBus worktree.",
+                    )
+                )
+            except WorktreeError as exc:
+                items.append(_refused("worktree", record.worktree_id, path, exc))
+        return items
+
+    def _clean_replay_workspaces(
+        self,
+        store: StateStore | None,
+        *,
+        dry_run: bool,
+    ) -> list[CleanupItem]:
+        if store is None:
+            return []
+        items: list[CleanupItem] = []
+        for session in store.list_replay_sessions(limit=1_000):
+            try:
+                run = store.get_run(session.source_run_id)
+            except Exception as exc:
+                items.append(
+                    _refused("replay_workspace", session.replay_id, "[unknown]", exc)
+                )
+                continue
+            workspace = Path(run.workspace).expanduser().resolve()
+            if not workspace.is_dir():
+                continue
+            replay_root = (
+                workspace.parent / ".agentbus-replays" / workspace.name
+            ).resolve()
+            component = _safe_replay_component(session.replay_id)
+            candidate = (replay_root / component).resolve()
+            if not candidate.exists():
+                continue
+            if session.status not in _TERMINAL_REPLAYS:
+                items.append(
+                    CleanupItem(
+                        category="replay_workspace",
+                        identifier=session.replay_id,
+                        location=str(candidate),
+                        status="protected",
+                        reason=f"Replay session is active: {session.status.value}.",
+                    )
+                )
+                continue
+            safe, reason = _known_replay_shape(candidate, replay_root)
+            if not safe:
+                items.append(
+                    CleanupItem(
+                        category="replay_workspace",
+                        identifier=session.replay_id,
+                        location=str(candidate),
+                        status="protected",
+                        reason=reason,
+                    )
+                )
+                continue
+            if dry_run:
+                items.append(
+                    CleanupItem(
+                        category="replay_workspace",
+                        identifier=session.replay_id,
+                        location=str(candidate),
+                        status="planned",
+                        reason="Known-shape workspace for a terminal replay would be removed.",
+                    )
+                )
+                continue
+            current = store.get_replay_session(session.replay_id)
+            if current.status not in _TERMINAL_REPLAYS:
+                items.append(
+                    CleanupItem(
+                        category="replay_workspace",
+                        identifier=session.replay_id,
+                        location=str(candidate),
+                        status="protected",
+                        reason="Replay became active during cleanup.",
+                    )
+                )
+                continue
+            try:
+                reclaimed = _remove_known_replay(candidate, replay_root)
+            except OSError as exc:
+                items.append(
+                    _refused("replay_workspace", session.replay_id, candidate, exc)
+                )
+                continue
+            items.append(
+                CleanupItem(
+                    category="replay_workspace",
+                    identifier=session.replay_id,
+                    location=str(candidate),
+                    status="removed",
+                    reason="Removed a terminal, known-shape replay workspace.",
+                    reclaimed_bytes=reclaimed,
+                )
+            )
+        return items
+
     def _clean_traces(
         self,
         store: StateStore | None,
@@ -381,6 +580,51 @@ def _unlink_direct_child(path: Path, root: Path) -> None:
     if resolved.parent != resolved_root or path.is_symlink() or not path.is_file():
         raise OSError("Cleanup refused a run log outside its exact managed directory.")
     path.unlink()
+
+
+def _safe_replay_component(value: str) -> str:
+    normalized = _REPLAY_COMPONENT.sub("-", value).strip("-.")
+    if not normalized:
+        raise ValueError("Replay ID cannot form a safe cleanup path.")
+    return normalized[:128]
+
+
+def _known_replay_shape(candidate: Path, replay_root: Path) -> tuple[bool, str]:
+    if not _is_strict_child(candidate, replay_root):
+        return False, "Replay workspace escaped its derived AgentBus root."
+    if candidate.is_symlink() or not candidate.is_dir():
+        return False, "Replay workspace is a link or is not a directory."
+    allowed = {"state.db", "state.db-shm", "state.db-wal"}
+    try:
+        children = tuple(candidate.iterdir())
+    except OSError:
+        return False, "Replay workspace could not be inspected."
+    if any(child.is_symlink() for child in children):
+        return False, "Replay workspace contains a symbolic link."
+    unexpected = sorted(child.name for child in children if child.name not in allowed)
+    if unexpected:
+        return False, "Replay workspace contains unknown files and was preserved."
+    if any(not child.is_file() for child in children):
+        return False, "Replay workspace contains an unexpected directory."
+    return True, "Replay workspace contains only known isolated state files."
+
+
+def _remove_known_replay(candidate: Path, replay_root: Path) -> int:
+    safe, reason = _known_replay_shape(candidate, replay_root)
+    if not safe:
+        raise OSError(reason)
+    reclaimed = 0
+    for child in candidate.iterdir():
+        reclaimed += child.stat().st_size
+        child.unlink()
+    candidate.rmdir()
+    return reclaimed
+
+
+def _is_strict_child(path: Path, root: Path) -> bool:
+    resolved = path.resolve()
+    parent = root.resolve()
+    return resolved != parent and resolved.is_relative_to(parent)
 
 
 def _refused(
