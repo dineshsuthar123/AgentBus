@@ -4,6 +4,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -91,39 +92,54 @@ def start_daemon(
     start_new_session = os.name != "nt"
     if os.name == "nt":
         creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
-    process = subprocess.Popen(
-        command,
-        cwd=config.workspace_path,
-        env=os.environ.copy(),
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        shell=False,
-        close_fds=True,
-        start_new_session=start_new_session,
-        creationflags=creationflags,
-    )
-    deadline = time.monotonic() + startup_timeout
-    entry: DaemonRegistryEntry | None = None
-    while time.monotonic() < deadline:
-        if process.poll() is not None:
-            break
-        candidates = [
-            item
-            for item in registry.list()
-            if item.daemon_id not in before and item.pid == process.pid and process_matches(item)
-        ]
-        if candidates:
-            entry = candidates[-1]
-            break
-        time.sleep(0.05)
-    if entry is None:
-        if process.poll() is None:
-            process.terminate()
-        _append_lifecycle_log(log_path, "start_failed", pid=process.pid)
-        raise RuntimeError(
-            "AgentBus daemon did not become ready. Run `agentbus doctor` and verify the ide extra."
+    diagnostic = tempfile.TemporaryFile(mode="w+b")
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=config.workspace_path,
+            env=os.environ.copy(),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=diagnostic,
+            shell=False,
+            close_fds=True,
+            start_new_session=start_new_session,
+            creationflags=creationflags,
         )
+        deadline = time.monotonic() + startup_timeout
+        entry: DaemonRegistryEntry | None = None
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                break
+            candidates = [
+                item
+                for item in registry.list()
+                if item.daemon_id not in before
+                and item.pid == process.pid
+                and process_matches(item)
+            ]
+            if candidates:
+                entry = candidates[-1]
+                break
+            time.sleep(0.05)
+        if entry is None:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass
+            detail = _read_startup_diagnostic(diagnostic)
+            _append_lifecycle_log(log_path, "start_failed", pid=process.pid)
+            message = (
+                "AgentBus daemon did not become ready. Run `agentbus doctor` "
+                "and verify the ide extra."
+            )
+            if detail:
+                message += f" Safe diagnostic: {detail}"
+            raise RuntimeError(message)
+    finally:
+        diagnostic.close()
     _append_lifecycle_log(log_path, "started", daemon_id=entry.daemon_id, pid=entry.pid)
     return DaemonStartResult(entry=entry, started=True, log_path=log_path)
 
@@ -246,3 +262,18 @@ def _append_lifecycle_log(path: Path, event: str, **fields: Any) -> None:
         message=event,
         fields=fields,
     )
+
+
+def _read_startup_diagnostic(handle) -> str:
+    try:
+        handle.flush()
+        handle.seek(0, os.SEEK_END)
+        size = handle.tell()
+        handle.seek(max(0, size - 8_000))
+        raw = handle.read(8_000).decode("utf-8", errors="replace")
+    except (OSError, ValueError):
+        return ""
+    safe = redact_text(raw[-1_500:].strip(), max_chars=2_000) or ""
+    if len(safe) <= 500:
+        return safe
+    return "[truncated]\n" + safe[-488:]

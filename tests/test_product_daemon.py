@@ -1,5 +1,6 @@
 import json
 import os
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -11,7 +12,12 @@ from agentbus.control.registry import (
     process_start_identity,
 )
 from agentbus.execution.state_store import StateStore
-from agentbus.product.daemon import daemon_status, read_daemon_logs, start_daemon
+from agentbus.product.daemon import (
+    _read_startup_diagnostic,
+    daemon_status,
+    read_daemon_logs,
+    start_daemon,
+)
 
 
 def _entry(tmp_path, **updates):
@@ -109,3 +115,14 @@ def test_daemon_lifecycle_log_uses_structured_rotating_schema(tmp_path):
     assert payload["message"] == "started"
     assert payload["fields"]["daemon_id"] == "daemon-1"
     assert payload["fields"]["token"] == "[REDACTED]"
+
+
+def test_daemon_startup_diagnostic_is_bounded_and_redacted():
+    with tempfile.TemporaryFile(mode="w+b") as diagnostic:
+        diagnostic.write(b"A" * 9_000 + b"\nAPI_KEY=private-value\nfinal failure")
+
+        detail = _read_startup_diagnostic(diagnostic)
+
+    assert len(detail) <= 500
+    assert "private-value" not in detail
+    assert "final failure" in detail
