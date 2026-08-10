@@ -38,6 +38,7 @@ dev = [
   "build>=1.2",
   "httpx>=0.28",
   "pytest>=8",
+  "setuptools>=69",
   "wheel>=0.43",
 ]
 entra = ["azure-identity>=1.17"]

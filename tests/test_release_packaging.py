@@ -28,6 +28,7 @@ def test_pyproject_metadata_version_and_entry_points_are_release_ready():
     assert all("openai" not in dependency for dependency in project["dependencies"])
     assert "pytest>=8" not in project["dependencies"]
     assert "pytest>=8" in project["optional-dependencies"]["dev"]
+    assert "setuptools>=69" in project["optional-dependencies"]["dev"]
     assert project["requires-python"] == ">=3.11"
 
 

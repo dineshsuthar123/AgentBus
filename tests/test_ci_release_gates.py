@@ -51,3 +51,17 @@ def test_required_ci_never_invokes_live_provider_or_publication() -> None:
     assert "npm publish" not in workflow
     assert "twine" not in workflow
     assert "vsce publish" not in workflow
+
+
+def test_vscode_ci_installs_protocol_and_electron_python_dependencies() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    compile_job = workflow.split("  vscode-compile:", 1)[1].split(
+        "  vscode-unit:", 1
+    )[0]
+    electron_job = workflow.split("  vscode-electron:", 1)[1].split(
+        "  vsix-audit:", 1
+    )[0]
+
+    assert "actions/setup-python@v5" in compile_job
+    assert "python -m pip install -e ." in compile_job
+    assert 'python -m pip install -e ".[dev,ide]"' in electron_job

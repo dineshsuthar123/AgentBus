@@ -328,11 +328,18 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: extensions/vscode/package-lock.json
+      - name: Install protocol generator dependencies
+        run: python -m pip install -e .
       - name: Install extension dependencies
         working-directory: extensions/vscode
         run: npm ci
@@ -380,8 +387,8 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: extensions/vscode/package-lock.json
-      - name: Install control plane
-        run: python -m pip install -e ".[ide]"
+      - name: Install control plane and test runtime
+        run: python -m pip install -e ".[dev,ide]"
       - name: Install extension dependencies
         working-directory: extensions/vscode
         run: npm ci
