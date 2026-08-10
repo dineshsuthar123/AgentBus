@@ -63,5 +63,5 @@ def test_vscode_ci_installs_protocol_and_electron_python_dependencies() -> None:
     )[0]
 
     assert "actions/setup-python@v5" in compile_job
-    assert "python -m pip install -e ." in compile_job
+    assert 'python -m pip install -e ".[ide]"' in compile_job
     assert 'python -m pip install -e ".[dev,ide]"' in electron_job
