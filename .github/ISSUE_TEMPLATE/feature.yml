@@ -1,0 +1,31 @@
+name: Feature request
+description: Propose a focused product capability or workflow improvement.
+title: "feat: "
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: Describe the user problem and safety tradeoffs. Do not include private source, prompts, provider responses, or credentials.
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+    validations:
+      required: true
+  - type: textarea
+    id: safety
+    attributes:
+      label: Safety and compatibility impact
+      description: Note workspace, tool, approval, provider, protocol, schema, migration, or cleanup implications.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

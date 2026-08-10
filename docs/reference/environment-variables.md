@@ -1,0 +1,56 @@
+# Environment variables
+
+Environment variables override config files and CLI values. AgentBus does not
+load `.env`; set variables in the process that launches the CLI or daemon.
+
+## Runtime and storage
+
+`AGENTBUS_WORKSPACE`, `AGENTBUS_RUNS_DIR`, `AGENTBUS_STATE_DIR`,
+`AGENTBUS_STATE_DB`, `AGENTBUS_WORKTREE_ROOT`, `AGENTBUS_KEEP_WORKTREES`,
+`AGENTBUS_MAX_STEPS`, `AGENTBUS_COMMAND_TIMEOUT`,
+`AGENTBUS_MAX_HISTORY_CHARS`, `AGENTBUS_DURABLE_EXECUTION`,
+`AGENTBUS_PARALLEL_EXECUTION`, `AGENTBUS_MAX_WORKERS`,
+`AGENTBUS_WORKER_LEASE_SECONDS`, `AGENTBUS_WORKER_HEARTBEAT_SECONDS`, and
+`AGENTBUS_INTEGRATION_STRATEGY` control local execution.
+
+## Safety, index, daemon, and logs
+
+`AGENTBUS_POLICY_MODE` must remain `enforce` during the public beta.
+`AGENTBUS_REPOSITORY_INTELLIGENCE`, `AGENTBUS_SEMANTIC_RETRIEVAL`,
+`AGENTBUS_TRACE_RETENTION_DAYS`, `AGENTBUS_DAEMON_AUTO_START`,
+`AGENTBUS_DAEMON_IDLE_TIMEOUT_SECONDS`, `AGENTBUS_LOG_LEVEL`, and
+`AGENTBUS_LOG_RETENTION_FILES` control optional local services and retention.
+
+## Provider routing
+
+`AGENTBUS_PROVIDER`, `AGENTBUS_FALLBACK_PROVIDER`,
+`AGENTBUS_ENABLE_PROVIDER_FALLBACK`, `AGENTBUS_MODEL`,
+`AGENTBUS_OLLAMA_URL`, `AGENTBUS_PLANNER_MODEL`, `AGENTBUS_CODER_MODEL`,
+`AGENTBUS_REVIEWER_MODEL`, `AGENTBUS_SUMMARIZER_MODEL`,
+`AGENTBUS_MODEL_TIMEOUT_SECONDS`, `AGENTBUS_MODEL_MAX_RETRIES`,
+`AGENTBUS_MODEL_RETRY_BASE_SECONDS`, and
+`AGENTBUS_MODEL_RETRY_MAX_SECONDS` configure normalized routing.
+
+## Azure OpenAI
+
+`AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`,
+`AZURE_OPENAI_AUTH_MODE`, `AZURE_OPENAI_API_MODE`,
+`AZURE_OPENAI_DEFAULT_DEPLOYMENT`, `AZURE_OPENAI_PLANNER_DEPLOYMENT`,
+`AZURE_OPENAI_CODER_DEPLOYMENT`, `AZURE_OPENAI_REVIEWER_DEPLOYMENT`,
+`AZURE_OPENAI_SUMMARIZER_DEPLOYMENT`, `AZURE_OPENAI_TIMEOUT_SECONDS`, and
+`AZURE_OPENAI_MAX_RETRIES` configure Azure.
+
+The API key is the only credential in this list. Never place it in Git, config
+files, command arguments, issue reports, support bundles, or screenshots.
+
+## Deterministic development and evaluation
+
+`AGENTBUS_DETERMINISTIC_PROFILE` selects a built-in offline profile. Latency and
+failure variables are intended for bounded tests, not normal user setup.
+Evaluation-specific limits use `AGENTBUS_EVAL_MAX_REQUESTS`,
+`AGENTBUS_EVAL_MAX_TOKENS`, `AGENTBUS_EVAL_TIMEOUT_SECONDS`,
+`AGENTBUS_EVAL_RESULTS_DIR`, `AGENTBUS_EVAL_FIXTURE_ROOT`, and
+`AGENTBUS_EVAL_PRESERVE_FIXTURES`.
+
+Use `.env.example` only as a placeholder reference. AgentBus intentionally does
+not load it.

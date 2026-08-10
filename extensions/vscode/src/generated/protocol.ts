@@ -209,6 +209,8 @@ export interface DaemonRegistryEntry {
   "heartbeat_at": string;
   "state_database": string;
   "registry_path": string;
+  "idle_timeout_seconds"?: number;
+  "log_path"?: string | null;
 }
 
 export type DependencyKind = "imports" | "exports" | "calls" | "references" | "inherits" | "implements" | "instantiates" | "reads" | "writes" | "configures" | "tests" | "owns" | "generated_from";

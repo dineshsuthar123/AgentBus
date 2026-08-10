@@ -1,0 +1,40 @@
+name: Provider problem
+description: Report deterministic, Ollama, or Azure routing behavior safely.
+title: "provider: "
+labels: [provider]
+body:
+  - type: markdown
+    attributes:
+      value: Never include API keys, bearer tokens, endpoint query credentials, prompts, full provider responses, or private source.
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Provider
+      options: [deterministic, Ollama, Azure OpenAI]
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: AgentBus, OS, and Python versions
+    validations:
+      required: true
+  - type: textarea
+    id: routing
+    attributes:
+      label: Redacted routing summary
+      description: Use reviewed agentbus providers show --json output.
+      render: json
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction and stable error code
+    validations:
+      required: true
+  - type: checkboxes
+    id: live
+    attributes:
+      label: Live-call status
+      options:
+        - label: I explicitly state whether a live provider request was made and understand it may incur cost.
+          required: true

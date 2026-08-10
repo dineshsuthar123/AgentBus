@@ -175,7 +175,19 @@ export class CommandController implements vscode.Disposable {
     command("agentbus.stopDaemon", () => this.stopDaemon());
     command("agentbus.openLogs", () => this.output.show());
     context.subscriptions.push(...this.disposables);
-    void this.connect();
+    if (vscode.workspace.isTrusted) {
+      void this.connect();
+    } else {
+      this.status.text = "$(shield) AgentBus restricted";
+      this.output.appendLine(
+        "AgentBus daemon startup is paused until this workspace is trusted."
+      );
+    }
+    this.disposables.push(
+      vscode.workspace.onDidGrantWorkspaceTrust(() => {
+        void this.connect();
+      })
+    );
   }
 
   public dispose(): void {

@@ -64,6 +64,7 @@ class AgentBusConfig:
         default_factory=_default_tool_resource_budget
     )
     max_history_chars: int = 25_000
+    durable_execution: bool = True
     parallel_execution: bool = False
     max_workers: int = 1
     worker_lease_seconds: float = 120.0
@@ -75,6 +76,17 @@ class AgentBusConfig:
         default=(),
         repr=False,
     )
+    policy_mode: str = "enforce"
+    repository_intelligence: bool = True
+    semantic_retrieval: bool = False
+    trace_retention_days: int = 30
+    daemon_auto_start: bool = True
+    daemon_idle_timeout_seconds: int = 86_400
+    log_level: str = "warning"
+    log_retention_files: int = 5
+    vscode_default_workflow: str = "multi"
+    vscode_default_durable: bool = True
+    vscode_default_parallel: bool = False
 
     provider_name: str = "ollama"
     fallback_provider_name: str = "ollama"
@@ -133,6 +145,9 @@ class AgentBusConfig:
                 cls.max_history_chars,
                 minimum=1,
             ),
+            durable_execution=_env_bool(
+                "AGENTBUS_DURABLE_EXECUTION", cls.durable_execution
+            ),
             parallel_execution=_env_bool(
                 "AGENTBUS_PARALLEL_EXECUTION", cls.parallel_execution
             ),
@@ -153,6 +168,37 @@ class AgentBusConfig:
                 _env_text("AGENTBUS_INTEGRATION_STRATEGY")
                 or cls.integration_strategy
             ).lower(),
+            policy_mode=(
+                _env_text("AGENTBUS_POLICY_MODE") or cls.policy_mode
+            ).lower(),
+            repository_intelligence=_env_bool(
+                "AGENTBUS_REPOSITORY_INTELLIGENCE",
+                cls.repository_intelligence,
+            ),
+            semantic_retrieval=_env_bool(
+                "AGENTBUS_SEMANTIC_RETRIEVAL", cls.semantic_retrieval
+            ),
+            trace_retention_days=_env_int(
+                "AGENTBUS_TRACE_RETENTION_DAYS",
+                cls.trace_retention_days,
+                minimum=1,
+            ),
+            daemon_auto_start=_env_bool(
+                "AGENTBUS_DAEMON_AUTO_START", cls.daemon_auto_start
+            ),
+            daemon_idle_timeout_seconds=_env_int(
+                "AGENTBUS_DAEMON_IDLE_TIMEOUT_SECONDS",
+                cls.daemon_idle_timeout_seconds,
+                minimum=0,
+            ),
+            log_level=(
+                _env_text("AGENTBUS_LOG_LEVEL") or cls.log_level
+            ).lower(),
+            log_retention_files=_env_int(
+                "AGENTBUS_LOG_RETENTION_FILES",
+                cls.log_retention_files,
+                minimum=1,
+            ),
             provider_name=(
                 _env_text("AGENTBUS_PROVIDER") or cls.provider_name
             ).lower(),
@@ -362,6 +408,28 @@ class AgentBusConfig:
             )
         if self.integration_strategy != "cherry-pick":
             raise ValueError("AGENTBUS_INTEGRATION_STRATEGY must be 'cherry-pick'")
+        if self.policy_mode != "enforce":
+            raise ValueError(
+                "AGENTBUS_POLICY_MODE must be 'enforce' during the public beta"
+            )
+        if self.trace_retention_days < 1:
+            raise ValueError("AGENTBUS_TRACE_RETENTION_DAYS must be at least 1")
+        if self.daemon_idle_timeout_seconds < 0:
+            raise ValueError(
+                "AGENTBUS_DAEMON_IDLE_TIMEOUT_SECONDS must be at least 0"
+            )
+        if self.log_level not in {"error", "warning", "info", "debug", "trace"}:
+            raise ValueError(
+                "AGENTBUS_LOG_LEVEL must be error, warning, info, debug, or trace"
+            )
+        if self.log_retention_files < 1 or self.log_retention_files > 100:
+            raise ValueError(
+                "AGENTBUS_LOG_RETENTION_FILES must be between 1 and 100"
+            )
+        if self.vscode_default_workflow not in {"single", "multi"}:
+            raise ValueError(
+                "vscode_default_workflow must be 'single' or 'multi'"
+            )
         if not math.isfinite(self.model_timeout_seconds) or self.model_timeout_seconds <= 0:
             raise ValueError("AGENTBUS_MODEL_TIMEOUT_SECONDS must be greater than 0")
         if self.model_max_retries < 0:

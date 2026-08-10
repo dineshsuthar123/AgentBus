@@ -1,0 +1,39 @@
+name: Installation problem
+description: Report package, Python, optional-extra, or setup failures.
+title: "install: "
+labels: [installation]
+body:
+  - type: markdown
+    attributes:
+      value: Do not paste environment files, credentials, private paths, package-index tokens, or complete pip configuration.
+  - type: input
+    id: version
+    attributes:
+      label: AgentBus version or artifact name
+    validations:
+      required: true
+  - type: input
+    id: os-python
+    attributes:
+      label: OS and Python version
+    validations:
+      required: true
+  - type: dropdown
+    id: source
+    attributes:
+      label: Installation source
+      options: [Built wheel, Source checkout, Package index]
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Sanitized command and error
+      description: Remove usernames, tokens, private indexes, and absolute personal paths.
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Sanitized doctor output
+      render: json

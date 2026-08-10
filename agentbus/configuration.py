@@ -25,6 +25,7 @@ ENVIRONMENT_FIELDS: dict[str, str] = {
     "AGENTBUS_MAX_STEPS": "max_steps",
     "AGENTBUS_COMMAND_TIMEOUT": "command_timeout_seconds",
     "AGENTBUS_MAX_HISTORY_CHARS": "max_history_chars",
+    "AGENTBUS_DURABLE_EXECUTION": "durable_execution",
     "AGENTBUS_PARALLEL_EXECUTION": "parallel_execution",
     "AGENTBUS_MAX_WORKERS": "max_workers",
     "AGENTBUS_WORKER_LEASE_SECONDS": "worker_lease_seconds",
@@ -32,6 +33,14 @@ ENVIRONMENT_FIELDS: dict[str, str] = {
     "AGENTBUS_WORKTREE_ROOT": "worktree_root",
     "AGENTBUS_KEEP_WORKTREES": "keep_worktrees",
     "AGENTBUS_INTEGRATION_STRATEGY": "integration_strategy",
+    "AGENTBUS_POLICY_MODE": "policy_mode",
+    "AGENTBUS_REPOSITORY_INTELLIGENCE": "repository_intelligence",
+    "AGENTBUS_SEMANTIC_RETRIEVAL": "semantic_retrieval",
+    "AGENTBUS_TRACE_RETENTION_DAYS": "trace_retention_days",
+    "AGENTBUS_DAEMON_AUTO_START": "daemon_auto_start",
+    "AGENTBUS_DAEMON_IDLE_TIMEOUT_SECONDS": "daemon_idle_timeout_seconds",
+    "AGENTBUS_LOG_LEVEL": "log_level",
+    "AGENTBUS_LOG_RETENTION_FILES": "log_retention_files",
     "AGENTBUS_PROVIDER": "provider_name",
     "AGENTBUS_FALLBACK_PROVIDER": "fallback_provider_name",
     "AGENTBUS_ENABLE_PROVIDER_FALLBACK": "enable_provider_fallback",
@@ -57,9 +66,13 @@ ENVIRONMENT_FIELDS: dict[str, str] = {
 }
 
 _BOOLEAN_FIELDS = {
+    "durable_execution",
     "parallel_execution",
     "keep_worktrees",
     "enable_provider_fallback",
+    "repository_intelligence",
+    "semantic_retrieval",
+    "daemon_auto_start",
 }
 _INTEGER_FIELDS = {
     "max_steps",
@@ -68,6 +81,9 @@ _INTEGER_FIELDS = {
     "max_workers",
     "model_max_retries",
     "azure_openai_max_retries",
+    "trace_retention_days",
+    "daemon_idle_timeout_seconds",
+    "log_retention_files",
 }
 _FLOAT_FIELDS = {
     "worker_lease_seconds",
@@ -83,6 +99,8 @@ _LOWERCASE_FIELDS = {
     "integration_strategy",
     "azure_openai_auth_mode",
     "azure_openai_api_mode",
+    "policy_mode",
+    "log_level",
 }
 
 
@@ -91,6 +109,7 @@ class ResolvedConfiguration:
     config: AgentBusConfig
     sources: dict[str, str]
     config_file: Path | None = None
+    layer_paths: dict[str, Path | None] | None = None
 
     def safe_values(self) -> dict[str, dict[str, Any]]:
         values = asdict(self.config)
@@ -121,35 +140,79 @@ def resolve_configuration(
     config_file: str | Path | None = None,
     cli_overrides: Mapping[str, Any] | None = None,
     environ: Mapping[str, str] | None = None,
+    workspace: str | Path | None = None,
+    user_config_file: str | Path | None = None,
+    workspace_config_file: str | Path | None = None,
+    discover: bool = True,
 ) -> ResolvedConfiguration:
-    """Resolve defaults < explicit file < environment < CLI without dotenv search."""
+    """Resolve documented product layers without parent or dotenv searches."""
 
     defaults = AgentBusConfig()
     values = asdict(defaults)
     sources = {name: "default" for name in values}
     loaded_path: Path | None = None
+    environment = os.environ if environ is None else environ
+    overrides = dict(cli_overrides or {})
+    discovery_root = _workspace_discovery_root(
+        workspace=workspace,
+        cli_overrides=overrides,
+        environ=environment,
+    )
+    layer_paths: dict[str, Path | None] = {
+        "user": None,
+        "workspace": None,
+        "explicit": None,
+    }
+
+    if discover:
+        user_path = (
+            Path(user_config_file).expanduser()
+            if user_config_file is not None
+            else default_user_config_path(environment)
+        )
+        workspace_path = (
+            Path(workspace_config_file).expanduser()
+            if workspace_config_file is not None
+            else discovery_root / ".agentbus" / "config.toml"
+        )
+        for layer, path in (("user", user_path), ("workspace", workspace_path)):
+            if not path.exists():
+                continue
+            canonical = _canonical_config_path(
+                path,
+                workspace_root=discovery_root if layer == "workspace" else None,
+            )
+            document = _load_file(canonical)
+            if layer == "workspace":
+                _validate_workspace_document(document, discovery_root)
+            _apply_layer(values, sources, document, f"{layer}:{canonical}")
+            layer_paths[layer] = canonical
+            loaded_path = canonical
 
     if config_file is not None:
-        loaded_path = Path(config_file).expanduser().resolve(strict=True)
-        for name, value in _load_file(loaded_path).items():
-            values[name] = value
-            sources[name] = f"config:{loaded_path}"
+        loaded_path = _canonical_config_path(Path(config_file).expanduser())
+        _apply_layer(
+            values,
+            sources,
+            _load_file(loaded_path),
+            f"explicit:{loaded_path}",
+        )
+        layer_paths["explicit"] = loaded_path
 
-    environment = os.environ if environ is None else environ
-    for variable, field_name in ENVIRONMENT_FIELDS.items():
-        raw = environment.get(variable)
-        if raw is None or not str(raw).strip():
-            continue
-        values[field_name] = _parse_environment_value(variable, field_name, str(raw))
-        sources[field_name] = f"environment:{variable}"
-
-    for name, value in (cli_overrides or {}).items():
+    for name, value in overrides.items():
         if value is None:
             continue
         if name not in values:
             raise ValueError(f"Unknown AgentBus configuration option: {name}")
         values[name] = value
         sources[name] = "cli"
+
+    for variable, field_name in ENVIRONMENT_FIELDS.items():
+        raw = environment.get(variable)
+        if raw is None or not str(raw).strip():
+            continue
+        values[field_name] = _parse_environment_value(variable, field_name, str(raw))
+        sources[field_name] = f"environment:{variable}"
 
     values["mcp_server_configs"] = _coerce_mcp_server_configs(
         values["mcp_server_configs"]
@@ -158,13 +221,22 @@ def resolve_configuration(
         values["tool_resource_budget"]
     )
     config = AgentBusConfig(**values)
-    return ResolvedConfiguration(config=config, sources=sources, config_file=loaded_path)
+    return ResolvedConfiguration(
+        config=config,
+        sources=sources,
+        config_file=loaded_path,
+        layer_paths=layer_paths,
+    )
 
 
 def configuration_paths(resolved: ResolvedConfiguration) -> dict[str, str | None]:
     config = resolved.config
+    layers = resolved.layer_paths or {}
     return {
         "config_file": str(resolved.config_file) if resolved.config_file else None,
+        "user_config": _optional_path(layers.get("user")),
+        "workspace_config": _optional_path(layers.get("workspace")),
+        "explicit_config": _optional_path(layers.get("explicit")),
         "workspace": str(config.workspace_path),
         "state_database": str(config.state_database_path.expanduser().resolve()),
         "runs_directory": str(Path(config.runs_dir).expanduser().resolve()),
@@ -196,7 +268,89 @@ def _load_file(path: Path) -> dict[str, Any]:
     unknown = sorted(set(raw) - allowed)
     if unknown:
         raise ValueError("Unknown AgentBus config option(s): " + ", ".join(unknown))
+    sensitive = sorted(name for name in raw if is_sensitive_key(name))
+    if sensitive:
+        raise ValueError(
+            "AgentBus config files cannot contain credentials: "
+            + ", ".join(sensitive)
+        )
     return dict(raw)
+
+
+def default_user_config_path(environ: Mapping[str, str] | None = None) -> Path:
+    environment = os.environ if environ is None else environ
+    if os.name == "nt":
+        base = environment.get("APPDATA")
+        root = Path(base).expanduser() if base else Path.home() / "AppData" / "Roaming"
+        return root / "AgentBus" / "config.toml"
+    base = environment.get("XDG_CONFIG_HOME")
+    root = Path(base).expanduser() if base else Path.home() / ".config"
+    return root / "agentbus" / "config.toml"
+
+
+def default_workspace_config_path(workspace: str | Path) -> Path:
+    return Path(workspace).expanduser().resolve() / ".agentbus" / "config.toml"
+
+
+def _workspace_discovery_root(
+    *,
+    workspace: str | Path | None,
+    cli_overrides: Mapping[str, Any],
+    environ: Mapping[str, str],
+) -> Path:
+    selected = workspace or cli_overrides.get("workspace_dir")
+    if selected is None:
+        selected = environ.get("AGENTBUS_WORKSPACE")
+    return Path(selected or Path.cwd()).expanduser().resolve()
+
+
+def _canonical_config_path(
+    path: Path,
+    *,
+    workspace_root: Path | None = None,
+) -> Path:
+    try:
+        canonical = path.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError(f"Unable to resolve AgentBus config file: {path}") from exc
+    if not canonical.is_file():
+        raise ValueError(f"AgentBus config path is not a file: {path}")
+    if workspace_root is not None:
+        root = workspace_root.resolve()
+        if not canonical.is_relative_to(root):
+            raise ValueError(
+                "Workspace configuration resolves outside the workspace: "
+                f"{path}"
+            )
+    return canonical
+
+
+def _validate_workspace_document(document: Mapping[str, Any], root: Path) -> None:
+    configured_workspace = document.get("workspace_dir")
+    if configured_workspace is None:
+        return
+    target = Path(str(configured_workspace)).expanduser()
+    if not target.is_absolute():
+        target = root / target
+    if target.resolve() != root.resolve():
+        raise ValueError(
+            "Workspace configuration cannot redirect execution outside its workspace"
+        )
+
+
+def _apply_layer(
+    values: dict[str, Any],
+    sources: dict[str, str],
+    document: Mapping[str, Any],
+    source: str,
+) -> None:
+    for name, value in document.items():
+        values[name] = value
+        sources[name] = source
+
+
+def _optional_path(value: Path | None) -> str | None:
+    return str(value) if value is not None else None
 
 
 def _parse_environment_value(variable: str, field_name: str, raw: str) -> Any:

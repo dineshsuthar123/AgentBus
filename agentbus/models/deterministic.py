@@ -385,7 +385,7 @@ class DeterministicProvider:
         return {
             "goal": "Complete a deterministic offline AgentBus execution.",
             "steps": steps,
-            "test_strategy": "Run the repository's detected pytest command.",
+            "test_strategy": "Run the repository's standard-library unittest suite.",
             "done_criteria": [
                 "All planned files are created.",
                 "Verification and review pass.",
@@ -460,9 +460,13 @@ class DeterministicProvider:
                         "arguments": {
                             "path": "test_agentbus_result.py",
                             "content": (
+                                "import unittest\n\n"
                                 "from agentbus_result import add\n\n\n"
-                                "def test_add() -> None:\n"
-                                "    assert add(2, 3) == 5\n"
+                                "class AgentBusResultTest(unittest.TestCase):\n"
+                                "    def test_add(self) -> None:\n"
+                                "        self.assertEqual(add(2, 3), 5)\n\n\n"
+                                "if __name__ == '__main__':\n"
+                                "    unittest.main()\n"
                             ),
                         },
                         "expected_capabilities": [
@@ -478,7 +482,13 @@ class DeterministicProvider:
                         "tool_name": "test.execute",
                         "arguments": {
                             "executable": "python",
-                            "arguments": ["-m", "pytest", "-q"],
+                            "arguments": [
+                                "-B",
+                                "-m",
+                                "unittest",
+                                "discover",
+                                "-q",
+                            ],
                         },
                         "expected_capabilities": [
                             "test.execute",

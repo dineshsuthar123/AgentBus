@@ -26,9 +26,25 @@ def test_pyproject_metadata_version_and_entry_points_are_release_ready():
     }
     assert "openai>=1.66" in project["optional-dependencies"]["azure"]
     assert all("openai" not in dependency for dependency in project["dependencies"])
-    assert "pytest>=8" in project["dependencies"]
-    assert "pytest>=8" not in project["optional-dependencies"]["dev"]
+    assert "pytest>=8" not in project["dependencies"]
+    assert "pytest>=8" in project["optional-dependencies"]["dev"]
+    assert "setuptools>=69" in project["optional-dependencies"]["dev"]
     assert project["requires-python"] == ">=3.11"
+
+
+def test_dependency_extras_keep_product_and_development_concerns_separate():
+    metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    project = metadata["project"]
+    base = set(project["dependencies"])
+    extras = project["optional-dependencies"]
+
+    assert set(extras) == {"all", "azure", "dev", "entra", "ide", "mcp"}
+    assert not base.intersection(extras["all"])
+    assert not base.intersection(extras["dev"])
+    assert "pytest>=8" not in extras["all"]
+    assert set(extras["azure"] + extras["entra"] + extras["ide"] + extras["mcp"]) <= set(
+        extras["all"]
+    )
 
 
 def test_version_is_shared_by_evaluation_and_durable_runtime(tmp_path):
@@ -39,7 +55,7 @@ def test_version_is_shared_by_evaluation_and_durable_runtime(tmp_path):
         agentbus_commit_sha="abc",
         configuration_fingerprint="fingerprint",
     )
-    assert run.agentbus_version == __version__ == "0.1.0a1"
+    assert run.agentbus_version == __version__ == "0.6.0b1"
 
     store = StateStore(tmp_path / "state.db")
     created = DurableExecutionEngine(store).create_run(

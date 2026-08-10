@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import uuid
 from pathlib import Path
@@ -31,6 +32,9 @@ from agentbus.control.supervisor import AgentBusRunBackend, BackgroundRunSupervi
 from agentbus.execution.state_store import StateStore
 
 
+_DAEMON_ID = re.compile(r"^[a-f0-9]{32}$")
+
+
 def serve(
     *,
     config: AgentBusConfig,
@@ -39,8 +43,10 @@ def serve(
     json_ready: bool = False,
     idle_timeout: float = 86_400,
     registry_path: str | Path | None = None,
+    daemon_id: str | None = None,
     log_level: str = "warning",
 ) -> int:
+    _startup_stage("serve-entered")
     normalized_host = validate_loopback_host(host)
     try:
         import uvicorn
@@ -48,18 +54,22 @@ def serve(
         raise RuntimeError(
             'The control plane requires optional dependencies. Install "agentbus[ide]".'
         ) from exc
+    _startup_stage("uvicorn-imported")
 
     listener = bind_loopback_socket(normalized_host, port)
+    _startup_stage("listener-bound")
     actual_port = int(listener.getsockname()[1])
-    daemon_id = uuid.uuid4().hex
+    daemon_id = _validated_daemon_id(daemon_id)
     token = generate_session_token()
     started_at = utc_now()
     registry = DaemonRegistry(registry_path)
     store = StateStore(config.state_database_path)
+    _startup_stage("state-ready")
     query = ControlQueryService(config, store)
     backend = AgentBusRunBackend(config, store)
     supervisor = BackgroundRunSupervisor(backend)
     replay_supervisor = BackgroundReplaySupervisor(query)
+    _startup_stage("services-ready")
     context = ControlAppContext(
         daemon_id=daemon_id,
         host=normalized_host,
@@ -74,6 +84,7 @@ def serve(
         replay_supervisor=replay_supervisor,
         context=context,
     )
+    _startup_stage("application-ready")
     entry = DaemonRegistryEntry(
         daemon_id=daemon_id,
         pid=os.getpid(),
@@ -86,8 +97,11 @@ def serve(
         heartbeat_at=started_at,
         state_database=context.state_database,
         registry_path=str(registry.path),
+        idle_timeout_seconds=idle_timeout,
+        log_path=str(config.state_database_path.resolve().parent / "logs" / "daemon.log"),
     )
     registry.register(entry)
+    _startup_stage("registry-ready")
     heartbeat = DaemonHeartbeat(registry, daemon_id)
     server = uvicorn.Server(
         uvicorn.Config(
@@ -141,6 +155,20 @@ def serve(
         supervisor.shutdown(wait=True)
         registry.remove(daemon_id)
         listener.close()
+
+
+def _startup_stage(stage: str) -> None:
+    if os.environ.get("AGENTBUS_DAEMON_STARTUP_DIAGNOSTICS") == "1":
+        sys.stderr.write(f"agentbus-daemon-stage:{stage}\n")
+        sys.stderr.flush()
+
+
+def _validated_daemon_id(value: str | None) -> str:
+    if value is None:
+        return uuid.uuid4().hex
+    if not _DAEMON_ID.fullmatch(value):
+        raise ValueError("Daemon startup ID must be a lowercase UUID hex value.")
+    return value
 
 
 def main() -> int:

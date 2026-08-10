@@ -2,47 +2,58 @@
 
 ## Supported versions
 
-The latest `0.3` prerelease receives security fixes. Alpha releases are for
-evaluation and are not covered by a production SLA.
+The latest `0.6` public-beta prerelease receives security fixes. Older pre-1.0
+milestones are unsupported unless maintainers state otherwise. AgentBus has no
+production SLA.
 
-## Reporting a vulnerability
+## Report a vulnerability privately
 
-Do not open a public issue containing credentials, exploit details, private
-repository content, or provider responses. Use GitHub's private security
-advisory flow for this repository. Include the affected version, a minimal
-reproduction, impact, and suggested mitigation. Remove all real API keys and
-personal data before submitting.
+Do not open a public issue with vulnerability details. Use this repository's
+[private security advisory form](https://github.com/dineshsuthar123/AgentBus/security/advisories/new).
+
+Include the affected AgentBus version, operating system, Python version,
+minimal sanitized reproduction, impact, and a proposed mitigation if known.
+Never include real API keys, bearer tokens, `.env` files, private source,
+prompts, provider responses, databases, trace archives, or personal data.
 
 ## Security boundaries
 
-AgentBus restricts managed tools to a canonical configured workspace, validates
-exact Git repository boundaries, derives capabilities independently of model
-claims, and applies deterministic policy before dispatch. Process adapters use
-an absolute executable identity, separate argument arrays with `shell=False`, a
-minimal environment, bounded output and resources, and process-tree cleanup.
-Filesystem adapters reject traversal, protected credential paths, unsafe
-links, devices, alternate data streams, and writes outside the assigned
-repository or worktree. Audit records, reports, diffs, and errors are bounded
-and redact secret-shaped values.
-
-High-risk tools and live providers require a revision-bound approval. Approval
-authorizes only the recorded run, task, tool, arguments, capability scope,
-workspace, budget, and cancellation revision. Resume revalidates that binding.
-The VS Code extension also requires Workspace Trust for start, resume,
-approval, and Git mutations; rejection, cancellation, and read-only
-diagnostics remain available without trust.
+AgentBus validates the canonical configured workspace and exact Git top-level,
+derives capabilities independently of model claims, applies deterministic
+policy, and binds risky approvals to an exact revision and scope. Managed
+subprocesses use an absolute revalidated executable, separate arguments with
+`shell=False`, a minimal environment, bounded resources and output, and process
+tree cleanup. Filesystem adapters reject traversal, protected credentials,
+unsafe links and junctions, Windows devices and alternate data streams, and
+mutation outside the assigned repository or owned worktree.
 
 Local MCP servers require explicit configuration, numeric loopback or managed
-stdio transport, and an exact capability map for every imported tool. MCP peers
-and generated repository code remain untrusted even after protocol and schema
-validation. Run them with least-privilege OS credentials.
+stdio transport, and an exact capability map. MCP peers, model output, indexed
+evidence, imported archives, and generated repository code remain untrusted.
+
+The local daemon uses loopback transport, ephemeral ports by default, process
+identity checks, and bearer authentication. Registry files contain metadata,
+not bearer tokens. The VS Code extension stores tokens in SecretStorage,
+validates package/protocol/schema compatibility, and requires Workspace Trust
+for execution and mutation.
+
+Logs, errors, reports, support bundles, traces, package archives, and VSIX files
+are bounded and scanned for sensitive content. Configuration mutation rejects
+credential keys and unsafe links. Setup never writes provider credentials.
+
+## Limits
 
 These controls are defense in depth, not a VM, container, firewall, restricted
-OS token, seccomp profile, or complete kernel security boundary. Review changes
-before commit, push, or PR creation. See
+OS token, kernel sandbox, or proof that generated code is safe. Use
+least-privilege OS and provider credentials, constrain network access, and
+review changes before execution, commit, push, or pull-request creation.
+
+Filesystem and external side effects are not transactionally rolled back.
+Failed runs report created and modified files but do not automatically reset,
+clean, delete, or restore them. Cleanup removes only validated AgentBus-owned
+runtime artifacts and must preserve unknown or active user data.
+
+See [security documentation](docs/security/README.md),
 [Sandbox Security](docs/sandbox-security.md),
 [Tool Capability Policy](docs/tool-policy.md), and
-[MCP Integration](docs/mcp-integration.md) for guarantees and limitations.
-
-Failed runs do not automatically reset, clean, delete, or roll back files.
-Inspect reported artifacts and perform any cleanup manually.
+[MCP Integration](docs/mcp-integration.md).
