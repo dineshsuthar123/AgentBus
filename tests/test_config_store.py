@@ -1,4 +1,5 @@
 import json
+import os
 import tomllib
 
 import pytest
@@ -91,11 +92,19 @@ def test_toml_renderer_round_trips_nested_product_values():
 def test_config_target_paths_are_scope_specific(tmp_path):
     user = config_target_path(
         ConfigScope.USER,
-        environ={"APPDATA": str(tmp_path / "roaming")},
+        environ={
+            "APPDATA": str(tmp_path / "roaming"),
+            "XDG_CONFIG_HOME": str(tmp_path / "xdg"),
+        },
     )
     workspace = config_target_path(ConfigScope.WORKSPACE, workspace=tmp_path)
 
-    assert user == tmp_path / "roaming" / "AgentBus" / "config.toml"
+    expected_user = (
+        tmp_path / "roaming" / "AgentBus" / "config.toml"
+        if os.name == "nt"
+        else tmp_path / "xdg" / "agentbus" / "config.toml"
+    )
+    assert user == expected_user
     assert workspace == tmp_path / ".agentbus" / "config.toml"
 
 
