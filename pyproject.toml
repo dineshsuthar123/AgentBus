@@ -36,6 +36,7 @@ dependencies = [
 azure = ["openai>=1.66"]
 dev = [
   "build>=1.2",
+  "hypothesis>=6.112",
   "httpx>=0.28",
   "pytest>=8",
   "setuptools>=69",

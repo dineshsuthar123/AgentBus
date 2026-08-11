@@ -42,6 +42,8 @@ def test_dependency_extras_keep_product_and_development_concerns_separate():
     assert not base.intersection(extras["all"])
     assert not base.intersection(extras["dev"])
     assert "pytest>=8" not in extras["all"]
+    assert "hypothesis>=6.112" in extras["dev"]
+    assert "hypothesis>=6.112" not in extras["all"]
     assert set(extras["azure"] + extras["entra"] + extras["ide"] + extras["mcp"]) <= set(
         extras["all"]
     )
