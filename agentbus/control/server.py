@@ -63,12 +63,20 @@ def serve(
     token = generate_session_token()
     started_at = utc_now()
     registry = DaemonRegistry(registry_path)
+    registry.cleanup_stale()
     store = StateStore(config.state_database_path)
     _startup_stage("state-ready")
     query = ControlQueryService(config, store)
-    backend = AgentBusRunBackend(config, store)
+    backend = AgentBusRunBackend(
+        config,
+        store,
+        reconcile_interrupted=True,
+    )
     supervisor = BackgroundRunSupervisor(backend)
-    replay_supervisor = BackgroundReplaySupervisor(query)
+    replay_supervisor = BackgroundReplaySupervisor(
+        query,
+        reconcile_interrupted=True,
+    )
     _startup_stage("services-ready")
     context = ControlAppContext(
         daemon_id=daemon_id,

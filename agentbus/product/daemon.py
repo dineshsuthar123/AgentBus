@@ -51,6 +51,7 @@ def start_daemon(
     startup_timeout: float = 15.0,
 ) -> DaemonStartResult:
     registry = DaemonRegistry(registry_path)
+    registry.cleanup_stale()
     active = [entry for entry in registry.list() if process_matches(entry)]
     compatible = [
         entry

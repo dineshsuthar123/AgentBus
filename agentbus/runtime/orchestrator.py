@@ -522,6 +522,14 @@ class MultiAgentOrchestrator:
         self._bind_component_cancellation(cancellation)
         persisted = self.state_store.get_run(run_id)
         runtime_trace = self._trace_for_run(run_id, reconcile=resume)
+        if resume:
+            with build_managed_tool_runtime(
+                workspace=self.workspace,
+                state_store=self.state_store,
+                cancellation_registry=self._cancellation_registry_for_use(),
+                runtime_trace=runtime_trace,
+            ) as recovery_runtime:
+                recovery_runtime.recover_run(run_id)
         with runtime_trace.scope(runtime_trace.root_context):
             if cancellation.is_requested:
                 report = self._durable_engine(

@@ -387,6 +387,92 @@ class StateStore:
             )
         return self.load_snapshot(run.run_id)
 
+    def finalize_provisional_run(
+        self,
+        run: RunRecord,
+        tasks: list[TaskSpec],
+    ) -> RunSnapshot:
+        """Atomically replace a control-plane planning placeholder."""
+        with self._write_transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM runs WHERE run_id = ?",
+                (run.run_id,),
+            ).fetchone()
+            if row is None:
+                raise RunNotFoundError(f"Run '{run.run_id}' was not found.")
+            current = self._run_from_row(row)
+            submission = current.metadata.get("control_submission")
+            if (
+                current.status != RunStatus.PENDING
+                or not isinstance(submission, dict)
+                or submission.get("state") != "planning"
+            ):
+                raise StateStoreError(
+                    f"Run '{run.run_id}' is not a provisional planning submission."
+                )
+            identity = (
+                "original_task",
+                "workflow_type",
+                "model",
+                "workspace",
+            )
+            if any(
+                getattr(current, field) != getattr(run, field)
+                for field in identity
+            ):
+                raise StateStoreError(
+                    "Planned run identity does not match its accepted submission."
+                )
+            task_count = connection.execute(
+                "SELECT COUNT(*) FROM tasks WHERE run_id = ?",
+                (run.run_id,),
+            ).fetchone()[0]
+            if task_count:
+                raise StateStoreError(
+                    "A provisional planning submission cannot already contain tasks."
+                )
+            metadata = {
+                **current.metadata,
+                **run.metadata,
+                "control_submission": {
+                    **submission,
+                    "state": "planned",
+                },
+            }
+            now = utc_now()
+            connection.execute(
+                """
+                UPDATE runs SET
+                    planner_output_json = ?, context_summary = ?, graph_json = ?,
+                    metadata_json = ?, updated_at = ?, version = version + 1
+                WHERE run_id = ?
+                """,
+                (
+                    _dump_json(run.planner_output),
+                    _safe_text(run.context_summary),
+                    _dump_json(run.graph_data),
+                    _dump_json(metadata),
+                    _timestamp(now),
+                    run.run_id,
+                ),
+            )
+            self._insert_tasks(connection, run.run_id, tasks)
+            self._insert_event(
+                connection,
+                run.run_id,
+                None,
+                "durable_planning_completed",
+                {"task_count": len(tasks)},
+            )
+            self._insert_event(
+                connection,
+                run.run_id,
+                None,
+                "task_graph_validated",
+                {"task_count": len(tasks), "graph_version": 1},
+            )
+        return self.load_snapshot(run.run_id)
+
     def _insert_run(self, connection: sqlite3.Connection, run: RunRecord) -> None:
         connection.execute(
             """
@@ -2123,6 +2209,64 @@ class StateStore:
                 parameters,
             ).fetchall()
         return [_replay_session_from_row(row) for row in rows]
+
+    def reconcile_interrupted_replay_sessions(
+        self,
+        *,
+        limit: int = 1_000,
+    ) -> list[ReplaySession]:
+        """Fail replay work that cannot still be owned after daemon restart."""
+        from agentbus.replay.session import ReplaySession, ReplaySessionStatus
+
+        if limit < 1 or limit > 1_000:
+            raise StateStoreError(
+                "Replay reconciliation limit must be between 1 and 1000."
+            )
+        active: list[ReplaySession] = []
+        for status in (
+            ReplaySessionStatus.PENDING,
+            ReplaySessionStatus.RUNNING,
+        ):
+            remaining = limit - len(active)
+            if remaining <= 0:
+                break
+            active.extend(
+                self.list_replay_sessions(status=status, limit=remaining)
+            )
+        reconciled: list[ReplaySession] = []
+        now = utc_now()
+        for session in active:
+            request = self.get_replay_request(session.replay_id)
+            completed_at = max(
+                now,
+                session.started_at or session.created_at,
+            )
+            failed = ReplaySession.model_validate(
+                session.model_copy(
+                    update={
+                        "status": ReplaySessionStatus.FAILED,
+                        "completed_at": completed_at,
+                        "failure_category": "DaemonRestartInterrupted",
+                        "failure_message": (
+                            "Replay ownership was lost during daemon restart; "
+                            "the replay was not rerun."
+                        ),
+                    }
+                ).model_dump()
+            )
+            persisted = self.record_replay_session(request, failed)
+            self.record_event(
+                session.source_run_id,
+                "replay_restart_reconciled",
+                {
+                    "replay_id": session.replay_id,
+                    "from_status": session.status.value,
+                    "to_status": persisted.status.value,
+                    "automatic_retry_allowed": False,
+                },
+            )
+            reconciled.append(persisted)
+        return reconciled
 
     def record_trace_comparison(
         self,
