@@ -1181,30 +1181,50 @@ def _benchmark_command(arguments: list[str]) -> int:
         run_benchmark,
         write_benchmark_report,
     )
+    from agentbus.product.index_scale import (
+        INDEX_SCALE_GROUP,
+        run_index_scale_benchmark,
+    )
     from agentbus.product.synthetic import SYNTHETIC_SIZES
 
     parser = argparse.ArgumentParser(prog="agentbus benchmark")
     parser.add_argument(
         "group",
         nargs="?",
-        choices=(*BENCHMARK_GROUPS, "all"),
+        choices=(*BENCHMARK_GROUPS, INDEX_SCALE_GROUP, "all"),
         default="all",
     )
-    parser.add_argument("--size", choices=tuple(SYNTHETIC_SIZES), default="small")
+    parser.add_argument("--size", choices=tuple(SYNTHETIC_SIZES))
     parser.add_argument("--files", type=int)
-    parser.add_argument("--iterations", type=int, default=5)
+    parser.add_argument("--iterations", type=int)
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--output", help="Write an atomic JSON benchmark report.")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(arguments)
     try:
-        report = run_benchmark(
-            args.group,
-            profile=args.size,
-            file_count=args.files,
-            iterations=args.iterations,
-            seed=args.seed,
+        profile = args.size or (
+            "medium" if args.group == INDEX_SCALE_GROUP else "small"
         )
+        if args.group == INDEX_SCALE_GROUP:
+            if args.iterations not in {None, 1}:
+                raise ValueError(
+                    "Index scale is one stateful lifecycle; --iterations must be 1."
+                )
+            report = run_index_scale_benchmark(
+                profile=profile,
+                file_count=args.files,
+                seed=args.seed,
+            )
+        else:
+            report = run_benchmark(
+                args.group,
+                profile=profile,
+                file_count=args.files,
+                iterations=(
+                    5 if args.iterations is None else args.iterations
+                ),
+                seed=args.seed,
+            )
         report_path = (
             write_benchmark_report(report, args.output) if args.output else None
         )
@@ -1220,6 +1240,32 @@ def _benchmark_command(arguments: list[str]) -> int:
     payload["report_path"] = str(report_path) if report_path else None
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))
+    elif args.group == INDEX_SCALE_GROUP:
+        repository = payload["repository"]
+        print(
+            "AgentBus index scale benchmark "
+            f"({repository['profile']}, {repository['file_count']} generated files)"
+        )
+        for operation in report.operations:
+            print(
+                f"  [{'OK' if operation.passed else 'FAIL'}] "
+                f"{operation.name}: {operation.duration_ms:.3f}ms, "
+                f"indexed={operation.indexed_files}, "
+                f"unnecessary={operation.unnecessarily_reindexed_files}, "
+                f"efficiency={operation.invalidation_efficiency:.3f}"
+            )
+        print(f"Environment: {report.environment_fingerprint}")
+        print(f"Database: {report.database_bytes} bytes")
+        print(
+            "Peak memory: "
+            + (
+                f"{report.peak_memory_bytes} bytes"
+                if report.peak_memory_bytes is not None
+                else "not measured"
+            )
+        )
+        if report_path:
+            print(f"Report: {report_path}")
     else:
         repository = payload["repository"]
         print(

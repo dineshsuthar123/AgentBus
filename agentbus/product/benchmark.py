@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from importlib import metadata
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
 
 from agentbus import __version__
 from agentbus.agents.planner import PlannerOutput
@@ -49,6 +49,10 @@ _BASE_BUDGETS_MS = {
     "filesystem_tool_read": 2_000.0,
     "trace_recording": 2_000.0,
 }
+
+
+class _SerializableBenchmarkReport(Protocol):
+    def to_dict(self) -> dict[str, Any]: ...
 
 
 @dataclass(frozen=True)
@@ -286,7 +290,10 @@ def run_benchmark(
     )
 
 
-def write_benchmark_report(report: BenchmarkReport, output: str | Path) -> Path:
+def write_benchmark_report(
+    report: _SerializableBenchmarkReport,
+    output: str | Path,
+) -> Path:
     destination = Path(output).expanduser().absolute()
     if destination.suffix.lower() != ".json":
         raise ValueError("Benchmark report output must use a .json extension.")
