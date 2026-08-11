@@ -176,6 +176,17 @@ class IndexFreshnessChecker:
             for item in inventory.files
             if self._supports(item.relative_path)
         }
+        failed_file_hashes = {
+            diagnostic.relative_path: observed_hash
+            for diagnostic in snapshot.diagnostics
+            if diagnostic.code == "index.file_failed"
+            and diagnostic.relative_path is not None
+            and isinstance(
+                observed_hash := diagnostic.details.get("observed_hash"),
+                str,
+            )
+            and len(observed_hash) == 64
+        }
         stale_paths: set[str] = set()
         diagnostics = list(inventory.diagnostics)
         ownership = CodeOwnershipExtractor().extract(inventory)
@@ -210,7 +221,23 @@ class IndexFreshnessChecker:
         for path, discovered in discovered_files.items():
             indexed = indexed_files.get(path)
             if indexed is None:
-                stale_paths.add(path)
+                failed_hash = failed_file_hashes.get(path)
+                if failed_hash is None:
+                    stale_paths.add(path)
+                    continue
+                try:
+                    payload = inventory.read_bytes(
+                        path,
+                        maximum_bytes=min(
+                            self.discovery_limits.maximum_file_bytes,
+                            discovered.size_bytes + 1,
+                        ),
+                    )
+                except RepositoryIntelligenceError:
+                    stale_paths.add(path)
+                    continue
+                if content_hash(payload) != failed_hash:
+                    stale_paths.add(path)
                 continue
             try:
                 payload = inventory.read_bytes(

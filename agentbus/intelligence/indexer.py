@@ -934,7 +934,14 @@ class RepositoryIndexer:
                         message="A source file could not be indexed safely.",
                         relative_path=discovered.relative_path,
                         recoverable=True,
-                        details={"error_type": type(exc).__name__},
+                        details={
+                            "error_type": type(exc).__name__,
+                            **(
+                                {"observed_hash": observed_hash}
+                                if observed_hash is not None
+                                else {}
+                            ),
+                        },
                     ),
                 ),
                 skipped=True,
