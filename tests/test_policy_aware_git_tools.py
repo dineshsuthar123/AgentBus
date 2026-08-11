@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 
@@ -181,3 +182,71 @@ def test_git_tool_surface_exposes_no_destructive_or_remote_operations(
         "run",
     ):
         assert hasattr(tools, operation) is False
+
+
+def test_git_repository_ignores_global_excludes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = initialized_repository(tmp_path / "repository")
+    home = tmp_path / "isolated-home"
+    home.mkdir()
+    excludes = home / "global-excludes"
+    excludes.write_text("hidden.txt\n", encoding="utf-8")
+    (home / ".gitconfig").write_text(
+        "[core]\n"
+        f"    excludesFile = {excludes.as_posix()}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / "xdg"))
+    (workspace / "hidden.txt").write_text("must remain visible\n", encoding="utf-8")
+
+    assert "hidden.txt" in GitRepository(str(workspace)).changed_files()
+
+
+def test_stage_rejects_repository_clean_filter_before_execution(
+    tmp_path: Path,
+) -> None:
+    workspace = initialized_repository(tmp_path / "repository")
+    marker = tmp_path / "filter-ran.txt"
+    filter_script = tmp_path / "filter.py"
+    filter_script.write_text(
+        "from pathlib import Path\n"
+        "import sys\n"
+        "Path(sys.argv[1]).write_text('executed', encoding='utf-8')\n"
+        "sys.stdout.buffer.write(sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    (workspace / ".gitattributes").write_text(
+        "*.payload filter=agentbus\n",
+        encoding="utf-8",
+    )
+    run_git(workspace, "add", ".gitattributes")
+    run_git(workspace, "commit", "-q", "-m", "test: add attributes")
+    command = (
+        f'"{Path(sys.executable).as_posix()}" '
+        f'"{filter_script.as_posix()}" "{marker.as_posix()}"'
+    )
+    run_git(workspace, "config", "filter.agentbus.clean", command)
+    (workspace / "input.payload").write_text("payload\n", encoding="utf-8")
+
+    with pytest.raises(GitRepositoryError, match="content filters"):
+        GitRepository(str(workspace)).stage(["input.payload"])
+
+    assert marker.exists() is False
+
+
+def test_nested_repository_is_excluded_from_review_and_commit(
+    tmp_path: Path,
+) -> None:
+    workspace = initialized_repository(tmp_path / "repository")
+    initialized_repository(workspace / "nested")
+
+    changes = GitRepository(str(workspace)).change_set()
+
+    assert "nested" in changes.changed_files
+    assert "nested" in changes.protected_files
+    assert "nested" not in changes.review_files
+    assert "nested" not in changes.commit_files

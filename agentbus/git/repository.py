@@ -536,6 +536,7 @@ class GitRepository:
                 "ignored artifacts were skipped."
             )
         pathspec = selected
+        self._reject_external_content_filters(pathspec)
         self._run(["git", "add", "--all", "--", *pathspec])
         staged_output = self._run(
             ["git", "diff", "--cached", "--name-only", "-z", "--", *pathspec]
@@ -556,6 +557,7 @@ class GitRepository:
             raise GitRepositoryError(
                 "Generated, ignored, protected, or unavailable paths cannot be staged."
             )
+        self._reject_external_content_filters(selected)
         self._run(["git", "add", "--all", "--", *selected])
         staged_output = self._run(
             ["git", "diff", "--cached", "--name-only", "-z", "--", *selected]
@@ -677,6 +679,29 @@ class GitRepository:
         output = self._run(["git", "ls-files", "-z", "--", *sorted(paths)])
         return [path for path in output.split("\0") if path]
 
+    def _reject_external_content_filters(self, paths: Iterable[str]) -> None:
+        selected = tuple(paths)
+        if not selected:
+            return
+        output = self._run(
+            ["git", "check-attr", "-z", "filter", "--", *selected]
+        )
+        fields = output.split("\0")
+        if fields and fields[-1] == "":
+            fields.pop()
+        if len(fields) % 3:
+            raise GitRepositoryError(
+                "Git returned malformed content-filter attributes."
+            )
+        for index in range(0, len(fields), 3):
+            attribute = fields[index + 1]
+            value = fields[index + 2]
+            if attribute != "filter" or value not in {"unspecified", "unset"}:
+                raise GitRepositoryError(
+                    "External Git content filters are not permitted for "
+                    "managed mutations."
+                )
+
     def _untracked_diff(self, relative: str) -> str:
         if self._is_protected_path(relative):
             return f"Protected file content omitted: {relative}"
@@ -788,7 +813,21 @@ class GitRepository:
     def _is_protected_path(self, path: str) -> bool:
         if self._path_resolver is None:
             self._path_resolver = ContainedPathResolver(self.workspace)
-        return self._path_resolver.classify(path).protected
+        return (
+            self._path_resolver.classify(path).protected
+            or self._is_nested_repository_path(path)
+        )
+
+    def _is_nested_repository_path(self, path: str) -> bool:
+        candidate = self.workspace / path
+        while candidate != self.workspace:
+            if os.path.lexists(candidate / ".git"):
+                return True
+            parent = candidate.parent
+            if parent == candidate:
+                break
+            candidate = parent
+        return False
 
     def _bound_output(self, output: str, max_chars: int, operation: str) -> str:
         if max_chars < 1 or max_chars > self.maximum_command_output_chars:
@@ -825,7 +864,10 @@ def _git_environment() -> dict[str, str]:
             environment.pop(name, None)
     environment.update(
         {
+            "GIT_ATTR_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": os.devnull,
             "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_SYSTEM": os.devnull,
             "GIT_OPTIONAL_LOCKS": "0",
             "GIT_PAGER": "",
             "GIT_TERMINAL_PROMPT": "0",

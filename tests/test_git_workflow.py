@@ -55,6 +55,8 @@ def test_git_repository_uses_safe_command_construction(monkeypatch, tmp_path):
         assert "--show-toplevel" in command
         assert "AGENTBUS_API_KEY" not in env
         assert "GIT_DIR" not in env
+        assert env["GIT_CONFIG_GLOBAL"] == os.devnull
+        assert env["GIT_CONFIG_SYSTEM"] == os.devnull
         assert env["GIT_TERMINAL_PROMPT"] == "0"
         return FakeCompleted(stdout=f"{tmp_path}\n")
 
