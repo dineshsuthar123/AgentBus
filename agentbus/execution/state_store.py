@@ -10,6 +10,12 @@ from functools import wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterator
 
+from agentbus._sqlite import (
+    DEFAULT_TRANSACTION_RETRY_DELAYS,
+    begin_immediate_with_retry,
+    is_sqlite_busy_error,
+    normalize_transaction_retry_delays,
+)
 from agentbus.execution.cancellation import (
     CancellationOperation,
     CancellationState,
@@ -109,6 +115,10 @@ class StateStoreError(RuntimeError):
     """Base error for durable state operations."""
 
 
+class StateStoreBusyError(StateStoreError):
+    """Raised after bounded retries cannot acquire the durable-state writer lock."""
+
+
 class RunNotFoundError(StateStoreError):
     pass
 
@@ -175,6 +185,7 @@ class ComparisonRecordConflictError(StateStoreError):
 
 _MAX_TEXT_CHARS = 20_000
 _PRIVATE_REPLAY_WORKSPACE = "[ISOLATED_REPLAY_WORKSPACE]"
+_DEFAULT_BUSY_TIMEOUT_MS = 5_000
 
 
 def _domain_decode(description: str) -> Callable:
@@ -202,8 +213,20 @@ class StateStore:
     transaction so transition validation and its audit event see one state.
     """
 
-    def __init__(self, database_path: str | Path):
+    def __init__(
+        self,
+        database_path: str | Path,
+        *,
+        busy_timeout_ms: int = _DEFAULT_BUSY_TIMEOUT_MS,
+        transaction_retry_delays: tuple[float, ...] = DEFAULT_TRANSACTION_RETRY_DELAYS,
+    ) -> None:
+        if busy_timeout_ms < 1 or busy_timeout_ms > 120_000:
+            raise ValueError("busy_timeout_ms must be between 1 and 120000")
         self.database_path = Path(database_path).expanduser().resolve()
+        self.busy_timeout_ms = busy_timeout_ms
+        self.transaction_retry_delays = normalize_transaction_retry_delays(
+            transaction_retry_delays
+        )
         try:
             self.database_path.parent.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
@@ -277,7 +300,10 @@ class StateStore:
                     f"{current} to {current + 1}."
                 )
             try:
-                connection.execute("BEGIN IMMEDIATE")
+                begin_immediate_with_retry(
+                    connection,
+                    retry_delays=self.transaction_retry_delays,
+                )
                 for statement in statements:
                     connection.execute(statement)
                 connection.execute(
@@ -285,6 +311,15 @@ class StateStore:
                     (str(current + 1), "schema_version"),
                 )
                 connection.commit()
+            except sqlite3.OperationalError as exc:
+                connection.rollback()
+                if is_sqlite_busy_error(exc):
+                    raise StateStoreBusyError(
+                        "State database remained busy during schema migration."
+                    ) from exc
+                raise StateStoreError(
+                    f"State schema migration {current} -> {current + 1} failed."
+                ) from exc
             except sqlite3.Error as exc:
                 connection.rollback()
                 raise StateStoreError(
@@ -314,12 +349,12 @@ class StateStore:
         try:
             connection = sqlite3.connect(
                 self.database_path,
-                timeout=10,
+                timeout=self.busy_timeout_ms / 1_000,
                 isolation_level=None,
             )
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA foreign_keys = ON")
-            connection.execute("PRAGMA busy_timeout = 5000")
+            connection.execute(f"PRAGMA busy_timeout = {self.busy_timeout_ms}")
             yield connection
         except StateStoreError:
             raise
@@ -335,7 +370,10 @@ class StateStore:
     def _write_transaction(self) -> Iterator[sqlite3.Connection]:
         with self._connection() as connection:
             try:
-                connection.execute("BEGIN IMMEDIATE")
+                begin_immediate_with_retry(
+                    connection,
+                    retry_delays=self.transaction_retry_delays,
+                )
                 yield connection
                 connection.commit()
             except (StateStoreError, InvalidStateTransition):
@@ -346,6 +384,13 @@ class StateStore:
                 raise StateStoreError(
                     "Durable state violates a uniqueness or relationship constraint."
                 ) from exc
+            except sqlite3.OperationalError as exc:
+                connection.rollback()
+                if is_sqlite_busy_error(exc):
+                    raise StateStoreBusyError(
+                        f"State database is busy: '{self.database_path}'."
+                    ) from exc
+                raise StateStoreError("Unable to update durable state.") from exc
             except sqlite3.Error as exc:
                 connection.rollback()
                 raise StateStoreError("Unable to update durable state.") from exc
