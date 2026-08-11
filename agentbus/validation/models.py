@@ -4,6 +4,7 @@ import re
 from datetime import datetime
 from enum import Enum
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -207,6 +208,37 @@ class ValidationRepository(ValidationModel):
             raise ValueError("repository path must be non-empty and NUL-free")
         return value
 
+    @field_validator("remote_url")
+    @classmethod
+    def safe_public_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError(
+                "public repository URLs must be credential-free HTTPS URLs"
+            )
+        return value
+
+    @field_validator("revision")
+    @classmethod
+    def safe_revision(cls, value: str | None) -> str | None:
+        if value is not None and (
+            not value
+            or value.startswith("-")
+            or "\x00" in value
+            or any(character.isspace() for character in value)
+        ):
+            raise ValueError("repository revision is ambiguous or unsafe")
+        return value
+
     @model_validator(mode="after")
     def valid_source_shape(self) -> "ValidationRepository":
         if self.source == RepositorySource.GENERATED:
@@ -318,9 +350,15 @@ class ValidationReport(ValidationModel):
     status: ValidationStatus
     generated_at: datetime
     offline: bool = True
-    network_used: Literal[False] = False
+    network_used: bool = False
     runs: tuple[ValidationRun, ...] = Field(default=(), max_length=1_000)
     warnings: tuple[str, ...] = Field(default=(), max_length=1_000)
+
+    @model_validator(mode="after")
+    def consistent_network_mode(self) -> "ValidationReport":
+        if self.offline and self.network_used:
+            raise ValueError("offline validation reports cannot record network use")
+        return self
 
     @property
     def ok(self) -> bool:

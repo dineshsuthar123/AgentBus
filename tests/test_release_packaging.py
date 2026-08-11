@@ -84,9 +84,10 @@ def test_version_is_shared_by_evaluation_and_durable_runtime(tmp_path):
 
 def test_package_data_contains_offline_fixtures_and_manifest():
     package_data = ROOT / "agentbus" / "evaluation"
-    patterns = tomllib.loads(
+    package_patterns = tomllib.loads(
         (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    )["tool"]["setuptools"]["package-data"]["agentbus.evaluation"]
+    )["tool"]["setuptools"]["package-data"]
+    patterns = package_patterns["agentbus.evaluation"]
 
     assert (package_data / "real_repositories.json").is_file()
     assert (package_data / "fixtures_data" / "python-feature" / "calculator.py").is_file()
@@ -99,6 +100,8 @@ def test_package_data_contains_offline_fixtures_and_manifest():
     ).is_file()
     assert "fixtures_data/repository-intelligence-mixed/.env" not in patterns
     assert "fixtures_data/repository-intelligence-mixed/.gitignore" in patterns
+    assert (ROOT / "agentbus" / "validation" / "corpus.json").is_file()
+    assert "corpus.json" in package_patterns["agentbus.validation"]
 
 
 def test_distribution_manifest_excludes_runtime_artifacts():

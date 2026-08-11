@@ -1,0 +1,265 @@
+{
+  "schema_version": 1,
+  "corpus_id": "agentbus-v07",
+  "title": "AgentBus v0.7 repository validation corpus",
+  "description": "Deterministic offline fixtures and opt-in public repository checkouts.",
+  "repositories": [
+    {
+      "repository_id": "generated-python-library",
+      "title": "Generated Python library",
+      "source": "generated",
+      "scale": "tiny",
+      "language_mix": ["python"],
+      "expected_project_count": {"minimum": 1},
+      "expected_file_count": {"minimum": 3},
+      "expected_symbol_count": {"minimum": 2},
+      "known_characteristics": [
+        "src layout",
+        "unit tests",
+        "protected environment file"
+      ],
+      "scenarios": [
+        {
+          "scenario_id": "python-identifier-search",
+          "title": "Find the calculator implementation",
+          "kind": "search",
+          "query": "calculate_total",
+          "expected_paths": ["src/calculator.py"],
+          "expected_minimum_results": 1
+        },
+        {
+          "scenario_id": "python-task-context",
+          "title": "Plan a safe calculator change",
+          "kind": "task",
+          "query": "change calculate_total without breaking tests",
+          "expected_paths": ["src/calculator.py"],
+          "expected_minimum_results": 1,
+          "expected_outputs": ["src/calculator.py", "tests/test_calculator.py"]
+        }
+      ]
+    },
+    {
+      "repository_id": "generated-mixed-monorepo",
+      "title": "Generated mixed-language monorepo",
+      "source": "generated",
+      "scale": "small",
+      "language_mix": ["python", "typescript", "java", "go"],
+      "expected_project_count": {"minimum": 3},
+      "expected_file_count": {"minimum": 8},
+      "expected_symbol_count": {"minimum": 6},
+      "known_characteristics": [
+        "multiple project manifests",
+        "generated directory",
+        "vendored directory",
+        "protected environment file"
+      ],
+      "scenarios": [
+        {
+          "scenario_id": "mixed-payment-search",
+          "title": "Find the payment service",
+          "kind": "search",
+          "query": "PaymentService authorize",
+          "expected_paths": ["services/python/payment_service.py"],
+          "expected_minimum_results": 1
+        },
+        {
+          "scenario_id": "mixed-payment-context",
+          "title": "Build multilingual payment context",
+          "kind": "context",
+          "query": "trace payment validation across services",
+          "expected_minimum_results": 1
+        }
+      ]
+    },
+    {
+      "repository_id": "generated-deep-tree",
+      "title": "Generated deeply nested repository",
+      "source": "generated",
+      "scale": "adversarial",
+      "language_mix": ["python"],
+      "expected_project_count": {"minimum": 1},
+      "expected_file_count": {"minimum": 3},
+      "expected_symbol_count": {"minimum": 2},
+      "known_characteristics": ["32 nested directory levels"],
+      "scenarios": [
+        {
+          "scenario_id": "deep-handler-search",
+          "title": "Find a deeply nested handler",
+          "kind": "search",
+          "query": "deep_handler",
+          "expected_minimum_results": 1
+        }
+      ]
+    },
+    {
+      "repository_id": "public-python-library",
+      "title": "Opt-in Python library checkout",
+      "source": "public",
+      "remote_url": "https://github.com/pallets/click.git",
+      "checkout_environment": "AGENTBUS_CORPUS_PYTHON_LIBRARY",
+      "scale": "real_world",
+      "language_mix": ["python"],
+      "known_characteristics": ["library API", "unit tests", "packaging metadata"],
+      "enabled_by_default": false,
+      "scenarios": [{
+        "scenario_id": "python-library-api",
+        "title": "Locate the public API and tests",
+        "kind": "task",
+        "query": "locate the primary public API implementation and its tests"
+      }]
+    },
+    {
+      "repository_id": "public-python-web-service",
+      "title": "Opt-in Python web service checkout",
+      "source": "public",
+      "remote_url": "https://github.com/fastapi/fastapi.git",
+      "checkout_environment": "AGENTBUS_CORPUS_PYTHON_WEB",
+      "scale": "large",
+      "language_mix": ["python"],
+      "known_characteristics": ["web endpoints", "documentation", "integration tests"],
+      "enabled_by_default": false,
+      "scenarios": [{
+        "scenario_id": "python-web-endpoint",
+        "title": "Locate endpoint implementation context",
+        "kind": "task",
+        "query": "locate a public HTTP endpoint implementation and its tests"
+      }]
+    },
+    {
+      "repository_id": "public-typescript-library",
+      "title": "Opt-in TypeScript library checkout",
+      "source": "public",
+      "remote_url": "https://github.com/microsoft/TypeScript.git",
+      "checkout_environment": "AGENTBUS_CORPUS_TYPESCRIPT_LIBRARY",
+      "scale": "very_large",
+      "language_mix": ["typescript", "javascript"],
+      "known_characteristics": ["compiler", "large test corpus", "generated artifacts"],
+      "enabled_by_default": false,
+      "scenarios": [{
+        "scenario_id": "typescript-library-api",
+        "title": "Locate compiler API context",
+        "kind": "task",
+        "query": "locate a compiler public API implementation and focused tests"
+      }]
+    },
+    {
+      "repository_id": "public-react-application",
+      "title": "Opt-in TypeScript and React checkout",
+      "source": "public",
+      "remote_url": "https://github.com/facebook/react.git",
+      "checkout_environment": "AGENTBUS_CORPUS_REACT_APP",
+      "scale": "very_large",
+      "language_mix": ["javascript", "typescript"],
+      "known_characteristics": ["workspace packages", "frontend runtime", "test fixtures"],
+      "enabled_by_default": false,
+      "scenarios": [{
+        "scenario_id": "react-component-context",
+        "title": "Locate component runtime context",
+        "kind": "task",
+        "query": "locate a component runtime implementation and related tests"
+      }]
+    },
+    {
+      "repository_id": "public-java-spring",
+      "title": "Opt-in Java Spring project checkout",
+      "source": "public",
+      "remote_url": "https://github.com/spring-projects/spring-petclinic.git",
+      "checkout_environment": "AGENTBUS_CORPUS_JAVA_SPRING",
+      "scale": "medium",
+      "language_mix": ["java"],
+      "known_characteristics": ["Spring application", "Maven project", "web controllers"],
+      "enabled_by_default": false,
+      "scenarios": [{
+        "scenario_id": "spring-controller-context",
+        "title": "Locate controller and test context",
+        "kind": "task",
+        "query": "locate a Spring controller implementation and related tests"
+      }]
+    },
+    {
+      "repository_id": "public-large-maven",
+      "title": "Opt-in large Maven repository checkout",
+      "source": "public",
+      "remote_url": "https://github.com/apache/maven.git",
+      "checkout_environment": "AGENTBUS_CORPUS_LARGE_MAVEN",
+      "scale": "large",
+      "language_mix": ["java"],
+      "known_characteristics": ["multi-module Maven build", "plugin architecture"],
+      "enabled_by_default": false,
+      "scenarios": [{
+        "scenario_id": "maven-module-context",
+        "title": "Locate module architecture context",
+        "kind": "task",
+        "query": "locate a core Maven module implementation and focused tests"
+      }]
+    },
+    {
+      "repository_id": "public-go-service",
+      "title": "Opt-in Go service checkout",
+      "source": "public",
+      "remote_url": "https://github.com/prometheus/prometheus.git",
+      "checkout_environment": "AGENTBUS_CORPUS_GO_SERVICE",
+      "scale": "very_large",
+      "language_mix": ["go"],
+      "known_characteristics": ["service commands", "storage", "HTTP APIs"],
+      "enabled_by_default": false,
+      "scenarios": [{
+        "scenario_id": "go-service-endpoint",
+        "title": "Locate service endpoint context",
+        "kind": "task",
+        "query": "locate a Go HTTP endpoint implementation and related tests"
+      }]
+    },
+    {
+      "repository_id": "public-go-library",
+      "title": "Opt-in Go library checkout",
+      "source": "public",
+      "remote_url": "https://github.com/stretchr/testify.git",
+      "checkout_environment": "AGENTBUS_CORPUS_GO_LIBRARY",
+      "scale": "medium",
+      "language_mix": ["go"],
+      "known_characteristics": ["library packages", "table-driven tests"],
+      "enabled_by_default": false,
+      "scenarios": [{
+        "scenario_id": "go-library-api",
+        "title": "Locate library API context",
+        "kind": "task",
+        "query": "locate a public Go API implementation and related tests"
+      }]
+    },
+    {
+      "repository_id": "public-mixed-monorepo",
+      "title": "Opt-in mixed-language monorepo checkout",
+      "source": "public",
+      "remote_url": "https://github.com/grpc/grpc.git",
+      "checkout_environment": "AGENTBUS_CORPUS_MIXED_MONOREPO",
+      "scale": "very_large",
+      "language_mix": ["python", "typescript", "java", "go"],
+      "known_characteristics": ["multiple language implementations", "generated code"],
+      "enabled_by_default": false,
+      "scenarios": [{
+        "scenario_id": "mixed-api-context",
+        "title": "Locate cross-language API context",
+        "kind": "task",
+        "query": "locate one cross-language API implementation and its tests"
+      }]
+    },
+    {
+      "repository_id": "public-deeply-nested",
+      "title": "Opt-in deeply nested repository checkout",
+      "source": "public",
+      "remote_url": "https://github.com/kubernetes/kubernetes.git",
+      "checkout_environment": "AGENTBUS_CORPUS_DEEPLY_NESTED",
+      "scale": "very_large",
+      "language_mix": ["go"],
+      "known_characteristics": ["deep package hierarchy", "many commands", "large tests"],
+      "enabled_by_default": false,
+      "scenarios": [{
+        "scenario_id": "deep-package-context",
+        "title": "Locate deeply nested package context",
+        "kind": "task",
+        "query": "locate a deeply nested API implementation and focused tests"
+      }]
+    }
+  ]
+}
