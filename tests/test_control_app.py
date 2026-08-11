@@ -329,6 +329,25 @@ def test_request_body_limit_is_enforced_before_routing(tmp_path: Path) -> None:
     assert response.json()["error"]["code"] == "request_too_large"
 
 
+def test_framework_http_errors_use_stable_safe_envelopes(tmp_path: Path) -> None:
+    client, _ = _client(tmp_path)
+
+    malformed = client.post(
+        "/api/v1/runs",
+        headers={**_auth(), "Content-Type": "application/json"},
+        content=b"\x80" + b"AZURE_OPENAI_API_KEY=must-not-echo",
+    )
+    missing = client.get("/api/v1/not-a-route", headers=_auth())
+
+    assert malformed.status_code == 400
+    assert malformed.json()["error"]["code"] == "invalid_request"
+    assert missing.status_code == 404
+    assert missing.json()["error"]["code"] == "not_found"
+    serialized = malformed.text + missing.text
+    assert "must-not-echo" not in serialized
+    assert "traceback" not in serialized.lower()
+
+
 def test_run_list_and_inspection_return_transport_models(tmp_path: Path) -> None:
     client, _ = _client(tmp_path)
 

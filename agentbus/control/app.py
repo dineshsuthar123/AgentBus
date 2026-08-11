@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -12,6 +13,7 @@ try:
     from fastapi import FastAPI, Query, Request
     from fastapi.exceptions import RequestValidationError
     from fastapi.responses import JSONResponse, Response, StreamingResponse
+    from starlette.exceptions import HTTPException as StarletteHTTPException
 except ImportError as exc:  # pragma: no cover - exercised by the CLI dependency test
     raise RuntimeError(
         'The control plane requires optional dependencies. Install "agentbus[ide]".'
@@ -234,6 +236,17 @@ def create_app(
             message="The request did not match the control protocol.",
             details={"issues": _bounded_validation_issues(exc.errors())},
             status_code=422,
+        )
+
+    @app.exception_handler(StarletteHTTPException)
+    async def http_error_handler(_request: Request, exc: StarletteHTTPException):
+        code, message = _safe_http_error(exc.status_code)
+        return _error_json(
+            JSONResponse,
+            code=code,
+            message=message,
+            status_code=exc.status_code,
+            headers=exc.headers,
         )
 
     @app.exception_handler(StateStoreError)
@@ -982,6 +995,7 @@ def _error_json(
     status_code: int,
     retryable: bool = False,
     details: dict[str, Any] | None = None,
+    headers: Mapping[str, str] | None = None,
 ):
     payload = ErrorResponse(
         error=ErrorBody(
@@ -994,11 +1008,26 @@ def _error_json(
     return response_type(
         status_code=status_code,
         content=payload.model_dump(mode="json"),
+        headers=headers,
     )
 
 
 def _reject_nonfinite_json() -> None:
     raise ValueError("Non-finite JSON values are not supported.")
+
+
+def _safe_http_error(status_code: int) -> tuple[str, str]:
+    errors = {
+        400: ("invalid_request", "The request body could not be parsed."),
+        404: ("not_found", "The requested control-plane resource was not found."),
+        405: ("method_not_allowed", "The request method is not supported."),
+        413: ("request_too_large", "The request exceeds the control-plane limit."),
+        415: ("invalid_content_type", "The request content type is not supported."),
+    }
+    return errors.get(
+        status_code,
+        ("http_error", "The control-plane request was rejected."),
+    )
 
 
 def _bounded_validation_issues(
