@@ -607,6 +607,11 @@ class ContainedFileSystem:
             )
             temporary = Path(temporary_name)
             try:
+                self._confirm_temporary_descriptor(temporary, descriptor)
+            except BaseException:
+                os.close(descriptor)
+                raise
+            try:
                 handle = os.fdopen(descriptor, "wb")
             except BaseException:
                 os.close(descriptor)
@@ -665,6 +670,30 @@ class ContainedFileSystem:
             created=before is None,
             atomic=True,
         )
+
+    def _confirm_temporary_descriptor(
+        self,
+        temporary: Path,
+        descriptor: int,
+    ) -> None:
+        try:
+            relative = temporary.relative_to(self.root).as_posix()
+        except ValueError as exc:
+            raise FileSystemContainmentError(
+                "Temporary mutation file escaped the assigned worktree."
+            ) from exc
+        resolved = self.resolver.resolve(relative, reject_any_link=True)
+        try:
+            descriptor_stat = os.fstat(descriptor)
+            path_stat = resolved.lexical_path.stat(follow_symlinks=False)
+        except OSError as exc:
+            raise FileMutationConflict(
+                "Temporary mutation file cannot be verified."
+            ) from exc
+        if _stat_identity(descriptor_stat) != _stat_identity(path_stat):
+            raise FileMutationConflict(
+                "Temporary mutation file identity changed before writing."
+            )
 
     def _ensure_parent_directories(self, relative_path: str) -> None:
         parent_parts = PurePosixPath(relative_path).parent.parts

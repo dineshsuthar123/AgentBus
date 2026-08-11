@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import tempfile
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 
@@ -122,6 +123,59 @@ def test_failed_atomic_replace_preserves_original_and_cleans_temporary_file(
 
     assert target.read_text(encoding="utf-8") == "original"
     assert list(tmp_path.glob(".module.py.agentbus-*.tmp")) == []
+
+
+def test_atomic_write_rejects_parent_swap_before_writing_payload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "root"
+    outside = tmp_path / "outside"
+    parent = root / "parent"
+    root.mkdir()
+    outside.mkdir()
+    parent.mkdir()
+    probe = root / "probe"
+    try:
+        probe.symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory links are unavailable: {exc}")
+    probe.unlink()
+
+    filesystem = ContainedFileSystem(root)
+    real_mkstemp = tempfile.mkstemp
+    real_fsync = os.fsync
+    observed_outside_payloads: list[bytes] = []
+
+    def redirect_mkstemp(*, prefix: str, suffix: str, dir: Path):
+        parent.rename(root / "held-parent")
+        parent.symlink_to(outside, target_is_directory=True)
+        return real_mkstemp(prefix=prefix, suffix=suffix, dir=dir)
+
+    def observe_fsync(descriptor: int) -> None:
+        observed_outside_payloads.extend(
+            path.read_bytes() for path in outside.iterdir() if path.is_file()
+        )
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(
+        "agentbus.tools.filesystem_operations.tempfile.mkstemp",
+        redirect_mkstemp,
+    )
+    monkeypatch.setattr(
+        "agentbus.tools.filesystem_operations.os.fsync",
+        observe_fsync,
+    )
+
+    with pytest.raises(FileSystemContainmentError):
+        filesystem.create(
+            "parent/private.txt",
+            "must-remain-contained",
+            **ATTRIBUTION,
+        )
+
+    assert b"must-remain-contained" not in observed_outside_payloads
+    assert list(outside.iterdir()) == []
 
 
 def test_write_rejects_oversized_input_and_existing_target(tmp_path: Path) -> None:
