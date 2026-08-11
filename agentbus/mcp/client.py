@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import threading
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import jsonschema
 
@@ -16,7 +16,7 @@ from agentbus.mcp.errors import (
 )
 from agentbus.mcp.models import McpServerConfig, namespace_mcp_tool
 from agentbus.mcp.transport import McpTransport
-from agentbus.security.redaction import redact_text
+from agentbus.security.redaction import redact_text, sanitize_json
 
 
 MAX_MCP_REMOTE_METADATA_BYTES = 65_536
@@ -233,9 +233,18 @@ class McpClient:
                 tool.output_schema,
                 "MCP structured tool output",
             )
+        safe_content = tuple(
+            cast(dict[str, Any], sanitize_json(item))
+            for item in content
+        )
+        safe_structured = (
+            cast(dict[str, Any], sanitize_json(structured))
+            if structured is not None
+            else None
+        )
         return McpToolCallResult(
-            content=tuple(content),
-            structured_content=structured,
+            content=safe_content,
+            structured_content=safe_structured,
             is_error=is_error,
         )
 
