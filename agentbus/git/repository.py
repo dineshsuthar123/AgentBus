@@ -613,7 +613,7 @@ class GitRepository:
                 text=True,
                 timeout=self.timeout_seconds,
                 shell=False,
-                env=_git_environment(),
+                env=safe_git_environment(),
             )
         except subprocess.TimeoutExpired as exc:
             raise GitRepositoryError(
@@ -854,7 +854,7 @@ class GitRepository:
             raise GitRepositoryError("Branch name contains unsafe characters.")
 
 
-def _git_environment() -> dict[str, str]:
+def safe_git_environment() -> dict[str, str]:
     environment = safe_child_environment()
     for name in tuple(environment):
         if (

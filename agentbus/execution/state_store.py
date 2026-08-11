@@ -183,6 +183,10 @@ class ComparisonRecordConflictError(StateStoreError):
     pass
 
 
+class WorktreeRecordConflictError(StateStoreError):
+    pass
+
+
 _MAX_TEXT_CHARS = 20_000
 _PRIVATE_REPLAY_WORKSPACE = "[ISOLATED_REPLAY_WORKSPACE]"
 _DEFAULT_BUSY_TIMEOUT_MS = 5_000
@@ -3942,6 +3946,34 @@ class StateStore:
             self._require_run_row(connection, record.run_id)
             if record.task_id is not None:
                 self._require_task_row(connection, record.run_id, record.task_id)
+            existing = None
+            if record.purpose == WorktreePurpose.TASK:
+                existing = connection.execute(
+                    """SELECT worktree_id FROM worktrees
+                    WHERE run_id = ? AND task_id = ? AND purpose = ? AND status != ?
+                    LIMIT 1""",
+                    (
+                        record.run_id,
+                        record.task_id,
+                        record.purpose.value,
+                        WorktreeStatus.REMOVED.value,
+                    ),
+                ).fetchone()
+            elif record.purpose == WorktreePurpose.INTEGRATION:
+                existing = connection.execute(
+                    """SELECT worktree_id FROM worktrees
+                    WHERE run_id = ? AND task_id IS NULL AND purpose = ? AND status != ?
+                    LIMIT 1""",
+                    (
+                        record.run_id,
+                        record.purpose.value,
+                        WorktreeStatus.REMOVED.value,
+                    ),
+                ).fetchone()
+            if existing is not None:
+                raise WorktreeRecordConflictError(
+                    "A non-removed worktree already owns this run and task scope."
+                )
             connection.execute(
                 """
                 INSERT INTO worktrees(
