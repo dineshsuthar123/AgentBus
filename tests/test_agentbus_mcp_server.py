@@ -115,6 +115,35 @@ def test_mcp_submission_forces_offline_managed_settings_and_cancel_is_bounded(
     assert cancelled.json()["result"]["isError"] is False
 
 
+def test_mcp_rejects_duplicate_batch_ids_before_mutation(tmp_path: Path) -> None:
+    client, supervisor = _client(tmp_path)
+    _initialize(client)
+    call = {
+        "jsonrpc": "2.0",
+        "id": "duplicate-mutation",
+        "method": "tools/call",
+        "params": {
+            "name": "agentbus.run.submit",
+            "arguments": {
+                "task": "Must execute at most once",
+                "workspace": str(tmp_path),
+            },
+        },
+    }
+
+    response = client.post(
+        "/mcp",
+        headers={**_headers(), "MCP-Protocol-Version": PROTOCOL},
+        json=[call, call],
+    )
+
+    assert response.status_code == 200
+    assert response.json()["error"]["code"] == -32600
+    assert response.json()["id"] is None
+    assert "duplicate" in response.json()["error"]["message"].lower()
+    assert supervisor.submissions == []
+
+
 def test_mcp_rejects_unauthenticated_unsupported_and_unexposed_requests(
     tmp_path: Path,
 ) -> None:

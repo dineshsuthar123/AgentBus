@@ -72,6 +72,8 @@ class AgentBusMcpServer:
         if isinstance(payload, list):
             if not payload or len(payload) > MAX_AGENTBUS_MCP_BATCH:
                 return _error(None, -32600, "Invalid JSON-RPC batch")
+            if _has_duplicate_request_ids(payload):
+                return _error(None, -32600, "Duplicate JSON-RPC request IDs")
             responses = [
                 response
                 for item in payload
@@ -415,6 +417,23 @@ def _error(request_id: Any, code: int, message: str) -> dict[str, Any]:
         "id": request_id,
         "error": {"code": code, "message": message},
     }
+
+
+def _has_duplicate_request_ids(messages: list[Any]) -> bool:
+    seen: set[tuple[type[Any], str | int | None]] = set()
+    for message in messages:
+        if not isinstance(message, dict) or "id" not in message:
+            continue
+        request_id = message.get("id")
+        if isinstance(request_id, bool) or not (
+            request_id is None or isinstance(request_id, (str, int))
+        ):
+            continue
+        identity = (type(request_id), request_id)
+        if identity in seen:
+            return True
+        seen.add(identity)
+    return False
 
 
 def _encoded_size(value: Any) -> int:
