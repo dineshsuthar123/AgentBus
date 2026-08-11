@@ -291,6 +291,27 @@ def test_validation_errors_use_stable_error_envelope(tmp_path: Path) -> None:
     assert "traceback" not in response.text.lower()
 
 
+def test_validation_errors_bound_and_hide_attacker_controlled_locations(
+    tmp_path: Path,
+) -> None:
+    client, _ = _client(tmp_path)
+    secret = "AZURE_OPENAI_API_KEY=control-private-value"
+    hostile_field = secret + "-" + "x" * 20_000
+
+    response = client.post(
+        "/api/v1/runs",
+        headers=_auth(),
+        json={"task": "", "workspace": str(tmp_path), hostile_field: "ignored"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "validation_error"
+    assert "[unexpected field]" in response.text
+    assert len(response.content) < 16_384
+    assert secret not in response.text
+    assert "traceback" not in response.text.lower()
+
+
 def test_request_body_limit_is_enforced_before_routing(tmp_path: Path) -> None:
     client, _ = _client(tmp_path)
 

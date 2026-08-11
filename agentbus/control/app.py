@@ -114,10 +114,13 @@ from agentbus.execution.state_store import StateStoreError
 from agentbus.git.repository import GitRepositoryError
 from agentbus.mcp.server import AgentBusMcpServer
 from agentbus.replay.session import ReplaySessionStatus
-from agentbus.security.redaction import sanitize_json
+from agentbus.security.redaction import redact_text, sanitize_json
 from agentbus.tools.descriptors import builtin_descriptors
 
 MAX_REQUEST_BYTES = 1_000_000
+MAX_VALIDATION_ISSUES = 50
+MAX_VALIDATION_LOCATION_PARTS = 8
+MAX_VALIDATION_TEXT_CHARS = 128
 
 
 @dataclass(frozen=True)
@@ -225,19 +228,11 @@ def create_app(
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(_request: Request, exc: RequestValidationError):
-        details = [
-            {
-                "location": [str(part) for part in item.get("loc", ())],
-                "message": item.get("msg", "Invalid value."),
-                "type": item.get("type", "validation_error"),
-            }
-            for item in exc.errors()
-        ]
         return _error_json(
             JSONResponse,
             code="validation_error",
             message="The request did not match the control protocol.",
-            details={"issues": details[:50]},
+            details={"issues": _bounded_validation_issues(exc.errors())},
             status_code=422,
         )
 
@@ -1004,3 +999,38 @@ def _error_json(
 
 def _reject_nonfinite_json() -> None:
     raise ValueError("Non-finite JSON values are not supported.")
+
+
+def _bounded_validation_issues(
+    errors: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    issues: list[dict[str, Any]] = []
+    for error in errors[:MAX_VALIDATION_ISSUES]:
+        issue_type = _bounded_validation_text(
+            error.get("type"),
+            default="validation_error",
+        )
+        location = list(error.get("loc", ()))[:MAX_VALIDATION_LOCATION_PARTS]
+        if issue_type == "extra_forbidden" and location:
+            location[-1] = "[unexpected field]"
+        issues.append(
+            {
+                "location": [
+                    _bounded_validation_text(part, default="[invalid]")
+                    for part in location
+                ],
+                "message": _bounded_validation_text(
+                    error.get("msg"),
+                    default="Invalid value.",
+                ),
+                "type": issue_type,
+            }
+        )
+    return issues
+
+
+def _bounded_validation_text(value: Any, *, default: str) -> str:
+    if value is None:
+        return default
+    safe = redact_text(str(value), max_chars=MAX_VALIDATION_TEXT_CHARS)
+    return safe or default
