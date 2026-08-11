@@ -57,6 +57,18 @@ def test_environment_accepts_only_explicit_safe_overrides(tmp_path: Path) -> Non
         sanitized_process_environment(source={}, overrides={"API_KEY": "secret"})
 
 
+def test_environment_pins_deterministic_python_encoding() -> None:
+    environment = sanitized_process_environment(
+        source={
+            "PYTHONIOENCODING": "cp1252",
+            "PYTHONUTF8": "0",
+        }
+    )
+
+    assert environment["PYTHONIOENCODING"] == "utf-8"
+    assert environment["PYTHONUTF8"] == "1"
+
+
 def test_environment_diagnostics_never_include_values() -> None:
     diagnostic = environment_diagnostics({"PATH": "secret-value", "CI": "1"})
 
