@@ -29,6 +29,7 @@ COMMANDS = (
     "cleanup",
     "logs",
     "support-bundle",
+    "validate",
     "benchmark",
     "soak",
     "release-check",
@@ -131,6 +132,10 @@ def main(argv: list[str] | None = None) -> int:
         return _logs_command(rest)
     if command == "support-bundle":
         return _support_bundle_command(rest)
+    if command == "validate":
+        from agentbus.validation.commands import validation_command
+
+        return validation_command(rest)
     if command == "benchmark":
         return _benchmark_command(rest)
     if command == "soak":
@@ -185,6 +190,7 @@ def _root_parser() -> argparse.ArgumentParser:
         "cleanup": "Remove only proven AgentBus-owned stale runtime artifacts.",
         "logs": "Inspect bounded redacted product and run logs.",
         "support-bundle": "Create a sanitized local diagnostic ZIP.",
+        "validate": "Validate local repositories and offline corpus fixtures.",
         "benchmark": "Measure bounded offline product performance.",
         "soak": "Exercise bounded offline reliability and leak checks.",
         "release-check": "Run non-publishing public beta release gates.",

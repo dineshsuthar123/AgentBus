@@ -31,7 +31,8 @@ def write_validation_report(
 def render_validation_report(report: ValidationReport) -> str:
     lines = [
         f"AgentBus repository validation: {report.status.value}",
-        f"Repositories: {len(report.runs)}; network used: no",
+        f"Repositories: {len(report.runs)}; "
+        f"network used: {'yes' if report.network_used else 'no'}",
     ]
     for run in report.runs:
         lines.append(
@@ -43,6 +44,8 @@ def render_validation_report(report: ValidationReport) -> str:
             lines.append(f"    {failure.category.value}: {failure.summary}")
         for warning in run.warnings:
             lines.append(f"    warning: {warning}")
+    for warning in report.warnings:
+        lines.append(f"  warning: {warning}")
     if report.status == ValidationStatus.PASS_WITH_WARNINGS:
         lines.append("Validation completed with bounded non-fatal warnings.")
     return "\n".join(lines)
