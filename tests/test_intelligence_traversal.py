@@ -135,6 +135,45 @@ def test_detects_strong_components_and_cycles() -> None:
     assert all(isinstance(item, StrongComponent) for item in cycles)
 
 
+def test_strong_components_bound_all_examined_edges() -> None:
+    unresolved = (
+        _edge("a", "opaque-a", resolved=False),
+        _edge("b", "opaque-b", resolved=False),
+    )
+    accepted = DependencyGraph(
+        unresolved,
+        limits=TraversalLimits(maximum_edges=2),
+    )
+    rejected = DependencyGraph(
+        unresolved,
+        limits=TraversalLimits(maximum_edges=1),
+    )
+
+    assert accepted.strongly_connected_components() == ()
+    with pytest.raises(QueryLimitError, match="edge limit"):
+        rejected.strongly_connected_components()
+
+
+def test_graph_wide_queries_enforce_the_node_budget() -> None:
+    symbols = (
+        _symbol("first", exported=True),
+        _symbol("second"),
+    )
+    graph = DependencyGraph(
+        (),
+        symbols=symbols,
+        limits=TraversalLimits(maximum_nodes=1),
+    )
+
+    for query in (
+        graph.public_api_surfaces,
+        graph.high_centrality,
+        graph.orphaned_symbols,
+    ):
+        with pytest.raises(QueryLimitError, match="node limit"):
+            query()
+
+
 def test_reports_project_crossings_centrality_and_unresolved_edges() -> None:
     unresolved = _edge("a", "opaque", resolved=False)
     graph = DependencyGraph(

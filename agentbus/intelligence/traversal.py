@@ -279,6 +279,7 @@ class DependencyGraph:
         *,
         kinds: Iterable[DependencyKind] = (),
     ) -> tuple[StrongComponent, ...]:
+        self._require_edge_budget("Strong-component")
         allowed = _kind_filter(kinds)
         edges = tuple(
             edge
@@ -305,32 +306,41 @@ class DependencyGraph:
         reverse = _adjacency(edges, reverse=True)
         finish_order = _finish_order(nodes, forward)
         assigned: set[str] = set()
-        components: list[StrongComponent] = []
+        component_nodes: list[tuple[str, ...]] = []
         for start in reversed(finish_order):
             if start in assigned:
                 continue
             component = _collect_component(start, reverse, assigned)
-            members = frozenset(component)
-            component_edges = tuple(
-                edge.edge_id
-                for edge in edges
-                if (
-                    edge.source_id in members
-                    and edge.target_id in members
-                )
+            component_nodes.append(tuple(sorted(component)))
+
+        component_by_node = {
+            node_id: index
+            for index, component in enumerate(component_nodes)
+            for node_id in component
+        }
+        component_edges: list[list[str]] = [
+            [] for _ in component_nodes
+        ]
+        self_loop_components: set[int] = set()
+        for edge in edges:
+            source_component = component_by_node[edge.source_id]
+            if source_component != component_by_node[edge.target_id]:
+                continue
+            component_edges[source_component].append(edge.edge_id)
+            if edge.source_id == edge.target_id:
+                self_loop_components.add(source_component)
+
+        components = tuple(
+            StrongComponent(
+                node_ids=nodes_in_component,
+                edge_ids=tuple(component_edges[index]),
+                cyclic=(
+                    len(nodes_in_component) > 1
+                    or index in self_loop_components
+                ),
             )
-            self_loop = any(
-                edge.source_id == edge.target_id
-                for edge in edges
-                if edge.source_id in members
-            )
-            components.append(
-                StrongComponent(
-                    node_ids=tuple(sorted(component)),
-                    edge_ids=component_edges,
-                    cyclic=len(component) > 1 or self_loop,
-                )
-            )
+            for index, nodes_in_component in enumerate(component_nodes)
+        )
         return tuple(
             sorted(components, key=lambda item: item.node_ids)
         )
@@ -368,6 +378,7 @@ class DependencyGraph:
         return tuple(crossings)
 
     def public_api_surfaces(self) -> tuple[str, ...]:
+        self._require_node_budget("Public API")
         return tuple(
             item.symbol_id
             for item in self.symbols
@@ -381,6 +392,7 @@ class DependencyGraph:
     ) -> tuple[CentralityScore, ...]:
         if limit < 1 or limit > 1_000:
             raise ValueError("centrality limit must be between 1 and 1000")
+        self._require_node_budget("Centrality")
         self._require_edge_budget("Centrality")
         node_count = max(len(self.node_ids), 1)
         scores: list[CentralityScore] = []
@@ -419,6 +431,7 @@ class DependencyGraph:
         )
 
     def orphaned_symbols(self) -> tuple[str, ...]:
+        self._require_node_budget("Orphaned-symbol")
         self._require_edge_budget("Orphaned-symbol")
         connected = {
             identity
@@ -537,6 +550,12 @@ class DependencyGraph:
         if len(self.edges) > self.limits.maximum_edges:
             raise QueryLimitError(
                 f"{operation} query exceeds the graph edge limit."
+            )
+
+    def _require_node_budget(self, operation: str) -> None:
+        if len(self.node_ids) > self.limits.maximum_nodes:
+            raise QueryLimitError(
+                f"{operation} query exceeds the graph node limit."
             )
 
 
