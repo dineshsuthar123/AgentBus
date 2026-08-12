@@ -319,7 +319,7 @@ def repository_intelligence_suite() -> EvaluationSuite:
         "expected_languages": {
             "go": 2,
             "java": 3,
-            "python": 8,
+            "python": 9,
             "typescript": 3,
         },
         "expected_projects": [
@@ -331,7 +331,7 @@ def repository_intelligence_suite() -> EvaluationSuite:
             "intelligence-shared-python",
         ],
         "minimum_counts": {
-            "files": 16,
+            "files": 17,
             "symbols": 40,
             "references": 50,
             "edges": 50,
@@ -420,13 +420,92 @@ def repository_intelligence_suite() -> EvaluationSuite:
                     **mixed_inventory,
                     "scenario": "planning",
                     "retrieval_precision_minimum": 1.0,
+                    "expected_search_stale": True,
                     "impact_recall_minimum": 1.0,
                     "test_recall_minimum": 1.0,
                     "search_probes": [
-                        _search_probe("calculate_total", "services/python_service/calculator.py", 1),
-                        _search_probe("CalculatorPanel", "packages/web/src/calculator.ts", 1),
-                        _search_probe("OrderService", "services/java/src/main/java/fixture/OrderService.java", 5),
-                        _search_probe("healthHandler", "services/go/main.go", 1),
+                        _search_probe(
+                            "exact_identifier",
+                            "calculate_total",
+                            ("services/python_service/calculator.py",),
+                            1,
+                            expected_components=("lexical", "symbol_match"),
+                        ),
+                        _search_probe(
+                            "fuzzy_identifier",
+                            "calculate total",
+                            (
+                                "services/python_service/calculator.py",
+                                "services/python_service/tests/test_calculator.py",
+                            ),
+                            2,
+                            expected_components=("lexical",),
+                        ),
+                        _search_probe(
+                            "endpoint",
+                            "GET /calculate",
+                            ("services/python_service/app.py",),
+                            1,
+                            expected_components=("lexical",),
+                        ),
+                        _search_probe(
+                            "implementation_location",
+                            "services/python_service/pricing.py",
+                            ("services/python_service/pricing.py",),
+                            3,
+                            expected_components=("lexical", "symbol_match"),
+                        ),
+                        _search_probe(
+                            "test_location",
+                            "services/python_service/tests/test_calculator.py",
+                            (
+                                "services/python_service/tests/test_calculator.py",
+                            ),
+                            3,
+                            expected_components=("lexical", "symbol_match"),
+                        ),
+                        _search_probe(
+                            "configuration",
+                            "PAYMENT_TIMEOUT_SECONDS",
+                            ("services/python_service/settings.py",),
+                            1,
+                            expected_components=("lexical", "symbol_match"),
+                        ),
+                        _search_probe(
+                            "dependency_related_symbol",
+                            "add_values",
+                            (
+                                "packages/shared_python/rules.py",
+                                "services/python_service/calculator.py",
+                                "services/python_service/pricing.py",
+                                "services/python_service/tests/test_calculator.py",
+                            ),
+                            5,
+                            required_paths=(
+                                "packages/shared_python/rules.py",
+                                "services/python_service/pricing.py",
+                            ),
+                            expected_components=("dependency", "lexical"),
+                        ),
+                        _search_probe(
+                            "architecture_boundary",
+                            "intelligence-python-service",
+                            (
+                                "services/python_service/app.py",
+                                "services/python_service/calculator.py",
+                                "services/python_service/pricing.py",
+                                "services/python_service/tests/test_calculator.py",
+                            ),
+                            8,
+                            expected_components=(
+                                "architecture",
+                                "project_proximity",
+                            ),
+                        ),
+                        _empty_search_probe(
+                            "protected_file_exclusion",
+                            "synthetic-protected-marker",
+                        ),
                     ],
                     "impact_probes": [
                         {
@@ -525,7 +604,13 @@ def repository_intelligence_suite() -> EvaluationSuite:
                     "maximum_storage_bytes": 32 * 1024 * 1024,
                     "retrieval_precision_minimum": 1.0,
                     "search_probes": [
-                        _search_probe("value_0119", "src/module_0119.py", 1),
+                        _search_probe(
+                            "exact_identifier",
+                            "value_0119",
+                            ("src/module_0119.py",),
+                            1,
+                            expected_components=("lexical", "symbol_match"),
+                        ),
                     ],
                     "context_probe": {
                         "task": "Change value_0119 without loading the whole repository",
@@ -715,18 +800,84 @@ def _evaluate_search(
     probes = benchmark.get("search_probes", [])
     if not probes:
         return None
-    outcomes: dict[str, bool] = {}
-    hits = 0
+    outcomes: dict[str, dict[str, Any]] = {}
+    relevant_hits = 0
+    evaluated_slots = 0
+    categories: set[str] = set()
     for index, probe in enumerate(probes):
+        category = str(probe.get("category", f"probe_{index}"))
+        if category in categories:
+            raise ValueError("search probe categories must be unique")
+        categories.add(category)
         limit = int(probe["top_k"])
         report = service.search(probe["query"], limit=limit)
         reports.append(report)
-        paths = [item.relative_path for item in report.results[:limit]]
-        matched = probe["expected_path"] in paths
-        hits += int(matched)
-        checks[f"search_{index}_{_check_name(probe['query'])}"] = matched
-        outcomes[probe["query"]] = matched
-    precision = hits / len(probes)
+        results = report.results[:limit]
+        paths = [item.relative_path for item in results]
+        check_prefix = f"search_{index}_{_check_name(category)}"
+        explanation_correct = all(
+            _search_explanation_correct(item) for item in results
+        )
+        checks[f"{check_prefix}_explanations"] = explanation_correct
+        if bool(probe.get("expect_empty", False)):
+            empty = not results
+            checks[f"{check_prefix}_empty"] = empty
+            outcomes[category] = {
+                "query": probe["query"],
+                "top_k": limit,
+                "result_paths": paths,
+                "expected_empty": True,
+                "explanations_correct": explanation_correct,
+            }
+            continue
+
+        relevant_paths = set(probe["relevant_paths"])
+        required_paths = set(
+            probe.get("required_paths", probe["relevant_paths"])
+        )
+        expected_components = set(probe.get("expected_components", ()))
+        expected_stale = bool(
+            benchmark.get("expected_search_stale", False)
+        )
+        relevant_results = tuple(
+            item for item in results if item.relative_path in relevant_paths
+        )
+        probe_hits = len(relevant_results)
+        probe_precision = probe_hits / limit
+        relevant_hits += probe_hits
+        evaluated_slots += limit
+        required_present = required_paths.issubset(paths)
+        available_components = {
+            component
+            for item in relevant_results
+            for component in item.score_components
+        }
+        components_present = expected_components.issubset(
+            available_components
+        )
+        stale_correct = all(
+            item.stale is expected_stale for item in results
+        )
+        minimum_precision = float(probe.get("minimum_precision", 1.0))
+        checks[f"{check_prefix}_precision_at_k"] = (
+            probe_precision >= minimum_precision
+        )
+        checks[f"{check_prefix}_required_paths"] = required_present
+        checks[f"{check_prefix}_score_components"] = components_present
+        checks[f"{check_prefix}_stale_state"] = stale_correct
+        outcomes[category] = {
+            "query": probe["query"],
+            "top_k": limit,
+            "precision_at_k": probe_precision,
+            "result_paths": paths,
+            "required_paths_present": required_present,
+            "expected_components_present": components_present,
+            "explanations_correct": explanation_correct,
+            "stale_state_correct": stale_correct,
+        }
+    if evaluated_slots == 0:
+        raise ValueError("search evaluation requires a positive retrieval probe")
+    precision = relevant_hits / evaluated_slots
     checks["retrieval_precision_threshold"] = precision >= float(
         benchmark.get("retrieval_precision_minimum", 0)
     )
@@ -1024,8 +1175,45 @@ def _reference_probe(
     }
 
 
-def _search_probe(query: str, expected_path: str, top_k: int) -> dict[str, Any]:
-    return {"query": query, "expected_path": expected_path, "top_k": top_k}
+def _search_probe(
+    category: str,
+    query: str,
+    relevant_paths: tuple[str, ...],
+    top_k: int,
+    *,
+    required_paths: tuple[str, ...] | None = None,
+    expected_components: tuple[str, ...] = (),
+    minimum_precision: float = 1.0,
+) -> dict[str, Any]:
+    return {
+        "category": category,
+        "query": query,
+        "relevant_paths": list(relevant_paths),
+        "required_paths": list(required_paths or relevant_paths),
+        "expected_components": list(expected_components),
+        "minimum_precision": minimum_precision,
+        "top_k": top_k,
+    }
+
+
+def _empty_search_probe(category: str, query: str) -> dict[str, Any]:
+    return {
+        "category": category,
+        "query": query,
+        "expect_empty": True,
+        "top_k": 5,
+    }
+
+
+def _search_explanation_correct(result: Any) -> bool:
+    if not result.explanation.startswith("Explainable hybrid ranking: "):
+        return False
+    if not result.explanation.endswith(".") or not result.score_components:
+        return False
+    return all(
+        f"{name.replace('_', ' ')}={score:g}" in result.explanation
+        for name, score in result.score_components.items()
+    )
 
 
 def _test_probe(subject: str, expected_test: str) -> dict[str, Any]:

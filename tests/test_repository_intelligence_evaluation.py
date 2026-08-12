@@ -73,7 +73,7 @@ def test_repository_intelligence_evaluation_uses_real_providerless_service(
     incremental = _metrics(by_case["incremental-staleness-and-rename"])
     large = _metrics(by_case["large-repository-budget"])
 
-    assert multilingual["indexed_files"] == 16
+    assert multilingual["indexed_files"] == 17
     assert multilingual["indexing_correctness"] == 1
     assert multilingual["symbol_precision"] == pytest.approx(8 / 9)
     assert multilingual["reference_precision"] == 1
@@ -88,6 +88,36 @@ def test_repository_intelligence_evaluation_uses_real_providerless_service(
     assert large["indexed_files"] == 132
     assert large["retrieval_precision"] == 1
     assert large["context_budget_adherence"] == 1
+
+    search_details = by_case["graph-retrieval-impact"].raw_metrics[
+        "details"
+    ]["search_probes"]
+    positive_categories = {
+        "architecture_boundary",
+        "configuration",
+        "dependency_related_symbol",
+        "endpoint",
+        "exact_identifier",
+        "fuzzy_identifier",
+        "implementation_location",
+        "test_location",
+    }
+    assert set(search_details) == {
+        *positive_categories,
+        "protected_file_exclusion",
+    }
+    for category in positive_categories:
+        detail = search_details[category]
+        assert detail["precision_at_k"] == 1
+        assert detail["required_paths_present"] is True
+        assert detail["expected_components_present"] is True
+        assert detail["explanations_correct"] is True
+        assert detail["stale_state_correct"] is True
+    protected = search_details["protected_file_exclusion"]
+    assert protected["expected_empty"] is True
+    assert protected["result_paths"] == []
+    assert "synthetic-fixture" in planning["interpretation_note"]
+    assert "statistical significance" in planning["interpretation_note"]
 
     for result in run.case_results:
         metrics = _metrics(result)
