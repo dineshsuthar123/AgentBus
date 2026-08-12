@@ -167,10 +167,17 @@ class CheckpointManager:
             raise ReplayIncompatibleError(
                 "Replay checkpoint must contain exactly one state document."
             )
+        reference = references[0]
         try:
-            state = ReplayCheckpointState.model_validate(
-                self.store.get_json(references[0].sha256)
-            )
+            stored = self.store.get(reference.sha256)
+            if (
+                stored.metadata.media_type != reference.media_type
+                or stored.metadata.byte_size != reference.byte_length
+            ):
+                raise ValueError(
+                    "checkpoint reference metadata does not match its object"
+                )
+            state = ReplayCheckpointState.model_validate_json(stored.data)
         except Exception as exc:
             raise ReplayIncompatibleError(
                 "Replay checkpoint state is unavailable or incompatible."

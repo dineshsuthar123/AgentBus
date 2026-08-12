@@ -9,6 +9,7 @@ from agentbus.execution.state_store import StateStore
 from agentbus.policy import ToolPolicyEngine
 from agentbus.replay import (
     ForkRequest,
+    ReplayIncompatibleError,
     ReplayRequest,
     ReplaySessionStatus,
     ReplaySpanAction,
@@ -25,8 +26,10 @@ from agentbus.tools import builtin_tool_registry
 from agentbus.tools.capabilities import derive_required_capabilities
 from agentbus.tools.dispatcher import ToolDispatcher
 from agentbus.tools.protocol import (
+    ToolCapabilityName,
     ToolInvocation,
     ToolInvocationContext,
+    ToolPolicyOutcome,
 )
 from agentbus.trace import (
     IntelligenceDriftCategory,
@@ -37,6 +40,8 @@ from agentbus.trace import (
     TraceStatus,
     build_repository_intelligence_trace_evidence,
 )
+from agentbus.trace.errors import TraceIntegrityError
+from agentbus.trace.protocols import provenance_protocol_documents
 from agentbus.trace.sealing import seal_run_provenance
 
 
@@ -510,6 +515,169 @@ def test_service_exports_imports_and_replays_archive_without_execution_on_import
     assert imported_replay.session.status == ReplaySessionStatus.SUCCEEDED
     assert imported_replay.session.provider_calls == 0
     assert imported_replay.session.network_calls == 0
+
+
+def test_service_rejects_current_protocol_drift_before_archive_import(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    config, store, service = _service(tmp_path)
+    trace, _ = _record_run(config, store, "run-stale-protocol")
+    archive = tmp_path / "stale-protocol.agentbus-trace"
+    service.export_trace(trace.run_id, archive)
+
+    target_root = tmp_path / "target"
+    target_workspace = target_root / "workspace"
+    target_workspace.mkdir(parents=True)
+    marker = target_workspace / "marker.txt"
+    marker.write_text("original\n", encoding="utf-8")
+    target_config = AgentBusConfig(
+        workspace_dir=str(target_workspace),
+        state_db=str(target_root / "state.db"),
+    )
+    target_store = StateStore(target_config.state_database_path)
+    target_service = TraceReplayService(
+        target_config,
+        state_store=target_store,
+    )
+    current_protocols = provenance_protocol_documents()
+    changed_protocols = dict(current_protocols)
+    changed_protocols[sorted(changed_protocols)[0]] = {"schema_version": 999}
+    monkeypatch.setattr(
+        "agentbus.replay.service.provenance_protocol_documents",
+        lambda: changed_protocols,
+    )
+
+    with pytest.raises(ReplayIncompatibleError, match="protocol"):
+        target_service.replay_archive(archive)
+
+    assert target_service.object_store.list_metadata() == []
+    assert target_store.list_replay_sessions() == []
+    assert marker.read_text(encoding="utf-8") == "original\n"
+
+
+def test_service_rejects_archive_replacement_before_replay(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    config, store, service = _service(tmp_path)
+    first, _ = _record_run(config, store, "run-archive-first")
+    second, _ = _record_run(config, store, "run-archive-second")
+    first_archive = tmp_path / "first.agentbus-trace"
+    second_archive = tmp_path / "second.agentbus-trace"
+    service.export_trace(first.run_id, first_archive)
+    service.export_trace(second.run_id, second_archive)
+
+    target_root = tmp_path / "replacement-target"
+    target_workspace = target_root / "workspace"
+    target_workspace.mkdir(parents=True)
+    marker = target_workspace / "marker.txt"
+    marker.write_text("original\n", encoding="utf-8")
+    target_config = AgentBusConfig(
+        workspace_dir=str(target_workspace),
+        state_db=str(target_root / "state.db"),
+    )
+    target_store = StateStore(target_config.state_database_path)
+    target_service = TraceReplayService(
+        target_config,
+        state_store=target_store,
+    )
+    import_archive = target_service.import_archive
+    monkeypatch.setattr(
+        target_service,
+        "import_archive",
+        lambda _source, **kwargs: import_archive(second_archive, **kwargs),
+    )
+
+    def unexpected_engine(*_args, **_kwargs):
+        raise AssertionError("replacement archive reached replay execution")
+
+    monkeypatch.setattr(target_service, "_engine", unexpected_engine)
+
+    with pytest.raises(TraceIntegrityError, match="changed"):
+        target_service.replay_archive(first_archive)
+
+    assert target_store.list_replay_sessions() == []
+    assert marker.read_text(encoding="utf-8") == "original\n"
+
+
+def test_service_rejects_changed_policy_without_replaying_mutation(
+    tmp_path,
+) -> None:
+    config, store, _ = _service(tmp_path)
+    trace, created = _record_tool_run(config, store, "run-policy-drift")
+    created.unlink()
+
+    class DenyPolicy:
+        def evaluate(self, invocation, descriptor):
+            decision = ToolPolicyEngine().evaluate(invocation, descriptor)
+            return decision.model_copy(
+                update={
+                    "outcome": ToolPolicyOutcome.DENY,
+                    "rule_id": "deny.changed-policy",
+                    "reason": "Current replay policy denies the invocation.",
+                }
+            )
+
+    service = TraceReplayService(
+        config,
+        state_store=store,
+        tool_replay_planner=ToolReplayPlanner(DenyPolicy()),
+    )
+    result = service.replay(
+        trace.run_id,
+        ReplayRequest(
+            replay_id="replay-policy-drift",
+            source_trace_id=trace.trace_id,
+            source_run_id=trace.run_id,
+            mode=ReplayMode.OFFLINE,
+        ),
+    )
+
+    assert result.session.status == ReplaySessionStatus.INCOMPATIBLE
+    assert result.session.provider_calls == 0
+    assert result.session.network_calls == 0
+    assert created.exists() is False
+
+
+def test_service_rejects_expanded_capability_without_replaying_mutation(
+    tmp_path,
+) -> None:
+    config, store, baseline = _service(tmp_path)
+    trace, created = _record_tool_run(config, store, "run-capability-drift")
+    created.unlink()
+    descriptors = dict(baseline.tool_descriptors)
+    current = descriptors["filesystem.create"]
+    expanded_capability = current.capabilities[0].model_copy(
+        update={"name": ToolCapabilityName.FILESYSTEM_DELETE}
+    )
+    descriptors[current.name] = current.model_copy(
+        update={
+            "version": current.version.model_copy(
+                update={"major": current.version.major + 1}
+            ),
+            "capabilities": (*current.capabilities, expanded_capability),
+        }
+    )
+    service = TraceReplayService(
+        config,
+        state_store=store,
+        tool_descriptors=descriptors,
+    )
+    result = service.replay(
+        trace.run_id,
+        ReplayRequest(
+            replay_id="replay-capability-drift",
+            source_trace_id=trace.trace_id,
+            source_run_id=trace.run_id,
+            mode=ReplayMode.OFFLINE,
+        ),
+    )
+
+    assert result.session.status == ReplaySessionStatus.INCOMPATIBLE
+    assert result.session.provider_calls == 0
+    assert result.session.network_calls == 0
+    assert created.exists() is False
 
 
 def test_service_comparison_is_idempotent_and_fork_stays_offline(

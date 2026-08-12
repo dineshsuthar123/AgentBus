@@ -35,6 +35,15 @@ class ReplayInputCatalog:
             available.add(digest)
         return available
 
+    def validate_all(self) -> None:
+        """Validate every span reference before replay invokes any component."""
+        for span in sorted(self.trace.spans, key=lambda item: item.sequence):
+            for reference in (
+                *span.input_references,
+                *span.output_references,
+            ):
+                self.read(reference)
+
     def read(self, reference: TraceValueReference) -> bytes:
         if reference.sha256 not in self._allowed:
             raise ReplayInputUnavailableError(

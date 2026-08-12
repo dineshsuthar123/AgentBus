@@ -105,6 +105,104 @@ def test_checkpoint_rejects_missing_dependency_and_ancestor(tmp_path: Path) -> N
         manager.validate_ancestry(trace, valid.checkpoint_id)
 
 
+def test_checkpoint_rejects_corrupt_state_reference_and_stale_schema(
+    tmp_path: Path,
+) -> None:
+    objects = ContentAddressedStore(tmp_path / "objects")
+    manager = CheckpointManager(objects)
+    recorder = TraceRecorder("run-1")
+    recorder.start_trace()
+    checkpoint = manager.capture(
+        recorder,
+        kind=CheckpointKind.GRAPH_PERSISTED,
+        label="graph",
+    )
+    reference = checkpoint.state_references[0]
+
+    mismatched_reference = reference.model_copy(
+        update={"byte_length": reference.byte_length + 1}
+    )
+    with pytest.raises(ReplayIncompatibleError, match="incompatible"):
+        manager.load_state(
+            checkpoint.model_copy(
+                update={"state_references": [mismatched_reference]}
+            )
+        )
+
+    state = manager.load_state(checkpoint)
+    stale_metadata = objects.put_json(
+        state.model_dump(mode="json") | {"trace_schema_version": 999},
+        producing_span_id="checkpoint",
+        media_type=reference.media_type,
+    )
+    stale_reference = reference.model_copy(
+        update={
+            "sha256": stale_metadata.sha256,
+            "byte_length": stale_metadata.byte_size,
+        }
+    )
+    with pytest.raises(ReplayIncompatibleError, match="incompatible"):
+        manager.load_state(
+            checkpoint.model_copy(update={"state_references": [stale_reference]})
+        )
+
+    blob_path, _ = objects._object_paths(reference.sha256)
+    blob_path.write_bytes(b"corrupt checkpoint")
+    with pytest.raises(ReplayIncompatibleError, match="incompatible"):
+        manager.load_state(checkpoint)
+
+
+def test_checkpoint_rejects_cyclic_ancestry(tmp_path: Path) -> None:
+    objects = ContentAddressedStore(tmp_path / "objects")
+    manager = CheckpointManager(objects)
+    recorder = TraceRecorder("run-1")
+    recorder.start_trace()
+    first = manager.capture(
+        recorder,
+        kind=CheckpointKind.GRAPH_PERSISTED,
+        label="graph",
+    )
+    second = manager.capture(
+        recorder,
+        kind=CheckpointKind.TASK_COMPLETED,
+        label="task",
+        parent_checkpoint_id=first.checkpoint_id,
+    )
+    first_state = manager.load_state(first).model_copy(
+        update={"parent_checkpoint_id": second.checkpoint_id}
+    )
+    first_metadata = objects.put_json(
+        first_state.model_dump(mode="json"),
+        producing_span_id="checkpoint",
+        media_type=first.state_references[0].media_type,
+    )
+    first_reference = first.state_references[0].model_copy(
+        update={
+            "sha256": first_metadata.sha256,
+            "byte_length": first_metadata.byte_size,
+        }
+    )
+    forged_first = first.model_copy(
+        update={"state_references": [first_reference]}
+    )
+    snapshot = recorder.snapshot()
+    trace = snapshot.model_copy(
+        update={
+            "checkpoints": [
+                (
+                    forged_first
+                    if item.checkpoint_id == first.checkpoint_id
+                    else item
+                )
+                for item in snapshot.checkpoints
+            ]
+        }
+    )
+
+    with pytest.raises(ReplayIncompatibleError, match="cycle"):
+        manager.validate_ancestry(trace, second.checkpoint_id)
+
+
 def test_replay_database_and_worktree_are_isolated(tmp_path: Path) -> None:
     repository = tmp_path / "source"
     base_commit = _repository(repository)

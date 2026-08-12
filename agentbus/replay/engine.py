@@ -136,6 +136,7 @@ class ReplayEngine:
         )
         repository_intelligence = None
         try:
+            catalog.validate_all()
             effective_request = self._prepare_partial_replay(
                 trace,
                 request,

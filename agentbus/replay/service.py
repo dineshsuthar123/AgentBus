@@ -196,17 +196,7 @@ class TraceReplayService:
         )
         for digest in blob_hashes:
             self.object_store.verify(digest)
-        current_protocols = provenance_protocol_documents()
-        drift = []
-        for name, expected in sorted(provenance.protocol_hashes.items()):
-            document = current_protocols.get(name)
-            actual = (
-                hashlib.sha256(canonical_json_bytes(document)).hexdigest()
-                if document is not None
-                else None
-            )
-            if actual != expected:
-                drift.append(name)
+        drift = _current_protocol_drift(provenance)
         return TraceVerificationReport(
             trace_id=trace.trace_id,
             run_id=trace.run_id,
@@ -314,24 +304,35 @@ class TraceReplayService:
         mode: ReplayMode = ReplayMode.OFFLINE,
         allow_source_content: bool = False,
     ) -> ArchiveReplayResult:
-        imported = self.import_archive(
-            source,
-            allow_source_content=allow_source_content,
-        )
+        inspected = TraceArchiveImporter(self.object_store).inspect(source)
+        protocol_drift = _current_protocol_drift(inspected.provenance)
+        if protocol_drift:
+            raise ReplayIncompatibleError(
+                "Trace archive protocols are incompatible with the current "
+                "AgentBus runtime."
+            )
         try:
             fixture = RegressionFixtureSpec.model_validate(
-                imported.assertions
+                inspected.assertions
             )
         except Exception:
             fixture = None
         if fixture is not None and (
-            fixture.trace_id != imported.trace.trace_id
-            or fixture.run_id != imported.trace.run_id
+            fixture.trace_id != inspected.trace.trace_id
+            or fixture.run_id != inspected.trace.run_id
             or fixture.provenance_root
-            != imported.provenance.integrity_root
+            != inspected.provenance.integrity_root
         ):
             raise TraceIntegrityError(
                 "Regression fixture identities do not match its trace."
+            )
+        imported = self.import_archive(
+            source,
+            allow_source_content=allow_source_content,
+        )
+        if imported.manifest.archive_root != inspected.manifest.archive_root:
+            raise TraceIntegrityError(
+                "Trace archive changed between inspection and import."
             )
         request = ReplayRequest(
             source_trace_id=imported.trace.trace_id,
@@ -994,6 +995,20 @@ def _validated_tool_descriptors(
             )
         validated[name] = descriptor.model_copy(deep=True)
     return validated
+
+
+def _current_protocol_drift(
+    provenance: ProvenanceManifest,
+) -> list[str]:
+    current = provenance_protocol_documents()
+    drift = set(current) ^ set(provenance.protocol_hashes)
+    for name in set(current) & set(provenance.protocol_hashes):
+        actual = hashlib.sha256(
+            canonical_json_bytes(current[name])
+        ).hexdigest()
+        if actual != provenance.protocol_hashes[name]:
+            drift.add(name)
+    return sorted(drift)
 
 
 __all__ = [
