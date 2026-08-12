@@ -252,6 +252,10 @@ class TraceArchiveExporter:
             if protocol_documents is not None
             else provenance_protocol_documents()
         )
+        if set(protocols) != set(provenance.protocol_hashes):
+            raise TraceIntegrityError(
+                "Trace archive protocol inventory does not match provenance."
+            )
         for name, document in sorted(protocols.items()):
             if not _SAFE_PROTOCOL_NAME.fullmatch(name):
                 raise TraceStorageError(
@@ -600,6 +604,12 @@ class TraceArchiveImporter:
         if missing:
             raise TraceArchiveError(
                 "Trace archive omits provenance protocol documents."
+            )
+        unexpected = set(protocols) - set(provenance.protocol_hashes)
+        if unexpected:
+            raise TraceArchiveError(
+                "Trace archive contains protocol documents not bound by "
+                "provenance."
             )
         return protocols
 

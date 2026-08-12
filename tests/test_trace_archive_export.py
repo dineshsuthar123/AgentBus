@@ -10,7 +10,8 @@ from agentbus.trace import (
     TraceSpanType,
     TraceStatus,
 )
-from agentbus.trace.errors import TraceStorageError
+from agentbus.trace.errors import TraceIntegrityError, TraceStorageError
+from agentbus.trace.protocols import provenance_protocol_documents
 from agentbus.trace.sealing import seal_run_provenance
 
 
@@ -140,3 +141,21 @@ def test_trace_archive_refuses_to_replace_an_existing_destination(
         )
 
     assert destination.read_bytes() == b"user-owned"
+
+
+def test_trace_archive_refuses_protocols_not_bound_by_provenance(
+    tmp_path,
+) -> None:
+    store, trace, provenance, _ = _sealed_source_trace(tmp_path)
+    protocols = provenance_protocol_documents()
+    protocols["unbound-fixture"] = {"schema_version": 1}
+
+    with pytest.raises(TraceIntegrityError, match="protocol inventory"):
+        TraceArchiveExporter(store).export(
+            trace,
+            provenance,
+            tmp_path / "unbound.agentbus-trace",
+            protocol_documents=protocols,
+        )
+
+    assert not (tmp_path / "unbound.agentbus-trace").exists()
