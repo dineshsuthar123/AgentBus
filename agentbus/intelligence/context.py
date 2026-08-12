@@ -52,6 +52,8 @@ _STOP_WORDS = {
     "update",
     "with",
 }
+_CHANGED_FILE_SCORE = 250.0
+_EXACT_TASK_MATCH_BONUS = 250.0
 
 
 @dataclass(frozen=True)
@@ -204,6 +206,7 @@ class ContextPlanner:
                 _relative_path(path) for path in request.changed_paths
             )
         )
+        changed_path_set = frozenset(normalized_changed)
         project_filter = SearchQuery(
             text="context",
             project_ids=request.project_ids,
@@ -234,6 +237,7 @@ class ContextPlanner:
                 *request.tool_results,
             ),
         )
+        maximum_seed_count = len(seeds) + self.config.maximum_candidates
         for term in query_terms:
             results = self.retriever.search(
                 SearchQuery(
@@ -245,11 +249,12 @@ class ContextPlanner:
                 recent_paths=normalized_changed,
             )
             for result in results:
-                self._add_result_seed(seeds, result)
-                if len(seeds) >= self.config.maximum_candidates:
-                    break
-            if len(seeds) >= self.config.maximum_candidates:
-                break
+                self._add_result_seed(
+                    seeds,
+                    result,
+                    allow_new=len(seeds) < maximum_seed_count,
+                    changed_paths=changed_path_set,
+                )
 
         candidates: list[ContextCandidate] = []
         hash_mismatch = False
@@ -322,7 +327,7 @@ class ContextPlanner:
             seed = _CandidateSeed(
                 source=source,
                 symbol=None,
-                score=250.0,
+                score=_CHANGED_FILE_SCORE,
                 reasons={"changed_file", "direct_source"},
             )
             seeds[seed.identity] = seed
@@ -332,6 +337,9 @@ class ContextPlanner:
         self,
         seeds: dict[str, _CandidateSeed],
         result: SearchResult,
+        *,
+        allow_new: bool,
+        changed_paths: frozenset[str],
     ) -> None:
         source = self._files_by_path.get(result.relative_path)
         if (
@@ -348,8 +356,13 @@ class ContextPlanner:
         identity = (
             symbol.symbol_id if symbol is not None else source.file_id
         )
+        result_score = result.score
+        if "symbol_match" in result.score_components:
+            result_score += _EXACT_TASK_MATCH_BONUS
         reasons = {"task_match"}
         reasons.update(result.score_components)
+        if source.relative_path in changed_paths:
+            reasons.update(("changed_file", "direct_source"))
         if symbol is not None:
             reasons.add("definition")
             if symbol.documentation:
@@ -368,14 +381,16 @@ class ContextPlanner:
             reasons.add("dependency_neighbor")
         current = seeds.get(identity)
         if current is None:
+            if not allow_new:
+                return
             seeds[identity] = _CandidateSeed(
                 source=source,
                 symbol=symbol,
-                score=result.score,
+                score=result_score,
                 reasons=reasons,
             )
         else:
-            current.score = max(current.score, result.score)
+            current.score = max(current.score, result_score)
             current.reasons.update(reasons)
 
     def _queries(

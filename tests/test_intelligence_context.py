@@ -6,6 +6,7 @@ from agentbus.intelligence import (
     ContextBudget,
     ContextCandidate,
     ContextPlanner,
+    ContextPlanningConfig,
     ContextPlanningRequest,
     ContextRole,
     ContextSelector,
@@ -297,6 +298,38 @@ def test_context_planner_tailors_scores_by_role(tmp_path: Path) -> None:
     assert any(
         item.symbol_id == test_id for item in signaled.candidates
     )
+
+
+def test_exact_task_match_survives_a_tight_candidate_cap(
+    tmp_path: Path,
+) -> None:
+    planner, _, symbols = _planner(tmp_path)
+    limited = ContextPlanner(
+        planner.inventory,
+        planner.retriever,
+        planner.files,
+        planner.symbols,
+        config=ContextPlanningConfig(maximum_candidates=1),
+    )
+
+    plan = limited.plan(
+        ContextPlanningRequest(
+            task="`validate_model` review",
+            role=ContextRole.CODER,
+            byte_budget=10_000,
+            token_budget=2_500,
+            changed_paths=(
+                "services/api/src/handler.py",
+                "services/api/src/model.py",
+            ),
+        )
+    )
+
+    assert len(plan.candidates) == 1
+    assert plan.candidates[0].symbol_id == symbols[1].symbol_id
+    assert plan.candidates[0].selected is True
+    assert "symbol_match" in plan.candidates[0].reasons
+    assert "task_match" in plan.candidates[0].reasons
 
 
 def test_context_planner_excludes_hash_mismatches_and_warns(
