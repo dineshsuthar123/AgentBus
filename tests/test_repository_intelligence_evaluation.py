@@ -89,6 +89,31 @@ def test_repository_intelligence_evaluation_uses_real_providerless_service(
     assert large["retrieval_precision"] == 1
     assert large["context_budget_adherence"] == 1
 
+    planning_context = by_case["graph-retrieval-impact"].raw_metrics[
+        "details"
+    ]["context_plan"]
+    assert planning_context["candidate_count"] == 26
+    assert planning_context["selected_candidate_count"] == 11
+    assert planning_context["exclusion_counts"] == {
+        "duplicate_content": 15,
+    }
+    assert planning_context["selected_source_hash_duplicates"] == 0
+    assert planning_context["stale_warning_present"] is True
+
+    large_context = by_case["large-repository-budget"].raw_metrics[
+        "details"
+    ]["context_plan"]
+    assert large_context["candidate_count"] == 61
+    assert large_context["selected_candidate_count"] == 40
+    assert large_context["exclusion_counts"] == {
+        "budget_exceeded": 12,
+        "duplicate_content": 9,
+    }
+    assert large_context["selected_bytes"] == 3910
+    assert large_context["selected_tokens"] == 987
+    assert large_context["selected_source_hash_duplicates"] == 0
+    assert large_context["stale_warning_present"] is False
+
     search_details = by_case["graph-retrieval-impact"].raw_metrics[
         "details"
     ]["search_probes"]

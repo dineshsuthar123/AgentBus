@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -539,6 +540,11 @@ def repository_intelligence_suite() -> EvaluationSuite:
                         ],
                         "byte_budget": 12_000,
                         "token_budget": 2_000,
+                        "expected_stale_warning": True,
+                        "forbidden_paths": [".env"],
+                        "maximum_candidates": 100,
+                        "maximum_selected_source_hash_duplicates": 0,
+                        "minimum_duplicate_content_exclusions": 1,
                     },
                 },
             },
@@ -618,6 +624,11 @@ def repository_intelligence_suite() -> EvaluationSuite:
                         "expected_paths": ["src/module_0119.py"],
                         "byte_budget": 8_000,
                         "token_budget": 1_000,
+                        "expected_stale_warning": False,
+                        "maximum_candidates": 100,
+                        "maximum_selected_source_hash_duplicates": 0,
+                        "minimum_budget_exclusions": 1,
+                        "minimum_duplicate_content_exclusions": 1,
                     },
                 },
             },
@@ -953,23 +964,92 @@ def _evaluate_planning(
             changed_paths=context_probe.get("changed_paths", []),
         )
         reports.append(context)
-        selected = {
-            item.relative_path for item in context.candidates if item.selected
-        }
+        selected_candidates = tuple(
+            item for item in context.candidates if item.selected
+        )
+        selected = {item.relative_path for item in selected_candidates}
+        exclusions = Counter(
+            item.exclusion_reason
+            for item in context.candidates
+            if not item.selected and item.exclusion_reason is not None
+        )
+        selected_hash_counts = Counter(
+            item.source_hash for item in selected_candidates
+        )
+        selected_hash_duplicates = sum(
+            count - 1 for count in selected_hash_counts.values()
+        )
+        forbidden_paths = set(context_probe.get("forbidden_paths", ()))
+        expected_stale_warning = bool(
+            context_probe.get("expected_stale_warning", False)
+        )
+        byte_accounted = sum(
+            item.byte_count for item in selected_candidates
+        ) == context.selected_bytes
+        token_accounted = sum(
+            item.estimated_tokens for item in selected_candidates
+        ) == context.selected_tokens
+        candidate_ids_unique = len(context.candidates) == len(
+            {item.candidate_id for item in context.candidates}
+        )
+        selected_exclusions_clear = all(
+            item.exclusion_reason is None for item in selected_candidates
+        )
         outcomes = [
             context.selected_bytes <= context.byte_budget,
             context.selected_tokens <= context.token_budget,
             set(context_probe.get("expected_paths", [])).issubset(selected),
+            byte_accounted,
+            token_accounted,
+            candidate_ids_unique,
+            selected_exclusions_clear,
+            not forbidden_paths.intersection(
+                item.relative_path for item in context.candidates
+            ),
+            bool(context.stale_warning) is expected_stale_warning,
+            len(context.candidates)
+            <= int(context_probe.get("maximum_candidates", 2_000)),
+            exclusions.get("budget_exceeded", 0)
+            >= int(context_probe.get("minimum_budget_exclusions", 0)),
+            exclusions.get("duplicate_content", 0)
+            >= int(
+                context_probe.get(
+                    "minimum_duplicate_content_exclusions",
+                    0,
+                )
+            ),
+            selected_hash_duplicates
+            <= int(
+                context_probe.get(
+                    "maximum_selected_source_hash_duplicates",
+                    2_000,
+                )
+            ),
         ]
         checks["context_byte_budget"] = outcomes[0]
         checks["context_token_budget"] = outcomes[1]
         checks["context_expected_paths"] = outcomes[2]
+        checks["context_byte_accounting"] = outcomes[3]
+        checks["context_token_accounting"] = outcomes[4]
+        checks["context_candidate_ids_unique"] = outcomes[5]
+        checks["context_selected_exclusions_clear"] = outcomes[6]
+        checks["context_forbidden_paths_excluded"] = outcomes[7]
+        checks["context_stale_warning"] = outcomes[8]
+        checks["context_candidate_limit"] = outcomes[9]
+        checks["context_budget_exclusions"] = outcomes[10]
+        checks["context_duplicate_content_exclusions"] = outcomes[11]
+        checks["context_selected_source_deduplication"] = outcomes[12]
         context_adherence = _ratio(outcomes)
         details["context_plan"] = {
+            "candidate_count": len(context.candidates),
+            "selected_candidate_count": len(selected_candidates),
             "selected_bytes": context.selected_bytes,
             "selected_tokens": context.selected_tokens,
             "byte_budget": context.byte_budget,
             "token_budget": context.token_budget,
+            "exclusion_counts": dict(sorted(exclusions.items())),
+            "selected_source_hash_duplicates": selected_hash_duplicates,
+            "stale_warning_present": bool(context.stale_warning),
             "selected_paths": sorted(selected),
         }
     return impact_recall, test_recall, context_adherence
