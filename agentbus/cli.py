@@ -59,6 +59,8 @@ COMMANDS = (
 
 
 def main(argv: list[str] | None = None) -> int:
+    _configure_console_output(sys.stdout)
+    _configure_console_output(sys.stderr)
     arguments = list(sys.argv[1:] if argv is None else argv)
     if not arguments:
         _root_parser().print_help()
@@ -1405,6 +1407,16 @@ def _print_console_safe(value: str) -> None:
     except (LookupError, UnicodeError):
         rendered = value.encode("ascii", errors="backslashreplace").decode("ascii")
     print(rendered)
+
+
+def _configure_console_output(stream: object) -> None:
+    reconfigure = getattr(stream, "reconfigure", None)
+    if not callable(reconfigure):
+        return
+    try:
+        reconfigure(errors="backslashreplace")
+    except (LookupError, OSError, TypeError, ValueError):
+        return
 
 
 if __name__ == "__main__":

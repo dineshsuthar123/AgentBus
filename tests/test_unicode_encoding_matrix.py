@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import io
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
+from agentbus import cli
 from agentbus.intelligence.discovery import RepositoryInventoryScanner
 from agentbus.intelligence.errors import UnsafeRepositoryPathError
 from agentbus.intelligence.models import IndexState
@@ -155,3 +158,34 @@ def test_raw_byte_inputs_and_unicode_paths_remain_safely_classified(
         assert result.content is None
         assert result.sha256 is not None
         assert result.truncated is False
+
+
+def test_human_cli_escapes_characters_unsupported_by_cp1252(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = _unicode_repository(tmp_path)
+    database = tmp_path / "repository-index.sqlite3"
+    RepositoryIntelligenceService(repository, database).build()
+    raw_output = io.BytesIO()
+    console = io.TextIOWrapper(
+        raw_output,
+        encoding="cp1252",
+        errors="strict",
+    )
+    monkeypatch.setattr(sys, "stdout", console)
+    common = [
+        "--workspace",
+        str(repository),
+        "--index-db",
+        str(database),
+    ]
+
+    assert cli.main(["search", CJK_IDENTIFIER, *common]) == 0
+    assert cli.main(["search", ACCENTED_IDENTIFIER, *common]) == 0
+    console.flush()
+    rendered = raw_output.getvalue().decode("cp1252")
+
+    assert "\\u8ba1\\u7b97" in rendered
+    assert "\\U0001f9ea" in rendered
+    assert ACCENTED_IDENTIFIER in rendered
