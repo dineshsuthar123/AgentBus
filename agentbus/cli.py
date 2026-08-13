@@ -11,6 +11,7 @@ from agentbus.bootstrap import BootstrapError, initialize
 from agentbus.config import SUPPORTED_PROVIDERS
 from agentbus.configuration import configuration_paths, resolve_configuration
 from agentbus.doctor import CheckStatus, render_doctor, run_doctor
+from agentbus.security.redaction import redact_diagnostic_text
 
 
 COMMANDS = (
@@ -568,23 +569,36 @@ def _migration_command(arguments: list[str]) -> int:
         else:
             report = coordinator.apply(dry_run=args.dry_run)
     except (OSError, RuntimeError, ValueError) as exc:
-        payload = {"ok": False, "error": str(exc), "network_used": False}
-        print(json.dumps(payload, indent=2, sort_keys=True) if args.json else f"Migration error: {exc}")
+        safe_error = (
+            redact_diagnostic_text(str(exc), max_chars=4_096)
+            or type(exc).__name__
+        )
+        payload = {"ok": False, "error": safe_error, "network_used": False}
+        print(
+            json.dumps(payload, indent=2, sort_keys=True)
+            if args.json
+            else f"Migration error: {safe_error}"
+        )
         return 2
     payload = report.to_dict()
     payload["network_used"] = False
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
-        print(f"Migration {report.operation}: {'OK' if report.ok else 'FAILED'}")
-        for target in report.targets:
-            version = "absent" if target.current_version is None else target.current_version
-            print(
-                f"  {target.name}: {target.state.value} "
-                f"({version} -> {target.target_version})"
+        summary = "OK" if report.ok else "FAILED"
+        print(f"Migration {payload['operation']}: {summary}")
+        for target in payload["targets"]:
+            version = (
+                "absent"
+                if target["current_version"] is None
+                else target["current_version"]
             )
-            print(f"    {target.message}")
-        for backup in report.backups:
+            print(
+                f"  {target['name']}: {target['state']} "
+                f"({version} -> {target['target_version']})"
+            )
+            print(f"    {target['message']}")
+        for backup in payload["backups"]:
             print(f"  Backup: {backup}")
     return 0 if report.ok else 2
 
