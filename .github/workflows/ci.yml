@@ -136,7 +136,7 @@ jobs:
       - name: Install offline acceptance prerequisites
         run: python -m pip install -e ".[dev,ide,mcp]"
       - name: Run wheel-installed product acceptance
-        run: python -m agentbus.product_acceptance
+        run: python -m agentbus.product_acceptance --repeat 2
       - name: Check patch whitespace
         run: git diff --check
 

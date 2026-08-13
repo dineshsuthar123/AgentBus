@@ -22,6 +22,8 @@ from agentbus.security.redaction import redact_text
 
 
 _TEMP_PREFIX = "agentbus-product-acceptance-"
+_REPEAT_TEMP_PREFIX = "agentbus-product-repetitions-"
+MAX_CLEAN_INSTALL_REPETITIONS = 10
 _OWNER_FILE = ".agentbus-product-acceptance.json"
 _PRODUCT_EXTRAS = ("ide", "mcp")
 
@@ -67,6 +69,45 @@ class CleanInstallAcceptanceReport:
             "fresh_virtual_environment": True,
             "wheel_install": True,
             "package_audit": self.kind == AcceptanceKind.BETA,
+            "editable_install": False,
+            "dependency_extras": list(_PRODUCT_EXTRAS),
+            "repository_pythonpath_used": False,
+            "provider": "deterministic",
+            "provider_calls": 0,
+            "network_used": False,
+            "published": False,
+        }
+
+
+@dataclass(frozen=True)
+class RepeatedCleanInstallAcceptanceReport:
+    kind: AcceptanceKind
+    requested_repetitions: int
+    reports: tuple[CleanInstallAcceptanceReport, ...]
+    duration_seconds: float
+    state_leak_iterations: tuple[int, ...] = ()
+
+    @property
+    def ok(self) -> bool:
+        return (
+            len(self.reports) == self.requested_repetitions
+            and not self.state_leak_iterations
+            and all(report.ok for report in self.reports)
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "kind": self.kind.value,
+            "ok": self.ok,
+            "version": __version__,
+            "duration_seconds": round(self.duration_seconds, 3),
+            "repetitions_requested": self.requested_repetitions,
+            "repetitions_completed": len(self.reports),
+            "runs": [report.to_dict() for report in self.reports],
+            "cross_run_state_leak_detected": bool(self.state_leak_iterations),
+            "state_leak_iterations": list(self.state_leak_iterations),
+            "fresh_virtual_environment": True,
+            "wheel_install": True,
             "editable_install": False,
             "dependency_extras": list(_PRODUCT_EXTRAS),
             "repository_pythonpath_used": False,
@@ -135,6 +176,7 @@ def run_clean_install_acceptance(
     kind: AcceptanceKind | str = AcceptanceKind.PRODUCT,
     *,
     root: str | Path = ".",
+    temp_parent: str | Path | None = None,
 ) -> CleanInstallAcceptanceReport:
     selected = AcceptanceKind(kind)
     started = time.monotonic()
@@ -143,7 +185,11 @@ def run_clean_install_acceptance(
     error: str | None = None
     try:
         repository = _repository_root(Path(root).expanduser().resolve())
-        with tempfile.TemporaryDirectory(prefix=_TEMP_PREFIX) as temporary:
+        parent = _acceptance_temp_parent(temp_parent)
+        with tempfile.TemporaryDirectory(
+            prefix=_TEMP_PREFIX,
+            dir=str(parent) if parent is not None else None,
+        ) as temporary:
             runner = _CleanInstallRunner(
                 selected,
                 repository=repository,
@@ -164,6 +210,54 @@ def run_clean_install_acceptance(
         duration_seconds=time.monotonic() - started,
         steps=tuple(steps),
         error=error,
+    )
+
+
+def run_repeated_clean_install_acceptance(
+    repetitions: int,
+    kind: AcceptanceKind | str = AcceptanceKind.PRODUCT,
+    *,
+    root: str | Path = ".",
+    temp_parent: str | Path | None = None,
+) -> RepeatedCleanInstallAcceptanceReport:
+    if (
+        isinstance(repetitions, bool)
+        or not isinstance(repetitions, int)
+        or repetitions < 1
+        or repetitions > MAX_CLEAN_INSTALL_REPETITIONS
+    ):
+        raise ValueError(
+            "Clean-install repetitions must be between 1 and "
+            f"{MAX_CLEAN_INSTALL_REPETITIONS}."
+        )
+    selected = AcceptanceKind(kind)
+    started = time.monotonic()
+    reports: list[CleanInstallAcceptanceReport] = []
+    leak_iterations: list[int] = []
+    parent = _acceptance_temp_parent(temp_parent)
+    with tempfile.TemporaryDirectory(
+        prefix=_REPEAT_TEMP_PREFIX,
+        dir=str(parent) if parent is not None else None,
+    ) as suite_temporary:
+        suite_root = Path(suite_temporary).resolve()
+        for iteration in range(1, repetitions + 1):
+            report = run_clean_install_acceptance(
+                selected,
+                root=root,
+                temp_parent=suite_root,
+            )
+            reports.append(report)
+            if any(suite_root.iterdir()):
+                leak_iterations.append(iteration)
+                break
+            if not report.ok:
+                break
+    return RepeatedCleanInstallAcceptanceReport(
+        kind=selected,
+        requested_repetitions=repetitions,
+        reports=tuple(reports),
+        duration_seconds=time.monotonic() - started,
+        state_leak_iterations=tuple(leak_iterations),
     )
 
 
@@ -865,6 +959,15 @@ def _repository_root(root: Path) -> Path:
     if os.path.normcase(str(discovered)) != os.path.normcase(str(root)):
         raise ValueError("Product acceptance root must equal the Git top-level directory.")
     return discovered
+
+
+def _acceptance_temp_parent(value: str | Path | None) -> Path | None:
+    if value is None:
+        return None
+    parent = Path(value).expanduser().resolve(strict=True)
+    if not parent.is_dir():
+        raise ValueError("Acceptance temporary parent must be a directory.")
+    return parent
 
 
 def _offline_environment(
