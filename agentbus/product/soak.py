@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -9,6 +10,7 @@ import threading
 import time
 import tracemalloc
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -20,8 +22,10 @@ from agentbus.control.event_stream import ControlEventReader
 from agentbus.execution.engine import DurableExecutionEngine
 from agentbus.execution.leases import LeaseService
 from agentbus.execution.models import RunStatus, TaskExecutionResult
+from agentbus.execution.schema import SCHEMA_VERSION
 from agentbus.execution.state_store import StateStore
 from agentbus.git.repository import GitRepository
+from agentbus.intelligence.migrations import verify_schema as verify_index_schema
 from agentbus.intelligence.service import RepositoryIntelligenceService
 from agentbus.mcp import McpServerConfig, mcp_server_capabilities
 from agentbus.models.router import ModelRouter
@@ -251,6 +255,7 @@ class SoakCycleResult:
     daemon_reconnected: bool
     worktree_cleaned: bool
     cleanup_failure_count: int
+    duration_seconds: float
     error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -270,6 +275,7 @@ class SoakCycleResult:
             "daemon_restarted": self.daemon_reconnected,
             "worktree_cleaned": self.worktree_cleaned,
             "cleanup_failure_count": self.cleanup_failure_count,
+            "duration_seconds": round(self.duration_seconds, 6),
             "error": self.error,
         }
 
@@ -304,6 +310,8 @@ class SoakReport:
     stale_lease_count: int
     leaked_worktree_count: int
     leaked_process_count: int
+    state_database_integrity: bool
+    index_database_integrity: bool
     sqlite_bytes_before: int
     sqlite_bytes_after: int
     memory_growth_bytes: int
@@ -322,6 +330,8 @@ class SoakReport:
             and self.stale_lease_count == 0
             and self.leaked_worktree_count == 0
             and self.leaked_process_count == 0
+            and self.state_database_integrity
+            and self.index_database_integrity
             and self.memory_growth_bytes <= self.memory_budget_bytes
             and all(
                 trend.measurable
@@ -369,6 +379,10 @@ class SoakReport:
                 "stale_lease_count": self.stale_lease_count,
                 "leaked_worktree_count": self.leaked_worktree_count,
                 "leaked_process_count": self.leaked_process_count,
+                "integrity": {
+                    "state_database": self.state_database_integrity,
+                    "repository_index": self.index_database_integrity,
+                },
                 "sqlite_bytes_before": self.sqlite_bytes_before,
                 "sqlite_bytes_after": self.sqlite_bytes_after,
                 "memory_growth_bytes": self.memory_growth_bytes,
@@ -516,6 +530,8 @@ def run_soak(
             event_count, event_gaps = _event_summary(store)
             stale_leases = _stale_lease_count(store)
             leaked_worktrees = _active_worktree_count(manager)
+            state_database_integrity = _state_database_is_valid(state_database)
+            index_database_integrity = _index_database_is_valid(index_database)
             resource_trends = resources.finish()
             cycles = tuple(sorted(results, key=lambda item: item.cycle))
             trends = {trend.name: trend for trend in resource_trends}
@@ -570,6 +586,8 @@ def run_soak(
                 stale_lease_count=stale_leases,
                 leaked_worktree_count=leaked_worktrees,
                 leaked_process_count=(trends["process_count"].after or 0),
+                state_database_integrity=state_database_integrity,
+                index_database_integrity=index_database_integrity,
                 sqlite_bytes_before=sqlite_before,
                 sqlite_bytes_after=sqlite_after,
                 memory_growth_bytes=memory_growth,
@@ -600,6 +618,7 @@ def _run_cycle(
     mcp_config: McpServerConfig,
     resources: _ResourceTracker,
 ) -> SoakCycleResult:
+    started = time.monotonic()
     run_id = f"soak-{seed}-{cycle:05d}"
     task_id = f"cycle-{cycle:05d}"
     worktree_cleaned = False
@@ -746,6 +765,7 @@ def _run_cycle(
         daemon_reconnected=daemon_reconnected,
         worktree_cleaned=worktree_cleaned,
         cleanup_failure_count=cleanup_failure_count,
+        duration_seconds=time.monotonic() - started,
         error=error,
     )
 
@@ -1139,6 +1159,39 @@ def _database_bytes(path: Path) -> int | None:
     except OSError:
         return None
     return total
+
+
+def _state_database_is_valid(path: Path) -> bool:
+    if not path.is_file() or path.is_symlink():
+        return False
+    try:
+        with closing(sqlite3.connect(path, timeout=5)) as connection:
+            connection.execute("PRAGMA query_only = ON")
+            quick_check = connection.execute("PRAGMA quick_check").fetchone()
+            foreign_keys = connection.execute("PRAGMA foreign_key_check").fetchall()
+            schema = connection.execute(
+                "SELECT value FROM schema_metadata WHERE key = ?",
+                ("schema_version",),
+            ).fetchone()
+    except sqlite3.DatabaseError:
+        return False
+    return (
+        quick_check == ("ok",)
+        and not foreign_keys
+        and schema == (str(SCHEMA_VERSION),)
+    )
+
+
+def _index_database_is_valid(path: Path) -> bool:
+    if not path.is_file() or path.is_symlink():
+        return False
+    try:
+        with closing(sqlite3.connect(path, timeout=5)) as connection:
+            connection.execute("PRAGMA query_only = ON")
+            verify_index_schema(connection)
+    except (sqlite3.DatabaseError, RuntimeError):
+        return False
+    return True
 
 
 def _directory_bytes(root: Path) -> int | None:

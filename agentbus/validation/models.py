@@ -376,3 +376,207 @@ class ValidationReport(ValidationModel):
             "failed": sum(run.status == ValidationStatus.FAIL for run in self.runs),
         }
         return payload
+
+
+class ReliabilityScenarioEvidence(ValidationModel):
+    scenario_id: str = Field(min_length=1, max_length=128)
+    source: Literal["repository", "soak"]
+    status: ValidationStatus
+    repository_id: str | None = Field(default=None, max_length=80)
+    duration_seconds: float | None = Field(default=None, ge=0)
+    detail: str | None = Field(default=None, max_length=1_024)
+
+
+class ReliabilityRepositoryEvidence(ValidationModel):
+    repository_id: str = Field(
+        min_length=1,
+        max_length=80,
+        pattern=r"^[a-z0-9][a-z0-9._-]*$",
+    )
+    source: Literal["fixture", "real_local"]
+    status: ValidationStatus
+    scenarios_run: int = Field(ge=0, le=10_000)
+    file_count: int = Field(ge=0)
+    project_count: int = Field(ge=0)
+    symbol_count: int = Field(ge=0)
+    duration_seconds: float = Field(ge=0)
+    warning_count: int = Field(ge=0, le=10_000)
+    failure_count: int = Field(ge=0, le=10_000)
+
+
+class ReliabilityFailure(ValidationModel):
+    category: FailureCategory
+    summary: str = Field(min_length=1, max_length=512)
+    detail: str | None = Field(default=None, max_length=2_048)
+    repository_id: str | None = Field(default=None, max_length=80)
+    scenario_id: str | None = Field(default=None, max_length=128)
+
+
+class ReliabilityLeakEvidence(ValidationModel):
+    status: ValidationStatus
+    checked: bool = True
+    count: int | None = Field(default=None, ge=0)
+    scope: str = Field(min_length=1, max_length=256)
+
+    @model_validator(mode="after")
+    def consistent_result(self) -> "ReliabilityLeakEvidence":
+        expected = (
+            ValidationStatus.FAIL
+            if not self.checked or self.count is None or self.count > 0
+            else ValidationStatus.PASS
+        )
+        if self.status != expected:
+            raise ValueError("leak status disagrees with the observed count")
+        return self
+
+
+class ReliabilityIntegrityEvidence(ValidationModel):
+    status: ValidationStatus
+    checked: bool
+    passed: bool | None = None
+    detail: str = Field(min_length=1, max_length=512)
+
+    @model_validator(mode="after")
+    def consistent_result(self) -> "ReliabilityIntegrityEvidence":
+        expected = (
+            ValidationStatus.PASS
+            if self.checked and self.passed is True
+            else ValidationStatus.FAIL
+        )
+        if self.status != expected:
+            raise ValueError("integrity status disagrees with the check result")
+        return self
+
+
+class ReliabilityOperationEvidence(ValidationModel):
+    status: ValidationStatus
+    attempted: int = Field(ge=0, le=1_000_000)
+    passed: int = Field(ge=0, le=1_000_000)
+    failed: int = Field(ge=0, le=1_000_000)
+    detail: str = Field(min_length=1, max_length=512)
+
+    @model_validator(mode="after")
+    def consistent_counts(self) -> "ReliabilityOperationEvidence":
+        if self.passed + self.failed != self.attempted:
+            raise ValueError("operation results must account for every attempt")
+        expected = (
+            ValidationStatus.FAIL
+            if self.failed
+            else ValidationStatus.PASS_WITH_WARNINGS
+            if not self.attempted
+            else ValidationStatus.PASS
+        )
+        if self.status != expected:
+            raise ValueError("operation status disagrees with result counts")
+        return self
+
+
+class ReliabilityLatencyEvidence(ValidationModel):
+    samples: int = Field(ge=0, le=1_000_000)
+    total_seconds: float = Field(ge=0)
+    mean_milliseconds: float | None = Field(default=None, ge=0)
+    p95_milliseconds: float | None = Field(default=None, ge=0)
+    maximum_milliseconds: float | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def consistent_samples(self) -> "ReliabilityLatencyEvidence":
+        values = (
+            self.mean_milliseconds,
+            self.p95_milliseconds,
+            self.maximum_milliseconds,
+        )
+        if self.samples == 0 and any(value is not None for value in values):
+            raise ValueError("latency values require at least one sample")
+        if self.samples > 0 and any(value is None for value in values):
+            raise ValueError("latency samples require mean, p95, and maximum")
+        return self
+
+
+class ReliabilityMemoryEvidence(ValidationModel):
+    status: ValidationStatus
+    available: bool
+    peak_bytes: int | None = Field(default=None, ge=0)
+    growth_bytes: int | None = Field(default=None, ge=0)
+    budget_bytes: int | None = Field(default=None, ge=1)
+    within_budget: bool | None = None
+
+    @model_validator(mode="after")
+    def consistent_measurement(self) -> "ReliabilityMemoryEvidence":
+        measurements = (self.peak_bytes, self.growth_bytes, self.budget_bytes)
+        if self.available and (any(value is None for value in measurements)):
+            raise ValueError("available memory evidence requires all measurements")
+        if not self.available and (
+            any(value is not None for value in measurements)
+            or self.within_budget is not None
+        ):
+            raise ValueError("unavailable memory evidence cannot contain estimates")
+        expected = (
+            ValidationStatus.PASS_WITH_WARNINGS
+            if not self.available
+            else ValidationStatus.PASS
+            if self.within_budget is True
+            else ValidationStatus.FAIL
+        )
+        if self.status != expected:
+            raise ValueError("memory status disagrees with the measurement")
+        return self
+
+
+class ReliabilityScorecard(ValidationModel):
+    schema_version: Literal[1] = VALIDATION_SCHEMA_VERSION
+    classification: ValidationStatus
+    generated_at: datetime
+    duration_seconds: float = Field(ge=0)
+    offline: Literal[True] = True
+    network_used: Literal[False] = False
+    scenarios_run: int = Field(ge=0, le=1_000_000)
+    scenario_results: tuple[ReliabilityScenarioEvidence, ...] = Field(
+        default=(),
+        max_length=20_000,
+    )
+    repository_fixtures: tuple[ReliabilityRepositoryEvidence, ...] = Field(
+        default=(),
+        max_length=1_000,
+    )
+    real_local_repositories: tuple[ReliabilityRepositoryEvidence, ...] = Field(
+        default=(),
+        max_length=32,
+    )
+    failures: tuple[ReliabilityFailure, ...] = Field(default=(), max_length=1_000)
+    process_leaks: ReliabilityLeakEvidence
+    worktree_leaks: ReliabilityLeakEvidence
+    db_integrity: ReliabilityIntegrityEvidence
+    index_integrity: ReliabilityIntegrityEvidence
+    replay_integrity: ReliabilityOperationEvidence
+    cancellation_results: ReliabilityOperationEvidence
+    restart_results: ReliabilityOperationEvidence
+    latency: ReliabilityLatencyEvidence
+    memory: ReliabilityMemoryEvidence
+    warnings: tuple[str, ...] = Field(default=(), max_length=1_000)
+    provider_calls: Literal[0] = 0
+
+    @model_validator(mode="after")
+    def consistent_scenario_count(self) -> "ReliabilityScorecard":
+        if self.scenarios_run != len(self.scenario_results):
+            raise ValueError("scenarios_run must match scenario_results")
+        if self.classification == ValidationStatus.FAIL and not self.failures:
+            raise ValueError("failed reliability scorecards require failure evidence")
+        if self.classification == ValidationStatus.PASS and (
+            self.failures or self.warnings
+        ):
+            raise ValueError("passing reliability scorecards cannot contain issues")
+        return self
+
+    @property
+    def ok(self) -> bool:
+        return self.classification != ValidationStatus.FAIL
+
+    def to_dict(self) -> dict[str, object]:
+        payload = self.model_dump(mode="json")
+        payload["ok"] = self.ok
+        payload["status"] = self.classification.value
+        payload["repositories"] = {
+            "fixtures": len(self.repository_fixtures),
+            "real_local": len(self.real_local_repositories),
+        }
+        return payload

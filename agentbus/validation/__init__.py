@@ -2,6 +2,7 @@
 
 from agentbus.validation.models import (
     FailureCategory,
+    ReliabilityScorecard,
     RepositoryScale,
     ValidationFailure,
     ValidationMetric,
@@ -12,9 +13,11 @@ from agentbus.validation.models import (
     ValidationStatus,
 )
 from agentbus.validation.runner import ValidationRunner
+from agentbus.validation.reliability import run_reliability_validation
 
 __all__ = [
     "FailureCategory",
+    "ReliabilityScorecard",
     "RepositoryScale",
     "ValidationFailure",
     "ValidationMetric",
@@ -24,4 +27,5 @@ __all__ = [
     "ValidationRunner",
     "ValidationScenario",
     "ValidationStatus",
+    "run_reliability_validation",
 ]

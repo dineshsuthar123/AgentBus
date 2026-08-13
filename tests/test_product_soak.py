@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -56,6 +57,26 @@ def test_resource_trends_do_not_rescan_growing_collections_per_cycle(
     assert scans == {"trace": 2, "worktrees": 2}
 
 
+def test_soak_integrity_checks_fail_closed_without_creating_databases(tmp_path):
+    missing_state = tmp_path / "missing-state.db"
+    missing_index = tmp_path / "missing-index.db"
+
+    assert soak_module._state_database_is_valid(missing_state) is False
+    assert soak_module._index_database_is_valid(missing_index) is False
+    assert not missing_state.exists()
+    assert not missing_index.exists()
+
+    stale_state = tmp_path / "stale-state.db"
+    with sqlite3.connect(stale_state) as connection:
+        connection.execute(
+            "CREATE TABLE schema_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO schema_metadata(key, value) VALUES ('schema_version', '0')"
+        )
+    assert soak_module._state_database_is_valid(stale_state) is False
+
+
 def test_soak_runner_exercises_bounded_offline_lifecycle():
     report = run_soak(
         profile="release-candidate",
@@ -87,6 +108,8 @@ def test_soak_runner_exercises_bounded_offline_lifecycle():
     assert report.stale_lease_count == 0
     assert report.leaked_worktree_count == 0
     assert report.leaked_process_count == 0
+    assert report.state_database_integrity is True
+    assert report.index_database_integrity is True
     assert report.sqlite_bytes_after >= report.sqlite_bytes_before
     assert report.memory_growth_bytes <= report.memory_budget_bytes
     assert report.to_dict()["network_used"] is False
@@ -113,6 +136,10 @@ def test_soak_runner_exercises_bounded_offline_lifecycle():
     assert trends["process_count"]["after"] == 0
     assert trends["owned_worktree_count"]["peak"] >= 1
     assert trends["owned_worktree_count"]["after"] == 0
+    assert report.to_dict()["resources"]["integrity"] == {
+        "state_database": True,
+        "repository_index": True,
+    }
     for name in (
         "state_database_bytes",
         "index_database_bytes",
