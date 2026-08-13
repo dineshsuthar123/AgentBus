@@ -150,12 +150,17 @@ def test_continuous_stdout_and_stderr_remain_bounded(tmp_path: Path) -> None:
 
     result = supervisor(tmp_path).run(
         "process-peer",
-        mode_arguments("continuous-output", lifecycle),
-        timeout_seconds=0.15,
+        mode_arguments(
+            "continuous-output",
+            lifecycle,
+            "--output-iterations",
+            "128",
+        ),
         resource_budget=budget,
     )
 
-    assert result.timed_out is True
+    assert result.passed is True
+    assert result.timed_out is False
     assert result.stdout_truncated is True
     assert result.stderr_truncated is True
     assert len(result.stdout.encode("utf-8")) <= budget.stdout_bytes

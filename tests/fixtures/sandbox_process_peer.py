@@ -32,6 +32,7 @@ def main() -> int:
     parser.add_argument("--lifecycle-dir")
     parser.add_argument("--exit-code", type=int, default=0)
     parser.add_argument("--child-count", type=int, default=4)
+    parser.add_argument("--output-iterations", type=int)
     args = parser.parse_args()
     lifecycle = (
         Path(args.lifecycle_dir).resolve(strict=True)
@@ -64,12 +65,20 @@ def main() -> int:
         _write_pid(lifecycle, "continuous")
         chunk = ("stdout-" + ("x" * 120) + "\n").encode("utf-8")
         error = ("stderr-" + ("y" * 120) + "\n").encode("utf-8")
+        remaining = (
+            None
+            if args.output_iterations is None
+            else max(0, args.output_iterations)
+        )
         try:
-            while True:
+            while remaining is None or remaining > 0:
                 os.write(1, chunk)
                 os.write(2, error)
+                if remaining is not None:
+                    remaining -= 1
         except OSError:
             return 0
+        return 0
     if args.mode == "spawn-repeatedly":
         _write_pid(lifecycle, "spawner")
         children = []
