@@ -5,6 +5,7 @@ import json
 import os
 import re
 import stat
+import struct
 import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -63,6 +64,14 @@ _SOURCE_MEDIA_MARKERS = (
     "source",
     "tool-envelope",
 )
+_ZIP_EOCD = struct.Struct("<4s4H2LH")
+_ZIP_EOCD_SIGNATURE = b"PK\x05\x06"
+_ZIP_CENTRAL_SIGNATURE = b"PK\x01\x02"
+_ZIP_CENTRAL_HEADER_BYTES = 46
+_MAX_ZIP_COMMENT_BYTES = 65_535
+_MAX_ZIP_ENTRY_NAME_BYTES = 2_048
+_MAX_ZIP_ENTRY_EXTRA_BYTES = 4_096
+_MAX_ZIP_ENTRY_COMMENT_BYTES = 512
 
 
 class TraceArchiveEntry(TraceModel):
@@ -533,6 +542,11 @@ class TraceArchiveImporter:
             raise TraceArchiveError(
                 "Trace archive file exceeds its configured size bound."
             )
+        _preflight_zip_directory(
+            path,
+            archive_size=archive_size,
+            max_entries=self.max_entries,
+        )
         try:
             with ZipFile(path, mode="r") as archive:
                 infos = archive.infolist()
@@ -803,6 +817,140 @@ def _write_deterministic_zip(
             except OSError:
                 pass
     return target
+
+
+def _preflight_zip_directory(
+    path: Path,
+    *,
+    archive_size: int,
+    max_entries: int,
+) -> None:
+    tail_size = min(archive_size, _ZIP_EOCD.size + _MAX_ZIP_COMMENT_BYTES)
+    try:
+        with path.open("rb") as handle:
+            handle.seek(archive_size - tail_size)
+            tail = handle.read(tail_size)
+        located = _find_zip_eocd(tail)
+        if located is None:
+            raise TraceArchiveError(
+                "Trace archive is not a valid bounded ZIP document."
+            )
+        eocd_offset, fields = located
+        (
+            _signature,
+            disk_number,
+            central_disk,
+            entries_on_disk,
+            entry_count,
+            central_size,
+            central_offset,
+            _comment_size,
+        ) = fields
+        if (
+            disk_number != 0
+            or central_disk != 0
+            or entries_on_disk != entry_count
+            or entry_count == 0xFFFF
+            or central_size == 0xFFFFFFFF
+            or central_offset == 0xFFFFFFFF
+        ):
+            raise TraceArchiveError(
+                "Trace archive uses unsupported multi-disk or ZIP64 metadata."
+            )
+        if entry_count > max_entries:
+            raise TraceArchiveError(
+                "Trace archive exceeds its configured entry bound."
+            )
+        absolute_eocd = archive_size - tail_size + eocd_offset
+        central_start = absolute_eocd - central_size
+        if central_start < 0 or central_offset > central_start:
+            raise TraceArchiveError(
+                "Trace archive central directory is inconsistent."
+            )
+        counted = _count_bounded_central_entries(
+            path,
+            central_start=central_start,
+            central_size=central_size,
+            max_entries=max_entries,
+        )
+        if counted != entry_count:
+            raise TraceArchiveError(
+                "Trace archive central directory entry count is inconsistent."
+            )
+    except TraceArchiveError:
+        raise
+    except OSError as exc:
+        raise TraceArchiveError(
+            "Trace archive central directory is unavailable."
+        ) from exc
+
+
+def _find_zip_eocd(tail: bytes) -> tuple[int, tuple[Any, ...]] | None:
+    search_end = len(tail)
+    while search_end:
+        offset = tail.rfind(_ZIP_EOCD_SIGNATURE, 0, search_end)
+        if offset < 0:
+            return None
+        if offset + _ZIP_EOCD.size <= len(tail):
+            fields = _ZIP_EOCD.unpack_from(tail, offset)
+            if offset + _ZIP_EOCD.size + fields[-1] == len(tail):
+                return offset, fields
+        search_end = offset
+    return None
+
+
+def _count_bounded_central_entries(
+    path: Path,
+    *,
+    central_start: int,
+    central_size: int,
+    max_entries: int,
+) -> int:
+    remaining = central_size
+    count = 0
+    with path.open("rb") as handle:
+        handle.seek(central_start)
+        while remaining:
+            if remaining < _ZIP_CENTRAL_HEADER_BYTES:
+                raise TraceArchiveError(
+                    "Trace archive central directory is truncated."
+                )
+            header = handle.read(_ZIP_CENTRAL_HEADER_BYTES)
+            if (
+                len(header) != _ZIP_CENTRAL_HEADER_BYTES
+                or header[:4] != _ZIP_CENTRAL_SIGNATURE
+            ):
+                raise TraceArchiveError(
+                    "Trace archive central directory is malformed."
+                )
+            name_size, extra_size, comment_size = struct.unpack_from(
+                "<HHH",
+                header,
+                28,
+            )
+            variable_size = name_size + extra_size + comment_size
+            if (
+                name_size < 1
+                or name_size > _MAX_ZIP_ENTRY_NAME_BYTES
+                or extra_size > _MAX_ZIP_ENTRY_EXTRA_BYTES
+                or comment_size > _MAX_ZIP_ENTRY_COMMENT_BYTES
+            ):
+                raise TraceArchiveError(
+                    "Trace archive central-directory metadata exceeds its bound."
+                )
+            record_size = _ZIP_CENTRAL_HEADER_BYTES + variable_size
+            if record_size > remaining:
+                raise TraceArchiveError(
+                    "Trace archive central directory is truncated."
+                )
+            count += 1
+            if count > max_entries:
+                raise TraceArchiveError(
+                    "Trace archive exceeds its configured entry bound."
+                )
+            handle.seek(variable_size, os.SEEK_CUR)
+            remaining -= record_size
+    return count
 
 
 def _validate_zip_entry(

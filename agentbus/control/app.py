@@ -202,6 +202,7 @@ def create_app(
                 )
             if request.url.path != "/health":
                 authenticator.authenticate(request.headers)
+            body_is_bounded = await _buffer_bounded_request_body(request)
         except (ControlPlaneError, ValueError) as exc:
             status_code = getattr(exc, "status_code", 400)
             return _error_json(
@@ -210,6 +211,13 @@ def create_app(
                 message=safe_error_message(exc),
                 retryable=bool(getattr(exc, "retryable", False)),
                 status_code=status_code,
+            )
+        if not body_is_bounded:
+            return _error_json(
+                JSONResponse,
+                code="request_too_large",
+                message="The request body exceeds the control-plane limit.",
+                status_code=413,
             )
         response = await call_next(request)
         response.headers["Cache-Control"] = "no-store"
@@ -961,6 +969,19 @@ def create_app(
         )
 
     return app
+
+
+async def _buffer_bounded_request_body(request: Request) -> bool:
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > MAX_REQUEST_BYTES:
+            return False
+        if chunk:
+            chunks.append(chunk)
+    request._body = b"".join(chunks)
+    return True
 
 
 def default_app(

@@ -10,7 +10,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from agentbus.config import AgentBusConfig
-from agentbus.control.app import ControlAppContext, create_app
+from agentbus.control.app import MAX_REQUEST_BYTES, ControlAppContext, create_app
 from agentbus.control.models import (
     CancellationLifecycle,
     CancelResponse,
@@ -327,6 +327,30 @@ def test_request_body_limit_is_enforced_before_routing(tmp_path: Path) -> None:
 
     assert response.status_code == 413
     assert response.json()["error"]["code"] == "request_too_large"
+
+
+def test_streamed_request_body_limit_is_enforced_without_content_length(
+    tmp_path: Path,
+) -> None:
+    client, supervisor = _client(tmp_path)
+    chunk = b"x" * 16_384
+
+    def streamed_body():
+        remaining = MAX_REQUEST_BYTES + 1
+        while remaining:
+            selected = chunk[:remaining]
+            remaining -= len(selected)
+            yield selected
+
+    response = client.post(
+        "/api/v1/runs",
+        headers={**_auth(), "Content-Type": "application/json"},
+        content=streamed_body(),
+    )
+
+    assert response.status_code == 413
+    assert response.json()["error"]["code"] == "request_too_large"
+    assert supervisor.submissions == []
 
 
 def test_framework_http_errors_use_stable_safe_envelopes(tmp_path: Path) -> None:

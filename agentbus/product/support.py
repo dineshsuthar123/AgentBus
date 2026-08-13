@@ -129,6 +129,7 @@ def create_support_bundle(
 
     sanitized_entries: dict[str, bytes] = {}
     redaction_count = 0
+    uncompressed_bytes = 0
     for name, document in sorted(documents.items()):
         sanitized = sanitize_document(
             document,
@@ -146,6 +147,11 @@ def create_support_bundle(
         ).encode("utf-8") + b"\n"
         if len(payload) > _MAX_ENTRY_BYTES:
             raise RuntimeError(f"Support bundle entry exceeds its safe bound: {name}")
+        uncompressed_bytes += len(payload)
+        if uncompressed_bytes > _MAX_BUNDLE_BYTES:
+            raise RuntimeError(
+                "Support bundle uncompressed content exceeded the maximum safe size."
+            )
         sanitized_entries[name] = payload
     manifest = {
         "schema_version": 1,
@@ -170,9 +176,16 @@ def create_support_bundle(
     manifest_document = sanitize_document(manifest, private_roots=private_roots)
     redaction_count += manifest_document.redaction.replacement_count
     manifest["redaction_count"] = redaction_count
-    sanitized_entries["manifest.json"] = (
+    manifest_payload = (
         json.dumps(manifest, indent=2, sort_keys=True).encode("utf-8") + b"\n"
     )
+    if len(manifest_payload) > _MAX_ENTRY_BYTES:
+        raise RuntimeError("Support bundle manifest exceeds its safe bound.")
+    if uncompressed_bytes + len(manifest_payload) > _MAX_BUNDLE_BYTES:
+        raise RuntimeError(
+            "Support bundle uncompressed content exceeded the maximum safe size."
+        )
+    sanitized_entries["manifest.json"] = manifest_payload
     _write_bundle(destination, sanitized_entries)
     size = destination.stat().st_size
     if size > _MAX_BUNDLE_BYTES:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import heapq
 import re
 from collections import defaultdict
 from collections.abc import Iterable
@@ -171,26 +172,12 @@ class RepositoryLexicalIndex:
     ) -> tuple[SearchResult, ...]:
         query = SearchQuery.model_validate(query.model_dump(mode="python"))
         terms = _query_terms(query.text, self.limits.maximum_query_terms)
-        scored: list[_ScoredDocument] = []
-        for document in self._documents:
-            if not _matches_filters(document, query):
-                continue
-            match = _score(document, terms)
-            if match is not None:
-                scored.append(match)
-        scored.sort(
-            key=lambda item: (
-                -item.score,
-                item.document.source.relative_path.casefold(),
-                (
-                    item.document.symbol.qualified_name.casefold()
-                    if item.document.symbol is not None
-                    else ""
-                ),
-                item.document.identity,
-            )
+        ranked = heapq.nsmallest(
+            query.offset + query.limit,
+            _matching_scores(self._documents, query, terms),
+            key=_score_order,
         )
-        selected = scored[query.offset : query.offset + query.limit]
+        selected = ranked[query.offset :]
         return tuple(
             SearchResult(
                 rank=query.offset + index + 1,
@@ -451,6 +438,32 @@ def _exact_score(
         field = fields.get(field_name)
         if field is not None and field.exact(query):
             components[component_name] = weight
+
+
+def _matching_scores(
+    documents: Iterable[_LexicalDocument],
+    query: SearchQuery,
+    terms: _QueryTerms,
+) -> Iterable[_ScoredDocument]:
+    for document in documents:
+        if not _matches_filters(document, query):
+            continue
+        match = _score(document, terms)
+        if match is not None:
+            yield match
+
+
+def _score_order(item: _ScoredDocument) -> tuple[float, str, str, str]:
+    return (
+        -item.score,
+        item.document.source.relative_path.casefold(),
+        (
+            item.document.symbol.qualified_name.casefold()
+            if item.document.symbol is not None
+            else ""
+        ),
+        item.document.identity,
+    )
 
 
 def _matches_filters(

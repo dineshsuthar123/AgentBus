@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from collections import defaultdict, deque
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from itertools import islice
+from typing import TYPE_CHECKING, TypeVar
 
 from agentbus.intelligence.errors import QueryLimitError
 from agentbus.intelligence.models import (
@@ -16,6 +17,10 @@ from agentbus.intelligence.models import (
 
 if TYPE_CHECKING:
     from agentbus.intelligence.storage import IndexStore
+
+
+_MAX_GRAPH_RECORDS = 1_000_000
+_Record = TypeVar("_Record")
 
 
 @dataclass(frozen=True)
@@ -88,22 +93,26 @@ class DependencyGraph:
         limits: TraversalLimits | None = None,
     ) -> None:
         self.limits = limits or TraversalLimits()
-        edge_records = tuple(
-            sorted(edges, key=lambda item: item.edge_id)
+        edge_records = _bounded_sorted_records(
+            edges,
+            key=lambda item: item.edge_id,
+            label="edge",
         )
-        if len(edge_records) > 1_000_000:
-            raise QueryLimitError(
-                "Repository graph exceeds the hard edge storage limit."
-            )
         self.edges = edge_records
-        self.symbols = tuple(
-            sorted(symbols, key=lambda item: item.symbol_id)
+        self.symbols = _bounded_sorted_records(
+            symbols,
+            key=lambda item: item.symbol_id,
+            label="symbol",
         )
-        self.files = tuple(
-            sorted(files, key=lambda item: item.file_id)
+        self.files = _bounded_sorted_records(
+            files,
+            key=lambda item: item.file_id,
+            label="file",
         )
-        self.modules = tuple(
-            sorted(modules, key=lambda item: item.module_id)
+        self.modules = _bounded_sorted_records(
+            modules,
+            key=lambda item: item.module_id,
+            label="module",
         )
         forward: dict[str, list[DependencyEdge]] = defaultdict(list)
         reverse: dict[str, list[DependencyEdge]] = defaultdict(list)
@@ -111,10 +120,10 @@ class DependencyGraph:
         for edge in self.edges:
             forward[edge.source_id].append(edge)
             reverse[edge.target_id].append(edge)
-            nodes.update((edge.source_id, edge.target_id))
-        nodes.update(item.symbol_id for item in self.symbols)
-        nodes.update(item.file_id for item in self.files)
-        nodes.update(item.module_id for item in self.modules)
+            _add_graph_nodes(nodes, (edge.source_id, edge.target_id))
+        _add_graph_nodes(nodes, (item.symbol_id for item in self.symbols))
+        _add_graph_nodes(nodes, (item.file_id for item in self.files))
+        _add_graph_nodes(nodes, (item.module_id for item in self.modules))
         self.node_ids = tuple(sorted(nodes))
         self._forward = {
             key: tuple(value) for key, value in forward.items()
@@ -122,26 +131,26 @@ class DependencyGraph:
         self._reverse = {
             key: tuple(value) for key, value in reverse.items()
         }
-        projects = dict(node_projects or {})
-        projects.update(
-            {
-                item.file_id: item.project_id
+        projects = _bounded_node_projects(node_projects or {})
+        _add_node_projects(
+            projects,
+            (
+                (item.file_id, item.project_id)
                 for item in self.files
                 if item.project_id is not None
-            }
+            ),
         )
-        projects.update(
-            {
-                item.module_id: item.project_id
-                for item in self.modules
-            }
+        _add_node_projects(
+            projects,
+            ((item.module_id, item.project_id) for item in self.modules),
         )
-        projects.update(
-            {
-                item.symbol_id: item.project_id
+        _add_node_projects(
+            projects,
+            (
+                (item.symbol_id, item.project_id)
                 for item in self.symbols
                 if item.project_id is not None
-            }
+            ),
         )
         self._node_projects = projects
 
@@ -481,15 +490,7 @@ class DependencyGraph:
         include_unresolved: bool,
     ) -> TraversalResult:
         depth_limit = self._depth(max_depth)
-        starts = (
-            (start_ids,)
-            if isinstance(start_ids, str)
-            else tuple(sorted(set(start_ids)))
-        )
-        if len(starts) > self.limits.maximum_nodes:
-            raise QueryLimitError(
-                "Graph traversal start set exceeds the node limit."
-            )
+        starts = _bounded_start_ids(start_ids, self.limits.maximum_nodes)
         allowed = _kind_filter(kinds)
         adjacency = self._reverse if reverse else self._forward
         visited = set(starts)
@@ -557,6 +558,65 @@ class DependencyGraph:
             raise QueryLimitError(
                 f"{operation} query exceeds the graph node limit."
             )
+
+
+def _bounded_sorted_records(
+    records: Iterable[_Record],
+    *,
+    key: Callable[[_Record], str],
+    label: str,
+) -> tuple[_Record, ...]:
+    values = list(islice(records, _MAX_GRAPH_RECORDS + 1))
+    if len(values) > _MAX_GRAPH_RECORDS:
+        raise QueryLimitError(
+            f"Repository graph exceeds the hard {label} storage limit."
+        )
+    values.sort(key=key)
+    return tuple(values)
+
+
+def _add_graph_nodes(nodes: set[str], identities: Iterable[str]) -> None:
+    for identity in identities:
+        nodes.add(identity)
+        if len(nodes) > _MAX_GRAPH_RECORDS:
+            raise QueryLimitError(
+                "Repository graph exceeds the hard node storage limit."
+            )
+
+
+def _bounded_node_projects(values: Mapping[str, str]) -> dict[str, str]:
+    items = list(islice(values.items(), _MAX_GRAPH_RECORDS + 1))
+    if len(items) > _MAX_GRAPH_RECORDS:
+        raise QueryLimitError(
+            "Repository graph exceeds the hard project-map storage limit."
+        )
+    return dict(items)
+
+
+def _add_node_projects(
+    projects: dict[str, str],
+    values: Iterable[tuple[str, str]],
+) -> None:
+    for identity, project_id in values:
+        projects[identity] = project_id
+        if len(projects) > _MAX_GRAPH_RECORDS:
+            raise QueryLimitError(
+                "Repository graph exceeds the hard project-map storage limit."
+            )
+
+
+def _bounded_start_ids(
+    start_ids: str | Iterable[str],
+    maximum_nodes: int,
+) -> tuple[str, ...]:
+    if isinstance(start_ids, str):
+        return (start_ids,)
+    values = tuple(islice(start_ids, maximum_nodes + 1))
+    if len(values) > maximum_nodes:
+        raise QueryLimitError(
+            "Graph traversal start set exceeds the node limit."
+        )
+    return tuple(sorted(set(values)))
 
 
 def _kind_filter(
