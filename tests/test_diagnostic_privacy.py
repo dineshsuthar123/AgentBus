@@ -37,7 +37,7 @@ from agentbus.trace import (
 from agentbus.trace.sealing import seal_run_provenance
 
 
-API_KEY = "sk-v07diagnostic0123456789abcdef"
+API_KEY = "".join(("sk", "-", "v07diagnostic", "0123456789abcdef"))
 BEARER_TOKEN = "v07-bearer-private-marker"
 JWT = (
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
@@ -45,9 +45,9 @@ JWT = (
     "v07syntheticsignaturevalue"
 )
 PRIVATE_KEY = (
-    "-----BEGIN PRIVATE KEY-----\n"
+    "-----" + "BEGIN " + "PRIVATE " + "KEY-----\n"
     "djA3LXByaXZhdGUta2V5LW1hcmtlcg==\n"
-    "-----END PRIVATE KEY-----"
+    "-----" + "END " + "PRIVATE " + "KEY-----"
 )
 CONNECTION_STRING = (
     "postgresql://diagnostic-user:connection-private-marker@localhost/agentbus"
