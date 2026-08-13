@@ -283,6 +283,7 @@ def _revalidate_identity(identity: ExecutableIdentity) -> None:
 
 
 def _resolve_directory(path: str | Path, *, description: str) -> Path:
+    _reject_unsupported_root(path)
     try:
         resolved = Path(path).expanduser().resolve(strict=True)
     except (OSError, RuntimeError) as exc:
@@ -292,6 +293,14 @@ def _resolve_directory(path: str | Path, *, description: str) -> Path:
     if not resolved.is_dir():
         raise WorkingDirectoryValidationError(f"{description} must be a directory.")
     return resolved
+
+
+def _reject_unsupported_root(path: str | Path) -> None:
+    normalized = str(path).replace("/", "\\")
+    if normalized.startswith(("\\\\", "\\?\\", "\\.\\")):
+        raise WorkingDirectoryValidationError(
+            "UNC and Windows device working-directory roots are not supported."
+        )
 
 
 def _reject_special_path(raw: str) -> None:

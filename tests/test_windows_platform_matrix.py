@@ -13,6 +13,7 @@ from agentbus.sandbox import (
     ControlledProcessSupervisor,
     ExecutableCatalog,
     ExecutableValidationError,
+    WorkingDirectoryValidationError,
     validate_working_directory,
 )
 from agentbus.sandbox.platform import windows_system_command_processor
@@ -20,6 +21,7 @@ from agentbus.tools.filesystem_operations import ContainedFileSystem
 from agentbus.tools.filesystem_security import (
     ContainedPathResolver,
     FileSystemContainmentError,
+    FileSystemSecurityError,
     UnsafeFileSystemPath,
     normalize_relative_tool_path,
 )
@@ -38,6 +40,26 @@ def test_drive_root_containment_accepts_only_canonical_descendants(
     assert validate_working_directory(drive_root, tmp_path) == tmp_path.resolve()
     with pytest.raises(UnsafeFileSystemPath, match="Absolute"):
         normalize_relative_tool_path(str(tmp_path / "absolute.txt"))
+
+
+def test_unc_roots_are_rejected_before_canonicalization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resolve_calls: list[Path] = []
+
+    def unexpected_resolve(path: Path, *args: object, **kwargs: object) -> Path:
+        resolve_calls.append(path)
+        raise AssertionError("UNC root reached filesystem canonicalization")
+
+    monkeypatch.setattr(Path, "resolve", unexpected_resolve)
+    unc_root = r"\\agentbus.invalid\untrusted-share"
+
+    with pytest.raises(FileSystemSecurityError, match="UNC"):
+        ContainedPathResolver(unc_root)
+    with pytest.raises(WorkingDirectoryValidationError, match="UNC"):
+        validate_working_directory(unc_root)
+
+    assert resolve_calls == []
 
 
 def test_long_path_round_trips_through_filesystem_and_inventory(
@@ -74,6 +96,11 @@ def test_long_path_round_trips_through_filesystem_and_inventory(
         "nul.txt",
         "COM9.log",
         "LPT1",
+        "CONIN$",
+        "CONOUT$.log",
+        "COM\u00b9.txt",
+        "LPT\u00b2",
+        "COM\u00b3.log",
         "payload.txt:metadata",
         r"\\server\share\payload.txt",
         r"\\?\C:\workspace\payload.txt",
@@ -96,6 +123,26 @@ def test_true_junction_escape_is_rejected(tmp_path: Path) -> None:
     try:
         with pytest.raises(FileSystemContainmentError, match="outside"):
             ContainedPathResolver(root).resolve("junction/payload.txt")
+    finally:
+        junction.rmdir()
+
+
+def test_junction_rejection_has_a_legacy_python_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "root"
+    target = root / "target"
+    junction = root / "junction"
+    target.mkdir(parents=True)
+    (target / "payload.txt").write_text("inside", encoding="utf-8")
+    _create_junction(junction, target)
+    resolver = ContainedPathResolver(root)
+    monkeypatch.setattr(Path, "is_junction", lambda _path: False, raising=False)
+
+    try:
+        with pytest.raises(FileSystemContainmentError, match="symlinks or junctions"):
+            resolver.resolve("junction/payload.txt", reject_any_link=True)
     finally:
         junction.rmdir()
 
@@ -166,4 +213,3 @@ def _create_junction(junction: Path, target: Path) -> None:
     if completed.returncode != 0:
         pytest.skip("Windows junction creation is unavailable")
     assert junction.is_dir()
-

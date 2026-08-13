@@ -14,8 +14,11 @@ from agentbus.repo.artifact_policy import (
 
 _WINDOWS_ABSOLUTE_PATTERN = re.compile(r"^[A-Za-z]:[/\\]")
 _WINDOWS_DEVICE_NAMES = re.compile(
-    r"(?i)^(?:con|prn|aux|nul|clock\$|com[1-9]|lpt[1-9])(?:\..*)?$"
+    r"(?i)^(?:con|prn|aux|nul|clock\$|conin\$|conout\$|"
+    r"com(?:[1-9]|\u00b9|\u00b2|\u00b3)|"
+    r"lpt(?:[1-9]|\u00b9|\u00b2|\u00b3))(?:\..*)?$"
 )
+_WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT = 0x400
 _PROTECTED_SEGMENTS = frozenset(
     {
         ".agentbus",
@@ -84,6 +87,7 @@ class ContainedPathResolver:
         *,
         create_root: bool = False,
     ) -> None:
+        _reject_unsupported_root(root)
         candidate = Path(root).expanduser()
         if create_root:
             candidate.mkdir(parents=True, exist_ok=True)
@@ -265,11 +269,25 @@ def _require_contained(path: Path, root: Path) -> None:
         ) from exc
 
 
+def _reject_unsupported_root(root: str | Path) -> None:
+    raw = str(root)
+    normalized = raw.replace("/", "\\")
+    if normalized.startswith(("\\\\", "\\?\\", "\\.\\")):
+        raise FileSystemSecurityError(
+            "UNC and Windows device filesystem roots are not supported."
+        )
+
+
 def _is_junction(path: Path) -> bool:
     checker = getattr(path, "is_junction", None)
-    if checker is None:
-        return False
+    if checker is not None:
+        try:
+            if checker():
+                return True
+        except OSError:
+            pass
     try:
-        return bool(checker())
+        attributes = getattr(path.lstat(), "st_file_attributes", 0)
     except OSError:
         return False
+    return bool(attributes & _WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT)
