@@ -13,6 +13,7 @@ import type {
   RunSummary,
   WorkspaceIndexMutationResponse
 } from "../../generated/protocol";
+import { canonicalWorkspacePath, selectWorkspace } from "../../workspace";
 
 interface Handoff {
   runId: string;
@@ -22,6 +23,7 @@ interface Handoff {
   cancelledRunId?: string;
   approvalRunId?: string;
   stressReplayId?: string;
+  secondaryRunId?: string;
   recoveredDaemonId?: string;
 }
 
@@ -302,6 +304,25 @@ async function stressFlow(
     canonicalPath(workspace),
     canonicalPath(secondaryWorkspace)
   ])));
+  const selectedSecondary = await selectWorkspace(false, async (choices) => {
+    assert.equal(choices.length, 2);
+    const expected = await canonicalPath(secondaryWorkspace);
+    for (const choice of choices) {
+      if (await canonicalPath(choice.folder.uri.fsPath) === expected) return choice;
+    }
+    return undefined;
+  });
+  assert.ok(selectedSecondary, "Secondary workspace was not explicitly selected");
+  const selectedSecondaryPath = await canonicalWorkspacePath(selectedSecondary);
+  assert.equal(
+    await canonicalPath(selectedSecondaryPath),
+    await canonicalPath(secondaryWorkspace)
+  );
+  assert.equal(
+    await selectWorkspace(false, async () => undefined),
+    undefined,
+    "Cancelling multi-root selection must not fall back to the first root"
+  );
 
   const handoff = JSON.parse(await readFile(handoffPath, "utf8")) as Handoff;
   let client = await waitFor(async () => {
@@ -363,6 +384,10 @@ async function stressFlow(
 
   const cancelledRunId = await exerciseCancellation(api, client, workspace);
   const approvalRunId = await exerciseApproval(api, client, workspace);
+  const secondaryRunId = await exerciseSecondaryWorkspaceRun(
+    client,
+    selectedSecondaryPath
+  );
   const stressReplayId = await exerciseReplay(client, handoff.runId);
   client = await exerciseSyntheticMcpFailure(
     api,
@@ -401,6 +426,7 @@ async function stressFlow(
   assert.equal((await client.run(handoff.runId)).status, "succeeded");
   assert.equal((await client.run(cancelledRunId)).status, "cancelled");
   assert.equal((await client.run(approvalRunId)).status, "succeeded");
+  assert.equal((await client.run(secondaryRunId)).status, "succeeded");
   assert.equal((await client.replay(stressReplayId)).status, "succeeded");
   assert.equal(
     (await client.attachWorkspaceIndex({ workspace })).workspace_id,
@@ -421,6 +447,7 @@ async function stressFlow(
       ...handoff,
       cancelledRunId,
       approvalRunId,
+      secondaryRunId,
       stressReplayId,
       recoveredDaemonId
     } satisfies Handoff),
@@ -607,6 +634,49 @@ async function exerciseReplay(
   return replay.replay_id;
 }
 
+async function exerciseSecondaryWorkspaceRun(
+  client: FreshClient,
+  workspace: string
+): Promise<string> {
+  const accepted = await submitAfterWorkspaceRelease({
+    task: "Implement only inside the explicitly selected secondary repository.",
+    workspace,
+    provider: "deterministic",
+    workflow: "multi",
+    durable: true,
+    parallel: false,
+    max_workers: 1,
+    commit_changes: false,
+    keep_worktrees: false,
+    deterministic: { profile: "python-calculator" }
+  });
+  assert.ok(accepted?.run_id, "Secondary workspace run was not accepted");
+  assert.equal(
+    await canonicalPath(accepted.workspace),
+    await canonicalPath(workspace)
+  );
+  const run = await waitForRun(client, accepted.run_id);
+  assert.equal(await canonicalPath(run.workspace), await canonicalPath(workspace));
+  const changes = await client.changes(run.run_id);
+  assert.equal(
+    await canonicalPath(changes.workspace),
+    await canonicalPath(workspace)
+  );
+  assert.deepEqual(
+    changes.changes.map((change) => change.path).sort(),
+    ["agentbus_result.py", "test_agentbus_result.py"]
+  );
+  const diff = await client.diff(run.run_id);
+  assert.match(diff.diff, /agentbus_result\.py/u);
+  assert.doesNotMatch(diff.diff, /delete_me\.txt/u);
+  const report = await client.report(run.run_id);
+  assert.equal(
+    await canonicalPath(String(report.report.workspace)),
+    await canonicalPath(workspace)
+  );
+  return run.run_id;
+}
+
 async function exerciseSyntheticMcpFailure(
   api: AgentBusExtensionApi,
   configuration: vscode.WorkspaceConfiguration,
@@ -683,6 +753,7 @@ async function trustedRecoveryFlow(
   const handoff = JSON.parse(await readFile(handoffPath, "utf8")) as Handoff;
   assert.ok(handoff.cancelledRunId);
   assert.ok(handoff.approvalRunId);
+  assert.ok(handoff.secondaryRunId);
   assert.ok(handoff.stressReplayId);
   const client = await waitFor(async () => {
     try {
@@ -695,6 +766,7 @@ async function trustedRecoveryFlow(
   assert.equal((await client.run(handoff.runId)).status, "succeeded");
   assert.equal((await client.run(handoff.cancelledRunId)).status, "cancelled");
   assert.equal((await client.run(handoff.approvalRunId)).status, "succeeded");
+  assert.equal((await client.run(handoff.secondaryRunId)).status, "succeeded");
   assert.equal((await client.replay(handoff.stressReplayId)).status, "succeeded");
   assert.equal(
     (await client.attachWorkspaceIndex({ workspace })).workspace_id,
