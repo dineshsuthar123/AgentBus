@@ -28,6 +28,9 @@ class ExecutableIdentity:
     sha256: str
     device: int
     inode: int
+    mode: int
+    user_id: int
+    group_id: int
     size_bytes: int
     modified_ns: int
 
@@ -246,6 +249,9 @@ def _capture_identity(
         sha256=digest,
         device=stat.st_dev,
         inode=stat.st_ino,
+        mode=stat.st_mode,
+        user_id=stat.st_uid,
+        group_id=stat.st_gid,
         size_bytes=stat.st_size,
         modified_ns=stat.st_mtime_ns,
     )
@@ -264,6 +270,9 @@ def _revalidate_identity(identity: ExecutableIdentity) -> None:
         _path_key(canonical),
         stat.st_dev,
         stat.st_ino,
+        stat.st_mode,
+        stat.st_uid,
+        stat.st_gid,
         stat.st_size,
         stat.st_mtime_ns,
         digest,
@@ -272,6 +281,9 @@ def _revalidate_identity(identity: ExecutableIdentity) -> None:
         _path_key(identity.path),
         identity.device,
         identity.inode,
+        identity.mode,
+        identity.user_id,
+        identity.group_id,
         identity.size_bytes,
         identity.modified_ns,
         identity.sha256,

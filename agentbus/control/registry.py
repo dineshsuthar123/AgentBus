@@ -309,6 +309,8 @@ def _open_windows_process(pid: int):
 def _process_identity_mismatches(entry: DaemonRegistryEntry) -> list[str]:
     if not _process_exists(entry.pid):
         return ["process missing"]
+    if os.name != "nt" and _posix_process_owner(entry.pid) != os.geteuid():
+        return ["process owner"]
     actual_start = process_start_identity(entry.pid)
     actual_executable = executable_identity(entry.pid)
     mismatches: list[str] = []
@@ -317,3 +319,10 @@ def _process_identity_mismatches(entry: DaemonRegistryEntry) -> list[str]:
     if not actual_executable or not _same_path(actual_executable, entry.executable):
         mismatches.append("executable identity")
     return mismatches
+
+
+def _posix_process_owner(pid: int) -> int | None:
+    try:
+        return Path(f"/proc/{pid}").stat().st_uid
+    except OSError:
+        return None
