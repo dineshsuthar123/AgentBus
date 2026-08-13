@@ -9,6 +9,52 @@ import { escapeMarkdown } from "./toolPresentation";
 const MAX_ITEMS = 20;
 const MAX_VALUE_LENGTH = 300;
 
+export class ApprovalStateConflictError extends Error {
+  public constructor(approvalId: string) {
+    super(`Conflicting restored approval state for ${approvalId}.`);
+    this.name = "ApprovalStateConflictError";
+  }
+}
+
+export function reconcileApprovalSummaries(
+  approvals: readonly ApprovalSummary[]
+): ApprovalSummary[] {
+  const reconciled = new Map<
+    string,
+    { approval: ApprovalSummary; scope: string }
+  >();
+  for (const approval of approvals) {
+    const scope = approvalScopeFingerprint(approval);
+    const current = reconciled.get(approval.approval_id);
+    if (!current) {
+      reconciled.set(approval.approval_id, { approval, scope });
+      continue;
+    }
+    if (scope !== current.scope) {
+      throw new ApprovalStateConflictError(approval.approval_id);
+    }
+    const currentRevision = current.approval.revision ?? 1;
+    const candidateRevision = approval.revision ?? 1;
+    if (candidateRevision > currentRevision) {
+      if (!validApprovalStateTransition(current.approval.state, approval.state)) {
+        throw new ApprovalStateConflictError(approval.approval_id);
+      }
+      reconciled.set(approval.approval_id, { approval, scope });
+    } else if (
+      candidateRevision === currentRevision &&
+      approval.state !== current.approval.state
+    ) {
+      throw new ApprovalStateConflictError(approval.approval_id);
+    }
+  }
+  return [...reconciled.values()].map((entry) => entry.approval);
+}
+
+function validApprovalStateTransition(current: string, candidate: string): boolean {
+  if (current === candidate) return true;
+  return current === "pending" && candidate !== "pending";
+}
+
 export function formatApprovalTooltip(approval: ApprovalSummary): string {
   const capabilities = formatCapabilities(approval.capabilities ?? [], true);
   const constraints = formatCapabilities(
@@ -108,4 +154,26 @@ function safeMarkdown(value: unknown): string {
 
 function safeText(value: unknown): string {
   return redactText(value, MAX_VALUE_LENGTH).replace(/[\r\n]+/g, " ");
+}
+
+function approvalScopeFingerprint(approval: ApprovalSummary): string {
+  const scope = Object.fromEntries(
+    Object.entries(approval).filter(
+      ([key]) => key !== "revision" && key !== "state"
+    )
+  );
+  return canonicalJson(scope);
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === undefined) return "undefined";
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
+  }
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
+    .join(",")}}`;
 }

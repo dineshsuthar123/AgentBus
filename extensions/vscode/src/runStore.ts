@@ -16,13 +16,20 @@ export class RunStore {
   }
 
   public replaceRuns(runs: RunSummary[]): void {
+    const restored = new Map<string, RunSummary>();
+    for (const run of runs) {
+      const current = restored.get(run.run_id);
+      if (!current || run.version > current.version) {
+        restored.set(run.run_id, run);
+      }
+    }
     const preserved = [...this.runsById.values()].filter(
       (run) =>
         !terminalStatuses.has(run.status) &&
-        !runs.some((candidate) => candidate.run_id === run.run_id)
+        !restored.has(run.run_id)
     );
     this.runsById.clear();
-    for (const run of [...runs, ...preserved]) {
+    for (const run of [...restored.values(), ...preserved]) {
       this.runsById.set(run.run_id, run);
     }
     this.emit();
