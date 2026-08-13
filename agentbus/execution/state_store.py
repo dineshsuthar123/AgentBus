@@ -10,6 +10,7 @@ from functools import wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterator
 
+from agentbus._failure_injection import FailureProbe
 from agentbus._sqlite import (
     DEFAULT_TRANSACTION_RETRY_DELAYS,
     begin_immediate_with_retry,
@@ -223,6 +224,7 @@ class StateStore:
         *,
         busy_timeout_ms: int = _DEFAULT_BUSY_TIMEOUT_MS,
         transaction_retry_delays: tuple[float, ...] = DEFAULT_TRANSACTION_RETRY_DELAYS,
+        failure_probe: FailureProbe | None = None,
     ) -> None:
         if busy_timeout_ms < 1 or busy_timeout_ms > 120_000:
             raise ValueError("busy_timeout_ms must be between 1 and 120000")
@@ -231,6 +233,7 @@ class StateStore:
         self.transaction_retry_delays = normalize_transaction_retry_delays(
             transaction_retry_delays
         )
+        self._failure_probe = failure_probe
         try:
             self.database_path.parent.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
@@ -307,6 +310,8 @@ class StateStore:
                 begin_immediate_with_retry(
                     connection,
                     retry_delays=self.transaction_retry_delays,
+                    failure_probe=self._failure_probe,
+                    failure_scope="state-write",
                 )
                 for statement in statements:
                     connection.execute(statement)
@@ -377,6 +382,8 @@ class StateStore:
                 begin_immediate_with_retry(
                     connection,
                     retry_delays=self.transaction_retry_delays,
+                    failure_probe=self._failure_probe,
+                    failure_scope="state-write",
                 )
                 yield connection
                 connection.commit()

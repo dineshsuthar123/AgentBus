@@ -7,6 +7,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Callable
 
+from agentbus._failure_injection import (
+    FailureInjectionPoint,
+    FailureProbe,
+    failure_due,
+)
 from agentbus.intelligence.discovery import (
     DiscoveredFile,
     DiscoveryLimits,
@@ -160,6 +165,7 @@ class RepositoryIndexer:
         operation_monotonic: Callable[[], float] | None = None,
         maximum_progress_events: int = 1_000,
         scheduler_limits: IndexSchedulerLimits | None = None,
+        failure_probe: FailureProbe | None = None,
     ) -> None:
         self.workspace = Path(workspace).expanduser().resolve()
         if not self.workspace.is_dir():
@@ -190,6 +196,7 @@ class RepositoryIndexer:
         self.operation_owner_pid = operation_owner_pid
         self.operation_clock = operation_clock
         self.operation_monotonic = operation_monotonic
+        self._failure_probe = failure_probe
         if maximum_progress_events < 2 or maximum_progress_events > 100_000:
             raise ValueError(
                 "maximum_progress_events must be between 2 and 100000"
@@ -252,6 +259,14 @@ class RepositoryIndexer:
             message="Repository discovery started.",
         )
         try:
+            if failure_due(
+                self._failure_probe,
+                FailureInjectionPoint.INDEX_FAILURE,
+                scope=operation_kind.value,
+            ):
+                raise IndexUnavailableError(
+                    f"Controlled {operation_kind.value} index failure."
+                )
             result = self._build_snapshot(
                 cancellation=lease,
                 lease=lease,

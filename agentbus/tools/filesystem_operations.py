@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import os
 import stat as stat_module
@@ -10,6 +11,11 @@ from enum import Enum
 from itertools import islice
 from pathlib import Path, PurePosixPath
 
+from agentbus._failure_injection import (
+    FailureInjectionPoint,
+    FailureProbe,
+    failure_due,
+)
 from agentbus.security.redaction import redact_text
 from agentbus.tools.filesystem_security import (
     ContainedPathResolver,
@@ -127,6 +133,7 @@ class ContainedFileSystem:
         create_root: bool = False,
         maximum_file_bytes: int = 2_097_152,
         maximum_list_entries: int = 10_000,
+        failure_probe: FailureProbe | None = None,
     ) -> None:
         if maximum_file_bytes < 1:
             raise ValueError("maximum_file_bytes must be positive")
@@ -136,6 +143,7 @@ class ContainedFileSystem:
         self.root = self.resolver.root
         self.maximum_file_bytes = maximum_file_bytes
         self.maximum_list_entries = maximum_list_entries
+        self._failure_probe = failure_probe
 
     def create(
         self,
@@ -620,6 +628,15 @@ class ContainedFileSystem:
                 handle.write(encoded)
                 handle.flush()
                 os.fsync(handle.fileno())
+            if failure_due(
+                self._failure_probe,
+                FailureInjectionPoint.FILESYSTEM_WRITE_FAILURE,
+                scope=operation.value,
+            ):
+                raise OSError(
+                    errno.ENOSPC,
+                    "controlled filesystem write failure",
+                )
             if before is not None:
                 os.chmod(temporary, stat_module.S_IMODE(before.mode))
                 self._require_unchanged(resolved, before)

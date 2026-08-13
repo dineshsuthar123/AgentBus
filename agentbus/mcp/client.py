@@ -8,10 +8,16 @@ from typing import Any, cast
 import jsonschema
 
 from agentbus import __version__
+from agentbus._failure_injection import (
+    FailureInjectionPoint,
+    FailureProbe,
+    failure_due,
+)
 from agentbus.execution.cancellation import CancellationToken
 from agentbus.mcp.errors import (
     McpProtocolError,
     McpRemoteError,
+    McpTransportError,
     McpUnsupportedProtocolVersion,
 )
 from agentbus.mcp.models import McpServerConfig, namespace_mcp_tool
@@ -57,9 +63,12 @@ class McpClient:
         self,
         config: McpServerConfig,
         transport: McpTransport,
+        *,
+        failure_probe: FailureProbe | None = None,
     ) -> None:
         self.config = config
         self.transport = transport
+        self._failure_probe = failure_probe
         self._lock = threading.RLock()
         self._next_request_id = 0
         self._connection: McpConnectionInfo | None = None
@@ -272,6 +281,14 @@ class McpClient:
     ) -> dict[str, Any]:
         if require_connection and self._connection is None:
             raise McpProtocolError("MCP client must initialize before requests.")
+        if failure_due(
+            self._failure_probe,
+            FailureInjectionPoint.MCP_FAILURE,
+            scope=method,
+        ):
+            raise McpTransportError(
+                f"Controlled local MCP failure during '{method}'."
+            )
         with self._lock:
             self._next_request_id += 1
             request_id = self._next_request_id

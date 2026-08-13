@@ -11,6 +11,11 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+from agentbus._failure_injection import (
+    FailureInjectionPoint,
+    FailureProbe,
+    failure_due,
+)
 from agentbus.trace.blobs import BlobMetadata, RetentionClass, StoredBlob
 from agentbus.trace.errors import (
     TraceIntegrityError,
@@ -50,6 +55,7 @@ class ContentAddressedStore:
         *,
         max_object_bytes: int = DEFAULT_MAX_OBJECT_BYTES,
         private_roots: Iterable[str | Path] = (),
+        failure_probe: FailureProbe | None = None,
     ):
         if max_object_bytes < 1 or max_object_bytes > HARD_MAX_OBJECT_BYTES:
             raise ValueError(
@@ -68,6 +74,7 @@ class ContentAddressedStore:
         self.blob_directory = self.root / "blobs"
         self.metadata_directory = self.root / "metadata"
         self.max_object_bytes = max_object_bytes
+        self._failure_probe = failure_probe
         self.private_roots = tuple(private_roots)
         self._lock = threading.RLock()
         self._ensure_directory(self.blob_directory)
@@ -433,6 +440,12 @@ class ContentAddressedStore:
                 handle.write(value)
                 handle.flush()
                 os.fsync(handle.fileno())
+            if failure_due(
+                self._failure_probe,
+                FailureInjectionPoint.TRACE_WRITE_FAILURE,
+                scope="object-write",
+            ):
+                raise OSError("controlled trace write failure")
             self._assert_safe_location(destination)
             os.replace(temporary, destination)
             temporary = None

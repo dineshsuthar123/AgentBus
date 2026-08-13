@@ -8,6 +8,11 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from agentbus._failure_injection import (
+    FailureInjectionPoint,
+    FailureProbe,
+    failure_due,
+)
 from agentbus.execution.models import utc_now
 from agentbus.security.redaction import redact_text
 
@@ -79,9 +84,11 @@ class CancellationToken:
         initial: CancellationState | None = None,
         *,
         clock: Callable[[], datetime] = utc_now,
+        failure_probe: FailureProbe | None = None,
     ):
         state = initial or CancellationState()
         self._clock = clock
+        self._failure_probe = failure_probe
         self._lock = threading.RLock()
         self._condition = threading.Condition(self._lock)
         self._event = threading.Event()
@@ -227,6 +234,12 @@ class CancellationToken:
         provider: str | None = None,
         acknowledge: bool = True,
     ) -> None:
+        if not self.is_requested and failure_due(
+            self._failure_probe,
+            FailureInjectionPoint.CANCELLATION,
+            scope="checkpoint",
+        ):
+            self.request("Controlled cancellation failure injection.")
         if not self.is_requested:
             return
         if acknowledge:

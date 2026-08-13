@@ -3,6 +3,11 @@ from __future__ import annotations
 import threading
 from collections.abc import Iterable, Mapping
 
+from agentbus._failure_injection import (
+    FailureInjectionPoint,
+    FailureProbe,
+    failure_due,
+)
 from agentbus.intelligence.errors import (
     ParserCompatibilityError,
     ParserUnavailableError,
@@ -24,11 +29,13 @@ class ParserRegistry:
         parsers: Iterable[LanguageParser] = (),
         *,
         required_versions: Mapping[str, str] | None = None,
+        failure_probe: FailureProbe | None = None,
     ) -> None:
         self._lock = threading.RLock()
         self._by_language: dict[SourceLanguage, LanguageParser] = {}
         self._by_name: dict[str, LanguageParser] = {}
         self._descriptors: dict[str, ParserDescriptor] = {}
+        self._failure_probe = failure_probe
         self._required_versions = {
             str(name): str(version)
             for name, version in (required_versions or {}).items()
@@ -128,6 +135,14 @@ class ParserRegistry:
             required_version=required_version,
         )
         descriptor = _validated_descriptor(parser)
+        if failure_due(
+            self._failure_probe,
+            FailureInjectionPoint.PARSER_FAILURE,
+            scope=validated_request.language.value,
+        ):
+            raise ParserUnavailableError(
+                f"Controlled parser failure for {validated_request.language.value}."
+            )
         result = parser.parse(
             validated_request,
             limits=limits,

@@ -5,6 +5,12 @@ import sqlite3
 from collections.abc import Iterable
 from time import sleep as _sleep
 
+from agentbus._failure_injection import (
+    FailureInjectionPoint,
+    FailureProbe,
+    failure_due,
+)
+
 
 DEFAULT_TRANSACTION_RETRY_DELAYS = (0.01, 0.05, 0.1)
 _MAX_TRANSACTION_RETRIES = 8
@@ -36,11 +42,21 @@ def begin_immediate_with_retry(
     connection: sqlite3.Connection,
     *,
     retry_delays: tuple[float, ...] = DEFAULT_TRANSACTION_RETRY_DELAYS,
+    failure_probe: FailureProbe | None = None,
+    failure_scope: str | None = None,
 ) -> None:
     """Acquire a SQLite writer transaction without replaying its write body."""
 
     for attempt in range(len(retry_delays) + 1):
         try:
+            if failure_due(
+                failure_probe,
+                FailureInjectionPoint.SQLITE_BUSY,
+                scope=failure_scope,
+            ):
+                raise sqlite3.OperationalError(
+                    "database is busy (controlled failure injection)"
+                )
             connection.execute("BEGIN IMMEDIATE")
             return
         except sqlite3.OperationalError as exc:

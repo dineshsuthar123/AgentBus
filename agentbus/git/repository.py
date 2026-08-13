@@ -9,6 +9,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
 
+from agentbus._failure_injection import (
+    FailureInjectionPoint,
+    FailureProbe,
+    failure_due,
+)
 from agentbus.repo.artifact_policy import (
     ArtifactPolicyError,
     GeneratedArtifactPolicy,
@@ -82,6 +87,7 @@ class GitRepository:
         artifact_policy: GeneratedArtifactPolicy | None = None,
         executable_catalog: ExecutableCatalog | None = None,
         maximum_command_output_chars: int = 4_194_304,
+        failure_probe: FailureProbe | None = None,
     ):
         if maximum_command_output_chars < 1:
             raise ValueError("maximum_command_output_chars must be positive")
@@ -92,6 +98,7 @@ class GitRepository:
             ("git",)
         )
         self.maximum_command_output_chars = maximum_command_output_chars
+        self._failure_probe = failure_probe
         self._validated_top_level: Path | None = None
         self._path_resolver: ContainedPathResolver | None = None
 
@@ -605,6 +612,14 @@ class GitRepository:
                 *command[1:],
             ]
         )
+        if failure_due(
+            self._failure_probe,
+            FailureInjectionPoint.GIT_COMMAND_FAILURE,
+            scope=operation,
+        ):
+            raise GitRepositoryError(
+                f"Controlled Git command failure for operation '{operation}'."
+            )
         try:
             result = subprocess.run(
                 safe_command,

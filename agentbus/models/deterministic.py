@@ -11,6 +11,11 @@ from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
+from agentbus._failure_injection import (
+    FailureInjectionPoint,
+    FailureProbe,
+    failure_due,
+)
 from agentbus.execution.cancellation import (
     CancellationRequested,
     CancellationState,
@@ -82,6 +87,7 @@ class DeterministicProvider:
         failure_kind: str = "service_unavailable",
         failure_calls: tuple[int, ...] = (),
         sleeper: Callable[[float], None] = time.sleep,
+        failure_probe: FailureProbe | None = None,
     ):
         if latency_seconds < 0:
             raise ValueError("deterministic latency must be non-negative")
@@ -94,6 +100,7 @@ class DeterministicProvider:
         self.failure_kind = failure_kind
         self.failure_calls = frozenset(failure_calls)
         self.sleeper = sleeper
+        self._failure_probe = failure_probe
         self._lock = threading.Lock()
         self._total_calls = 0
         self._scope_calls: dict[str, int] = {}
@@ -242,6 +249,17 @@ class DeterministicProvider:
         *,
         cancellation: CancellationToken | None,
     ) -> None:
+        if failure_due(
+            self._failure_probe,
+            FailureInjectionPoint.PROVIDER_FAILURE,
+            scope=self.role.value,
+        ):
+            raise ModelServiceUnavailableError(
+                "Controlled deterministic provider failure.",
+                provider=self.provider_name,
+                model=self.model_name,
+                metadata={"controlled_failure": True},
+            )
         if self.latency_seconds:
             if timeout_seconds is not None and self.latency_seconds > timeout_seconds:
                 raise ModelTimeoutError(
