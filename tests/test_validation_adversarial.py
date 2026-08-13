@@ -52,7 +52,7 @@ def test_adversarial_inventory_remains_bounded_and_excludes_protected_content(
 
     assert "src/valid.py" in paths
     assert "src/cafe_\u8ba1\u7b97.py" in paths
-    assert "nested/repository/source.py" in paths
+    assert "nested/repository/source.py" not in paths
     assert ".env" not in paths
     assert ".env.local" not in paths
     assert "secrets.json" not in paths
@@ -64,6 +64,12 @@ def test_adversarial_inventory_remains_bounded_and_excludes_protected_content(
     assert "oversized.bin" not in paths
     assert "discovery.gitignore_unreadable" in diagnostics
     assert "discovery.file_too_large" in diagnostics
+    assert "discovery.nested_repository_boundary" in diagnostics
+    assert any(
+        item.code == "discovery.nested_repository_boundary"
+        and item.relative_path == "nested/repository"
+        for item in inventory.diagnostics
+    )
     if "symlink-loop" in fixture.created_features:
         assert "discovery.link_rejected" in diagnostics
         assert "loop" not in paths
