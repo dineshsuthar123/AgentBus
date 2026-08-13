@@ -10,7 +10,10 @@ from typing import Any, Iterable
 
 from pydantic import Field
 
-from agentbus.security.redaction import is_sensitive_key, redact_text
+from agentbus.security.redaction import (
+    is_sensitive_key,
+    redact_diagnostic_text,
+)
 from agentbus.trace.models import TraceModel
 
 REDACTED = "[REDACTED]"
@@ -192,6 +195,14 @@ def contains_secret_material(payload: str | bytes) -> bool:
             return True
     else:
         text = payload
+    if (
+        redact_diagnostic_text(
+            text,
+            max_chars=max(DEFAULT_MAX_TEXT_CHARS, len(text) + 1),
+        )
+        != text
+    ):
+        return True
     if _PRIVATE_KEY_PATTERN.search(text) or _BEARER_PATTERN.search(text):
         return True
     for match in _SECRET_ASSIGNMENT_PATTERN.finditer(text):
@@ -333,11 +344,16 @@ def _sanitize_string(
     counters: _RedactionCounters,
     max_text_chars: int,
 ) -> str:
-    sanitized = redact_text(value, max_chars=max_text_chars) or ""
+    existing_private_paths = value.count(PRIVATE_PATH)
+    sanitized = redact_diagnostic_text(value, max_chars=max_text_chars) or ""
     if sanitized != value:
         counters.replacements += 1
         if sanitized.endswith("\n[truncated]"):
             counters.truncated_values += 1
+    counters.private_paths += max(
+        0,
+        sanitized.count(PRIVATE_PATH) - existing_private_paths,
+    )
     for pattern in (_WINDOWS_HOME_PATTERN, _POSIX_HOME_PATTERN):
         sanitized, replacement_count = pattern.subn(PRIVATE_PATH, sanitized)
         counters.replacements += replacement_count

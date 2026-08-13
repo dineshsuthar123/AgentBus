@@ -24,6 +24,10 @@ from agentbus.models.types import ModelRole
 from agentbus.product.synthetic import generate_synthetic_repository
 from agentbus.replay.engine import ReplayEngine
 from agentbus.replay.session import ReplayRequest
+from agentbus.security.redaction import (
+    redact_diagnostic_text,
+    sanitize_diagnostic_json,
+)
 from agentbus.tools.filesystem import FileSystemTools
 from agentbus.trace.models import (
     ReplayMode,
@@ -71,9 +75,9 @@ class OperationMetrics:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "name": self.name,
-            "group": self.group,
-            "status": self.status,
+            "name": redact_diagnostic_text(self.name, max_chars=256),
+            "group": redact_diagnostic_text(self.group, max_chars=256),
+            "status": redact_diagnostic_text(self.status, max_chars=256),
             "samples_ms": [round(value, 3) for value in self.samples_ms],
             "median_ms": _round(self.median_ms),
             "p95_ms": _round(self.p95_ms),
@@ -81,7 +85,7 @@ class OperationMetrics:
             "operation_count": self.operation_count,
             "budget_ms": _round(self.budget_ms),
             "budget_passed": self.budget_passed,
-            "detail": self.detail,
+            "detail": redact_diagnostic_text(self.detail, max_chars=4_000),
         }
 
 
@@ -124,7 +128,7 @@ class BenchmarkReport:
             "memory_budget_bytes": self.memory_budget_bytes,
             "memory_budget_passed": self.peak_memory_bytes <= self.memory_budget_bytes,
             "budget_policy": "broad-regression-v1",
-            "environment": self.environment,
+            "environment": _safe_environment(self.environment),
             "environment_fingerprint": self.environment_fingerprint,
             "operations": [operation.to_dict() for operation in self.operations],
             "generated_at": self.generated_at,
@@ -300,7 +304,14 @@ def write_benchmark_report(
     if destination.exists() or destination.is_symlink():
         raise ValueError("Benchmark report output already exists or is a link.")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps(report.to_dict(), indent=2, sort_keys=True) + "\n"
+    report_payload = report.to_dict()
+    if not isinstance(report_payload, dict):
+        raise ValueError("Benchmark report must serialize to a JSON object.")
+    environment = report_payload.get("environment")
+    sanitized_payload = sanitize_diagnostic_json(report_payload)
+    if environment is not None:
+        sanitized_payload["environment"] = _safe_environment(environment)
+    payload = json.dumps(sanitized_payload, indent=2, sort_keys=True) + "\n"
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{destination.name}.",
         suffix=".tmp",
@@ -469,6 +480,25 @@ def _environment() -> dict[str, Any]:
         "machine": platform.machine(),
         "processor_count": os.cpu_count(),
         "dependencies": dependencies,
+    }
+
+
+def _safe_environment(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    allowed = {
+        "agentbus_version",
+        "dependencies",
+        "implementation",
+        "machine",
+        "processor_count",
+        "python",
+        "system",
+    }
+    return {
+        key: sanitize_diagnostic_json(item)
+        for key, item in value.items()
+        if key in allowed
     }
 
 

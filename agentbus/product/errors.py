@@ -5,7 +5,10 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
-from agentbus.security.redaction import redact_text, sanitize_json
+from agentbus.security.redaction import (
+    redact_diagnostic_text,
+    sanitize_diagnostic_json,
+)
 
 
 class ProductErrorCategory(StrEnum):
@@ -78,7 +81,7 @@ class ProductError(RuntimeError):
         }
         if debug_detail:
             payload["debug_detail"] = _safe(debug_detail, 8_000)
-        return sanitize_json(payload, max_chars=8_000)
+        return sanitize_diagnostic_json(payload, max_chars=8_000)
 
 
 def as_product_error(
@@ -125,4 +128,8 @@ def render_product_error(error: ProductError, *, debug: bool = False) -> str:
 
 
 def _safe(value: str | None, limit: int) -> str | None:
-    return redact_text(value, max_chars=limit) if value is not None else None
+    return (
+        redact_diagnostic_text(value, max_chars=limit)
+        if value is not None
+        else None
+    )

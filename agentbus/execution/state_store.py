@@ -2781,7 +2781,9 @@ class StateStore:
                     request.invocation_revision,
                     request.run_id,
                     request.task_id,
-                    _dump_json(persisted_request.model_dump(mode="json")),
+                    _dump_validated_json(
+                        persisted_request.model_dump(mode="json")
+                    ),
                     request_sha256,
                     _timestamp(request.created_at),
                 ),
@@ -5219,6 +5221,20 @@ def _dump_json(value: Any) -> str:
     try:
         return json.dumps(
             _sanitize(value),
+            allow_nan=False,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    except (TypeError, ValueError) as exc:
+        raise StateStoreError("Durable state value is not JSON serializable.") from exc
+
+
+def _dump_validated_json(value: Any) -> str:
+    """Serialize an already-sanitized model without changing bound identities."""
+    try:
+        return json.dumps(
+            value,
             allow_nan=False,
             ensure_ascii=True,
             separators=(",", ":"),
