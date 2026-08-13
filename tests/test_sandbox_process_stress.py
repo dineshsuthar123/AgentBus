@@ -189,6 +189,8 @@ def test_repeated_child_creation_is_enforced_or_reported_and_cleaned(
             lifecycle,
             "--child-count",
             "8",
+            "--expected-active-children",
+            str(budget.child_processes),
         ),
         resource_budget=budget,
     )
@@ -197,7 +199,8 @@ def test_repeated_child_creation_is_enforced_or_reported_and_cleaned(
     payload = json.loads(result.stdout)
     child_limit = result.resource_usage.limits["child_processes"]
     if result.process_tree is not None and result.process_tree.job_assigned:
-        assert len(payload["children"]) <= budget.child_processes
+        assert len(payload["active_children"]) <= budget.child_processes
+        assert len(payload["children"]) >= len(payload["active_children"])
         assert child_limit.supported is True
         assert child_limit.enforced is True
     else:

@@ -32,6 +32,7 @@ def main() -> int:
     parser.add_argument("--lifecycle-dir")
     parser.add_argument("--exit-code", type=int, default=0)
     parser.add_argument("--child-count", type=int, default=4)
+    parser.add_argument("--expected-active-children", type=int)
     parser.add_argument("--output-iterations", type=int)
     args = parser.parse_args()
     lifecycle = (
@@ -88,10 +89,15 @@ def main() -> int:
                 children.append(_spawn("leaf", lifecycle))
             except OSError:
                 blocked += 1
+        active_children = _settled_active_children(
+            children,
+            expected=args.expected_active_children,
+        )
         print(
             json.dumps(
                 {
                     "children": [child.pid for child in children],
+                    "active_children": [child.pid for child in active_children],
                     "blocked": blocked,
                 }
             ),
@@ -136,6 +142,21 @@ def _write_pid(lifecycle: Path | None, role: str) -> None:
         return
     marker = lifecycle / f"{role}-{os.getpid()}.pid"
     marker.write_text(str(os.getpid()), encoding="utf-8")
+
+
+def _settled_active_children(
+    children: list[subprocess.Popen[bytes]],
+    *,
+    expected: int | None,
+) -> list[subprocess.Popen[bytes]]:
+    active = [child for child in children if child.poll() is None]
+    if os.name != "nt" or expected is None or len(active) <= expected:
+        return active
+    deadline = time.monotonic() + 2.0
+    while len(active) > expected and time.monotonic() < deadline:
+        time.sleep(0.01)
+        active = [child for child in active if child.poll() is None]
+    return active
 
 
 def _wait_forever() -> None:
