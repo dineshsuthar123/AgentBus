@@ -181,7 +181,16 @@ class ControlledProcessSupervisor:
         command, launch_backend, command_processor, executable_override = (
             self._launch_command(identity, arguments)
         )
-        with tempfile.TemporaryDirectory(prefix="agentbus-tool-") as isolated_home:
+        try:
+            isolated_home_context = tempfile.TemporaryDirectory(
+                prefix="agentbus-tool-"
+            )
+        except OSError as exc:
+            raise ProcessSupervisionError(
+                "Could not create the isolated process temporary directory; verify "
+                "the temporary directory is writable and has available space."
+            ) from exc
+        with isolated_home_context as isolated_home:
             environment = sanitized_process_environment(
                 source=self._base_environment,
                 executable_directories=self._executable_directories,

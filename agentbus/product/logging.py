@@ -22,6 +22,10 @@ _MAX_RUN_FILES = 20
 _WRITE_LOCK = threading.Lock()
 
 
+class ProductLogError(OSError):
+    """Raised when a product log cannot be written safely."""
+
+
 @dataclass(frozen=True)
 class ProductLogEntry:
     timestamp: str
@@ -100,14 +104,23 @@ class ProductLogWriter:
                 json.dumps(payload, sort_keys=True, ensure_ascii=True, allow_nan=False)
                 + "\n"
             ).encode("utf-8")
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with _WRITE_LOCK:
-            if self.path.is_symlink():
-                raise OSError("Product log path became a symbolic link.")
-            if self.path.is_file() and self.path.stat().st_size + len(encoded) > self.max_bytes:
-                self._rotate()
-            with self.path.open("ab") as handle:
-                handle.write(encoded)
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with _WRITE_LOCK:
+                if self.path.is_symlink():
+                    raise OSError("Product log path became a symbolic link.")
+                if (
+                    self.path.is_file()
+                    and self.path.stat().st_size + len(encoded) > self.max_bytes
+                ):
+                    self._rotate()
+                with self.path.open("ab") as handle:
+                    handle.write(encoded)
+        except OSError as exc:
+            raise ProductLogError(
+                "Unable to write the AgentBus product log; verify the log directory "
+                "is writable and has available disk space."
+            ) from exc
 
     def _rotate(self) -> None:
         oldest = self.path.with_name(f"{self.path.name}.{self.retained_files}")

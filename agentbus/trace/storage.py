@@ -331,11 +331,28 @@ class ContentAddressedStore:
                 retention_classes=[retention_class],
             )
             self._atomic_write(blob_path, value)
-            self._atomic_write(
-                metadata_path,
-                canonical_json_bytes(metadata.model_dump(mode="json")),
-            )
+            try:
+                self._atomic_write(
+                    metadata_path,
+                    canonical_json_bytes(metadata.model_dump(mode="json")),
+                )
+            except Exception:
+                self._discard_uncommitted_blob(blob_path, metadata_path)
+                raise
             return metadata
+
+    def _discard_uncommitted_blob(
+        self,
+        blob_path: Path,
+        metadata_path: Path,
+    ) -> None:
+        try:
+            self._assert_safe_location(blob_path)
+            self._assert_safe_location(metadata_path)
+            if not metadata_path.exists():
+                blob_path.unlink(missing_ok=True)
+        except (OSError, TraceStorageError):
+            pass
 
     def _load_existing(
         self,

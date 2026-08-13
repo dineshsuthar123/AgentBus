@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import warnings
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -22,7 +23,7 @@ from agentbus.control.registry import (
     wait_for_registered_daemon_exit,
 )
 from agentbus.control.version import CONTROL_PROTOCOL_VERSION
-from agentbus.product.logging import ProductLogWriter
+from agentbus.product.logging import ProductLogError, ProductLogWriter
 from agentbus.security.redaction import redact_text
 
 
@@ -279,13 +280,18 @@ def _count_query(path: Path, query: str) -> int:
         return 0
 
 
-def _append_lifecycle_log(path: Path, event: str, **fields: Any) -> None:
-    ProductLogWriter(path).write(
-        level="error" if event.endswith("failed") else "info",
-        component="daemon",
-        message=event,
-        fields=fields,
-    )
+def _append_lifecycle_log(path: Path, event: str, **fields: Any) -> bool:
+    try:
+        ProductLogWriter(path).write(
+            level="error" if event.endswith("failed") else "info",
+            component="daemon",
+            message=event,
+            fields=fields,
+        )
+    except ProductLogError as exc:
+        warnings.warn(str(exc), RuntimeWarning, stacklevel=2)
+        return False
+    return True
 
 
 def _read_startup_diagnostic(handle) -> str:
