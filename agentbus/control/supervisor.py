@@ -129,8 +129,8 @@ class AgentBusRunBackend:
     def execute_new(self, request: RunCreateRequest, run_id: str) -> None:
         config = self._config_for(request)
         if request.durable:
-            orchestrator = self._orchestrator(config, request, run_id)
             try:
+                orchestrator = self._orchestrator(config, request, run_id)
                 orchestrator.create_durable_run(request.task, run_id=run_id)
             except (CancellationRequested, ModelCancellationError):
                 self._persist_preplanning_cancellation(
