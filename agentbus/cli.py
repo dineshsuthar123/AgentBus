@@ -1309,21 +1309,29 @@ def _benchmark_command(arguments: list[str]) -> int:
 
 
 def _soak_command(arguments: list[str]) -> int:
-    from agentbus.product.soak import run_soak
+    from agentbus.product.soak import SOAK_PROFILE_NAMES, run_soak
 
     parser = argparse.ArgumentParser(prog="agentbus soak")
-    parser.add_argument("--duration", type=float, default=30.0, metavar="SECONDS")
-    parser.add_argument("--runs", type=int, default=10)
-    parser.add_argument("--parallelism", type=int, default=2)
+    parser.add_argument(
+        "--profile",
+        choices=SOAK_PROFILE_NAMES,
+        default="quick",
+    )
+    parser.add_argument("--duration", type=float, default=None, metavar="SECONDS")
+    parser.add_argument("--runs", type=int, default=None)
+    parser.add_argument("--parallelism", type=int, default=None)
+    parser.add_argument("--repository-files", type=int, default=None)
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(arguments)
     try:
         report = run_soak(
+            profile=args.profile,
             duration_seconds=args.duration,
             runs=args.runs,
             parallelism=args.parallelism,
             seed=args.seed,
+            repository_files=args.repository_files,
         )
     except (OSError, RuntimeError, ValueError) as exc:
         payload = {"ok": False, "error": str(exc), "network_used": False}
@@ -1338,8 +1346,9 @@ def _soak_command(arguments: list[str]) -> int:
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         print(
-            f"AgentBus offline soak: {report.completed_runs}/{report.requested_runs} "
-            f"cycles in {report.duration_seconds:.3f}s"
+            f"AgentBus offline soak ({report.profile}): "
+            f"{report.completed_runs}/{report.requested_runs} cycles in "
+            f"{report.duration_seconds:.3f}s"
         )
         print(
             f"  successful={report.successful_runs} "
@@ -1350,6 +1359,11 @@ def _soak_command(arguments: list[str]) -> int:
             f"stale_leases={report.stale_lease_count}"
         )
         print(
+            f"  tools={report.tool_calls} approvals={report.approval_count} "
+            f"mcp_calls={report.mcp_call_count} "
+            f"daemon_restarts={report.daemon_restart_count}"
+        )
+        print(
             f"  leaked_worktrees={report.leaked_worktree_count} "
             f"leaked_processes={report.leaked_process_count} "
             f"cleanup_failures={report.failed_cleanup_count}"
@@ -1357,6 +1371,12 @@ def _soak_command(arguments: list[str]) -> int:
         print(
             f"  memory_growth={report.memory_growth_bytes} "
             f"budget={report.memory_budget_bytes} bytes"
+        )
+        trends = {trend.name: trend for trend in report.resource_trends}
+        print(
+            f"  state_db={trends['state_database_bytes'].after} "
+            f"index_db={trends['index_database_bytes'].after} "
+            f"trace={trends['trace_bytes'].after} bytes"
         )
         if report.stopped_by_duration:
             print("  duration limit stopped scheduling additional cycles")

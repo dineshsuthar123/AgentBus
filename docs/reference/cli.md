@@ -20,6 +20,12 @@ Run `agentbus --help` for the current command list and
 | `soak` | Run bounded offline reliability checks |
 | `release-check` | Run non-publishing beta gates |
 
+`agentbus soak --profile quick` is the short development check.
+`agentbus soak --profile release-candidate` selects the bounded 5-10 minute
+release profile. `--duration`, `--runs`, `--parallelism`, and
+`--repository-files` may override profile defaults for explicit manual runs;
+the soak remains synthetic, local, providerless, and non-publishing.
+
 ## Execution
 
 | Command | Purpose |

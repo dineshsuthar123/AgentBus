@@ -13,6 +13,38 @@ startup, full and incremental indexing, search, context planning, run overhead,
 offline replay, memory where available, and database sizes. Budgets are broad
 regression tripwires, not universal performance promises.
 
+## Reliability soak profiles
+
+The quick soak is suitable for local development and remains the default:
+
+```console
+agentbus soak --profile quick --json
+```
+
+The release-candidate profile has a ten-minute scheduling limit and a bounded
+run cap. It repeatedly exercises deterministic tasks, managed filesystem tools,
+exact approvals, a synthetic local stdio MCP peer, indexing, offline replay,
+cancellation, owned worktree cleanup, and durable daemon restart recovery:
+
+```console
+agentbus soak --profile release-candidate --json
+```
+
+Longer manual runs are explicit. For example, this sets a two-hour limit while
+retaining all local, providerless, and bounded behavior:
+
+```console
+agentbus soak --profile release-candidate --duration 7200 --runs 10000 --json
+```
+
+The report records before, peak, and after values for AgentBus-owned child
+processes and worktrees, state and index databases, trace storage, Python
+allocation memory, threads, and process handles where the platform exposes a
+safe measurement. It also reports stale leases, event gaps, and cleanup
+failures. An unavailable handle count is reported as unmeasurable rather than
+estimated. Long soaks are manual release evidence and are not part of ordinary
+pytest invocation.
+
 For repeatability, close unrelated heavy processes, use the same Python and Git
 versions, run on the same storage class, and compare medians from multiple
 runs. Never commit transient benchmark output or benchmark clones.
