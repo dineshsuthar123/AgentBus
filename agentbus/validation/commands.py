@@ -14,12 +14,15 @@ from agentbus.validation.failures import (
     RepositoryValidationError,
 )
 from agentbus.validation.models import (
+    ReliabilityScorecard,
     RepositoryScale,
     RepositorySource,
     ValidationReport,
     ValidationRepository,
 )
+from agentbus.validation.reliability import run_reliability_validation
 from agentbus.validation.reports import (
+    render_reliability_scorecard,
     render_validation_report,
     write_validation_report,
 )
@@ -58,9 +61,51 @@ def validation_command(arguments: list[str]) -> int:
     )
     corpus.add_argument("--output")
     corpus.add_argument("--json", action="store_true")
+
+    reliability = commands.add_parser(
+        "reliability",
+        help="Generate an explicit offline release reliability scorecard.",
+    )
+    reliability.add_argument(
+        "--repository",
+        "--repo",
+        "--path",
+        "--local-repository",
+        dest="repository_paths",
+        action="append",
+        default=[],
+        help="Also validate one explicit local repository; repeat as needed.",
+    )
+    reliability.add_argument("--duration", type=float, metavar="SECONDS")
+    reliability.add_argument("--runs", type=int)
+    reliability.add_argument("--parallelism", type=int)
+    reliability.add_argument("--repository-files", type=int)
+    reliability.add_argument("--seed", type=int, default=2026)
+    reliability.add_argument("--output")
+    reliability.add_argument("--json", action="store_true")
     args = parser.parse_args(arguments)
 
     try:
+        if args.validation_command == "reliability":
+            scorecard = run_reliability_validation(
+                repository_paths=args.repository_paths,
+                duration_seconds=args.duration,
+                runs=args.runs,
+                parallelism=args.parallelism,
+                repository_files=args.repository_files,
+                seed=args.seed,
+            )
+            report_path = (
+                write_validation_report(scorecard, args.output)
+                if args.output
+                else None
+            )
+            _emit_reliability_scorecard(
+                scorecard,
+                report_path=report_path,
+                json_output=args.json,
+            )
+            return 0 if scorecard.ok else 1
         if args.validation_command == "repo":
             report = _validate_repository(
                 args.path,
@@ -133,6 +178,23 @@ def _emit_report(
         _print_safe(json.dumps(payload, indent=2, sort_keys=True))
         return
     rendered = render_validation_report(report)
+    if report_path is not None:
+        rendered += f"\nReport: {report_path}"
+    _print_safe(rendered)
+
+
+def _emit_reliability_scorecard(
+    scorecard: ReliabilityScorecard,
+    *,
+    report_path: Path | None,
+    json_output: bool,
+) -> None:
+    if json_output:
+        payload = scorecard.to_dict()
+        payload["report_path"] = str(report_path) if report_path else None
+        _print_safe(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    rendered = render_reliability_scorecard(scorecard)
     if report_path is not None:
         rendered += f"\nReport: {report_path}"
     _print_safe(rendered)

@@ -193,7 +193,7 @@ def _root_parser() -> argparse.ArgumentParser:
         "cleanup": "Remove only proven AgentBus-owned stale runtime artifacts.",
         "logs": "Inspect bounded redacted product and run logs.",
         "support-bundle": "Create a sanitized local diagnostic ZIP.",
-        "validate": "Validate local repositories and offline corpus fixtures.",
+        "validate": "Validate repositories, corpus fixtures, and reliability.",
         "benchmark": "Measure bounded offline product performance.",
         "soak": "Exercise bounded offline reliability and leak checks.",
         "release-check": "Run non-publishing public beta release gates.",

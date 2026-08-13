@@ -16,6 +16,7 @@ Run `agentbus --help` for the current command list and
 | `cleanup` | Dry-run or remove proven owned stale runtime state |
 | `logs` | Read bounded redacted product/run logs |
 | `support-bundle` | Create a sanitized local diagnostic ZIP |
+| `validate` | Validate repositories, fixtures, and release reliability offline |
 | `benchmark` | Run generated offline performance checks |
 | `soak` | Run bounded offline reliability checks |
 | `release-check` | Run non-publishing beta gates |
@@ -25,6 +26,16 @@ Run `agentbus --help` for the current command list and
 release profile. `--duration`, `--runs`, `--parallelism`, and
 `--repository-files` may override profile defaults for explicit manual runs;
 the soak remains synthetic, local, providerless, and non-publishing.
+
+`agentbus validate reliability` combines the generated repository corpus with
+the bounded quick lifecycle soak and emits an explicit `PASS`,
+`PASS_WITH_WARNINGS`, or `FAIL` scorecard. Repeat `--repository PATH` to add
+real local repositories; AgentBus indexes them into temporary databases and
+does not modify their source trees. `--runs`, `--duration`, `--parallelism`,
+`--repository-files`, and `--seed` provide bounded deterministic overrides.
+Use `--json` for structured output or `--output PATH` for an atomic JSON report.
+The report lists concrete checks and observations rather than an opaque numeric
+score, and it never uses a provider or the network.
 
 ## Execution
 

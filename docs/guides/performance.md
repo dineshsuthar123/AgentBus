@@ -45,6 +45,24 @@ failures. An unavailable handle count is reported as unmeasurable rather than
 estimated. Long soaks are manual release evidence and are not part of ordinary
 pytest invocation.
 
+## Reliability scorecard
+
+The release scorecard runs the generated validation corpus and the bounded
+quick lifecycle profile together:
+
+```console
+agentbus validate reliability --json
+agentbus validate reliability --repository C:\path\to\local-repository --json
+```
+
+Explicit local repositories are read and indexed into disposable storage; the
+scorecard does not edit their source trees. Structured output records scenarios,
+generated fixtures, supplied local repositories, failures, owned process and
+worktree leaks, durable-database and repository-index integrity, replay,
+cancellation, restart recovery, latency, and memory where measurable. Overall
+classification is `PASS`, `PASS_WITH_WARNINGS`, or `FAIL`. AgentBus does not
+collapse this evidence into an opaque numerical reliability score.
+
 For repeatability, close unrelated heavy processes, use the same Python and Git
 versions, run on the same storage class, and compare medians from multiple
 runs. Never commit transient benchmark output or benchmark clones.

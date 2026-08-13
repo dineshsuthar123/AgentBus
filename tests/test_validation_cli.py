@@ -20,6 +20,21 @@ def _passing_report(*, offline: bool = True, network_used: bool = False):
     )
 
 
+class _ScorecardStub:
+    def __init__(self, *, ok: bool = True):
+        self.ok = ok
+
+    def to_dict(self):
+        return {
+            "classification": "PASS" if self.ok else "FAIL",
+            "failures": [] if self.ok else [{"summary": "synthetic failure"}],
+            "network_used": False,
+            "ok": self.ok,
+            "scenarios_run": 2,
+            "status": "PASS" if self.ok else "FAIL",
+        }
+
+
 def test_root_cli_dispatches_validation_commands(monkeypatch):
     captured = {}
 
@@ -104,6 +119,74 @@ def test_corpus_defaults_offline_and_download_requires_explicit_mode(
     assert captured[1][1]["allow_download"] is True
     assert captured[1][1]["include_optional"] is True
     assert captured[1][1]["cache_directory"] == str(tmp_path)
+
+
+def test_reliability_cli_forwards_bounded_options_and_repeated_repositories(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    captured = {}
+
+    def fake_reliability(**kwargs):
+        captured.update(kwargs)
+        return _ScorecardStub()
+
+    monkeypatch.setattr(commands, "run_reliability_validation", fake_reliability)
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+
+    exit_code = validation_command(
+        [
+            "reliability",
+            "--repository",
+            str(first),
+            "--repo",
+            str(second),
+            "--duration",
+            "12.5",
+            "--runs",
+            "4",
+            "--parallelism",
+            "2",
+            "--repository-files",
+            "16",
+            "--seed",
+            "32",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert payload["status"] == "PASS"
+    assert payload["report_path"] is None
+    assert captured == {
+        "repository_paths": [str(first), str(second)],
+        "duration_seconds": 12.5,
+        "runs": 4,
+        "parallelism": 2,
+        "repository_files": 16,
+        "seed": 32,
+    }
+
+
+def test_reliability_cli_returns_failure_exit_for_failed_scorecard(
+    monkeypatch,
+    capsys,
+):
+    monkeypatch.setattr(
+        commands,
+        "run_reliability_validation",
+        lambda **_kwargs: _ScorecardStub(ok=False),
+    )
+
+    exit_code = validation_command(["reliability", "--runs", "2", "--json"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 1
+    assert payload["status"] == "FAIL"
+    assert payload["failures"]
 
 
 def test_malformed_manifest_error_does_not_echo_payload(tmp_path, capsys):

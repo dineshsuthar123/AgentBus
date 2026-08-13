@@ -16,6 +16,10 @@ from agentbus.validation.models import (
     ValidationStatus,
 )
 from agentbus.validation.reliability import run_reliability_validation
+from agentbus.validation.reports import (
+    render_reliability_scorecard,
+    write_validation_report,
+)
 
 
 def _validation_run(repository_id: str) -> ValidationRun:
@@ -188,6 +192,24 @@ def test_reliability_scorecard_is_explicit_offline_and_path_free(tmp_path: Path)
     assert payload["memory"]["available"] is True
     assert "score" not in json.dumps(payload).lower()
     assert str(local_repository) not in json.dumps(payload)
+
+    rendered = render_reliability_scorecard(scorecard)
+    for label in (
+        "process_leaks=0",
+        "worktree_leaks=0",
+        "db_integrity=PASS",
+        "index_integrity=PASS",
+        "replay=2/2",
+        "cancellation=1/1",
+        "restart=2/2",
+        "latency_samples=4",
+        "memory_peak=10",
+    ):
+        assert label in rendered
+
+    output = write_validation_report(scorecard, tmp_path / "scorecard.json")
+    assert json.loads(output.read_text(encoding="utf-8"))["status"] == "PASS"
+    assert not list(tmp_path.glob("*.tmp"))
 
 
 def test_failed_integrity_is_visible_and_classifies_scorecard_as_failed():
