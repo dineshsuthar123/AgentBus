@@ -37,6 +37,13 @@ Use `--json` for structured output or `--output PATH` for an atomic JSON report.
 The report lists concrete checks and observations rather than an opaque numeric
 score, and it never uses a provider or the network.
 
+`agentbus benchmark all --output BASELINE.json` writes an atomic reusable local
+performance baseline. A later compatible run can add `--baseline BASELINE.json`
+and `--comparison-output SCORECARD.json` to classify broad regressions,
+improvements, and neutral changes across release performance metrics. Baseline
+comparison remains generated, providerless, offline, and deliberately tolerant
+of ordinary CI timing variance.
+
 ## Execution
 
 | Command | Purpose |

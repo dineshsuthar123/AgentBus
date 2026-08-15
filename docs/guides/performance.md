@@ -13,6 +13,38 @@ startup, full and incremental indexing, search, context planning, run overhead,
 offline replay, memory where available, and database sizes. Budgets are broad
 regression tripwires, not universal performance promises.
 
+## Release baseline scorecard
+
+Create a reusable baseline with the full generated benchmark, then compare a
+later run using the same fixture, operating system, architecture, and Python
+major/minor series:
+
+```console
+agentbus benchmark all --files 250 --iterations 5 --output .tmp/perf-baseline.json --json
+agentbus benchmark all --files 250 --iterations 5 --baseline .tmp/perf-baseline.json --output .tmp/perf-current.json --comparison-output .tmp/perf-scorecard.json --json
+```
+
+The scorecard compares daemon startup, initial and incremental indexing,
+lexical search, graph traversal, context planning, deterministic-run startup,
+filesystem tool invocation, offline replay, isolated daemon Python-allocation
+peak, and AgentBus-owned persistent storage. Generated repository bytes are not
+counted as AgentBus persistent storage.
+
+Each available metric is classified as `regression`, `improvement`, or
+`neutral`. A regression must exceed both `1.75x` the baseline and a
+metric-specific absolute noise floor; an improvement must fall below `0.60x`
+and clear the same noise floor. These deliberately broad boundaries tolerate
+ordinary CI variance and detect major changes, not small optimization claims.
+Skipped or unmeasurable evidence is reported as a warning rather than estimated.
+The scorecard contains no opaque aggregate performance score.
+
+Baseline loading is bounded to a 2 MiB regular UTF-8 JSON file. Reports from a
+different fixture, operating system, machine architecture, Python
+implementation, or Python major/minor series are rejected rather than compared.
+Patch-version, dependency, processor-count, and iteration differences remain
+visible warnings. Keep baseline and scorecard artifacts outside commits unless
+they are intentionally reviewed release evidence.
+
 ## Reliability soak profiles
 
 The quick soak is suitable for local development and remains the default:

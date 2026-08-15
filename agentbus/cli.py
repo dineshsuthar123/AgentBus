@@ -1201,6 +1201,10 @@ def _benchmark_command(arguments: list[str]) -> int:
         INDEX_SCALE_GROUP,
         run_index_scale_benchmark,
     )
+    from agentbus.product.performance import (
+        compare_benchmark_reports,
+        load_benchmark_report,
+    )
     from agentbus.product.synthetic import SYNTHETIC_SIZES
 
     parser = argparse.ArgumentParser(prog="agentbus benchmark")
@@ -1215,9 +1219,26 @@ def _benchmark_command(arguments: list[str]) -> int:
     parser.add_argument("--iterations", type=int)
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--output", help="Write an atomic JSON benchmark report.")
+    parser.add_argument(
+        "--baseline",
+        help="Compare an `all` benchmark with a compatible JSON baseline.",
+    )
+    parser.add_argument(
+        "--comparison-output",
+        help="Write the baseline comparison as a separate atomic JSON scorecard.",
+    )
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(arguments)
     try:
+        if args.baseline and args.group != "all":
+            raise ValueError(
+                "Performance baselines require the `all` benchmark group."
+            )
+        if args.comparison_output and not args.baseline:
+            raise ValueError("--comparison-output requires --baseline.")
+        baseline = (
+            load_benchmark_report(args.baseline) if args.baseline else None
+        )
         profile = args.size or (
             "medium" if args.group == INDEX_SCALE_GROUP else "small"
         )
@@ -1241,8 +1262,18 @@ def _benchmark_command(arguments: list[str]) -> int:
                 ),
                 seed=args.seed,
             )
+        comparison = (
+            compare_benchmark_reports(baseline, report)
+            if baseline is not None
+            else None
+        )
         report_path = (
             write_benchmark_report(report, args.output) if args.output else None
+        )
+        comparison_path = (
+            write_benchmark_report(comparison, args.comparison_output)
+            if comparison is not None and args.comparison_output
+            else None
         )
     except (OSError, RuntimeError, ValueError) as exc:
         payload = {"ok": False, "error": str(exc), "network_used": False}
@@ -1254,6 +1285,13 @@ def _benchmark_command(arguments: list[str]) -> int:
         return 2
     payload = report.to_dict()
     payload["report_path"] = str(report_path) if report_path else None
+    payload["comparison_report_path"] = (
+        str(comparison_path) if comparison_path else None
+    )
+    if comparison is not None:
+        payload["benchmark_ok"] = report.passed
+        payload["performance_scorecard"] = comparison.to_dict()
+        payload["ok"] = report.passed and comparison.ok
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))
     elif args.group == INDEX_SCALE_GROUP:
@@ -1303,9 +1341,36 @@ def _benchmark_command(arguments: list[str]) -> int:
             f"Peak memory: {report.peak_memory_bytes} / "
             f"{report.memory_budget_bytes} bytes"
         )
+        print(
+            "Daemon memory: "
+            + (
+                f"{report.daemon_peak_memory_bytes} bytes"
+                if report.daemon_peak_memory_bytes is not None
+                else "not measured"
+            )
+        )
+        print(f"Persistent storage: {report.persistent_storage_bytes} bytes")
+        if comparison is not None:
+            print(
+                "Performance scorecard: "
+                f"{comparison.status.value} ({comparison.classification.value})"
+            )
+            for metric in comparison.metrics:
+                if not metric.available:
+                    print(f"  [UNAVAILABLE] {metric.title}: {metric.observation}")
+                    continue
+                print(
+                    f"  [{metric.classification.value.upper()}] {metric.title}: "
+                    f"baseline={metric.baseline_value:.3f} "
+                    f"current={metric.current_value:.3f} {metric.unit}"
+                )
+            for warning in comparison.warnings:
+                print(f"  Warning: {warning}")
         if report_path:
             print(f"Report: {report_path}")
-    return 0 if report.passed else 1
+        if comparison_path:
+            print(f"Comparison report: {comparison_path}")
+    return 0 if report.passed and (comparison is None or comparison.ok) else 1
 
 
 def _soak_command(arguments: list[str]) -> int:

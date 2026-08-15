@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from importlib import metadata
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Protocol, TypeVar
 
 from agentbus import __version__
 from agentbus.agents.planner import PlannerOutput
@@ -39,7 +39,11 @@ from agentbus.trace.models import (
 from agentbus.trace.storage import ContentAddressedStore
 
 
+BENCHMARK_SCHEMA_VERSION = 1
 BENCHMARK_GROUPS = ("startup", "index", "search", "control", "replay", "tools")
+_PERSISTENT_STORAGE_SCOPE = (
+    "AgentBus-owned benchmark persistence; generated repository bytes excluded."
+)
 _BASE_BUDGETS_MS = {
     "deterministic_run_startup": 5_000.0,
     "initial_index": 30_000.0,
@@ -103,6 +107,8 @@ class BenchmarkReport:
     environment_fingerprint: str
     operations: tuple[OperationMetrics, ...]
     generated_at: str
+    daemon_peak_memory_bytes: int | None = None
+    persistent_storage_bytes: int = 0
 
     @property
     def passed(self) -> bool:
@@ -114,6 +120,7 @@ class BenchmarkReport:
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "schema_version": BENCHMARK_SCHEMA_VERSION,
             "ok": self.passed,
             "selected_group": self.selected_group,
             "iterations": self.iterations,
@@ -127,11 +134,21 @@ class BenchmarkReport:
             "peak_memory_bytes": self.peak_memory_bytes,
             "memory_budget_bytes": self.memory_budget_bytes,
             "memory_budget_passed": self.peak_memory_bytes <= self.memory_budget_bytes,
+            "daemon_peak_memory_bytes": self.daemon_peak_memory_bytes,
+            "daemon_memory_measured": self.daemon_peak_memory_bytes is not None,
+            "daemon_memory_measurement": (
+                "isolated_python_allocation_peak"
+                if self.daemon_peak_memory_bytes is not None
+                else "unavailable"
+            ),
+            "persistent_storage_bytes": self.persistent_storage_bytes,
+            "persistent_storage_scope": _PERSISTENT_STORAGE_SCOPE,
             "budget_policy": "broad-regression-v1",
             "environment": _safe_environment(self.environment),
             "environment_fingerprint": self.environment_fingerprint,
             "operations": [operation.to_dict() for operation in self.operations],
             "generated_at": self.generated_at,
+            "provider_calls": 0,
             "network_used": False,
         }
 
@@ -154,6 +171,8 @@ def run_benchmark(
     repository_bytes = 0
     repository_fingerprint: str | None = None
     peak_memory_bytes = 0
+    daemon_peak_memory_bytes: int | None = None
+    persistent_storage_bytes = 0
     with tempfile.TemporaryDirectory(prefix="agentbus-benchmark-") as temporary:
         root = Path(temporary)
         workspace = root / "repository"
@@ -229,7 +248,16 @@ def run_benchmark(
                 )
             )
         if "control" in selected_groups:
-            operations.extend(_control_metrics(iterations))
+            control_metrics = _control_metrics(iterations)
+            operations.extend(control_metrics)
+            if any(
+                operation.name == "daemon_app_startup"
+                and operation.status != "skipped"
+                for operation in control_metrics
+            ):
+                _, daemon_peak_memory_bytes = _measure_python_allocation_peak(
+                    _daemon_memory_probe
+                )
         if "replay" in selected_groups:
             replay = _replay_fixture(root)
             operations.append(
@@ -270,6 +298,7 @@ def run_benchmark(
                     ),
                 )
             )
+        persistent_storage_bytes = _persistent_storage_size(root, workspace)
     environment = _environment()
     environment_payload = json.dumps(
         environment,
@@ -291,6 +320,8 @@ def run_benchmark(
         environment_fingerprint=hashlib.sha256(environment_payload).hexdigest(),
         operations=tuple(operations),
         generated_at=datetime.now(UTC).isoformat(),
+        daemon_peak_memory_bytes=daemon_peak_memory_bytes,
+        persistent_storage_bytes=persistent_storage_bytes,
     )
 
 
@@ -373,6 +404,35 @@ def _measure(
     )
 
 
+_T = TypeVar("_T")
+
+
+def _measure_python_allocation_peak(
+    operation: Callable[[], _T],
+) -> tuple[_T, int | None]:
+    if tracemalloc.is_tracing():
+        return operation(), None
+    tracemalloc.start()
+    try:
+        result = operation()
+        _, peak_memory_bytes = tracemalloc.get_traced_memory()
+        return result, peak_memory_bytes
+    finally:
+        tracemalloc.stop()
+
+
+def _persistent_storage_size(root: Path, workspace: Path) -> int:
+    total = 0
+    for candidate in root.rglob("*"):
+        if candidate.is_symlink() or not candidate.is_file():
+            continue
+        try:
+            candidate.relative_to(workspace)
+        except ValueError:
+            total += candidate.stat().st_size
+    return total
+
+
 def _deterministic_startup(workspace: Path) -> None:
     workspace.mkdir(parents=True, exist_ok=True)
     config = AgentBusConfig(
@@ -413,6 +473,13 @@ def _control_metrics(iterations: int) -> tuple[OperationMetrics, ...]:
         _measure("daemon_app_startup", "control", build_openapi, iterations),
         _measure("protocol_readiness", "control", build_json_schema, iterations),
     )
+
+
+def _daemon_memory_probe() -> None:
+    from agentbus.control.protocol import build_json_schema, build_openapi
+
+    build_openapi()
+    build_json_schema()
 
 
 def _replay_fixture(root: Path) -> Callable[[], Any]:
