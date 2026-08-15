@@ -147,6 +147,103 @@ def run_managed_approval_probe(root: str | Path) -> dict[str, Any]:
     }
 
 
+def run_managed_workflow_probe(root: str | Path) -> dict[str, Any]:
+    runtime_root = Path(root).expanduser().resolve()
+    if runtime_root.exists() and any(runtime_root.iterdir()):
+        raise ValueError("Managed-tool probe root must be empty.")
+    runtime_root.mkdir(parents=True, exist_ok=True)
+    workspace = runtime_root / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("README.md").write_text(
+        "deterministic managed workflow acceptance\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    workspace.joinpath("module.py").write_text(
+        "VALUE = 1\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    workspace.joinpath("test_acceptance_tool.py").write_text(
+        "from acceptance_tool import add\n\n\n"
+        "def test_add():\n"
+        "    assert add(2, 3) == 5\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    _initialize_repository(workspace)
+    config = AgentBusConfig(
+        provider_name="deterministic",
+        deterministic_profile="tool-control-acceptance",
+        model_max_retries=0,
+        workspace_dir=str(workspace),
+        runs_dir=str(runtime_root / "runs"),
+        state_dir=str(runtime_root / "state"),
+        tool_resource_budget=ToolResourceBudget(),
+    )
+    planner = ModelRouter(config).generate_json(
+        ModelRole.PLANNER,
+        "Plan the deterministic managed-tool workflow probe.",
+        schema=PlannerOutput,
+    )
+    plan = planner.json_value()
+    store = StateStore(runtime_root / "tool-state.db")
+    store.create_run_with_tasks(
+        RunRecord(
+            run_id=_RUN_ID,
+            original_task="Exercise the deterministic managed tool workflow.",
+            workflow_type="durable",
+            model="deterministic-coder",
+            workspace=str(workspace),
+            planner_output=plan,
+            graph_data={"version": 1, "tasks": [_TASK_ID]},
+        ),
+        [
+            TaskSpec(
+                task_id=_TASK_ID,
+                title="Exercise the managed tool workflow",
+                description="Read, write, and verify through managed tools.",
+                metadata={
+                    "required_capabilities": plan["steps"][0][
+                        "required_capabilities"
+                    ]
+                },
+            )
+        ],
+    )
+    store.update_run_status(_RUN_ID, RunStatus.RUNNING)
+    store.update_task_status(_RUN_ID, _TASK_ID, TaskStatus.READY)
+    store.update_task_status(_RUN_ID, _TASK_ID, TaskStatus.RUNNING)
+    cancellations = CancellationRegistry(store)
+    runtime = _runtime(workspace, store, cancellations)
+    try:
+        summary = _loop(config, plan, store, cancellations, runtime).run(
+            "Read, write, and verify through managed tools."
+        )
+    finally:
+        runtime.close()
+    invocations = store.list_tool_invocations(_RUN_ID)
+    audits = store.list_tool_audits(_RUN_ID)
+    expected = ["filesystem.read", "filesystem.write", "test.execute"]
+    names = [item.tool_name for item in invocations]
+    succeeded = (
+        names == expected
+        and all(item.status == ToolInvocationStatus.SUCCEEDED for item in invocations)
+        and len(audits) == len(expected)
+        and workspace.joinpath("acceptance_tool.py").is_file()
+    )
+    return {
+        "ok": succeeded,
+        "summary": summary,
+        "tool_names": names,
+        "invocation_count": len(invocations),
+        "audit_count": len(audits),
+        "provider": "deterministic",
+        "provider_calls": 0,
+        "network_used": False,
+    }
+
+
 def _runtime(workspace: Path, store: StateStore, cancellations: CancellationRegistry):
     return build_managed_tool_runtime(
         workspace=workspace,
@@ -218,9 +315,14 @@ def _initialize_repository(workspace: Path) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="agentbus beta managed-tool probe")
     parser.add_argument("--root", required=True)
+    parser.add_argument("--mode", choices=("approval", "workflow"), default="approval")
     args = parser.parse_args(argv)
     try:
-        payload = run_managed_approval_probe(args.root)
+        payload = (
+            run_managed_approval_probe(args.root)
+            if args.mode == "approval"
+            else run_managed_workflow_probe(args.root)
+        )
     except Exception as exc:
         payload = {
             "ok": False,

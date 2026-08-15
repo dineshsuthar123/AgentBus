@@ -11,6 +11,7 @@ import sys
 import tempfile
 import time
 import venv
+import zipfile
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -31,6 +32,33 @@ _PRODUCT_EXTRAS = ("ide", "mcp")
 class AcceptanceKind(StrEnum):
     PRODUCT = "product"
     BETA = "beta"
+    RC = "release-candidate"
+
+
+RC_ACCEPTANCE_STEPS = (
+    "package_build",
+    "package_audit",
+    "clean_install",
+    "migration_verification",
+    "setup",
+    "doctor",
+    "deterministic_quickstart",
+    "repository_index",
+    "managed_tool_workflow",
+    "scoped_approval",
+    "cancellation",
+    "daemon_restart",
+    "offline_replay",
+    "trace_integrity",
+    "hostile_mcp",
+    "adversarial_path",
+    "support_bundle_privacy",
+    "reliability_smoke",
+    "performance_smoke",
+    "cleanup",
+    "uninstall",
+    "process_worktree_leak_check",
+)
 
 
 @dataclass(frozen=True)
@@ -68,13 +96,15 @@ class CleanInstallAcceptanceReport:
             "error": self.error,
             "fresh_virtual_environment": True,
             "wheel_install": True,
-            "package_audit": self.kind == AcceptanceKind.BETA,
+            "package_audit": self.kind != AcceptanceKind.PRODUCT,
+            "release_candidate": self.kind == AcceptanceKind.RC,
             "editable_install": False,
             "dependency_extras": list(_PRODUCT_EXTRAS),
             "repository_pythonpath_used": False,
             "provider": "deterministic",
             "provider_calls": 0,
             "network_used": False,
+            "external_security_targets_contacted": 0,
             "published": False,
         }
 
@@ -114,6 +144,7 @@ class RepeatedCleanInstallAcceptanceReport:
             "provider": "deterministic",
             "provider_calls": 0,
             "network_used": False,
+            "external_security_targets_contacted": 0,
             "published": False,
         }
 
@@ -146,6 +177,8 @@ def acceptance_step_names(kind: AcceptanceKind | str) -> tuple[str, ...]:
     )
     if selected == AcceptanceKind.PRODUCT:
         return common
+    if selected == AcceptanceKind.RC:
+        return RC_ACCEPTANCE_STEPS
     return (
         "package_build",
         "package_audit",
@@ -292,7 +325,10 @@ class _CleanInstallRunner:
         self.agentbus: Path | None = None
         self.daemon_id: str | None = None
         self.daemon_pid: int | None = None
+        self.daemon_pids: set[int] = set()
         self.run_id: str | None = None
+        self.reliability_payload: dict[str, Any] | None = None
+        self.security_scorecard: Any | None = None
         self.root.joinpath(_OWNER_FILE).write_text(
             json.dumps({"owner": "agentbus", "kind": kind.value}) + "\n",
             encoding="utf-8",
@@ -322,7 +358,24 @@ class _CleanInstallRunner:
             "cleanup": self._cleanup,
             "leak_check": self._leak_check,
             "uninstall": self._uninstall,
+            "clean_install": self._clean_install,
+            "migration_verification": self._migration_verification,
+            "deterministic_quickstart": self._quickstart,
+            "managed_tool_workflow": self._managed_tool_workflow,
+            "scoped_approval": self._managed_tool_approval,
+            "cancellation": self._cancellation,
+            "daemon_restart": self._restart_daemon,
+            "trace_integrity": self._trace_integrity,
+            "hostile_mcp": self._hostile_mcp,
+            "adversarial_path": self._adversarial_path,
+            "support_bundle_privacy": self._support_bundle_privacy,
+            "reliability_smoke": self._reliability_smoke,
+            "performance_smoke": self._performance_smoke,
+            "process_worktree_leak_check": self._post_uninstall_leak_check,
         }
+        if self.kind == AcceptanceKind.RC:
+            actions["doctor"] = self._rc_doctor
+            actions["cleanup"] = self._rc_cleanup
         for name in acceptance_step_names(self.kind):
             self._step(name, actions[name])
 
@@ -436,6 +489,35 @@ class _CleanInstallRunner:
             raise RuntimeError("Fresh Python did not import the expected AgentBus wheel.")
         return "Verified AgentBus imports from fresh-environment site-packages."
 
+    def _clean_install(self) -> str:
+        self._create_environment()
+        self._install_wheel()
+        self._verify_installed_origin()
+        _create_repository(self.workspace, self.root / "empty-hooks")
+        return (
+            "Created a fresh environment, installed the wheel with offline "
+            "dependencies, and verified its isolated import origin."
+        )
+
+    def _migration_verification(self) -> str:
+        payload = self._agentbus_json(
+            "migrate",
+            "verify",
+            "--workspace",
+            str(self.workspace),
+            "--json",
+        )
+        targets = payload.get("targets")
+        if (
+            payload.get("ok") is not True
+            or payload.get("operation") != "verify"
+            or not isinstance(targets, list)
+            or len(targets) != 2
+            or payload.get("network_used") is not False
+        ):
+            raise RuntimeError("Fresh-install migration verification was incomplete.")
+        return "Verified execution and index migration targets without network access."
+
     def _version(self) -> str:
         payload = self._agentbus_json("version", "--json")
         if payload.get("version") != __version__:
@@ -458,8 +540,27 @@ class _CleanInstallRunner:
             raise RuntimeError("Doctor did not prove its offline execution mode.")
         return "Ran pre-setup product diagnostics without a live provider request."
 
+    def _rc_doctor(self) -> str:
+        payload = self._agentbus_json(
+            "doctor",
+            "--config",
+            str(self.config_file),
+            "--workspace",
+            str(self.workspace),
+            "--provider",
+            "deterministic",
+            "--registry-path",
+            str(self.registry),
+            "--json",
+            allowed_returncodes={0, 1},
+        )
+        if payload.get("network_used") is not False:
+            raise RuntimeError("RC doctor did not prove its offline execution mode.")
+        return "Ran post-setup diagnostics against the configured local workspace."
+
     def _setup(self) -> str:
-        _create_repository(self.workspace, self.root / "empty-hooks")
+        if not self.workspace.exists():
+            _create_repository(self.workspace, self.root / "empty-hooks")
         payload = self._agentbus_json(
             "setup",
             "--workspace",
@@ -520,6 +621,7 @@ class _CleanInstallRunner:
             raise RuntimeError("The fresh-install daemon did not prove process ownership.")
         self.daemon_id = str(daemon["daemon_id"])
         self.daemon_pid = int(daemon["pid"])
+        self.daemon_pids.add(self.daemon_pid)
         status = self._agentbus_json(
             "daemon",
             "--registry-path",
@@ -625,6 +727,95 @@ class _CleanInstallRunner:
             raise RuntimeError("Managed tool approval audit evidence was incomplete.")
         return "Approved and resumed one exact managed filesystem tool invocation."
 
+    def _managed_tool_workflow(self) -> str:
+        python = self._required(self.python, "fresh Python")
+        payload = self._json_command(
+            [
+                str(python),
+                "-m",
+                "agentbus.product.acceptance_probe",
+                "--mode",
+                "workflow",
+                "--root",
+                str(self.root / "managed-workflow-probe"),
+            ],
+            cwd=self.root,
+        )
+        if (
+            payload.get("ok") is not True
+            or payload.get("tool_names")
+            != ["filesystem.read", "filesystem.write", "test.execute"]
+            or payload.get("provider_calls") != 0
+            or payload.get("network_used") is not False
+        ):
+            raise RuntimeError("Managed tool workflow probe omitted required evidence.")
+        self._start_daemon()
+        self._run_task()
+        self._show_report()
+        return (
+            "Executed read, write, and test tools through the installed managed "
+            "runtime and completed a reviewed durable task."
+        )
+
+    def _reliability_lifecycle(self) -> dict[str, Any]:
+        if self.reliability_payload is None:
+            self.reliability_payload = self._agentbus_json(
+                "validate",
+                "reliability",
+                "--runs",
+                "2",
+                "--parallelism",
+                "1",
+                "--repository-files",
+                "20",
+                "--json",
+                timeout=300,
+            )
+        return self.reliability_payload
+
+    def _cancellation(self) -> str:
+        payload = self._reliability_lifecycle()
+        evidence = payload.get("cancellation_results")
+        if (
+            payload.get("ok") is not True
+            or not isinstance(evidence, dict)
+            or int(evidence.get("attempted", 0)) < 1
+            or evidence.get("attempted") != evidence.get("passed")
+        ):
+            raise RuntimeError("Reliability lifecycle cancellation did not pass.")
+        return "Cancelled a deterministic lifecycle run and completed its cleanup."
+
+    def _restart_daemon(self) -> str:
+        daemon_id = self._required(self.daemon_id, "daemon ID")
+        previous_pid = self._required(self.daemon_pid, "daemon PID")
+        payload = self._agentbus_json(
+            "daemon",
+            "--registry-path",
+            str(self.registry),
+            "--json",
+            "restart",
+            str(daemon_id),
+            "--config",
+            str(self.config_file),
+            "--workspace",
+            str(self.workspace),
+            "--idle-timeout",
+            "300",
+        )
+        daemon = payload.get("daemon")
+        if (
+            not isinstance(daemon, dict)
+            or daemon.get("lifecycle") != "active"
+            or daemon.get("process_matches") is not True
+        ):
+            raise RuntimeError("The owned daemon did not restart into active state.")
+        self.daemon_id = str(daemon["daemon_id"])
+        self.daemon_pid = int(daemon["pid"])
+        self.daemon_pids.add(self.daemon_pid)
+        if self.daemon_pid == previous_pid or _process_exists(previous_pid):
+            raise RuntimeError("The previous daemon process remained after restart.")
+        return "Restarted the exact owned daemon and retired its previous process."
+
     def _replay(self) -> str:
         run_id = self._required(self.run_id, "durable run ID")
         payload = self._agentbus_json(
@@ -643,6 +834,55 @@ class _CleanInstallRunner:
         if session.get("provider_calls") != 0 or session.get("network_calls") != 0:
             raise RuntimeError("Offline replay attempted provider or network access.")
         return "Replayed the persisted run offline with zero provider and network calls."
+
+    def _trace_integrity(self) -> str:
+        run_id = self._required(self.run_id, "durable run ID")
+        payload = self._agentbus_json(
+            "trace",
+            "verify",
+            str(run_id),
+            "--config",
+            str(self.config_file),
+            "--json",
+        )
+        if (
+            payload.get("valid") is not True
+            or int(payload.get("object_count", 0)) < 1
+            or len(str(payload.get("provenance_root", ""))) != 64
+        ):
+            raise RuntimeError("Trace integrity verification omitted sealed evidence.")
+        return "Verified sealed trace provenance and content-addressed objects."
+
+    def _security_validation(self) -> Any:
+        if self.security_scorecard is None:
+            from agentbus.security.validation import run_defensive_security_validation
+
+            self.security_scorecard = run_defensive_security_validation(
+                self.repository,
+                artifacts=self.artifacts,
+            )
+        if not self.security_scorecard.ok:
+            raise RuntimeError("Controlled local defensive validation failed.")
+        return self.security_scorecard
+
+    def _security_boundary(self, boundary_id: str) -> Any:
+        scorecard = self._security_validation()
+        evidence = next(
+            (item for item in scorecard.evidence if item.boundary_id == boundary_id),
+            None,
+        )
+        if evidence is None or not evidence.passed:
+            raise RuntimeError(f"Security boundary {boundary_id} did not pass.")
+        return evidence
+
+    def _hostile_mcp(self) -> str:
+        self._security_boundary("hostile_mcp_peer")
+        return "Rejected a synthetic in-memory hostile MCP peer and closed it safely."
+
+    def _adversarial_path(self) -> str:
+        self._security_boundary("filesystem_containment")
+        self._security_boundary("git_safety")
+        return "Rejected adversarial local path and Git forms within disposable roots."
 
     def _support_bundle(self) -> str:
         output = self.root / "agentbus-support.zip"
@@ -663,6 +903,82 @@ class _CleanInstallRunner:
         if payload.get("network_used") is not False:
             raise RuntimeError("Support bundle did not remain offline.")
         return "Created a bounded sanitized support bundle without source-derived data."
+
+    def _support_bundle_privacy(self) -> str:
+        self._support_bundle()
+        output = self.root / "agentbus-support.zip"
+        marker = self.private_marker.encode("utf-8")
+        total = 0
+        with zipfile.ZipFile(output) as archive:
+            members = archive.infolist()
+            if len(members) > 1_000:
+                raise RuntimeError("Support bundle member count exceeded its bound.")
+            for member in members:
+                total += member.file_size
+                if total > 32 * 1024 * 1024:
+                    raise RuntimeError("Support bundle content exceeded its scan bound.")
+                if marker in archive.read(member):
+                    raise RuntimeError("A private marker reached the support bundle.")
+        self._security_boundary("diagnostic_privacy")
+        return "Inspected the bounded support bundle and confirmed diagnostic privacy."
+
+    def _reliability_smoke(self) -> str:
+        payload = self._reliability_lifecycle()
+        process = payload.get("process_leaks")
+        worktree = payload.get("worktree_leaks")
+        if (
+            payload.get("ok") is not True
+            or payload.get("network_used") is not False
+            or not isinstance(process, dict)
+            or not isinstance(worktree, dict)
+            or process.get("count") != 0
+            or worktree.get("count") != 0
+        ):
+            raise RuntimeError("Release reliability smoke reported a leak or failure.")
+        return "Passed bounded reliability evidence with no process or worktree leaks."
+
+    def _performance_smoke(self) -> str:
+        baseline = self.root / "rc-performance-baseline.json"
+        baseline_payload = self._agentbus_json(
+            "benchmark",
+            "all",
+            "--files",
+            "20",
+            "--iterations",
+            "1",
+            "--output",
+            str(baseline),
+            "--json",
+            timeout=300,
+        )
+        current = self._agentbus_json(
+            "benchmark",
+            "all",
+            "--files",
+            "20",
+            "--iterations",
+            "1",
+            "--baseline",
+            str(baseline),
+            "--json",
+            timeout=300,
+        )
+        scorecard = current.get("performance_scorecard")
+        if (
+            baseline_payload.get("ok") is not True
+            or current.get("ok") is not True
+            or not isinstance(scorecard, dict)
+            or scorecard.get("ok") is not True
+            or scorecard.get("regression_count") != 0
+            or scorecard.get("compared_metric_count") != 11
+            or current.get("network_used") is not False
+        ):
+            raise RuntimeError("Release performance smoke found unacceptable evidence.")
+        return "Compared all 11 release metrics with no broad performance regression."
+
+    def _rc_cleanup(self) -> str:
+        self._stop_daemon()
+        return self._cleanup()
 
     def _benchmark_smoke(self) -> str:
         payload = self._agentbus_json(
@@ -719,7 +1035,7 @@ class _CleanInstallRunner:
         )
         if registry.get("count") != 0:
             raise RuntimeError("An AgentBus daemon registration remained after shutdown.")
-        if self.daemon_pid is not None and _process_exists(self.daemon_pid):
+        if any(_process_exists(pid) for pid in self.daemon_pids):
             raise RuntimeError("The owned AgentBus daemon process remained active.")
         worktrees = self._command(
             ["git", "worktree", "list", "--porcelain"],
@@ -767,6 +1083,23 @@ class _CleanInstallRunner:
         if result.strip() != "absent":
             raise RuntimeError("AgentBus remained importable after uninstall.")
         return "Uninstalled the wheel from the fresh virtual environment."
+
+    def _post_uninstall_leak_check(self) -> str:
+        from agentbus.control.registry import DaemonRegistry, process_matches
+
+        entries = DaemonRegistry(self.registry).list()
+        if entries or any(process_matches(entry) for entry in entries):
+            raise RuntimeError("A daemon registration remained after uninstall.")
+        if any(_process_exists(pid) for pid in self.daemon_pids):
+            raise RuntimeError("An owned daemon process remained after uninstall.")
+        worktrees = self._command(
+            ["git", "worktree", "list", "--porcelain"],
+            cwd=self.workspace,
+        )
+        if sum(line.startswith("worktree ") for line in worktrees.splitlines()) != 1:
+            raise RuntimeError("A temporary Git worktree remained after uninstall.")
+        _assert_private_marker_absent(self.root, self.private_marker)
+        return "Verified post-uninstall process, worktree, and credential cleanup."
 
     def _agentbus_json(
         self,
