@@ -28,6 +28,14 @@ verification, review, persistence, and replay paths without network access.
 - [Local storage](reference/storage.md)
 - [Pre-v1 compatibility](reference/compatibility.md)
 
+## Validation
+
+- [Real local repositories](validation/real-repositories.md)
+- [Adversarial defensive testing](validation/adversarial-testing.md)
+- [Reliability validation](validation/reliability.md)
+- [Performance validation](validation/performance.md)
+- [Release-candidate acceptance](validation/release-candidate.md)
+
 ## Troubleshooting
 
 - [Installation](troubleshooting/install.md)
