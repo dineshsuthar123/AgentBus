@@ -3,7 +3,11 @@ from __future__ import annotations
 import json
 
 from agentbus.cli import main
-from agentbus.product.benchmark import run_benchmark, write_benchmark_report
+from agentbus.product.benchmark import (
+    BENCHMARK_SCHEMA_VERSION,
+    run_benchmark,
+    write_benchmark_report,
+)
 
 
 def test_startup_tools_and_replay_benchmarks_are_offline_and_budgeted():
@@ -35,6 +39,7 @@ def test_index_and_search_benchmark_uses_generated_repository():
     assert payload["repository"]["fingerprint"]
     assert payload["peak_memory_bytes"] > 0
     assert payload["memory_budget_passed"] is True
+    assert payload["persistent_storage_bytes"] > 0
     assert payload["budget_policy"] == "broad-regression-v1"
     assert [item["name"] for item in payload["operations"]] == [
         "initial_index",
@@ -58,12 +63,15 @@ def test_control_benchmark_measures_app_and_protocol_readiness():
     operations = report.to_dict()["operations"]
     if operations[0]["status"] == "skipped":
         assert "ide" in operations[0]["detail"]
+        assert report.daemon_peak_memory_bytes is None
     else:
         assert [item["name"] for item in operations] == [
             "daemon_app_startup",
             "protocol_readiness",
         ]
         assert all(item["budget_passed"] is True for item in operations)
+        assert report.daemon_peak_memory_bytes is not None
+        assert report.daemon_peak_memory_bytes > 0
 
 
 def test_benchmark_report_write_is_atomic_and_machine_readable(tmp_path):
@@ -71,8 +79,10 @@ def test_benchmark_report_write_is_atomic_and_machine_readable(tmp_path):
     output = write_benchmark_report(report, tmp_path / "benchmark.json")
 
     payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == BENCHMARK_SCHEMA_VERSION
     assert payload["selected_group"] == "tools"
     assert payload["network_used"] is False
+    assert payload["provider_calls"] == 0
     assert not list(tmp_path.glob("*.tmp"))
 
 
