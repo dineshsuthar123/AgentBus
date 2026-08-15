@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 
@@ -7,18 +8,33 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 
 
-def test_ci_exposes_every_named_public_beta_gate() -> None:
+def test_ci_exposes_every_named_v07_gate() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     required = (
-        "Python Core",
+        "Python 3.11 Core",
+        "Python 3.12 Core",
+        "Python 3.13 Core",
+        "Python 3.14 Core",
         "Windows Core",
         "Linux Core",
-        "Package Build",
-        "Clean Installation",
+        "Windows Security Boundaries",
+        "Linux Security Boundaries",
+        "Property Tests",
+        "Parser Robustness",
+        "Protocol Robustness",
+        "Sandbox Stress",
+        "MCP Adversarial Local",
+        "SQLite Contention",
+        "Repository Scale",
+        "Package Audit",
+        "Product Acceptance",
+        "RC Acceptance",
         "Control Acceptance",
         "Repository Intelligence",
-        "Replay",
+        "Replay Integrity",
         "Security Audit",
+        "Release Security",
+        "Performance Smoke",
         "VS Code Compile",
         "VS Code Unit",
         "VS Code Electron",
@@ -36,11 +52,43 @@ def test_ci_runs_product_acceptance_on_both_platforms_and_beta_readiness() -> No
 
     assert "python -m agentbus.product_acceptance" in workflow
     assert "python -m agentbus.beta_acceptance" in workflow
+    assert "python -m agentbus.rc_acceptance" in workflow
     assert "ubuntu-latest" in workflow
     assert "windows-latest" in workflow
     assert "xvfb-run -a npm run test:product" in workflow
     assert "python -m agentbus.release_security" in workflow
     assert "continue-on-error" not in workflow
+
+
+def test_v07_specialized_ci_gates_are_focused_and_mandatory() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+
+    expected_commands = (
+        "tests/property",
+        "tests/fuzz/test_python_parser_fuzz.py",
+        "tests/fuzz/test_control_protocol_fuzz.py",
+        "tests/test_sandbox_process_stress.py",
+        "tests/test_mcp_adversarial.py",
+        "tests/test_sqlite_contention.py",
+        "tests/test_index_scale_benchmark.py",
+        "tests/test_trace_sealing.py",
+        "python -m agentbus.rc_acceptance",
+        "python -m agentbus.release_security",
+        "python -m agentbus.cli benchmark all",
+    )
+    for command in expected_commands:
+        assert command in workflow
+
+    assert 'python: "3.12"' in workflow
+    assert "continue-on-error" not in workflow
+
+
+def test_ci_references_only_existing_test_paths() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    referenced = set(re.findall(r"tests/[A-Za-z0-9_./-]+", workflow))
+
+    assert referenced
+    assert not [path for path in sorted(referenced) if not (ROOT / path).exists()]
 
 
 def test_required_ci_never_invokes_live_provider_or_publication() -> None:
