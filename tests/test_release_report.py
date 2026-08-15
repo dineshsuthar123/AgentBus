@@ -12,6 +12,8 @@ from agentbus.evaluation.models import (
 from agentbus.evaluation.storage import EvaluationStorage
 from agentbus.release_report import (
     ReleaseStatus,
+    _git,
+    _sensitive_file_check,
     build_release_report,
     main,
     render_markdown,
@@ -160,3 +162,37 @@ def test_release_report_cli_writes_markdown_and_json(tmp_path, capsys):
     assert payload["ready"] is False
     assert markdown.read_text(encoding="utf-8").startswith("# AgentBus")
     assert json.loads(capsys.readouterr().out)["version"] == "0.6.0b1"
+
+
+def test_sensitive_file_inventory_filters_ignored_content_without_weakening(
+    tmp_path,
+) -> None:
+    repository = _repository(tmp_path / "repository")
+    (repository / ".gitignore").write_text("ignored/\n", encoding="utf-8")
+    ignored = repository / "ignored"
+    ignored.mkdir()
+    (ignored / "runtime.db").write_bytes(b"SQLite format 3\x00")
+    (ignored / "ordinary.txt").write_text("ordinary\n", encoding="utf-8")
+
+    check = _sensitive_file_check(repository, status="")
+
+    assert check.status == ReleaseStatus.WARN
+    assert check.evidence["inspection_complete"] is True
+    assert check.evidence["paths"] == ["ignored/runtime.db"]
+
+
+def test_sensitive_file_inventory_fails_closed_when_git_times_out(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    repository = _repository(tmp_path / "repository")
+
+    def timeout(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired(["git", "ls-files"], timeout=15)
+
+    monkeypatch.setattr("agentbus.release_report.subprocess.run", timeout)
+
+    assert _git(repository, "ls-files", "-z") is None
+    check = _sensitive_file_check(repository, status="")
+    assert check.status == ReleaseStatus.FAIL
+    assert check.evidence["inspection_complete"] is False
