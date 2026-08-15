@@ -15,13 +15,21 @@ env:
 
 jobs:
   python-core:
-    name: Python Core / ${{ matrix.python }}
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.11", "3.13", "3.14"]
+        include:
+          - python: "3.11"
+            name: Python 3.11 Core
+          - python: "3.12"
+            name: Python 3.12 Core
+          - python: "3.13"
+            name: Python 3.13 Core
+          - python: "3.14"
+            name: Python 3.14 Core
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -53,8 +61,6 @@ jobs:
         run: python -m pip install -e ".[dev,ide]"
       - name: Compile package
         run: python -m compileall -q agentbus
-      - name: Run full test suite
-        run: python -m pytest
       - name: Run deterministic core evaluation
         run: python -m agentbus.eval run --suite core-offline --variant durable-parallel-fake
       - name: Check patch whitespace
@@ -87,8 +93,8 @@ jobs:
       - name: Check patch whitespace
         run: git diff --check
 
-  package-build:
-    name: Package Build
+  package-audit:
+    name: Package Audit
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -114,8 +120,8 @@ jobs:
       - name: Check patch whitespace
         run: git diff --check
 
-  clean-installation:
-    name: Clean Installation / ${{ matrix.platform }}
+  product-acceptance:
+    name: Product Acceptance / ${{ matrix.platform }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
@@ -137,6 +143,24 @@ jobs:
         run: python -m pip install -e ".[dev,ide,mcp]"
       - name: Run wheel-installed product acceptance
         run: python -m agentbus.product_acceptance --repeat 2
+      - name: Check patch whitespace
+        run: git diff --check
+
+  rc-acceptance:
+    name: RC Acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install offline RC prerequisites
+        run: python -m pip install -e ".[dev,ide,mcp]"
+      - name: Run local release-candidate acceptance
+        run: python -m agentbus.rc_acceptance
       - name: Check patch whitespace
         run: git diff --check
 
@@ -221,8 +245,8 @@ jobs:
       - name: Check patch whitespace
         run: git diff --check
 
-  replay:
-    name: Replay / ${{ matrix.platform }}
+  replay-integrity:
+    name: Replay Integrity / ${{ matrix.platform }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
@@ -271,8 +295,8 @@ jobs:
       - name: Check patch whitespace
         run: git diff --check
 
-  security-audit:
-    name: Security Audit / ${{ matrix.platform }}
+  security-boundaries:
+    name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
@@ -281,8 +305,10 @@ jobs:
         include:
           - os: ubuntu-latest
             platform: Linux
+            name: Linux Security Boundaries
           - os: windows-latest
             platform: Windows
+            name: Windows Security Boundaries
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -292,19 +318,245 @@ jobs:
           cache-dependency-path: pyproject.toml
       - name: Install security-test dependencies
         run: python -m pip install -e ".[dev,ide,mcp]"
-      - name: Verify tool policy filesystem and Git boundaries
+      - name: Verify tool policy filesystem Git and platform boundaries
         run: >-
           python -m pytest
-          tests/test_tool_protocol.py
           tests/test_tool_registry.py
           tests/test_tool_policy.py
           tests/test_policy_aware_git_tools.py
           tests/test_filesystem_security.py
           tests/test_filesystem_read_operations.py
           tests/test_filesystem_mutations.py
-      - name: Verify sandbox process and MCP boundaries
+          tests/test_git_adversarial.py
+          tests/test_windows_platform_matrix.py
+          tests/test_posix_platform_matrix.py
+      - name: Check patch whitespace
+        run: git diff --check
+
+  property-tests:
+    name: Property Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install property-test dependencies
+        run: python -m pip install -e ".[dev,ide]"
+      - name: Verify generated invariants
+        run: python -m pytest tests/property
+      - name: Check patch whitespace
+        run: git diff --check
+
+  parser-robustness:
+    name: Parser Robustness
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install parser-test dependencies
+        run: python -m pip install -e ".[dev,ide]"
+      - name: Verify bounded multilingual parser behavior
         run: >-
           python -m pytest
+          tests/fuzz/test_python_parser_fuzz.py
+          tests/fuzz/test_typescript_parser_fuzz.py
+          tests/fuzz/test_java_go_parser_fuzz.py
+      - name: Check patch whitespace
+        run: git diff --check
+
+  protocol-robustness:
+    name: Protocol Robustness
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install protocol-test dependencies
+        run: python -m pip install -e ".[dev,ide,mcp]"
+      - name: Verify malformed control and tool messages fail closed
+        run: >-
+          python -m pytest
+          tests/fuzz/test_control_protocol_fuzz.py
+          tests/fuzz/test_tool_protocol_fuzz.py
+          tests/fuzz/test_policy_capability_escalation_fuzz.py
+      - name: Check patch whitespace
+        run: git diff --check
+
+  sandbox-stress:
+    name: Sandbox Stress
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install sandbox-test dependencies
+        run: python -m pip install -e ".[dev,ide]"
+      - name: Verify supervised process cleanup under stress
+        run: >-
+          python -m pytest
+          tests/test_sandbox_process.py
+          tests/test_sandbox_process_stress.py
+          tests/test_controlled_failure_injection.py
+      - name: Check patch whitespace
+        run: git diff --check
+
+  mcp-adversarial-local:
+    name: MCP Adversarial Local
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install local MCP test dependencies
+        run: python -m pip install -e ".[dev,ide,mcp]"
+      - name: Verify hostile synthetic local MCP peers
+        run: >-
+          python -m pytest
+          tests/test_mcp_adversarial.py
+          tests/test_mcp_client.py
+          tests/test_mcp_stdio_transport.py
+          tests/test_mcp_http_transport.py
+      - name: Check patch whitespace
+        run: git diff --check
+
+  sqlite-contention:
+    name: SQLite Contention
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install storage-test dependencies
+        run: python -m pip install -e ".[dev,ide]"
+      - name: Verify bounded contention and transaction recovery
+        run: python -m pytest tests/test_sqlite_contention.py
+      - name: Check patch whitespace
+        run: git diff --check
+
+  repository-scale:
+    name: Repository Scale
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install scale-test dependencies
+        run: python -m pip install -e ".[dev,ide]"
+      - name: Verify index graph context and worktree scale boundaries
+        run: >-
+          python -m pytest
+          tests/test_index_scale_benchmark.py
+          tests/test_intelligence_graph_scale.py
+          tests/test_intelligence_context_scale.py
+          tests/test_real_repository_benchmarks.py
+          tests/test_worktree_stress.py
+      - name: Run medium synthetic repository benchmark
+        run: >-
+          python -m agentbus.cli benchmark index-scale
+          --size medium --iterations 1 --json
+      - name: Check patch whitespace
+        run: git diff --check
+
+  release-security:
+    name: Release Security
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install defensive-validation dependencies
+        run: python -m pip install -e ".[dev,ide,mcp]"
+      - name: Verify defensive security scorecard contracts
+        run: >-
+          python -m pytest
+          tests/test_defensive_security_scorecard.py
+          tests/test_release_security.py
+      - name: Audit release inputs and controlled local boundaries
+        run: python -m agentbus.release_security
+      - name: Check patch whitespace
+        run: git diff --check
+
+  performance-smoke:
+    name: Performance Smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install benchmark dependencies
+        run: python -m pip install -e ".[dev,ide]"
+      - name: Verify performance scorecard policy
+        run: >-
+          python -m pytest
+          tests/test_product_benchmark.py
+          tests/test_performance_scorecard.py
+      - name: Capture local performance baseline
+        run: >-
+          python -m agentbus.cli benchmark all
+          --files 20 --iterations 1
+          --output "${{ runner.temp }}/agentbus-performance-baseline.json" --json
+      - name: Compare local performance smoke
+        run: >-
+          python -m agentbus.cli benchmark all
+          --files 20 --iterations 1
+          --baseline "${{ runner.temp }}/agentbus-performance-baseline.json" --json
+      - name: Check patch whitespace
+        run: git diff --check
+
+  security-audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install security-test dependencies
+        run: python -m pip install -e ".[dev,ide,mcp]"
+      - name: Verify sandbox and MCP integration boundaries
+        run: >-
+          python -m pytest
+          tests/test_tool_protocol.py
           tests/test_sandbox_process.py
           tests/test_sandbox_platform.py
           tests/test_sandbox_environment.py
@@ -317,8 +569,6 @@ jobs:
           tests/test_mcp_http_transport.py
           tests/test_mcp_tools.py
           tests/test_agentbus_mcp_server.py
-      - name: Audit tracked release inputs
-        run: python -m agentbus.release_security
       - name: Check patch whitespace
         run: git diff --check
 
