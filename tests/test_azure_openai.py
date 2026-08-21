@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 from typing import Literal
 
@@ -425,6 +426,29 @@ def test_dictionary_schema_is_validated_locally():
         )
 
 
+def test_incompatible_dictionary_schema_fails_locally_before_transport():
+    client = FakeClient(response('{"name":"ok"}'))
+    schema = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "minLength": 1},
+        },
+        "required": ["name"],
+        "additionalProperties": False,
+    }
+
+    with pytest.raises(ModelConfigurationError) as captured:
+        provider(client).generate_json("schema", schema=schema)
+
+    assert client.responses.create.calls == []
+    assert client.responses.parse.calls == []
+    assert captured.value.metadata == {
+        "schema_issue_count": 1,
+        "schema_issue_codes": ["unsupported_keyword"],
+        "schema_issue_paths": ["$.properties.name.minLength"],
+    }
+
+
 def test_chat_completions_mode_uses_messages_and_usage_fields():
     chat_response = SimpleNamespace(
         choices=[
@@ -458,10 +482,22 @@ def test_chat_completions_mode_uses_messages_and_usage_fields():
 
 
 class FakeSdkError(Exception):
-    def __init__(self, message, status_code=None, headers=None):
+    def __init__(
+        self,
+        message,
+        status_code=None,
+        headers=None,
+        *,
+        body=None,
+        code=None,
+        param=None,
+    ):
         super().__init__(message)
         self.status_code = status_code
         self.request_id = "error-request"
+        self.body = body
+        self.code = code
+        self.param = param
         self.response = SimpleNamespace(
             status_code=status_code,
             headers=headers or {},
@@ -526,6 +562,61 @@ def test_retry_after_seconds_and_milliseconds_are_extracted():
 
     assert seconds.retry_after_seconds == 3
     assert milliseconds.retry_after_seconds == 0.25
+
+
+def test_bad_request_preserves_only_bounded_allowlisted_azure_diagnostics():
+    error = FakeSdkError(
+        "Azure request failed; api_key=must-not-persist",
+        400,
+        body={
+            "code": "invalid_request_error",
+            "param": "text.format.schema",
+            "message": (
+                "Invalid schema: additionalProperties must be false; "
+                "prompt=private-source; api_key=must-not-persist"
+            ),
+            "request": {"schema": "must-not-persist"},
+        },
+        code="invalid_request_error",
+        param="text.format.schema",
+    )
+
+    mapped = map_azure_exception(error, model="coder-deployment")
+    safe = mapped.safe_metadata()
+
+    assert isinstance(mapped, ModelBadRequestError)
+    assert mapped.retryable is False
+    assert safe["model"] == "coder-deployment"
+    assert safe["request_id"] == "error-request"
+    assert safe["http_status"] == 400
+    assert safe["metadata"] == {
+        "azure_error_code": "invalid_request_error",
+        "azure_error_param": "text.format.schema",
+        "azure_diagnostic": (
+            "Azure rejected an unsupported structured-output schema keyword."
+        ),
+    }
+    serialized = json.dumps(safe, sort_keys=True)
+    assert "must-not-persist" not in serialized
+    assert "private-source" not in serialized
+    assert '"request"' not in serialized
+
+
+def test_azure_diagnostics_reject_non_identifier_code_and_parameter_values():
+    mapped = map_azure_exception(
+        FakeSdkError(
+            "bad request",
+            400,
+            body={
+                "code": "api_key=must-not-persist",
+                "param": "prompt: private-source",
+                "message": "bad request",
+            },
+        ),
+        model="coder-deployment",
+    )
+
+    assert mapped.safe_metadata()["metadata"] == {}
 
 
 def test_unknown_client_error_is_not_misclassified_as_retryable_transport():

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Mapping
 from contextlib import nullcontext
 from typing import Any, Callable
 from urllib.parse import urlsplit, urlunsplit
@@ -515,7 +516,8 @@ def map_azure_exception(error: Exception, *, model: str) -> ModelProviderError:
     status = _status_code(error)
     request_id = getattr(error, "request_id", None)
     retry_after = _retry_after(error)
-    message_lower = str(error).lower()
+    azure_metadata, diagnostic_source = _azure_error_metadata(error)
+    message_lower = diagnostic_source.lower()
     class_name = type(error).__name__.lower()
 
     common = {
@@ -524,6 +526,7 @@ def map_azure_exception(error: Exception, *, model: str) -> ModelProviderError:
         "http_status": status,
         "request_id": request_id,
         "retry_after_seconds": retry_after,
+        "metadata": azure_metadata,
     }
     if "timeout" in class_name:
         return ModelTimeoutError("Azure OpenAI request timed out.", **common)
@@ -687,6 +690,99 @@ def _retry_after(error: Exception) -> float | None:
     except (TypeError, ValueError):
         return None
     return value * scale if value >= 0 else None
+
+
+def _azure_error_metadata(error: Exception) -> tuple[dict[str, str], str]:
+    body = getattr(error, "body", None)
+    selected_body: Mapping[str, Any] | None = None
+    if isinstance(body, Mapping):
+        nested = body.get("error")
+        selected_body = nested if isinstance(nested, Mapping) else body
+
+    code = _safe_azure_identifier(getattr(error, "code", None), max_chars=128)
+    param = _safe_azure_identifier(getattr(error, "param", None), max_chars=256)
+    body_message = None
+    if selected_body is not None:
+        code = code or _safe_azure_identifier(
+            selected_body.get("code"),
+            max_chars=128,
+        )
+        param = param or _safe_azure_identifier(
+            selected_body.get("param"),
+            max_chars=256,
+        )
+        candidate_message = selected_body.get("message")
+        if isinstance(candidate_message, str):
+            body_message = candidate_message[:4_096]
+
+    error_message = str(error)[:4_096]
+    diagnostic_source = " ".join(
+        value for value in (error_message, body_message) if value
+    )
+    diagnostic = _azure_diagnostic(
+        " ".join(value for value in (diagnostic_source, code, param) if value),
+        param=param,
+    )
+    metadata = {}
+    if code:
+        metadata["azure_error_code"] = code
+    if param:
+        metadata["azure_error_param"] = param
+    if diagnostic:
+        metadata["azure_diagnostic"] = diagnostic
+    return metadata, diagnostic_source
+
+
+def _safe_azure_identifier(value: Any, *, max_chars: int) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text or len(text) > max_chars:
+        return None
+    if any(
+        not (character.isalnum() or character in "._-[]")
+        for character in text
+    ):
+        return None
+    return text
+
+
+def _azure_diagnostic(value: str, *, param: str | None) -> str | None:
+    normalized = value.casefold()
+    structured_markers = (
+        "json_schema",
+        "response_format",
+        "structured output",
+        "text.format",
+    )
+    if "not supported" in normalized and any(
+        marker in normalized for marker in structured_markers
+    ):
+        return "Azure deployment does not support the structured-output feature."
+    if any(
+        marker in normalized
+        for marker in (
+            "additionalproperties",
+            "exclusivemaximum",
+            "exclusiveminimum",
+            "maxlength",
+            "maxitems",
+            "maximum",
+            "minlength",
+            "minitems",
+            "minimum",
+        )
+    ):
+        return "Azure rejected an unsupported structured-output schema keyword."
+    if "schema" in normalized and any(
+        marker in normalized for marker in ("invalid", "must", "required")
+    ):
+        return "Azure rejected the structured-output schema."
+    if any(marker in normalized for marker in structured_markers):
+        return "Azure rejected the configured response format."
+    if param:
+        return "Azure rejected a malformed request parameter."
+    return None
 
 
 def _optional_nonnegative(value: Any) -> int | None:
