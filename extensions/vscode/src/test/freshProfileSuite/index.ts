@@ -502,13 +502,7 @@ async function exerciseCancellation(
   );
   assert.equal(cancellation?.cancellation_requested, true);
   assert.equal(cancellation?.cancellation?.requested, true);
-  const terminal = await waitForRunStatus(
-    client,
-    accepted.run_id,
-    ["cancelled"],
-    45_000
-  );
-  assert.equal(terminal.cancellation?.cleanup_completed, true);
+  await waitForCancellationCleanup(client, accepted.run_id);
   assertUniqueRuns(api.runs());
   return accepted.run_id;
 }
@@ -809,6 +803,32 @@ async function waitForRunStatus(
     }
     return undefined;
   }, timeoutMs);
+}
+
+async function waitForCancellationCleanup(
+  client: FreshClient,
+  runId: string
+): Promise<RunSummary> {
+  return waitFor(async () => {
+    let run: RunSummary;
+    try {
+      run = await client.run(runId);
+    } catch {
+      return undefined;
+    }
+    if (
+      run.status === "cancelled" &&
+      run.cancellation?.cleanup_completed === true
+    ) {
+      return run;
+    }
+    if (["succeeded", "failed"].includes(run.status)) {
+      throw new Error(
+        `Cancellation run ${runId} reached unexpected status ${run.status}.`
+      );
+    }
+    return undefined;
+  }, 45_000);
 }
 
 async function waitForPendingApproval(
