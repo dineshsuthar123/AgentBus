@@ -565,6 +565,7 @@ class MultiAgentTaskExecutor:
             "title": task.title,
             "description": task.description,
             "risk": task.risk.value,
+            "execution_kind": task.execution_kind.value,
             "dependencies": task.dependency_ids,
             "assigned_role": task.assigned_role,
             "expected_outputs": task.expected_outputs,

@@ -177,6 +177,49 @@ def test_coder_preserves_legacy_loop_factory_that_only_accepts_config():
     assert "Complete task" in seen["task"]
 
 
+def test_coder_scopes_overall_request_to_current_durable_task():
+    seen = {}
+
+    class CapturingLoop:
+        def __init__(self, config):
+            pass
+
+        def run(self, task):
+            seen["task"] = task
+            return "current task complete"
+
+    coder = CoderAgent(model=FakeModel({}), loop_factory=CapturingLoop)
+    coder.execute(
+        "Fix calculator, then update downstream documentation.",
+        {
+            "goal": "Fix calculator",
+            "steps": [
+                {
+                    "id": "step-1",
+                    "title": "Fix calculator",
+                    "execution_kind": "implementation",
+                    "required_capabilities": [
+                        "filesystem.read",
+                        "filesystem.write",
+                    ],
+                    "done_criteria": ["Calculator tests pass"],
+                }
+            ],
+        },
+    )
+
+    prompt = seen["task"]
+    assert "Execute ONLY the current durable task" in prompt
+    assert "Overall request context:" in prompt
+    assert "Current durable task plan:" in prompt
+    assert "Original user task:" not in prompt
+    assert "does not authorize work" in prompt
+    assert "Do not perform downstream work" in prompt
+    assert "required_capabilities are an upper bound" in prompt
+    assert "Do not request capabilities beyond" in prompt
+    assert "plan contract is insufficient" in prompt
+
+
 def test_coder_propagates_managed_runtime_identity_to_modern_loop():
     seen = {}
     runtime = object()

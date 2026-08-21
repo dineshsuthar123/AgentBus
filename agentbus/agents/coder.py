@@ -102,15 +102,26 @@ class CoderAgent(BaseAgent):
             )
 
         return f"""
-Execute this AgentBus plan locally.
+Execute ONLY the current durable task described below.
 
-Original user task:
+Overall request context:
 {user_task}
 
-Plan:
+Current durable task plan:
 {json.dumps(plan, indent=2)}
 {feedback}
 {intelligence}
+Task boundary:
+- The overall request provides context and intent. It does not authorize work
+  assigned to later task-graph steps.
+- Do not perform downstream work or infer capabilities from the overall request.
+- The current task's required_capabilities are an upper bound. Runtime path,
+  scope, approval, and policy checks remain authoritative.
+- Do not request capabilities beyond the current task's declared set.
+- If the current task cannot satisfy its done criteria within that set, state
+  that the plan contract is insufficient. Do not claim completion or attempt
+  later tasks.
+
 Use the existing tools, run verification where practical, inspect git diff before finishing, and finish with a concise summary.
 """
 
