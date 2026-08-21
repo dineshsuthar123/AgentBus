@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,6 +12,11 @@ from agentbus.config import AgentBusConfig
 from agentbus.execution.engine import DurableExecutionEngine
 from agentbus.execution.models import RunStatus
 from agentbus.execution.state_store import StateStore
+from agentbus.models.azure_openai import AzureOpenAIProvider
+from agentbus.models.azure_schema import (
+    AzureAgentActionWire,
+    validate_azure_structured_output_schema,
+)
 from agentbus.models.errors import ModelServiceUnavailableError
 from agentbus.models.router import (
     ModelProviderFactory,
@@ -17,7 +24,9 @@ from agentbus.models.router import (
     model_request_context,
 )
 from agentbus.models.types import ModelResult, ModelUsage
+from agentbus.runtime.loop import AgentLoop
 from agentbus.runtime.orchestrator import MultiAgentOrchestrator
+from agentbus.tools.protocol import ToolInvocationStatus
 
 
 PLAN = {
@@ -87,6 +96,51 @@ class FakeVerifier:
         }
 
 
+class StrictAzureResponses:
+    """Offline Responses transport that enforces Azure's strict schema subset."""
+
+    def __init__(self, scripts):
+        self.scripts = {model: list(outcomes) for model, outcomes in scripts.items()}
+        self.parse_calls = []
+        self.create_calls = []
+
+    def parse(self, **kwargs):
+        text_format = kwargs["text_format"]
+        validate_azure_structured_output_schema(text_format.model_json_schema())
+        self.parse_calls.append(kwargs)
+        return self._response(kwargs["model"], parsed=True)
+
+    def create(self, **kwargs):
+        self.create_calls.append(kwargs)
+        return self._response(kwargs["model"], parsed=False)
+
+    def _response(self, model, *, parsed):
+        outcome = self.scripts[model].pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return SimpleNamespace(
+            output_text=(
+                json.dumps(outcome, ensure_ascii=True)
+                if isinstance(outcome, dict)
+                else str(outcome)
+            ),
+            output_parsed=outcome if parsed else None,
+            _request_id=f"strict-{model}",
+            status="completed",
+            usage=SimpleNamespace(
+                input_tokens=5,
+                output_tokens=2,
+                total_tokens=7,
+                input_tokens_details=SimpleNamespace(cached_tokens=0),
+            ),
+        )
+
+
+class StrictAzureClient:
+    def __init__(self, scripts):
+        self.responses = StrictAzureResponses(scripts)
+
+
 def config(tmp_path, *, fallback=False):
     return AgentBusConfig(
         provider_name="azure",
@@ -147,6 +201,80 @@ def build_runner(tmp_path, scripts, *, fallback=False):
         model_router=router,
     )
     return runner, store, router, providers, verifier
+
+
+def test_strict_azure_schema_exercises_real_coder_loop_and_managed_write(tmp_path):
+    settings = config(tmp_path).with_overrides(max_steps=2)
+    client = StrictAzureClient(
+        {
+            "coder-deployment": [
+                {
+                    "action": "tool_call",
+                    "tool_call": {
+                        "tool_name": "filesystem.write",
+                        "arguments_json": json.dumps(
+                            {"path": "result.py", "content": "VALUE = 3\n"}
+                        ),
+                        "expected_capabilities": [
+                            "filesystem.write",
+                            "filesystem.create",
+                        ],
+                        "timeout_seconds": None,
+                        "invocation_revision": 1,
+                        "idempotency_key": "strict-azure-create-result",
+                    },
+                    "summary": None,
+                },
+                {
+                    "action": "finish",
+                    "tool_call": None,
+                    "summary": "strict Azure managed write complete",
+                },
+            ]
+        }
+    )
+
+    def builder(route):
+        return AzureOpenAIProvider(
+            endpoint=settings.azure_openai_endpoint,
+            api_key=settings.azure_openai_api_key,
+            deployment=route.model,
+            timeout_seconds=route.timeout_seconds,
+            role=route.role,
+            client=client,
+        )
+
+    router = ModelRouter(
+        settings,
+        provider_factory=ModelProviderFactory(
+            settings,
+            builders={"azure": builder},
+        ),
+        sleeper=lambda delay: None,
+        jitter=lambda: 0,
+    )
+    loop = AgentLoop(config=settings, model_router=router)
+
+    summary = loop.run("Create result.py through the managed runtime")
+
+    assert summary == "strict Azure managed write complete"
+    assert (settings.workspace_path / "result.py").read_text(encoding="utf-8") == (
+        "VALUE = 3\n"
+    )
+    assert client.responses.create_calls == []
+    assert len(client.responses.parse_calls) == 2
+    assert {
+        call["model"] for call in client.responses.parse_calls
+    } == {"coder-deployment"}
+    assert all(
+        call["text_format"] is AzureAgentActionWire
+        for call in client.responses.parse_calls
+    )
+    invocations = StateStore(settings.state_database_path).list_tool_invocations(
+        loop.run_id
+    )
+    assert len(invocations) == 1
+    assert invocations[0].status == ToolInvocationStatus.SUCCEEDED
 
 
 @pytest.mark.parametrize("provider_name", ["azure", "ollama"])
