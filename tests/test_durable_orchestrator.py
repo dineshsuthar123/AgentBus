@@ -33,12 +33,16 @@ PLAN = {
             "title": "Implement",
             "description": "Create calculator",
             "risk": "low",
+            "execution_kind": "implementation",
+            "required_capabilities": ["filesystem.write"],
         },
         {
             "id": "step-2",
-            "title": "Test",
-            "description": "Test calculator",
+            "title": "Add calculator tests",
+            "description": "Add independently verifiable calculator coverage",
             "risk": "low",
+            "execution_kind": "implementation",
+            "required_capabilities": ["filesystem.write"],
         },
     ],
     "test_strategy": "Run pytest",
@@ -54,6 +58,22 @@ class FakePlanner:
     def plan(self, user_task, file_list=None, context_pack=None):
         self.context_pack = context_pack
         return self.output
+
+
+class ReplanningPlanner:
+    def __init__(self, outputs):
+        self.outputs = list(outputs)
+        self.feedback = []
+
+    def plan(
+        self,
+        user_task,
+        file_list=None,
+        context_pack=None,
+        contract_feedback=None,
+    ):
+        self.feedback.append(contract_feedback)
+        return self.outputs.pop(0)
 
 
 class FakeCoder:
@@ -259,6 +279,63 @@ def test_durable_mode_persists_validated_planner_graph_before_execution(tmp_path
 
     assert report.status == RunStatus.SUCCEEDED
     assert [call["task_id"] for call in coder.calls] == ["step-1", "step-2"]
+
+
+def test_durable_planner_replans_once_after_contract_rejection(tmp_path):
+    invalid = {
+        "goal": "Create calculator",
+        "steps": [
+            {
+                "id": "step-1",
+                "title": "Inspect first",
+                "description": "Inspect before a later implementation phase.",
+                "risk": "low",
+                "execution_kind": "implementation",
+                "required_capabilities": ["filesystem.read"],
+                "done_criteria": ["Inspection is complete"],
+            }
+        ],
+        "test_strategy": "Run pytest",
+        "done_criteria": ["Tests pass"],
+    }
+    corrected = {
+        "goal": "Create calculator",
+        "steps": [
+            {
+                "id": "step-1",
+                "title": "Implement and verify calculator",
+                "description": "Create the calculator and its relevant tests.",
+                "risk": "low",
+                "execution_kind": "implementation",
+                "required_capabilities": [
+                    "filesystem.read",
+                    "filesystem.write",
+                    "filesystem.create",
+                    "test.execute",
+                    "process.execute",
+                    "git.read",
+                ],
+                "expected_outputs": ["calculator.py", "test_calculator.py"],
+                "done_criteria": ["Calculator tests pass"],
+            }
+        ],
+        "test_strategy": "Run pytest",
+        "done_criteria": ["Tests pass"],
+    }
+    planner = ReplanningPlanner([invalid, corrected])
+    runner, store = orchestrator(tmp_path, planner=planner)
+
+    run_id = runner.create_durable_run("Create calculator")
+
+    persisted = store.get_run(run_id)
+    persisted_step = persisted.planner_output["steps"][0]
+    assert persisted_step["title"] == "Implement and verify calculator"
+    assert persisted_step["execution_kind"] == "implementation"
+    assert persisted_step["required_capabilities"] == corrected["steps"][0][
+        "required_capabilities"
+    ]
+    assert planner.feedback[0] is None
+    assert "implementation_without_mutation" in planner.feedback[1][0]
 
 
 def test_durable_mode_persists_validated_repository_intelligence(tmp_path):

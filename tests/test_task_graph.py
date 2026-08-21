@@ -1,7 +1,11 @@
 import pytest
 
 from agentbus.execution.models import TaskStatus
-from agentbus.execution.task_graph import TaskGraph, TaskGraphValidationError
+from agentbus.execution.task_graph import (
+    PlanContractValidationError,
+    TaskGraph,
+    TaskGraphValidationError,
+)
 
 
 def planner_output(steps):
@@ -19,6 +23,8 @@ def step(task_id, *, dependencies=None):
         "title": task_id,
         "description": f"Implement {task_id}",
         "risk": "low",
+        "execution_kind": "implementation",
+        "required_capabilities": ["filesystem.write"],
     }
     if dependencies is not None:
         value["dependencies"] = dependencies
@@ -129,6 +135,71 @@ def test_planner_capability_requirements_persist_in_task_metadata():
         "filesystem.write",
         "filesystem.create",
     ]
+    assert restored.tasks[0].metadata["execution_kind"] == "implementation"
+
+
+def test_read_only_implementation_step_is_rejected_before_persistence():
+    planned = step("inspect", dependencies=[])
+    planned["required_capabilities"] = ["filesystem.read"]
+
+    with pytest.raises(PlanContractValidationError) as captured:
+        TaskGraph.from_planner_output(planner_output([planned]))
+
+    assert {
+        (issue.task_id, issue.code) for issue in captured.value.issues
+    } == {("inspect", "implementation_without_mutation")}
+
+
+def test_analysis_step_cannot_mutate_or_authorize_a_downstream_task():
+    analysis = step("inspect", dependencies=[])
+    analysis.update(
+        {
+            "execution_kind": "analysis",
+            "required_capabilities": ["filesystem.read", "filesystem.write"],
+        }
+    )
+    implementation = step("implement", dependencies=["inspect"])
+
+    with pytest.raises(PlanContractValidationError) as captured:
+        TaskGraph.from_planner_output(
+            planner_output([analysis, implementation])
+        )
+
+    assert {
+        issue.code for issue in captured.value.issues
+    } == {"analysis_with_mutation", "analysis_prerequisite_unsupported"}
+
+
+def test_terminal_analysis_task_has_explicit_read_only_contract():
+    analysis = step("inspect", dependencies=[])
+    analysis.update(
+        {
+            "execution_kind": "analysis",
+            "required_capabilities": ["filesystem.read", "git.read"],
+        }
+    )
+
+    graph = TaskGraph.from_planner_output(planner_output([analysis]))
+
+    assert graph.tasks[0].execution_kind.value == "analysis"
+    assert graph.tasks[0].metadata["required_capabilities"] == [
+        "filesystem.read",
+        "git.read",
+    ]
+
+
+def test_genuine_multi_step_implementation_slices_remain_supported():
+    storage = step("storage", dependencies=[])
+    storage["expected_outputs"] = ["storage.py", "test_storage.py"]
+    webhook = step("webhook", dependencies=["storage"])
+    webhook["expected_outputs"] = ["webhook.py", "test_webhook.py"]
+
+    graph = TaskGraph.from_planner_output(
+        planner_output([storage, webhook])
+    )
+
+    assert [task.task_id for task in graph.tasks] == ["storage", "webhook"]
+    assert graph.get("webhook").dependency_ids == ["storage"]
 
 
 def test_repository_intelligence_claims_persist_in_task_metadata():

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from agentbus.agents.coder import CoderAgent
-from agentbus.agents.planner import PlannerAgent
+from agentbus.agents.planner import PlannerAgent, PlannerOutput
 from agentbus.agents.reviewer import ReviewerAgent
 from agentbus.config import AgentBusConfig
 from agentbus.execution.cancellation import CancellationRequested, CancellationToken
@@ -19,6 +19,7 @@ from agentbus.execution.leases import LeaseService
 from agentbus.execution.models import ExecutionReport, RunStatus, TaskStatus
 from agentbus.execution.scheduler import ParallelExecutionScheduler
 from agentbus.execution.state_store import StateStore, StateStoreError
+from agentbus.execution.task_graph import PlanContractValidationError, TaskGraph
 from agentbus.execution.worker import LocalTaskWorker
 from agentbus.git.branching import generate_branch_name
 from agentbus.git.commit_message import generate_commit_message
@@ -389,8 +390,12 @@ class MultiAgentOrchestrator:
         cancellation.checkpoint("orchestrator", stage="before-planner")
         self.logger.log("planner_started", {})
         with model_request_context(run_id=run_id, cancellation=cancellation):
-            plan = self.planner.plan(user_task, context_pack=context_pack)
-        plan = self._validate_planner_scope(plan, intelligence_context)
+            plan = self._plan_durable(
+                user_task,
+                context_pack,
+                intelligence_context,
+                cancellation,
+            )
         cancellation.checkpoint("orchestrator", stage="after-planner")
         self.logger.log("planner_output", _plan_log_metadata(plan))
         metadata = {
@@ -2198,6 +2203,53 @@ class MultiAgentOrchestrator:
             },
         )
         return result.plan
+
+    def _plan_durable(
+        self,
+        user_task: str,
+        context_pack: str,
+        intelligence: PlannerIntelligenceContext | None,
+        cancellation: CancellationToken,
+    ) -> dict[str, Any]:
+        feedback: list[str] | None = None
+        for attempt in range(1, 3):
+            cancellation.checkpoint(
+                "orchestrator",
+                stage=f"before-planner-contract-attempt-{attempt}",
+            )
+            plan = self._call_with_supported_arguments(
+                self.planner.plan,
+                {
+                    "user_task": user_task,
+                    "context_pack": context_pack,
+                    "contract_feedback": feedback,
+                },
+            )
+            plan = PlannerOutput.model_validate(plan).model_dump(
+                mode="json",
+                exclude_none=True,
+            )
+            plan = self._validate_planner_scope(plan, intelligence)
+            try:
+                TaskGraph.from_planner_output(plan)
+            except PlanContractValidationError as exc:
+                self.logger.log(
+                    "planner_contract_rejected",
+                    {
+                        "attempt": attempt,
+                        **exc.safe_metadata(),
+                    },
+                )
+                if attempt == 2:
+                    raise
+                feedback = exc.feedback()
+                continue
+            cancellation.checkpoint(
+                "orchestrator",
+                stage=f"after-planner-contract-attempt-{attempt}",
+            )
+            return plan
+        raise AssertionError("bounded planner contract loop did not terminate")
 
     def _record_repository_intelligence_trace(
         self,

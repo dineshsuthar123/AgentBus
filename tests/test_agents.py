@@ -25,6 +25,7 @@ def test_planner_agent_parses_valid_model_output():
                     "title": "Add module",
                     "description": "Create calculator.py",
                     "risk": "low",
+                    "execution_kind": "implementation",
                     "required_capabilities": [
                         "filesystem.write",
                         "filesystem.create",
@@ -45,9 +46,13 @@ def test_planner_agent_parses_valid_model_output():
         "filesystem.write",
         "filesystem.create",
     ]
+    assert plan["steps"][0]["execution_kind"] == "implementation"
     assert "dependencies" not in plan["steps"][0]
     assert "done_criteria" not in plan["steps"][0]
     assert "create calculator" in model.prompts[0]
+    assert "A durable step is an independently executable" in model.prompts[0]
+    assert "BAD durable decomposition" in model.prompts[0]
+    assert "GOOD atomic durable task" in model.prompts[0]
 
 
 def test_planner_agent_supports_repository_intelligence_claims():
@@ -60,6 +65,7 @@ def test_planner_agent_supports_repository_intelligence_claims():
                     "title": "Update add",
                     "description": "Update calculator.add",
                     "risk": "medium",
+                    "execution_kind": "implementation",
                     "targeted_files": ["calculator.py"],
                     "targeted_symbols": ["symbol_indexed"],
                     "expected_impacted_components": ["project_calculator"],
@@ -86,6 +92,43 @@ def test_planner_agent_supports_repository_intelligence_claims():
     ]
     assert "advisory evidence, not authorization" in model.prompts[0]
     assert "independent scope validation" in model.prompts[0]
+
+
+def test_planner_contract_feedback_is_bounded_and_does_not_grant_capabilities():
+    model = FakeModel(
+        {
+            "goal": "Fix calculator",
+            "steps": [
+                {
+                    "id": "step-1",
+                    "title": "Fix divide",
+                    "description": "Fix and verify divide in one work unit.",
+                    "risk": "low",
+                    "execution_kind": "implementation",
+                    "required_capabilities": [
+                        "filesystem.read",
+                        "filesystem.write",
+                    ],
+                }
+            ],
+            "test_strategy": "Run calculator tests",
+            "done_criteria": ["Calculator tests pass"],
+        }
+    )
+    planner = PlannerAgent(model=model)
+
+    planner.plan(
+        "fix divide",
+        file_list="calculator.py",
+        contract_feedback=[
+            "step-1 [implementation_without_mutation]: declare a coherent work unit",
+        ],
+    )
+
+    prompt = model.prompts[0]
+    assert "previous durable plan was rejected" in prompt
+    assert "Do not add capabilities unless" in prompt
+    assert "implementation_without_mutation" in prompt
 
 
 def test_reviewer_agent_parses_valid_model_output():

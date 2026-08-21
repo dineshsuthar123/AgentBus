@@ -18,13 +18,19 @@ from agentbus.execution.models import (
     RunStatus,
     TaskAttempt,
     TaskDependency,
+    TaskExecutionKind,
     TaskExecutionContext,
     TaskExecutionResult,
     TaskSpec,
     TaskStatus,
 )
 from agentbus.execution.state_store import StateStore
-from agentbus.execution.task_graph import TaskGraph, TaskGraphValidationError
+from agentbus.execution.task_graph import (
+    PlanContractIssue,
+    PlanContractValidationError,
+    TaskGraph,
+    TaskGraphValidationError,
+)
 
 __all__ = [
     "ApprovalDecision",
@@ -37,6 +43,8 @@ __all__ = [
     "ExecutionArtifact",
     "ExecutionReport",
     "FailureCategory",
+    "PlanContractIssue",
+    "PlanContractValidationError",
     "RetryPolicy",
     "RiskLevel",
     "RunRecord",
@@ -45,6 +53,7 @@ __all__ = [
     "StateStore",
     "TaskAttempt",
     "TaskDependency",
+    "TaskExecutionKind",
     "TaskExecutionContext",
     "TaskExecutionResult",
     "TaskGraph",

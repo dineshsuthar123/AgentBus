@@ -1,17 +1,70 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Iterable
 
 from agentbus.execution.models import (
     RiskLevel,
     TaskDependency,
+    TaskExecutionKind,
     TaskSpec,
     TaskStatus,
 )
+from agentbus.tools.protocol import ToolCapabilityName
 
 
 class TaskGraphValidationError(ValueError):
     """Raised when planner output cannot form a safe deterministic graph."""
+
+
+@dataclass(frozen=True)
+class PlanContractIssue:
+    code: str
+    task_id: str
+    message: str
+
+
+class PlanContractValidationError(TaskGraphValidationError):
+    """Raised when planner steps are not executable durable work units."""
+
+    def __init__(self, issues: Iterable[PlanContractIssue]):
+        self.issues = tuple(issues)
+        details = "; ".join(
+            f"{str(issue.task_id)[:128]} [{issue.code}]: {issue.message}"
+            for issue in self.issues[:8]
+        )
+        if len(self.issues) > 8:
+            details += f"; and {len(self.issues) - 8} more issue(s)"
+        super().__init__(f"Durable planner contract is invalid: {details}")
+
+    def feedback(self) -> list[str]:
+        return [
+            (
+                f"{str(issue.task_id)[:128]} [{issue.code}]: "
+                f"{issue.message}"
+            )[:512]
+            for issue in self.issues[:8]
+        ]
+
+    def safe_metadata(self) -> dict[str, Any]:
+        issue_codes = sorted({issue.code for issue in self.issues})
+        task_ids = sorted({str(issue.task_id)[:128] for issue in self.issues})
+        return {
+            "issue_count": len(self.issues),
+            "issue_codes": issue_codes[:8],
+            "task_ids": task_ids[:8],
+            "metadata_truncated": len(issue_codes) > 8 or len(task_ids) > 8,
+        }
+
+
+_REPOSITORY_MUTATION_CAPABILITIES = frozenset(
+    {
+        ToolCapabilityName.FILESYSTEM_WRITE,
+        ToolCapabilityName.FILESYSTEM_CREATE,
+        ToolCapabilityName.FILESYSTEM_DELETE,
+        ToolCapabilityName.FILESYSTEM_RENAME,
+    }
+)
 
 
 FAILED_DEPENDENCY_STATUSES = {
@@ -42,6 +95,24 @@ class TaskGraph:
         explicit_dependencies = any(
             isinstance(step, dict) and "dependencies" in step for step in raw_steps
         )
+        contract_declarations = [
+            isinstance(step, dict) and "execution_kind" in step for step in raw_steps
+        ]
+        if any(contract_declarations) and not all(contract_declarations):
+            raise PlanContractValidationError(
+                [
+                    PlanContractIssue(
+                        "partial_execution_kind_contract",
+                        str(
+                            raw_step.get("id") or f"step-{index + 1}"
+                        ),
+                        "all planner steps must declare execution_kind",
+                    )
+                    for index, raw_step in enumerate(raw_steps)
+                    if isinstance(raw_step, dict)
+                    and "execution_kind" not in raw_step
+                ]
+            )
         overall_done = planner_output.get("done_criteria", [])
         tasks: list[TaskSpec] = []
 
@@ -67,6 +138,19 @@ class TaskGraph:
                 metadata = {
                     **dict(raw_step.get("metadata", {})),
                     "planner_index": index,
+                    "execution_kind": str(
+                        getattr(
+                            raw_step.get(
+                                "execution_kind",
+                                TaskExecutionKind.IMPLEMENTATION,
+                            ),
+                            "value",
+                            raw_step.get(
+                                "execution_kind",
+                                TaskExecutionKind.IMPLEMENTATION.value,
+                            ),
+                        )
+                    ),
                     "required_capabilities": list(
                         raw_step.get("required_capabilities") or []
                     ),
@@ -113,7 +197,10 @@ class TaskGraph:
                 ) from exc
             tasks.append(task)
 
-        return cls(tasks)
+        graph = cls(tasks)
+        if all(contract_declarations):
+            graph._validate_planner_contract()
+        return graph
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "TaskGraph":
@@ -182,6 +269,113 @@ class TaskGraph:
                     )
 
         self._validate_acyclic()
+
+    def _validate_planner_contract(self) -> None:
+        issues: list[PlanContractIssue] = []
+        dependents = {
+            dependency_id
+            for task in self.tasks
+            for dependency_id in task.dependency_ids
+        }
+        for task in self.tasks:
+            try:
+                kind = task.execution_kind
+            except ValueError:
+                issues.append(
+                    PlanContractIssue(
+                        "unsupported_execution_kind",
+                        task.task_id,
+                        "execution_kind must be implementation or analysis",
+                    )
+                )
+                continue
+
+            raw_capabilities = task.metadata.get("required_capabilities", [])
+            capabilities: set[ToolCapabilityName] = set()
+            invalid_capabilities: list[str] = []
+            if not isinstance(raw_capabilities, list):
+                invalid_capabilities.append("non-list capability declaration")
+            else:
+                for value in raw_capabilities:
+                    try:
+                        capabilities.add(ToolCapabilityName(value))
+                    except ValueError:
+                        invalid_capabilities.append(str(value)[:128])
+                if len(capabilities) != len(raw_capabilities):
+                    issues.append(
+                        PlanContractIssue(
+                            "duplicate_capability",
+                            task.task_id,
+                            "required capabilities must be unique",
+                        )
+                    )
+            if invalid_capabilities:
+                issues.append(
+                    PlanContractIssue(
+                        "invalid_capability",
+                        task.task_id,
+                        "required capabilities contain unsupported values",
+                    )
+                )
+                continue
+
+            mutation_capabilities = capabilities.intersection(
+                _REPOSITORY_MUTATION_CAPABILITIES
+            )
+            if kind == TaskExecutionKind.IMPLEMENTATION:
+                if not capabilities:
+                    issues.append(
+                        PlanContractIssue(
+                            "missing_capabilities",
+                            task.task_id,
+                            "implementation tasks must declare their capability upper bound",
+                        )
+                    )
+                if not mutation_capabilities:
+                    issues.append(
+                        PlanContractIssue(
+                            "implementation_without_mutation",
+                            task.task_id,
+                            "implementation tasks must declare a filesystem mutation capability",
+                        )
+                    )
+            else:
+                if mutation_capabilities:
+                    issues.append(
+                        PlanContractIssue(
+                            "analysis_with_mutation",
+                            task.task_id,
+                            "analysis tasks cannot declare repository mutation capabilities",
+                        )
+                    )
+                if task.expected_outputs:
+                    issues.append(
+                        PlanContractIssue(
+                            "analysis_with_repository_outputs",
+                            task.task_id,
+                            "analysis tasks persist a bounded analysis artifact, not repository files",
+                        )
+                    )
+                if task.task_id in dependents:
+                    issues.append(
+                        PlanContractIssue(
+                            "analysis_prerequisite_unsupported",
+                            task.task_id,
+                            "analysis artifacts are not executable authorization or downstream task input",
+                        )
+                    )
+
+            if not task.done_criteria:
+                issues.append(
+                    PlanContractIssue(
+                        "missing_done_criteria",
+                        task.task_id,
+                        "every durable task requires independently checkable done criteria",
+                    )
+                )
+
+        if issues:
+            raise PlanContractValidationError(issues)
 
     def _validate_acyclic(self) -> None:
         visiting: set[str] = set()

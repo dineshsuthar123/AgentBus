@@ -11,8 +11,9 @@ import pytest
 
 from agentbus.config import AgentBusConfig
 from agentbus.execution.engine import DurableExecutionEngine
-from agentbus.execution.models import FailureCategory, RunStatus
+from agentbus.execution.models import RunStatus
 from agentbus.execution.state_store import StateStore
+from agentbus.execution.task_graph import PlanContractValidationError
 from agentbus.models.azure_openai import AzureOpenAIProvider
 from agentbus.models.azure_schema import (
     AzureAgentActionWire,
@@ -43,9 +44,11 @@ PLAN = {
             "title": "Finish",
             "description": "Finish without changing files",
             "risk": "low",
+            "execution_kind": "analysis",
             "maximum_attempts": 2,
             "expected_outputs": [],
             "done_criteria": ["Agent finishes"],
+            "required_capabilities": [],
         }
     ],
     "test_strategy": "Use fake verifier",
@@ -296,7 +299,7 @@ def test_strict_azure_schema_exercises_real_coder_loop_and_managed_write(tmp_pat
     assert invocations[0].status == ToolInvocationStatus.SUCCEEDED
 
 
-def test_read_only_prerequisite_deadlocks_real_durable_workflow(tmp_path):
+def test_read_only_prerequisite_is_rejected_before_durable_persistence(tmp_path):
     workspace = tmp_path / "read-only-prerequisite"
     workspace.mkdir()
     calculator = workspace / "calculator.py"
@@ -341,6 +344,7 @@ def test_read_only_prerequisite_deadlocks_real_durable_workflow(tmp_path):
                 "title": "Inspect calculator implementation",
                 "description": "Inspect divide and its tests.",
                 "risk": "low",
+                "execution_kind": "implementation",
                 "dependencies": [],
                 "assigned_role": "coder",
                 "maximum_attempts": 1,
@@ -358,6 +362,7 @@ def test_read_only_prerequisite_deadlocks_real_durable_workflow(tmp_path):
                 "title": "Fix division behavior",
                 "description": "Raise ValueError when the divisor is zero.",
                 "risk": "low",
+                "execution_kind": "implementation",
                 "dependencies": ["step-1"],
                 "assigned_role": "coder",
                 "maximum_attempts": 1,
@@ -378,6 +383,7 @@ def test_read_only_prerequisite_deadlocks_real_durable_workflow(tmp_path):
                 "title": "Verify behavior",
                 "description": "Run the existing calculator tests.",
                 "risk": "low",
+                "execution_kind": "implementation",
                 "dependencies": ["step-2"],
                 "assigned_role": "coder",
                 "maximum_attempts": 1,
@@ -408,42 +414,7 @@ def test_read_only_prerequisite_deadlocks_real_durable_workflow(tmp_path):
     }
     client = StrictAzureClient(
         {
-            "agentbus-planner": [plan],
-            "agentbus-coder": [
-                {
-                    "action": "tool_call",
-                    "tool_call": {
-                        "tool_name": "filesystem.write",
-                        "arguments_json": json.dumps(
-                            {
-                                "path": "calculator.py",
-                                "content": (
-                                    "def divide(a, b):\n"
-                                    "    if b == 0:\n"
-                                    "        raise ValueError('division by zero')\n"
-                                    "    return a / b\n"
-                                ),
-                            }
-                        ),
-                        "expected_capabilities": [
-                            "filesystem.write",
-                            "filesystem.create",
-                        ],
-                        "timeout_seconds": None,
-                        "invocation_revision": 1,
-                        "idempotency_key": "blocked-prerequisite-write",
-                    },
-                    "summary": None,
-                },
-                {
-                    "action": "finish",
-                    "tool_call": None,
-                    "summary": "No change was possible with read-only capabilities.",
-                },
-            ],
-            "agentbus-reviewer": [
-                approved_review("No code change was made under the read-only plan."),
-            ],
+            "agentbus-planner": [plan, plan],
         }
     )
     settings = AgentBusConfig(
@@ -493,39 +464,27 @@ def test_read_only_prerequisite_deadlocks_real_durable_workflow(tmp_path):
         "Do not modify unrelated files."
     )
 
-    run_id = runner.create_durable_run(task)
-    report = runner.run_durable(run_id)
+    with pytest.raises(PlanContractValidationError) as captured:
+        runner.create_durable_run(task)
 
-    assert report.status == RunStatus.FAILED
-    assert report.successful_tasks == []
-    assert report.failed_tasks == ["step-1"]
-    assert report.blocked_tasks == ["step-2", "step-3"]
-    assert report.verifier_status == "failed"
-    assert report.changed_files == []
+    assert {
+        (issue.task_id, issue.code) for issue in captured.value.issues
+    } == {
+        ("step-1", "implementation_without_mutation"),
+        ("step-3", "implementation_without_mutation"),
+    }
     assert calculator.read_text(encoding="utf-8") == (
         "def divide(a, b):\n"
         "    return a / b\n"
     )
-    attempt = store.list_attempts(run_id, "step-1")[0]
-    assert attempt.error_category == FailureCategory.VERIFIER_FAILURE
-    assert attempt.metadata["verifier"]["passed"] is False
-    assert not any(
-        invocation.tool_name == "filesystem.write"
-        for invocation in store.list_tool_invocations(run_id)
-    )
+    assert store.list_runs() == []
     requests = client.responses.parse_calls
     assert [call["model"] for call in requests] == [
         "agentbus-planner",
-        "agentbus-coder",
-        "agentbus-coder",
-        "agentbus-reviewer",
+        "agentbus-planner",
     ]
-    assert "Original user task" in requests[1]["input"]
-    assert "Fix divide()" in requests[1]["input"]
-    assert '"id": "step-1"' in requests[1]["input"]
-    assert '"id": "step-2"' not in requests[1]["input"]
-    trace = store.get_run_trace(run_id)
-    assert any(span.name == "task verifier" for span in trace.spans)
+    assert "previous durable plan was rejected" in requests[1]["input"]
+    assert "implementation_without_mutation" in requests[1]["input"]
 
 
 def test_strict_fake_azure_completes_durable_calculator_workflow(tmp_path):
@@ -599,6 +558,7 @@ def test_strict_fake_azure_completes_durable_calculator_workflow(tmp_path):
                 "title": "Fix divide",
                 "description": "Raise a clear ValueError when the divisor is zero.",
                 "risk": "low",
+                "execution_kind": "implementation",
                 "dependencies": None,
                 "assigned_role": "coder",
                 "maximum_attempts": 1,

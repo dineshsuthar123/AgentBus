@@ -66,6 +66,12 @@ _PROFILE_REQUIREMENTS: dict[str, list[str]] = {
         "process.execute",
     ],
 }
+_REPOSITORY_MUTATION_CAPABILITIES = {
+    "filesystem.write",
+    "filesystem.create",
+    "filesystem.delete",
+    "filesystem.rename",
+}
 _PROFILE_OUTPUTS: dict[str, list[str]] = {
     "tool-atomic-write": ["profile_result.txt"],
     "tool-source-patch": ["module.py"],
@@ -337,6 +343,13 @@ class DeterministicProvider:
                             "the deterministic provider."
                         ),
                         "risk": "low",
+                        "execution_kind": (
+                            "implementation"
+                            if _REPOSITORY_MUTATION_CAPABILITIES.intersection(
+                                _PROFILE_REQUIREMENTS[self.profile]
+                            )
+                            else "analysis"
+                        ),
                         "dependencies": [],
                         "assigned_role": "coder",
                         "maximum_attempts": 2,
@@ -360,6 +373,7 @@ class DeterministicProvider:
                     "Create a small calculator module and its deterministic test."
                 ),
                 "risk": "low",
+                "execution_kind": "implementation",
                 "dependencies": [],
                 "assigned_role": "coder",
                 "maximum_attempts": 2,
@@ -389,6 +403,7 @@ class DeterministicProvider:
                         "Create a second artifact only if scheduling remains active."
                     ),
                     "risk": "low",
+                    "execution_kind": "implementation",
                     "dependencies": [],
                     "assigned_role": "coder",
                     "maximum_attempts": 1,

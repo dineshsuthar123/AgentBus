@@ -55,6 +55,11 @@ class RiskLevel(str, Enum):
     HIGH = "high"
 
 
+class TaskExecutionKind(str, Enum):
+    IMPLEMENTATION = "implementation"
+    ANALYSIS = "analysis"
+
+
 class FailureCategory(str, Enum):
     CANCELLED = "cancelled"
     MODEL_OUTPUT_ERROR = "model_output_error"
@@ -103,6 +108,14 @@ class TaskSpec(DomainModel):
     @property
     def dependency_ids(self) -> list[str]:
         return [dependency.task_id for dependency in self.dependencies if dependency.required]
+
+    @property
+    def execution_kind(self) -> TaskExecutionKind:
+        value = self.metadata.get(
+            "execution_kind",
+            TaskExecutionKind.IMPLEMENTATION.value,
+        )
+        return TaskExecutionKind(value)
 
 
 class TaskRecord(DomainModel):

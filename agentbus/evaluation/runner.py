@@ -1126,11 +1126,20 @@ def _case_tasks(case: EvaluationCase) -> list[dict[str, Any]]:
             "title": case.title,
             "description": case.task_prompt,
             "risk": case.risk_level.value,
+            "execution_kind": "implementation",
             "dependencies": [],
             "assigned_role": "coder",
             "maximum_attempts": case.maximum_attempts,
             "expected_outputs": case.expected_files,
             "done_criteria": ["Evaluation assertions pass."],
+            "required_capabilities": [
+                "filesystem.read",
+                "filesystem.write",
+                "filesystem.create",
+                "test.execute",
+                "process.execute",
+                "git.read",
+            ],
         }
     ]
 

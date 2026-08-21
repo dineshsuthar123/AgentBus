@@ -6,6 +6,7 @@ from typing import Any, Callable, Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from agentbus.execution.models import TaskExecutionKind
 from agentbus.tools.protocol import ToolCapabilityName
 
 
@@ -87,6 +88,7 @@ class AzurePlanStepWire(_AzureWireModel):
     title: str
     description: str
     risk: Literal["low", "medium", "high"]
+    execution_kind: TaskExecutionKind
     dependencies: list[str] | None
     assigned_role: str
     maximum_attempts: int
