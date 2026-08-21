@@ -3,6 +3,7 @@ import {
   access,
   copyFile,
   mkdir,
+  realpath,
   readFile,
   readdir,
   rm,
@@ -10,11 +11,21 @@ import {
   writeFile
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+  win32 as windowsPath
+} from "node:path";
 import { downloadAndUnzipVSCode } from "@vscode/test-electron";
 import JSZip from "jszip";
 
-const SESSION_PREFIX = "agentbus-vscode-fresh-profile-";
+const POSIX_SESSION_PREFIX = "agentbus-vscode-fresh-profile-";
+const WINDOWS_SESSION_PREFIX = "agentbus-vfp-";
 const INCOMPATIBLE_DAEMON_ID = "ffffffffffffffffffffffffffffffff";
 
 type FreshStage =
@@ -27,12 +38,13 @@ type FreshStage =
 async function main(): Promise<void> {
   const extensionSource = resolve(__dirname, "..", "..");
   const repositoryRoot = resolve(extensionSource, "..", "..");
-  const stagingRoot = resolve(
-    process.platform === "win32"
-      ? process.env.TEMP ?? process.env.TMP ?? tmpdir()
-      : tmpdir()
+  const requestedStagingRoot = freshProfileStagingRoot(
+    process.platform,
+    tmpdir()
   );
-  const sessionRoot = join(stagingRoot, `${SESSION_PREFIX}${process.pid}`);
+  await mkdir(requestedStagingRoot, { recursive: true });
+  const stagingRoot = await realpath(requestedStagingRoot);
+  const sessionRoot = join(stagingRoot, freshProfileSessionName(process.pid));
   assertOwnedSession(sessionRoot, stagingRoot);
   const extensionPath = join(sessionRoot, "extension");
   const workspacePath = join(sessionRoot, "workspace");
@@ -51,7 +63,6 @@ async function main(): Promise<void> {
   const handoffPath = join(sessionRoot, "handoff.json");
   const vsixPath = join(extensionSource, "agentbus-vscode.vsix");
   const pythonPath = await findPython(repositoryRoot);
-  await mkdir(stagingRoot, { recursive: true });
   await stopDaemons(pythonPath, registryPath);
   await assertNoRegisteredDaemons(registryPath);
   await removeOwnedSession(sessionRoot, stagingRoot);
@@ -747,10 +758,43 @@ function assertOwnedSession(sessionRoot: string, stagingRoot: string): void {
     !child ||
     child.startsWith("..") ||
     isAbsolute(child) ||
-    !basename(resolvedSession).startsWith(SESSION_PREFIX)
+    !basename(resolvedSession).startsWith(
+      freshProfileSessionPrefix(process.platform)
+    )
   ) {
     throw new Error("Refusing to manage a non-owned fresh-profile directory.");
   }
+}
+
+export function freshProfileSessionName(
+  pid: number,
+  platform: NodeJS.Platform = process.platform
+): string {
+  if (!Number.isInteger(pid) || pid <= 0 || pid > 0x7fff_ffff) {
+    throw new Error("Fresh-profile process ID is outside the supported range.");
+  }
+  const suffix = platform === "win32" ? pid.toString(36) : String(pid);
+  return `${freshProfileSessionPrefix(platform)}${suffix}`;
+}
+
+export function freshProfileSessionPrefix(platform: NodeJS.Platform): string {
+  // VS Code derives Windows IPC names from this path and exits before logging
+  // when an otherwise normal per-user temporary path becomes too long.
+  return platform === "win32" ? WINDOWS_SESSION_PREFIX : POSIX_SESSION_PREFIX;
+}
+
+export function freshProfileStagingRoot(
+  platform: NodeJS.Platform,
+  systemTempDirectory: string
+): string {
+  if (platform !== "win32") return resolve(systemTempDirectory);
+  const driveRoot = windowsPath.parse(
+    windowsPath.resolve(systemTempDirectory)
+  ).root;
+  if (!/^[a-z]:\\$/iu.test(driveRoot)) {
+    throw new Error("Fresh-profile acceptance requires a local Windows drive.");
+  }
+  return windowsPath.join(driveRoot, "tmp");
 }
 
 async function removeOwnedSession(
@@ -767,7 +811,9 @@ async function removeOwnedSession(
   }
 }
 
-void main().catch((error: unknown) => {
-  process.stderr.write(`${String(error)}\n`);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  void main().catch((error: unknown) => {
+    process.stderr.write(`${String(error)}\n`);
+    process.exitCode = 1;
+  });
+}
