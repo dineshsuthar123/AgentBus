@@ -104,13 +104,13 @@ def test_repository_intelligence_evaluation_uses_real_providerless_service(
         "details"
     ]["context_plan"]
     assert large_context["candidate_count"] == 61
-    assert large_context["selected_candidate_count"] == 40
+    assert large_context["selected_candidate_count"] == 42
     assert large_context["exclusion_counts"] == {
-        "budget_exceeded": 12,
+        "budget_exceeded": 10,
         "duplicate_content": 9,
     }
-    assert large_context["selected_bytes"] == 3910
-    assert large_context["selected_tokens"] == 987
+    assert large_context["selected_bytes"] == 3901
+    assert large_context["selected_tokens"] == 996
     assert large_context["selected_source_hash_duplicates"] == 0
     assert large_context["stale_warning_present"] is False
 

@@ -63,7 +63,8 @@ def test_selected_real_vsix_is_included_in_scorecard_evidence(
 ) -> None:
     repository = tmp_path / "repository"
     repository.mkdir()
-    vsix = ROOT / "extensions" / "vscode" / "agentbus-vscode.vsix"
+    vsix = tmp_path / "agentbus-vscode.vsix"
+    _write_selected_vsix(vsix)
 
     scorecard = run_defensive_security_validation(
         repository,
@@ -171,3 +172,25 @@ def _evidence(scorecard, boundary_id: str):
     return next(
         item for item in scorecard.evidence if item.boundary_id == boundary_id
     )
+
+
+def _write_selected_vsix(path: Path) -> None:
+    extension = ROOT / "extensions" / "vscode"
+    package_bytes = (extension / "package.json").read_bytes()
+    package = json.loads(package_bytes)
+    entries = {
+        "[Content_Types].xml": b"<Types />\n",
+        "extension.vsixmanifest": (
+            f'<PackageManifest Version="{package["version"]}" />\n'.encode()
+        ),
+        "extension/LICENSE.txt": (extension / "LICENSE").read_bytes(),
+        "extension/readme.md": (extension / "README.md").read_bytes(),
+        "extension/media/agentbus.svg": (
+            extension / "media" / "agentbus.svg"
+        ).read_bytes(),
+        "extension/out/extension.js": b"exports.activate = () => {};\n",
+        "extension/package.json": package_bytes,
+    }
+    with ZipFile(path, mode="w") as archive:
+        for name, content in entries.items():
+            archive.writestr(name, content)

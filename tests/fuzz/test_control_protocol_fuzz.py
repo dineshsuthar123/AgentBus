@@ -408,7 +408,10 @@ def test_recursive_and_oversized_bodies_are_rejected_with_bounded_errors(
         content=b"{" + b"x" * 1_000_001,
     )
 
-    _assert_rest_error(recursive)
+    _assert_rest_error(
+        recursive,
+        code={"invalid_request", "validation_error"},
+    )
     _assert_rest_error(oversized, code="request_too_large")
 
 

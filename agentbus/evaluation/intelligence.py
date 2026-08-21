@@ -1139,6 +1139,7 @@ def _prepare_large_repository(repository: Path, module_count: int) -> dict[str, 
     (repository / "pyproject.toml").write_text(
         "[project]\nname = \"intelligence-large\"\nversion = \"0.1.0\"\n",
         encoding="utf-8",
+        newline="\n",
     )
     test_count = 0
     for index in range(module_count):
@@ -1152,13 +1153,18 @@ def _prepare_large_repository(repository: Path, module_count: int) -> dict[str, 
                 f"def value_{name}() -> int:\n"
                 f"    return value_{previous}() + 1\n"
             )
-        (source / f"module_{name}.py").write_text(body, encoding="utf-8")
+        (source / f"module_{name}.py").write_text(
+            body,
+            encoding="utf-8",
+            newline="\n",
+        )
         if (index + 1) % 10 == 0:
             (tests / f"test_module_{name}.py").write_text(
                 f"from src.module_{name} import value_{name}\n\n\n"
                 f"def test_value_{name}() -> None:\n"
                 f"    assert value_{name}() == {index}\n",
                 encoding="utf-8",
+                newline="\n",
             )
             test_count += 1
     return {"module_count": module_count, "test_count": test_count}
