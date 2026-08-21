@@ -92,4 +92,5 @@ not replace:
 Review [adversarial testing](adversarial-testing.md),
 [reliability](reliability.md), [performance](performance.md), and
 [real repository validation](real-repositories.md) alongside the machine-
-readable acceptance report.
+readable acceptance report. Record candidate evidence in the
+[v0.7 RC checklist](../release/v0.7-rc-checklist.md).

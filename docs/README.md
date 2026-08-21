@@ -36,6 +36,10 @@ verification, review, persistence, and replay paths without network access.
 - [Performance validation](validation/performance.md)
 - [Release-candidate acceptance](validation/release-candidate.md)
 
+## Release
+
+- [v0.7 release-candidate checklist](release/v0.7-rc-checklist.md)
+
 ## Troubleshooting
 
 - [Installation](troubleshooting/install.md)
