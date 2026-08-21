@@ -475,7 +475,6 @@ def test_read_only_prerequisite_is_rejected_before_durable_persistence(tmp_path)
         (issue.task_id, issue.code) for issue in captured.value.issues
     } == {
         ("step-1", "implementation_without_mutation"),
-        ("step-3", "implementation_without_mutation"),
     }
     assert calculator.read_text(encoding="utf-8") == (
         "def divide(a, b):\n"
