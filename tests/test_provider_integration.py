@@ -11,7 +11,7 @@ import pytest
 
 from agentbus.config import AgentBusConfig
 from agentbus.execution.engine import DurableExecutionEngine
-from agentbus.execution.models import RunStatus
+from agentbus.execution.models import FailureCategory, RunStatus
 from agentbus.execution.state_store import StateStore
 from agentbus.models.azure_openai import AzureOpenAIProvider
 from agentbus.models.azure_schema import (
@@ -294,6 +294,238 @@ def test_strict_azure_schema_exercises_real_coder_loop_and_managed_write(tmp_pat
     )
     assert len(invocations) == 1
     assert invocations[0].status == ToolInvocationStatus.SUCCEEDED
+
+
+def test_read_only_prerequisite_deadlocks_real_durable_workflow(tmp_path):
+    workspace = tmp_path / "read-only-prerequisite"
+    workspace.mkdir()
+    calculator = workspace / "calculator.py"
+    calculator.write_text(
+        "def divide(a, b):\n"
+        "    return a / b\n",
+        encoding="utf-8",
+    )
+    (workspace / "test_calculator.py").write_text(
+        "from calculator import divide\n\n"
+        "def test_divide():\n"
+        "    assert divide(10, 2) == 5\n\n"
+        "def test_divide_by_zero():\n"
+        "    try:\n"
+        "        divide(10, 0)\n"
+        "        assert False\n"
+        "    except ValueError:\n"
+        "        pass\n",
+        encoding="utf-8",
+    )
+    for command in (
+        ["git", "init", "-q"],
+        ["git", "config", "user.name", "AgentBus Offline Test"],
+        ["git", "config", "user.email", "agentbus-offline@example.invalid"],
+        ["git", "add", "--", "calculator.py", "test_calculator.py"],
+        ["git", "commit", "-q", "-m", "test: failing calculator baseline"],
+    ):
+        subprocess.run(
+            command,
+            cwd=workspace,
+            check=True,
+            capture_output=True,
+            text=True,
+            shell=False,
+        )
+
+    plan = {
+        "goal": "Fix division by zero",
+        "steps": [
+            {
+                "id": "step-1",
+                "title": "Inspect calculator implementation",
+                "description": "Inspect divide and its tests.",
+                "risk": "low",
+                "dependencies": [],
+                "assigned_role": "coder",
+                "maximum_attempts": 1,
+                "expected_outputs": [],
+                "done_criteria": ["The implementation problem is understood."],
+                "required_capabilities": ["filesystem.read"],
+                "targeted_files": ["calculator.py", "test_calculator.py"],
+                "targeted_symbols": None,
+                "expected_impacted_components": None,
+                "proposed_tests": ["test_calculator.py"],
+                "architecture_constraints": None,
+            },
+            {
+                "id": "step-2",
+                "title": "Fix division behavior",
+                "description": "Raise ValueError when the divisor is zero.",
+                "risk": "low",
+                "dependencies": ["step-1"],
+                "assigned_role": "coder",
+                "maximum_attempts": 1,
+                "expected_outputs": ["calculator.py"],
+                "done_criteria": ["divide raises ValueError for zero."],
+                "required_capabilities": [
+                    "filesystem.read",
+                    "filesystem.write",
+                ],
+                "targeted_files": ["calculator.py"],
+                "targeted_symbols": None,
+                "expected_impacted_components": None,
+                "proposed_tests": ["test_calculator.py"],
+                "architecture_constraints": None,
+            },
+            {
+                "id": "step-3",
+                "title": "Verify behavior",
+                "description": "Run the existing calculator tests.",
+                "risk": "low",
+                "dependencies": ["step-2"],
+                "assigned_role": "coder",
+                "maximum_attempts": 1,
+                "expected_outputs": [],
+                "done_criteria": ["The existing calculator tests pass."],
+                "required_capabilities": [
+                    "test.execute",
+                    "process.execute",
+                ],
+                "targeted_files": ["test_calculator.py"],
+                "targeted_symbols": None,
+                "expected_impacted_components": None,
+                "proposed_tests": ["test_calculator.py"],
+                "architecture_constraints": None,
+            },
+        ],
+        "test_strategy": "Run pytest.",
+        "done_criteria": ["Both calculator tests pass."],
+        "targeted_files": ["calculator.py", "test_calculator.py"],
+        "targeted_symbols": None,
+        "expected_impacted_components": None,
+        "proposed_tests": ["test_calculator.py"],
+        "architecture_constraints": None,
+        "intelligence_snapshot_id": None,
+        "intelligence_context_hash": None,
+        "intelligence_warnings": None,
+        "intelligence_scope_validated": None,
+    }
+    client = StrictAzureClient(
+        {
+            "agentbus-planner": [plan],
+            "agentbus-coder": [
+                {
+                    "action": "tool_call",
+                    "tool_call": {
+                        "tool_name": "filesystem.write",
+                        "arguments_json": json.dumps(
+                            {
+                                "path": "calculator.py",
+                                "content": (
+                                    "def divide(a, b):\n"
+                                    "    if b == 0:\n"
+                                    "        raise ValueError('division by zero')\n"
+                                    "    return a / b\n"
+                                ),
+                            }
+                        ),
+                        "expected_capabilities": [
+                            "filesystem.write",
+                            "filesystem.create",
+                        ],
+                        "timeout_seconds": None,
+                        "invocation_revision": 1,
+                        "idempotency_key": "blocked-prerequisite-write",
+                    },
+                    "summary": None,
+                },
+                {
+                    "action": "finish",
+                    "tool_call": None,
+                    "summary": "No change was possible with read-only capabilities.",
+                },
+            ],
+            "agentbus-reviewer": [
+                approved_review("No code change was made under the read-only plan."),
+            ],
+        }
+    )
+    settings = AgentBusConfig(
+        provider_name="azure",
+        workspace_dir=str(workspace),
+        runs_dir=str(tmp_path / "runs"),
+        state_dir=str(tmp_path / "state"),
+        max_steps=2,
+        model_max_retries=0,
+        azure_openai_endpoint="https://sample.openai.azure.com",
+        azure_openai_api_key="offline-fake-key",
+        azure_openai_default_deployment="agentbus-reviewer",
+        azure_openai_planner_deployment="agentbus-planner",
+        azure_openai_coder_deployment="agentbus-coder",
+        azure_openai_reviewer_deployment="agentbus-reviewer",
+        azure_openai_summarizer_deployment="agentbus-reviewer",
+    )
+
+    def builder(route):
+        return AzureOpenAIProvider(
+            endpoint=settings.azure_openai_endpoint,
+            api_key="offline",
+            deployment=route.model,
+            timeout_seconds=route.timeout_seconds,
+            role=route.role,
+            client=client,
+        )
+
+    store = StateStore(settings.state_database_path)
+    router = ModelRouter(
+        settings,
+        provider_factory=ModelProviderFactory(
+            settings,
+            builders={"azure": builder},
+        ),
+        sleeper=lambda delay: None,
+        jitter=lambda: 0,
+    )
+    runner = MultiAgentOrchestrator(
+        config=settings,
+        state_store=store,
+        model_router=router,
+    )
+    task = (
+        "Fix divide() so division by zero raises ValueError with a clear message. "
+        "Preserve normal division behavior. Make the existing tests pass. "
+        "Do not modify unrelated files."
+    )
+
+    run_id = runner.create_durable_run(task)
+    report = runner.run_durable(run_id)
+
+    assert report.status == RunStatus.FAILED
+    assert report.successful_tasks == []
+    assert report.failed_tasks == ["step-1"]
+    assert report.blocked_tasks == ["step-2", "step-3"]
+    assert report.verifier_status == "failed"
+    assert report.changed_files == []
+    assert calculator.read_text(encoding="utf-8") == (
+        "def divide(a, b):\n"
+        "    return a / b\n"
+    )
+    attempt = store.list_attempts(run_id, "step-1")[0]
+    assert attempt.error_category == FailureCategory.VERIFIER_FAILURE
+    assert attempt.metadata["verifier"]["passed"] is False
+    assert not any(
+        invocation.tool_name == "filesystem.write"
+        for invocation in store.list_tool_invocations(run_id)
+    )
+    requests = client.responses.parse_calls
+    assert [call["model"] for call in requests] == [
+        "agentbus-planner",
+        "agentbus-coder",
+        "agentbus-coder",
+        "agentbus-reviewer",
+    ]
+    assert "Original user task" in requests[1]["input"]
+    assert "Fix divide()" in requests[1]["input"]
+    assert '"id": "step-1"' in requests[1]["input"]
+    assert '"id": "step-2"' not in requests[1]["input"]
+    trace = store.get_run_trace(run_id)
+    assert any(span.name == "task verifier" for span in trace.spans)
 
 
 def test_strict_fake_azure_completes_durable_calculator_workflow(tmp_path):
