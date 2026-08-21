@@ -118,6 +118,18 @@ class ReplayEngine:
             trace,
             available_object_hashes=catalog.available_hashes,
         )
+        captured_provider_requests = {
+            span.parent_span_id
+            for span in trace.spans
+            if span.span_type == TraceSpanType.PROVIDER_RESPONSE
+            and span.parent_span_id is not None
+            and any(
+                reference.replayable
+                and reference.media_type == MODEL_ENVELOPE_MEDIA_TYPE
+                and reference.sha256 in catalog.available_hashes
+                for reference in span.output_references
+            )
+        }
         created_at = session_created_at or self.clock()
         session = ReplaySession(
             replay_id=request.replay_id,
@@ -152,6 +164,9 @@ class ReplayEngine:
                     span,
                     request=effective_request,
                     inputs=catalog,
+                    captured_provider_response=(
+                        span.span_id in captured_provider_requests
+                    ),
                 )
                 session.span_results.append(result)
                 if result.action == ReplaySpanAction.SUBSTITUTED:
@@ -290,6 +305,7 @@ class ReplayEngine:
         *,
         request: ReplayRequest,
         inputs: ReplayInputCatalog,
+        captured_provider_response: bool = False,
     ) -> tuple[ReplaySpanResult, dict[str, Any] | None]:
         loaded_inputs = [_load_reference(inputs, item) for item in span.input_references]
         loaded_outputs = [
@@ -324,6 +340,19 @@ class ReplayEngine:
                 for reference in span.output_references
                 if reference.media_type == MODEL_ENVELOPE_MEDIA_TYPE
             ]
+            if (
+                span.span_type == TraceSpanType.PROVIDER_REQUEST
+                and not envelopes
+                and captured_provider_response
+            ):
+                return (
+                    _span_result(
+                        span,
+                        ReplaySpanAction.SUBSTITUTED,
+                        "Captured child provider response replaced the live request.",
+                    ),
+                    None,
+                )
             if not envelopes and span.attributes.get("provider") != "deterministic":
                 raise ReplayInputUnavailableError(
                     f"Provider span '{span.span_id}' has no captured envelope."

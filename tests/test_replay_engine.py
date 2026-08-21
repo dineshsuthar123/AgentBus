@@ -255,6 +255,55 @@ def test_providerless_replay_runs_parsing_policy_and_verifier(tmp_path: Path) ->
     assert "provider" in result.session.substitutions
 
 
+def test_provider_request_replays_through_its_captured_child_response(
+    tmp_path: Path,
+) -> None:
+    store = ContentAddressedStore(tmp_path / "objects")
+    provider_output = capture_model_envelope(
+        store,
+        ModelResult(
+            value={"answer": 42},
+            provider="azure",
+            model="coder-deployment",
+            role=ModelRole.CODER,
+        ),
+        prompt="prompt",
+        producing_span_id="provider-response",
+        reference_id="captured-response",
+    )
+    root = _span("root", TraceSpanType.RUN, 1, parent=None)
+    request = _span(
+        "provider-request",
+        TraceSpanType.PROVIDER_REQUEST,
+        2,
+        attributes={"provider": "azure"},
+    )
+    response = _span(
+        "provider-response",
+        TraceSpanType.PROVIDER_RESPONSE,
+        3,
+        parent=request.span_id,
+        outputs=[provider_output],
+        attributes={"provider": "azure"},
+    )
+    trace = Trace(
+        trace_id="trace-1",
+        run_id="run-1",
+        root_span_id=root.span_id,
+        status=TraceStatus.SUCCEEDED,
+        created_at=root.started_at,
+        completed_at=response.ended_at,
+        spans=[root, request, response],
+    )
+
+    result = ReplayEngine(store).replay(trace, _request())
+
+    assert result.session.status == ReplaySessionStatus.SUCCEEDED
+    assert result.session.provider_calls == 0
+    assert result.session.network_calls == 0
+    assert result.session.substitutions == [request.span_id, response.span_id]
+
+
 def test_replay_reuses_captured_repository_intelligence_without_provider(
     tmp_path: Path,
 ) -> None:

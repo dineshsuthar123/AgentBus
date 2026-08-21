@@ -5,6 +5,7 @@ from typing import Any
 
 from pydantic import Field, field_validator
 
+from agentbus.replay.substitutions import MODEL_ENVELOPE_MEDIA_TYPE
 from agentbus.security.redaction import redact_text
 from agentbus.trace.models import (
     Sha256Digest,
@@ -63,8 +64,26 @@ class ReplayabilityClassifier:
             if available_object_hashes is not None
             else _all_reference_hashes(trace)
         )
+        captured_provider_requests = {
+            span.parent_span_id
+            for span in trace.spans
+            if span.span_type == TraceSpanType.PROVIDER_RESPONSE
+            and span.parent_span_id is not None
+            and any(
+                reference.replayable
+                and reference.media_type == MODEL_ENVELOPE_MEDIA_TYPE
+                and reference.sha256 in available
+                for reference in span.output_references
+            )
+        }
         spans = [
-            self.classify_span(span, available_object_hashes=available)
+            self.classify_span(
+                span,
+                available_object_hashes=available,
+                captured_provider_response=(
+                    span.span_id in captured_provider_requests
+                ),
+            )
             for span in sorted(trace.spans, key=lambda item: item.sequence)
         ]
         level = _aggregate_level(spans)
@@ -95,6 +114,7 @@ class ReplayabilityClassifier:
         span: TraceSpan,
         *,
         available_object_hashes: Iterable[str],
+        captured_provider_response: bool = False,
     ) -> SpanReplayability:
         available = set(available_object_hashes)
         required = sorted(
@@ -190,7 +210,17 @@ class ReplayabilityClassifier:
                     ["The deterministic provider route is locally reproducible."],
                     required=required,
                 )
-            if span.output_references:
+            captured_outputs = [
+                reference
+                for reference in span.output_references
+                if reference.replayable
+                and reference.media_type == MODEL_ENVELOPE_MEDIA_TYPE
+                and reference.sha256 in available
+            ]
+            if captured_outputs or (
+                span.span_type == TraceSpanType.PROVIDER_REQUEST
+                and captured_provider_response
+            ):
                 return _result(
                     span,
                     ReplayabilityLevel.DETERMINISTICALLY_SUBSTITUTABLE,
