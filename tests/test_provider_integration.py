@@ -256,7 +256,7 @@ def test_strict_azure_schema_exercises_real_coder_loop_and_managed_write(tmp_pat
     def builder(route):
         return AzureOpenAIProvider(
             endpoint=settings.azure_openai_endpoint,
-            api_key=settings.azure_openai_api_key,
+            api_key="offline",
             deployment=route.model,
             timeout_seconds=route.timeout_seconds,
             role=route.role,
@@ -447,7 +447,7 @@ def test_strict_fake_azure_completes_durable_calculator_workflow(tmp_path):
     def builder(route):
         return AzureOpenAIProvider(
             endpoint=settings.azure_openai_endpoint,
-            api_key=settings.azure_openai_api_key,
+            api_key="offline",
             deployment=route.model,
             timeout_seconds=route.timeout_seconds,
             role=route.role,
