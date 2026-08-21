@@ -44,6 +44,40 @@ class ManagedToolApprovalRequired(RuntimeError):
         self.tool_name = tool_name
 
 
+class PlannedCapabilityMismatchError(ToolCapabilityEscalationError):
+    """Signals that a model tool call exceeded its durable task contract."""
+
+    def __init__(
+        self,
+        *,
+        task_id: str,
+        tool_name: str,
+        requested_capabilities,
+        declared_capabilities,
+    ):
+        self.task_id = str(task_id)[:128]
+        self.tool_name = str(tool_name)[:128]
+        self.requested_capabilities = _bounded_names(requested_capabilities)
+        self.declared_capabilities = _bounded_names(declared_capabilities)
+        self.undeclared_capabilities = sorted(
+            set(self.requested_capabilities) - set(self.declared_capabilities)
+        )
+        missing = ", ".join(self.undeclared_capabilities) or "unknown"
+        super().__init__(
+            "Planner capability contract prevented task completion: "
+            f"tool '{self.tool_name}' requested undeclared capabilities: {missing}."
+        )
+
+    def safe_metadata(self) -> dict[str, Any]:
+        return {
+            "task_id": self.task_id,
+            "tool_name": self.tool_name,
+            "requested_capabilities": self.requested_capabilities,
+            "declared_capabilities": self.declared_capabilities,
+            "undeclared_capabilities": self.undeclared_capabilities,
+        }
+
+
 class AgentLoop:
     def __init__(
         self,
@@ -177,6 +211,13 @@ class AgentLoop:
                 except ManagedToolApprovalRequired:
                     self._mark_standalone_waiting_for_approval()
                     raise
+                except PlannedCapabilityMismatchError as error:
+                    self.logger.log(
+                        "plan_capability_mismatch",
+                        {"step": step, **error.safe_metadata()},
+                    )
+                    self._finish_standalone(succeeded=False, reason=str(error))
+                    raise
                 except Exception as e:
                     observation = f"Tool error: {str(e)}"
 
@@ -237,7 +278,7 @@ Return the next JSON action.
 
         requested = action.tool_call
         planned_capabilities = self.policy_context.get("planned_capabilities")
-        if isinstance(planned_capabilities, list) and planned_capabilities:
+        if isinstance(planned_capabilities, list):
             declared = {
                 str(getattr(value, "value", value))
                 for value in planned_capabilities
@@ -246,8 +287,11 @@ Return the next JSON action.
                 capability.value for capability in requested.expected_capabilities
             }
             if not requested_names.issubset(declared):
-                raise ToolCapabilityEscalationError(
-                    "Tool call exceeds the planner-declared capability requirements."
+                raise PlannedCapabilityMismatchError(
+                    task_id=self.task_id,
+                    tool_name=requested.tool_name,
+                    requested_capabilities=requested_names,
+                    declared_capabilities=declared,
                 )
         call = self.tool_runtime.prepare_model_call(
             tool_name=requested.tool_name,
@@ -474,6 +518,15 @@ def _accepts_schema(method) -> bool:
         or parameter.name == "schema"
         for parameter in parameters
     )
+
+
+def _bounded_names(values) -> list[str]:
+    return sorted(
+        {
+            str(getattr(value, "value", value))[:128]
+            for value in values
+        }
+    )[:32]
 
 
 def _action_log_metadata(action: AgentAction) -> dict:

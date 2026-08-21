@@ -7,7 +7,11 @@ from agentbus.config import AgentBusConfig
 from agentbus.execution.state_store import StateStore
 from agentbus.models.errors import ModelBadRequestError, ModelOutputError
 from agentbus.product.logging import read_product_logs
-from agentbus.runtime.loop import AgentLoop, ManagedToolApprovalRequired
+from agentbus.runtime.loop import (
+    AgentLoop,
+    ManagedToolApprovalRequired,
+    PlannedCapabilityMismatchError,
+)
 from agentbus.tools.protocol import ToolInvocationStatus
 
 
@@ -305,8 +309,7 @@ def test_loop_rejects_capability_outside_planner_requirements(tmp_path):
                         "idempotency_key": "planner-overreach",
                     },
                 }
-            assert "exceeds the planner-declared" in prompt
-            return {"action": "finish", "summary": "overreach rejected"}
+            raise AssertionError("planner mismatch must stop before another model call")
 
     workspace = tmp_path / "workspace"
     config = AgentBusConfig(
@@ -321,5 +324,75 @@ def test_loop_rejects_capability_outside_planner_requirements(tmp_path):
         policy_context={"planned_capabilities": ["filesystem.read"]},
     )
 
-    assert loop.run("respect plan") == "overreach rejected"
+    with pytest.raises(PlannedCapabilityMismatchError) as captured:
+        loop.run("respect plan")
+
+    assert captured.value.task_id == "single-task"
+    assert captured.value.tool_name == "filesystem.write"
+    assert captured.value.requested_capabilities == [
+        "filesystem.create",
+        "filesystem.write",
+    ]
+    assert captured.value.declared_capabilities == ["filesystem.read"]
+    assert captured.value.undeclared_capabilities == [
+        "filesystem.create",
+        "filesystem.write",
+    ]
+    assert loop.model.calls == 1
     assert not (workspace / "result.py").exists()
+    events = [
+        json.loads(line)
+        for line in loop.logger.log_file.read_text(encoding="utf-8").splitlines()
+    ]
+    mismatch = next(
+        event for event in events if event["type"] == "plan_capability_mismatch"
+    )
+    assert mismatch["data"] == {
+        "step": 1,
+        "task_id": "single-task",
+        "tool_name": "filesystem.write",
+        "requested_capabilities": [
+            "filesystem.create",
+            "filesystem.write",
+        ],
+        "declared_capabilities": ["filesystem.read"],
+        "undeclared_capabilities": [
+            "filesystem.create",
+            "filesystem.write",
+        ],
+    }
+    assert "arguments" not in mismatch["data"]
+    store = StateStore(config.state_database_path)
+    assert store.get_run(loop.run_id).status.value == "failed"
+
+
+def test_explicit_empty_planner_capability_set_denies_tool_calls(tmp_path):
+    class ReadModel:
+        def generate_json(self, prompt, **kwargs):
+            return {
+                "action": "tool_call",
+                "tool_call": {
+                    "tool_name": "filesystem.list",
+                    "arguments": {},
+                    "expected_capabilities": ["filesystem.read"],
+                    "idempotency_key": "empty-upper-bound",
+                },
+            }
+
+    config = AgentBusConfig(
+        workspace_dir=str(tmp_path / "workspace"),
+        runs_dir=str(tmp_path / "runs"),
+        state_dir=str(tmp_path / "state"),
+        max_steps=1,
+    )
+    loop = AgentLoop(
+        config=config,
+        model=ReadModel(),
+        policy_context={"planned_capabilities": []},
+    )
+
+    with pytest.raises(PlannedCapabilityMismatchError) as captured:
+        loop.run("respect empty capability contract")
+
+    assert captured.value.requested_capabilities == ["filesystem.read"]
+    assert captured.value.declared_capabilities == []

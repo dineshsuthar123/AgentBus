@@ -66,6 +66,7 @@ class FailureCategory(str, Enum):
     MODEL_TRANSPORT_ERROR = "model_transport_error"
     MODEL_PROVIDER_ERROR = "model_provider_error"
     TOOL_VALIDATION_ERROR = "tool_validation_error"
+    PLAN_CAPABILITY_MISMATCH = "plan_capability_mismatch"
     COMMAND_FAILURE = "command_failure"
     VERIFIER_FAILURE = "verifier_failure"
     REVIEWER_REJECTION = "reviewer_rejection"
