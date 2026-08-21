@@ -11,7 +11,7 @@ import pytest
 
 from agentbus.config import AgentBusConfig
 from agentbus.execution.engine import DurableExecutionEngine
-from agentbus.execution.models import RunStatus
+from agentbus.execution.models import FailureCategory, RunStatus
 from agentbus.execution.state_store import StateStore
 from agentbus.execution.task_graph import PlanContractValidationError
 from agentbus.models.azure_openai import AzureOpenAIProvider
@@ -935,6 +935,96 @@ def test_offline_azure_durable_smoke_routes_roles_retries_and_persists_usage(
         for path in (tmp_path / "runs").glob("*.jsonl")
     )
     assert "integration-super-secret" not in combined_state + combined_logs
+
+
+def test_offline_azure_capability_mismatch_stops_before_dispatch_and_verifier(
+    tmp_path,
+):
+    plan = {
+        "goal": "Create a result module",
+        "steps": [
+            {
+                "id": "step-1",
+                "title": "Create result module",
+                "description": "Create result.py and verify the implementation.",
+                "risk": "low",
+                "execution_kind": "implementation",
+                "dependencies": [],
+                "assigned_role": "coder",
+                "maximum_attempts": 2,
+                "expected_outputs": ["result.py"],
+                "done_criteria": ["The result module is complete"],
+                "required_capabilities": ["filesystem.write"],
+            }
+        ],
+        "test_strategy": "Use the fake verifier",
+        "done_criteria": ["The result module is complete"],
+    }
+    raw_secret = "raw-tool-argument-must-not-be-logged"
+    scripts = {
+        ("azure", "planner"): [plan],
+        ("azure", "coder"): [
+            {
+                "action": "tool_call",
+                "tool_call": {
+                    "tool_name": "filesystem.write",
+                    "arguments": {
+                        "path": "result.py",
+                        "content": f"VALUE = '{raw_secret}'\n",
+                    },
+                    "expected_capabilities": [
+                        "filesystem.write",
+                        "filesystem.create",
+                    ],
+                    "idempotency_key": "planner-contract-mismatch",
+                },
+            }
+        ],
+        ("azure", "reviewer"): [],
+    }
+    runner, store, _, providers, verifier = build_runner(tmp_path, scripts)
+
+    run_id = runner.create_durable_run("Create a result module")
+    report = runner.run_durable(run_id)
+    attempt = store.list_attempts(run_id, "step-1")[0]
+
+    assert report.status == RunStatus.FAILED
+    assert report.failed_tasks == ["step-1"]
+    assert report.verifier_status == "not_run"
+    assert report.reviewer_status == "not_run"
+    assert report.changed_files == []
+    assert attempt.error_category == FailureCategory.PLAN_CAPABILITY_MISMATCH
+    assert attempt.metadata["plan_capability_mismatch"] == {
+        "task_id": "step-1",
+        "tool_name": "filesystem.write",
+        "requested_capabilities": [
+            "filesystem.create",
+            "filesystem.write",
+        ],
+        "declared_capabilities": ["filesystem.write"],
+        "undeclared_capabilities": ["filesystem.create"],
+    }
+    assert attempt.metadata["_agentbus"]["retryable_override"] is False
+    assert verifier.calls == 0
+    assert len(providers[("azure", "coder")].calls) == 1
+    assert ("azure", "reviewer") not in providers
+    assert store.list_tool_invocations(run_id) == []
+    assert not (runner.config.workspace_path / "result.py").exists()
+
+    logs = "".join(
+        path.read_text(encoding="utf-8")
+        for path in (tmp_path / "runs").glob("*.jsonl")
+    )
+    persisted = str(store.load_snapshot(run_id).model_dump(mode="json"))
+    assert "plan_capability_mismatch" in logs
+    assert "filesystem.create" in logs
+    assert raw_secret not in logs + persisted
+
+    calls_before_resume = len(providers[("azure", "coder")].calls)
+    resumed = runner.resume_durable(run_id)
+    assert resumed.status == RunStatus.FAILED
+    assert len(providers[("azure", "coder")].calls) == calls_before_resume
+    assert len(store.list_attempts(run_id, "step-1")) == 1
 
 
 def test_offline_fallback_smoke_exhausts_azure_then_uses_ollama_and_gates(

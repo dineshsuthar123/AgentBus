@@ -14,6 +14,7 @@ from agentbus.runtime.intelligence import (
     PlannerIntelligenceContext,
     StaticPlannerIntelligenceSource,
 )
+from agentbus.runtime.loop import PlannedCapabilityMismatchError
 from agentbus.runtime.orchestrator import MultiAgentOrchestrator
 from agentbus.trace import (
     REPOSITORY_INTELLIGENCE_COMPONENT,
@@ -107,6 +108,20 @@ class FailingProviderCoder(FakeCoder):
             model="coder-deployment",
             request_id="safe-request-id",
             metadata={"api_key": "must-not-persist"},
+        )
+
+
+class CapabilityMismatchCoder(FakeCoder):
+    def execute(self, user_task, plan, reviewer_feedback=None):
+        super().execute(user_task, plan, reviewer_feedback)
+        raise PlannedCapabilityMismatchError(
+            task_id=plan["steps"][0]["id"],
+            tool_name="filesystem.write",
+            requested_capabilities=[
+                "filesystem.write",
+                "filesystem.create",
+            ],
+            declared_capabilities=["filesystem.write"],
         )
 
 
@@ -336,6 +351,60 @@ def test_durable_planner_replans_once_after_contract_rejection(tmp_path):
     ]
     assert planner.feedback[0] is None
     assert "implementation_without_mutation" in planner.feedback[1][0]
+
+
+def test_capability_contract_failure_stops_before_verifier_and_reviewer(tmp_path):
+    coder = CapabilityMismatchCoder()
+    verifier = FakeVerifier()
+
+    class NeverReviewer(FakeReviewer):
+        def review(self, *args, **kwargs):
+            raise AssertionError("reviewer must not run after a known coder failure")
+
+        def review_task(self, *args, **kwargs):
+            raise AssertionError("reviewer must not run after a known coder failure")
+
+    repository = FakeGitRepository()
+    repository.dirty = False
+    runner, store = orchestrator(
+        tmp_path,
+        coder=coder,
+        verifier=verifier,
+        reviewer=NeverReviewer(),
+        git_repository=repository,
+    )
+    run_id = runner.create_durable_run("Create calculator")
+
+    report = runner.run_durable(run_id)
+
+    assert report.status == RunStatus.FAILED
+    assert report.failed_tasks == ["step-1"]
+    assert report.blocked_tasks == ["step-2"]
+    assert report.verifier_status == "not_run"
+    assert report.reviewer_status == "not_run"
+    assert report.changed_files == []
+    assert verifier.calls == 0
+    assert [call["task_id"] for call in coder.calls] == ["step-1"]
+    attempts = store.list_attempts(run_id, "step-1")
+    assert len(attempts) == 1
+    assert attempts[0].error_category == FailureCategory.PLAN_CAPABILITY_MISMATCH
+    assert attempts[0].metadata["plan_capability_mismatch"] == {
+        "task_id": "step-1",
+        "tool_name": "filesystem.write",
+        "requested_capabilities": [
+            "filesystem.create",
+            "filesystem.write",
+        ],
+        "declared_capabilities": ["filesystem.write"],
+        "undeclared_capabilities": ["filesystem.create"],
+    }
+    assert attempts[0].metadata["_agentbus"]["retryable_override"] is False
+    assert repository.commits == []
+
+    resumed = runner.resume_durable(run_id)
+    assert resumed.status == RunStatus.FAILED
+    assert len(store.list_attempts(run_id, "step-1")) == 1
+    assert [call["task_id"] for call in coder.calls] == ["step-1"]
 
 
 def test_durable_mode_persists_validated_repository_intelligence(tmp_path):

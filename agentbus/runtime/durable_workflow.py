@@ -20,7 +20,10 @@ from agentbus.runtime.intelligence_guidance import (
     build_coder_intelligence,
     build_reviewer_intelligence,
 )
-from agentbus.runtime.loop import ManagedToolApprovalRequired
+from agentbus.runtime.loop import (
+    ManagedToolApprovalRequired,
+    PlannedCapabilityMismatchError,
+)
 from agentbus.trace import (
     RuntimeTrace,
     TraceArtifactReference,
@@ -260,6 +263,13 @@ class MultiAgentTaskExecutor:
                     capture="json",
                 )
                 self._checkpoint("after-task-review")
+        except PlannedCapabilityMismatchError as exc:
+            return self._plan_capability_mismatch_result(
+                context,
+                before,
+                exc,
+                coder_summary=coder_summary,
+            )
         except ManagedToolApprovalRequired as exc:
             return self._approval_pending_result(
                 context,
@@ -400,6 +410,76 @@ class MultiAgentTaskExecutor:
             changed_files=changed_files,
             metadata=metadata,
         )
+
+    def _plan_capability_mismatch_result(
+        self,
+        context: TaskExecutionContext,
+        before: dict[str, str],
+        mismatch: PlannedCapabilityMismatchError,
+        *,
+        coder_summary: str,
+    ) -> TaskExecutionResult:
+        changed_files, changes, artifacts = self._execution_artifacts(
+            context,
+            before,
+        )
+        mismatch_metadata = mismatch.safe_metadata()
+        return TaskExecutionResult(
+            succeeded=False,
+            summary="Planner capability contract prevented task completion.",
+            artifacts=artifacts,
+            failure_category=FailureCategory.PLAN_CAPABILITY_MISMATCH,
+            error_message=str(mismatch),
+            retryable=False,
+            verifier_status="not_run",
+            reviewer_status="not_run",
+            changed_files=changed_files,
+            metadata={
+                "artifact_hygiene": changes.to_metadata(),
+                "coder_summary": coder_summary,
+                "plan_capability_mismatch": mismatch_metadata,
+                "task_contract": {
+                    "execution_kind": context.task.execution_kind.value,
+                    "required_capabilities": mismatch.declared_capabilities,
+                },
+                "model_requests": [
+                    *(_drain_model_results(self.coder)),
+                    *(_drain_model_results(self.reviewer)),
+                ],
+            },
+        )
+
+    def _execution_artifacts(
+        self,
+        context: TaskExecutionContext,
+        before: dict[str, str],
+    ) -> tuple[list[str], RepositoryChangeSet, list[ExecutionArtifact]]:
+        changed_files = self._changed_since(before)
+        changes = self._change_set(changed_files)
+        generated = set(changes.generated_files)
+        ignored = set(changes.ignored_files)
+        tracked_generated = set(changes.tracked_generated_files)
+        review_files = set(changes.review_files)
+        commit_files = set(changes.commit_files)
+        artifacts = [
+            ExecutionArtifact(
+                artifact_id=uuid.uuid4().hex,
+                run_id=context.run.run_id,
+                task_id=context.task.task_id,
+                artifact_type="workspace_file",
+                identifier=path,
+                metadata={
+                    "attempt_number": context.attempt_number,
+                    "generated": path in generated,
+                    "ignored": path in ignored,
+                    "tracked_generated": path in tracked_generated,
+                    "review_eligible": path in review_files,
+                    "commit_eligible": path in commit_files,
+                },
+            )
+            for path in changed_files
+        ]
+        return changed_files, changes, artifacts
 
     def _approval_pending_result(
         self,
