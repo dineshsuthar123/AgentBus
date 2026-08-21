@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import inspect
 import uuid
 from pathlib import Path
@@ -9,6 +10,7 @@ from agentbus.execution.cancellation import CancellationRequested, CancellationT
 from agentbus.execution.models import (
     FailureCategory,
     ExecutionArtifact,
+    TaskExecutionKind,
     TaskExecutionContext,
     TaskExecutionResult,
 )
@@ -32,6 +34,9 @@ from agentbus.trace import (
     TraceStatus,
 )
 from agentbus.tools.runtime import ManagedToolRuntime
+
+
+_ANALYSIS_SUMMARY_MAX_CHARS = 16_000
 
 
 class MultiAgentTaskExecutor:
@@ -172,6 +177,8 @@ class MultiAgentTaskExecutor:
         coder_summary = ""
         verifier_result: dict[str, Any] | None = None
         reviewer_result: dict[str, Any] | None = None
+        artifacts: list[ExecutionArtifact] = []
+        analysis_artifact: ExecutionArtifact | None = None
         try:
             self._recover_tool_runtime(context.run.run_id)
             with model_request_context(
@@ -215,29 +222,49 @@ class MultiAgentTaskExecutor:
                     capture="text",
                 )
                 self._checkpoint("after-coder")
-                verifier_result = self._trace_call(
-                    TraceSpanType.VERIFIER,
-                    "task verifier",
-                    lambda: self.verifier.verify(
-                        **_supported_arguments(
-                            self.verifier.verify,
-                            {
-                                "tool_runtime": self.tool_runtime,
-                                "run_id": context.run.run_id,
-                                "task_id": context.task.task_id,
-                                "invocation_key": (
-                                    f"attempt-{context.attempt_number}"
-                                ),
-                                "workspace_trusted": True,
-                                "provider_consented": True,
-                            },
-                        )
-                    ),
-                    capture="json",
-                )
+                if context.task.execution_kind == TaskExecutionKind.ANALYSIS:
+                    verifier_result = self._analysis_verifier_result()
+                else:
+                    verifier_result = self._trace_call(
+                        TraceSpanType.VERIFIER,
+                        "task verifier",
+                        lambda: self.verifier.verify(
+                            **_supported_arguments(
+                                self.verifier.verify,
+                                {
+                                    "tool_runtime": self.tool_runtime,
+                                    "run_id": context.run.run_id,
+                                    "task_id": context.task.task_id,
+                                    "invocation_key": (
+                                        f"attempt-{context.attempt_number}"
+                                    ),
+                                    "workspace_trusted": True,
+                                    "provider_consented": True,
+                                },
+                            )
+                        ),
+                        capture="json",
+                    )
                 self._checkpoint("after-verifier")
-                changed_files = self._changed_since(before)
-                changes = self._change_set(changed_files)
+                changed_files, changes, artifacts = self._execution_artifacts(
+                    context,
+                    before,
+                )
+                if context.task.execution_kind == TaskExecutionKind.ANALYSIS:
+                    if changed_files:
+                        return self._analysis_mutation_result(
+                            context,
+                            coder_summary=coder_summary,
+                            changed_files=changed_files,
+                            changes=changes,
+                            artifacts=artifacts,
+                        )
+                    analysis_artifact = self._analysis_artifact(
+                        context,
+                        coder_summary,
+                    )
+                    artifacts.append(analysis_artifact)
+                    coder_summary = str(analysis_artifact.metadata["summary"])
                 task_diff = self._task_diff(changes)
                 reviewer_intelligence = None
                 if self.intelligence_context is not None:
@@ -259,6 +286,11 @@ class MultiAgentTaskExecutor:
                         coder_summary,
                         verifier_result,
                         reviewer_intelligence,
+                        artifact_identifiers=(
+                            [analysis_artifact.identifier]
+                            if analysis_artifact is not None
+                            else None
+                        ),
                     ),
                     capture="json",
                 )
@@ -286,7 +318,10 @@ class MultiAgentTaskExecutor:
             )
         assert verifier_result is not None
         assert reviewer_result is not None
-        verifier_status = "passed" if verifier_result.get("passed") else "failed"
+        verifier_status = str(
+            verifier_result.get("status")
+            or ("passed" if verifier_result.get("passed") else "failed")
+        )
         metadata = {
             "task_review": {
                 "approved": bool(reviewer_result.get("approved")),
@@ -312,6 +347,8 @@ class MultiAgentTaskExecutor:
                 "command": verifier_result.get("command", []),
                 "exit_code": verifier_result.get("exit_code"),
                 "reason": verifier_result.get("reason"),
+                "status": verifier_status,
+                "skipped": bool(verifier_result.get("skipped")),
                 "artifact_suppression_active": bool(
                     verifier_result.get("artifact_suppression_active")
                 ),
@@ -320,6 +357,22 @@ class MultiAgentTaskExecutor:
                 ),
             },
             "artifact_hygiene": changes.to_metadata(),
+            "task_contract": {
+                "execution_kind": context.task.execution_kind.value,
+                "required_capabilities": _bounded_capability_names(
+                    context.task.metadata.get("required_capabilities", [])
+                ),
+            },
+            "analysis": (
+                {
+                    "artifact_identifier": analysis_artifact.identifier,
+                    "summary_chars": analysis_artifact.metadata["summary_chars"],
+                    "truncated": analysis_artifact.metadata["truncated"],
+                    "repository_mutation_observed": False,
+                }
+                if analysis_artifact is not None
+                else None
+            ),
             "repository_intelligence": {
                 "context_hash": (
                     self.intelligence_context.context_hash
@@ -354,28 +407,6 @@ class MultiAgentTaskExecutor:
                 *(_drain_model_results(self.reviewer)),
             ],
         }
-        generated = set(changes.generated_files)
-        ignored = set(changes.ignored_files)
-        tracked_generated = set(changes.tracked_generated_files)
-        artifacts = [
-            ExecutionArtifact(
-                artifact_id=uuid.uuid4().hex,
-                run_id=context.run.run_id,
-                task_id=context.task.task_id,
-                artifact_type="workspace_file",
-                identifier=path,
-                metadata={
-                    "attempt_number": context.attempt_number,
-                    "generated": path in generated,
-                    "ignored": path in ignored,
-                    "tracked_generated": path in tracked_generated,
-                    "review_eligible": path in set(changes.review_files),
-                    "commit_eligible": path in set(changes.commit_files),
-                },
-            )
-            for path in changed_files
-        ]
-
         if not verifier_result.get("passed"):
             return TaskExecutionResult(
                 succeeded=False,
@@ -409,6 +440,87 @@ class MultiAgentTaskExecutor:
             verifier_status=verifier_status,
             changed_files=changed_files,
             metadata=metadata,
+        )
+
+    @staticmethod
+    def _analysis_verifier_result() -> dict[str, Any]:
+        return {
+            "command": [],
+            "exit_code": None,
+            "passed": True,
+            "output": None,
+            "reason": (
+                "Code verification is not applicable to an explicit analysis task."
+            ),
+            "status": "not_applicable",
+            "skipped": True,
+        }
+
+    @staticmethod
+    def _analysis_artifact(
+        context: TaskExecutionContext,
+        coder_summary: str,
+    ) -> ExecutionArtifact:
+        raw_summary = str(coder_summary or "")
+        bounded_summary = raw_summary[:_ANALYSIS_SUMMARY_MAX_CHARS]
+        digest = hashlib.sha256(bounded_summary.encode("utf-8")).hexdigest()
+        return ExecutionArtifact(
+            artifact_id=uuid.uuid4().hex,
+            run_id=context.run.run_id,
+            task_id=context.task.task_id,
+            artifact_type="analysis_summary",
+            identifier=f"analysis:{digest}",
+            metadata={
+                "attempt_number": context.attempt_number,
+                "summary": bounded_summary,
+                "summary_chars": len(bounded_summary),
+                "source_summary_chars": len(raw_summary),
+                "truncated": len(raw_summary) > len(bounded_summary),
+                "review_eligible": True,
+                "commit_eligible": False,
+            },
+        )
+
+    def _analysis_mutation_result(
+        self,
+        context: TaskExecutionContext,
+        *,
+        coder_summary: str,
+        changed_files: list[str],
+        changes: RepositoryChangeSet,
+        artifacts: list[ExecutionArtifact],
+    ) -> TaskExecutionResult:
+        return TaskExecutionResult(
+            succeeded=False,
+            summary="Analysis task violated its read-only repository contract.",
+            artifacts=artifacts,
+            failure_category=FailureCategory.POLICY_VIOLATION,
+            error_message=(
+                "Repository changes were observed during an explicit analysis task."
+            ),
+            retryable=False,
+            verifier_status="not_applicable",
+            reviewer_status="not_run",
+            changed_files=changed_files,
+            metadata={
+                "artifact_hygiene": changes.to_metadata(),
+                "coder_summary": coder_summary[:_ANALYSIS_SUMMARY_MAX_CHARS],
+                "task_contract": {
+                    "execution_kind": context.task.execution_kind.value,
+                    "required_capabilities": _bounded_capability_names(
+                        context.task.metadata.get("required_capabilities", [])
+                    ),
+                },
+                "analysis": {
+                    "artifact_identifier": None,
+                    "repository_mutation_observed": True,
+                    "changed_file_count": len(changed_files),
+                },
+                "model_requests": [
+                    *(_drain_model_results(self.coder)),
+                    *(_drain_model_results(self.reviewer)),
+                ],
+            },
         )
 
     def _plan_capability_mismatch_result(
@@ -740,6 +852,7 @@ class MultiAgentTaskExecutor:
         coder_summary: str,
         verifier_result: dict[str, Any],
         repository_intelligence: str | None,
+        artifact_identifiers: list[str] | None = None,
     ) -> dict[str, Any]:
         review_task = getattr(self.reviewer, "review_task", None)
         if review_task is not None:
@@ -747,7 +860,11 @@ class MultiAgentTaskExecutor:
                 "original_task": context.run.original_task,
                 "task_spec": plan["steps"][0],
                 "expected_outputs": context.task.expected_outputs,
-                "artifacts": changes.review_files,
+                "artifacts": (
+                    artifact_identifiers
+                    if artifact_identifiers is not None
+                    else changes.review_files
+                ),
                 "task_diff": task_diff,
                 "coder_summary": coder_summary,
                 "verifier_result": verifier_result,
@@ -761,7 +878,11 @@ class MultiAgentTaskExecutor:
             "user_task": context.run.original_task,
             "plan": plan,
             "git_diff": task_diff,
-            "test_output": verifier_result.get("output"),
+            "test_output": (
+                coder_summary
+                if context.task.execution_kind == TaskExecutionKind.ANALYSIS
+                else verifier_result.get("output")
+            ),
             "repository_intelligence": repository_intelligence,
         }
         return self.reviewer.review(
@@ -783,3 +904,12 @@ def _supported_arguments(callable_object, arguments: dict[str, Any]) -> dict[str
         return arguments
     supported = {parameter.name for parameter in parameters}
     return {name: value for name, value in arguments.items() if name in supported}
+
+
+def _bounded_capability_names(values) -> list[str]:
+    return sorted(
+        {
+            str(getattr(value, "value", value))[:128]
+            for value in values
+        }
+    )[:32]

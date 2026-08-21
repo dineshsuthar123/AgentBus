@@ -65,6 +65,13 @@ _REPOSITORY_MUTATION_CAPABILITIES = frozenset(
         ToolCapabilityName.FILESYSTEM_RENAME,
     }
 )
+_ANALYSIS_READ_ONLY_CAPABILITIES = frozenset(
+    {
+        ToolCapabilityName.FILESYSTEM_READ,
+        ToolCapabilityName.GIT_READ,
+        ToolCapabilityName.ENVIRONMENT_READ_SAFE,
+    }
+)
 
 
 FAILED_DEPENDENCY_STATUSES = {
@@ -346,6 +353,18 @@ class TaskGraph:
                             "analysis_with_mutation",
                             task.task_id,
                             "analysis tasks cannot declare repository mutation capabilities",
+                        )
+                    )
+                indirect_side_effect_capabilities = capabilities.difference(
+                    _ANALYSIS_READ_ONLY_CAPABILITIES,
+                    _REPOSITORY_MUTATION_CAPABILITIES,
+                )
+                if indirect_side_effect_capabilities:
+                    issues.append(
+                        PlanContractIssue(
+                            "analysis_with_side_effect_capability",
+                            task.task_id,
+                            "analysis tasks may declare only read-only capabilities",
                         )
                     )
                 if task.expected_outputs:

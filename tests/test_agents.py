@@ -154,6 +154,54 @@ def test_reviewer_agent_parses_valid_model_output():
     assert "1 passed" in model.prompts[0]
 
 
+def test_reviewer_receives_analysis_artifacts_and_not_applicable_verification():
+    model = FakeModel(
+        {
+            "approved": True,
+            "issues": [],
+            "summary": "Analysis is complete",
+            "required_fixes": [],
+        }
+    )
+    reviewer = ReviewerAgent(model=model)
+    artifact = {
+        "task_id": "step-1",
+        "identifier": "analysis:abc123",
+        "summary": "calculator uses direct arithmetic",
+        "truncated": False,
+    }
+
+    reviewer.review(
+        user_task="inspect calculator",
+        plan={"goal": "inspect", "steps": []},
+        git_diff="",
+        analysis_artifacts=[artifact],
+    )
+    reviewer.review_task(
+        original_task="inspect calculator",
+        task_spec={
+            "id": "step-1",
+            "execution_kind": "analysis",
+            "done_criteria": ["analysis available"],
+        },
+        expected_outputs=[],
+        artifacts=["analysis:abc123"],
+        task_diff="No repository changes.",
+        coder_summary=artifact["summary"],
+        verifier_result={
+            "passed": True,
+            "status": "not_applicable",
+            "skipped": True,
+        },
+    )
+
+    assert "Persisted analysis artifacts:" in model.prompts[0]
+    assert "calculator uses direct arithmetic" in model.prompts[0]
+    assert 'execution_kind="analysis"' in model.prompts[1]
+    assert "code verifier is not applicable" in model.prompts[1]
+    assert '"status": "not_applicable"' in model.prompts[1]
+
+
 def test_coder_preserves_legacy_loop_factory_that_only_accepts_config():
     seen = {}
 

@@ -16,10 +16,19 @@ from agentbus.execution.cancellation_registry import CancellationRegistry
 from agentbus.execution.engine import DurableExecutionEngine
 from agentbus.execution.integration import IntegrationCoordinator
 from agentbus.execution.leases import LeaseService
-from agentbus.execution.models import ExecutionReport, RunStatus, TaskStatus
+from agentbus.execution.models import (
+    ExecutionReport,
+    RunStatus,
+    TaskExecutionKind,
+    TaskStatus,
+)
 from agentbus.execution.scheduler import ParallelExecutionScheduler
 from agentbus.execution.state_store import StateStore, StateStoreError
-from agentbus.execution.task_graph import PlanContractValidationError, TaskGraph
+from agentbus.execution.task_graph import (
+    PlanContractIssue,
+    PlanContractValidationError,
+    TaskGraph,
+)
 from agentbus.execution.worker import LocalTaskWorker
 from agentbus.git.branching import generate_branch_name
 from agentbus.git.commit_message import generate_commit_message
@@ -976,13 +985,25 @@ class MultiAgentOrchestrator:
                 )
                 return self.get_durable_report(run_id)
 
-        verifier_result = self._trace_runtime_call(
-            run_id,
-            TraceSpanType.VERIFIER,
-            "final verifier",
-            lambda: self._verify_final(run_id),
-            capture="json",
-        )
+        if self._requires_final_verification(run_id):
+            verifier_result = self._trace_runtime_call(
+                run_id,
+                TraceSpanType.VERIFIER,
+                "final verifier",
+                lambda: self._verify_final(run_id),
+                capture="json",
+            )
+        else:
+            verifier_result = self._analysis_final_verifier_result()
+            self.state_store.record_event(
+                run_id,
+                "final_verification_not_applicable",
+                {"reason": "analysis_only"},
+            )
+            self.logger.log(
+                "final_verification_not_applicable",
+                {"run_id": run_id, "reason": "analysis_only"},
+            )
         cancellation.checkpoint(
             "final-review",
             stage="after-final-verification",
@@ -996,7 +1017,10 @@ class MultiAgentOrchestrator:
             else run.changed_files or self.git_repository.changed_files()
         )
         changes = self._repository_changes(changed_files)
-        verifier_status = "passed" if verifier_result.get("passed") else "failed"
+        verifier_status = str(
+            verifier_result.get("status")
+            or ("passed" if verifier_result.get("passed") else "failed")
+        )
         if not verifier_result.get("passed"):
             self.state_store.update_run_details(
                 run_id,
@@ -1055,6 +1079,7 @@ class MultiAgentOrchestrator:
                 git_diff=git_diff,
                 test_output=verifier_result.get("output"),
                 changes=changes,
+                analysis_artifacts=self._analysis_artifacts_for_review(run_id),
             ),
             capture="json",
             attributes={"review_scope": "whole_run"},
@@ -1443,6 +1468,7 @@ class MultiAgentOrchestrator:
         test_output: str | None,
         changes: RepositoryChangeSet,
         reviewer=None,
+        analysis_artifacts: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         with model_request_context(
             run_id=run_id,
@@ -1455,6 +1481,7 @@ class MultiAgentOrchestrator:
                 test_output=test_output,
                 changes=changes,
                 reviewer=reviewer,
+                analysis_artifacts=analysis_artifacts,
             )
 
     def _finalize_parallel_git(self, run_id: str) -> ExecutionReport:
@@ -1592,6 +1619,55 @@ class MultiAgentOrchestrator:
                     "provider_consented": True,
                 },
             )
+
+    def _requires_final_verification(self, run_id: str) -> bool:
+        return any(
+            task.spec.execution_kind == TaskExecutionKind.IMPLEMENTATION
+            for task in self.state_store.list_tasks(run_id)
+        )
+
+    @staticmethod
+    def _analysis_final_verifier_result() -> dict[str, Any]:
+        return {
+            "command": [],
+            "exit_code": None,
+            "passed": True,
+            "output": None,
+            "reason": "All durable tasks are explicit analysis tasks.",
+            "status": "not_applicable",
+            "skipped": True,
+        }
+
+    def _analysis_artifacts_for_review(
+        self,
+        run_id: str,
+    ) -> list[dict[str, Any]]:
+        latest: dict[str, tuple[int, Any]] = {}
+        for artifact in self.state_store.load_snapshot(run_id).artifacts:
+            if artifact.artifact_type != "analysis_summary" or not artifact.task_id:
+                continue
+            attempt_number = int(artifact.metadata.get("attempt_number") or 0)
+            previous = latest.get(artifact.task_id)
+            if previous is None or attempt_number > previous[0]:
+                latest[artifact.task_id] = (attempt_number, artifact)
+
+        values: list[dict[str, Any]] = []
+        remaining_chars = 16_000
+        for task_id in sorted(latest)[:16]:
+            if remaining_chars <= 0:
+                break
+            artifact = latest[task_id][1]
+            summary = str(artifact.metadata.get("summary") or "")[:remaining_chars]
+            remaining_chars -= len(summary)
+            values.append(
+                {
+                    "task_id": task_id[:128],
+                    "identifier": artifact.identifier[:128],
+                    "summary": summary,
+                    "truncated": bool(artifact.metadata.get("truncated")),
+                }
+            )
+        return values
 
     def _final_tool_task_id(self, run_id: str) -> str:
         tasks = self.state_store.list_tasks(run_id)
@@ -1852,6 +1928,7 @@ class MultiAgentOrchestrator:
         reviewer=None,
         intelligence_context: PlannerIntelligenceContext | None = None,
         task_id: str | None = None,
+        analysis_artifacts: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         selected_reviewer = reviewer or self.reviewer
         if intelligence_context is None:
@@ -1877,6 +1954,7 @@ class MultiAgentOrchestrator:
             "ignored_files": changes.ignored_files,
             "tracked_generated_artifacts": changes.tracked_generated_files,
             "repository_intelligence": repository_intelligence,
+            "analysis_artifacts": analysis_artifacts,
         }
         parameters = inspect.signature(selected_reviewer.review).parameters.values()
         if not any(
@@ -2231,7 +2309,24 @@ class MultiAgentOrchestrator:
             )
             plan = self._validate_planner_scope(plan, intelligence)
             try:
-                TaskGraph.from_planner_output(plan)
+                graph = TaskGraph.from_planner_output(plan)
+                if self.config.parallel_execution:
+                    analysis_tasks = [
+                        task
+                        for task in graph.tasks
+                        if task.execution_kind.value == "analysis"
+                    ]
+                    if analysis_tasks:
+                        raise PlanContractValidationError(
+                            [
+                                PlanContractIssue(
+                                    "analysis_parallel_unsupported",
+                                    task.task_id,
+                                    "analysis tasks require sequential execution",
+                                )
+                                for task in analysis_tasks
+                            ]
+                        )
             except PlanContractValidationError as exc:
                 self.logger.log(
                     "planner_contract_rejected",

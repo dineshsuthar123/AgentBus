@@ -916,7 +916,8 @@ def test_offline_azure_durable_smoke_routes_roles_retries_and_persists_usage(
     attempt = store.list_attempts(run_id, "step-1")[0]
 
     assert report.status == RunStatus.SUCCEEDED
-    assert verifier.calls == 2
+    assert report.verifier_status == "not_applicable"
+    assert verifier.calls == 0
     assert len(providers[("azure", "coder")].calls) == 2
     assert attempt.metadata["model_requests"][0]["provider"] == "azure"
     assert attempt.metadata["model_requests"][0]["model"] == "coder-deployment"
@@ -1071,9 +1072,10 @@ def test_offline_fallback_smoke_exhausts_azure_then_uses_ollama_and_gates(
     coder_result = attempt.metadata["model_requests"][0]
 
     assert report.status == RunStatus.SUCCEEDED
+    assert report.verifier_status == "not_applicable"
     assert len(providers[("azure", "coder")].calls) == 2
     assert len(providers[("ollama", "coder")].calls) == 1
-    assert verifier.calls == 2
+    assert verifier.calls == 0
     assert len(providers[("azure", "reviewer")].calls) == 2
     assert coder_result["provider"] == "ollama"
     assert coder_result["fallback_used"] is True

@@ -188,6 +188,26 @@ def test_terminal_analysis_task_has_explicit_read_only_contract():
     ]
 
 
+def test_analysis_task_rejects_indirect_side_effect_capabilities():
+    analysis = step("inspect", dependencies=[])
+    analysis.update(
+        {
+            "execution_kind": "analysis",
+            "required_capabilities": [
+                "filesystem.read",
+                "process.execute",
+            ],
+        }
+    )
+
+    with pytest.raises(PlanContractValidationError) as captured:
+        TaskGraph.from_planner_output(planner_output([analysis]))
+
+    assert {
+        issue.code for issue in captured.value.issues
+    } == {"analysis_with_side_effect_capability"}
+
+
 def test_genuine_multi_step_implementation_slices_remain_supported():
     storage = step("storage", dependencies=[])
     storage["expected_outputs"] = ["storage.py", "test_storage.py"]

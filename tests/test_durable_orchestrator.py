@@ -4,9 +4,9 @@ from agentbus.config import AgentBusConfig
 from agentbus.execution.cancellation import CancellationToken
 from agentbus.execution.cancellation_registry import CancellationRegistry
 from agentbus.execution.engine import DurableExecutionEngine
-from agentbus.execution.models import RunStatus, TaskStatus
-from agentbus.execution.models import FailureCategory
+from agentbus.execution.models import FailureCategory, RunStatus, TaskStatus
 from agentbus.execution.state_store import StateStore, StateStoreError
+from agentbus.execution.task_graph import PlanContractValidationError
 from agentbus.memory.run_log import RunLogger
 from agentbus.models.errors import ModelAuthenticationError
 from agentbus.replay.checkpoints import CheckpointKind, CheckpointManager
@@ -405,6 +405,220 @@ def test_capability_contract_failure_stops_before_verifier_and_reviewer(tmp_path
     assert resumed.status == RunStatus.FAILED
     assert len(store.list_attempts(run_id, "step-1")) == 1
     assert [call["task_id"] for call in coder.calls] == ["step-1"]
+
+
+def test_analysis_task_persists_bounded_artifact_without_code_verification(tmp_path):
+    analysis_plan = {
+        "goal": "Inspect calculator safely",
+        "steps": [
+            {
+                "id": "step-1",
+                "title": "Inspect calculator",
+                "description": "Report the calculator structure without edits.",
+                "risk": "low",
+                "execution_kind": "analysis",
+                "required_capabilities": ["filesystem.read", "git.read"],
+                "done_criteria": ["A bounded calculator analysis is available"],
+            }
+        ],
+        "test_strategy": "No code verifier is applicable",
+        "done_criteria": ["A bounded calculator analysis is available"],
+    }
+
+    class LongAnalysisCoder(FakeCoder):
+        def execute(self, user_task, plan, reviewer_feedback=None):
+            super().execute(user_task, plan, reviewer_feedback)
+            return "A" * 17_000
+
+    class AnalysisReviewer(FakeReviewer):
+        def __init__(self):
+            super().__init__()
+            self.task_calls = []
+            self.final_calls = []
+
+        def review_task(self, **kwargs):
+            self.task_calls.append(kwargs)
+            return {
+                "approved": True,
+                "issues": [],
+                "summary": "Analysis artifact approved",
+                "required_fixes": [],
+            }
+
+        def review(self, **kwargs):
+            self.final_calls.append(kwargs)
+            return {
+                "approved": True,
+                "issues": [],
+                "summary": "Analysis run approved",
+                "required_fixes": [],
+            }
+
+    coder = LongAnalysisCoder()
+    verifier = FakeVerifier()
+    reviewer = AnalysisReviewer()
+    repository = FakeGitRepository()
+    repository.dirty = False
+    runner, store = orchestrator(
+        tmp_path,
+        planner=FakePlanner(analysis_plan),
+        coder=coder,
+        verifier=verifier,
+        reviewer=reviewer,
+        git_repository=repository,
+    )
+
+    run_id = runner.create_durable_run("Inspect calculator safely")
+    report = runner.run_durable(run_id)
+    snapshot = store.load_snapshot(run_id)
+    analysis_artifacts = [
+        artifact
+        for artifact in snapshot.artifacts
+        if artifact.artifact_type == "analysis_summary"
+    ]
+
+    assert report.status == RunStatus.SUCCEEDED
+    assert report.verifier_status == "not_applicable"
+    assert report.reviewer_status == "approved"
+    assert report.changed_files == []
+    assert verifier.calls == 0
+    assert len(analysis_artifacts) == 1
+    artifact = analysis_artifacts[0]
+    assert artifact.identifier.startswith("analysis:")
+    assert artifact.metadata["summary"] == "A" * 16_000
+    assert artifact.metadata["summary_chars"] == 16_000
+    assert artifact.metadata["source_summary_chars"] == 17_000
+    assert artifact.metadata["truncated"] is True
+    assert artifact.metadata["commit_eligible"] is False
+    assert reviewer.task_calls[0]["artifacts"] == [artifact.identifier]
+    assert reviewer.task_calls[0]["coder_summary"] == "A" * 16_000
+    assert reviewer.task_calls[0]["verifier_result"]["status"] == (
+        "not_applicable"
+    )
+    assert reviewer.final_calls[0]["analysis_artifacts"] == [
+        {
+            "task_id": "step-1",
+            "identifier": artifact.identifier,
+            "summary": "A" * 16_000,
+            "truncated": True,
+        }
+    ]
+    trace = store.get_run_trace(run_id)
+    assert not any(span.span_type == TraceSpanType.VERIFIER for span in trace.spans)
+    assert "final_verification_not_applicable" in {
+        event["event_type"] for event in store.list_events(run_id)
+    }
+
+
+def test_analysis_task_reports_filesystem_side_effect_without_rollback(tmp_path):
+    analysis_plan = {
+        "goal": "Inspect calculator safely",
+        "steps": [
+            {
+                "id": "step-1",
+                "title": "Inspect calculator",
+                "description": "Report calculator structure without edits.",
+                "risk": "low",
+                "execution_kind": "analysis",
+                "required_capabilities": ["filesystem.read"],
+                "done_criteria": ["A calculator analysis is available"],
+            }
+        ],
+        "test_strategy": "No code verifier is applicable",
+        "done_criteria": ["A calculator analysis is available"],
+    }
+    workspace = tmp_path / "workspace"
+    output = workspace / "unexpected.txt"
+
+    class MutatingAnalysisCoder(FakeCoder):
+        def execute(self, user_task, plan, reviewer_feedback=None):
+            super().execute(user_task, plan, reviewer_feedback)
+            output.write_text("preserve this side effect\n", encoding="utf-8")
+            return "Analysis complete"
+
+    class ObservingRepository(FakeGitRepository):
+        def worktree_snapshot(self):
+            return {"unexpected.txt": "present"} if output.exists() else {}
+
+        def changed_since(self, snapshot):
+            return ["unexpected.txt"] if output.exists() and not snapshot else []
+
+    class NeverReviewer(FakeReviewer):
+        def review(self, *args, **kwargs):
+            raise AssertionError("final reviewer must not run after mutation")
+
+        def review_task(self, *args, **kwargs):
+            raise AssertionError("task reviewer must not run after mutation")
+
+    verifier = FakeVerifier()
+    runner, store = orchestrator(
+        tmp_path,
+        planner=FakePlanner(analysis_plan),
+        coder=MutatingAnalysisCoder(),
+        verifier=verifier,
+        reviewer=NeverReviewer(),
+        git_repository=ObservingRepository(),
+    )
+
+    run_id = runner.create_durable_run("Inspect calculator safely")
+    report = runner.run_durable(run_id)
+    attempt = store.list_attempts(run_id, "step-1")[0]
+
+    assert report.status == RunStatus.FAILED
+    assert report.changed_files == ["unexpected.txt"]
+    assert report.verifier_status == "not_applicable"
+    assert report.reviewer_status == "not_run"
+    assert verifier.calls == 0
+    assert attempt.error_category == FailureCategory.POLICY_VIOLATION
+    assert attempt.metadata["analysis"]["repository_mutation_observed"] is True
+    assert attempt.metadata["_agentbus"]["retryable_override"] is False
+    artifact_ids = [
+        artifact.identifier for artifact in store.load_snapshot(run_id).artifacts
+    ]
+    assert artifact_ids == ["unexpected.txt"]
+    assert output.read_text(encoding="utf-8") == "preserve this side effect\n"
+
+
+def test_parallel_analysis_plan_is_rejected_with_one_bounded_replan(tmp_path):
+    analysis_plan = {
+        "goal": "Inspect calculator safely",
+        "steps": [
+            {
+                "id": "step-1",
+                "title": "Inspect calculator",
+                "description": "Report calculator structure without edits.",
+                "risk": "low",
+                "execution_kind": "analysis",
+                "required_capabilities": ["filesystem.read"],
+                "done_criteria": ["A calculator analysis is available"],
+            }
+        ],
+        "test_strategy": "No code verifier is applicable",
+        "done_criteria": ["A calculator analysis is available"],
+    }
+    settings = config(tmp_path).with_overrides(parallel_execution=True)
+    store = StateStore(settings.state_database_path)
+    planner = ReplanningPlanner([analysis_plan, analysis_plan])
+    runner = MultiAgentOrchestrator(
+        config=settings,
+        planner=planner,
+        coder=FakeCoder(),
+        verifier=FakeVerifier(),
+        reviewer=FakeReviewer(),
+        git_repository=FakeGitRepository(),
+        pr_client=FakePRClient(),
+        state_store=store,
+    )
+
+    with pytest.raises(PlanContractValidationError) as captured:
+        runner.create_durable_run("Inspect calculator safely")
+
+    assert [issue.code for issue in captured.value.issues] == [
+        "analysis_parallel_unsupported"
+    ]
+    assert planner.feedback[0] is None
+    assert "analysis_parallel_unsupported" in planner.feedback[1][0]
+    assert store.list_runs() == []
 
 
 def test_durable_mode_persists_validated_repository_intelligence(tmp_path):
