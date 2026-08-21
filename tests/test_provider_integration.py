@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
@@ -15,6 +16,8 @@ from agentbus.execution.state_store import StateStore
 from agentbus.models.azure_openai import AzureOpenAIProvider
 from agentbus.models.azure_schema import (
     AzureAgentActionWire,
+    AzurePlannerOutputWire,
+    AzureReviewerOutputWire,
     validate_azure_structured_output_schema,
 )
 from agentbus.models.errors import ModelServiceUnavailableError
@@ -24,8 +27,11 @@ from agentbus.models.router import (
     model_request_context,
 )
 from agentbus.models.types import ModelResult, ModelUsage
+from agentbus.replay.service import TraceReplayService
+from agentbus.replay.session import ReplayRequest, ReplaySessionStatus
 from agentbus.runtime.loop import AgentLoop
 from agentbus.runtime.orchestrator import MultiAgentOrchestrator
+from agentbus.trace import ReplayMode, TraceSpanType
 from agentbus.tools.protocol import ToolInvocationStatus
 
 
@@ -139,6 +145,19 @@ class StrictAzureResponses:
 class StrictAzureClient:
     def __init__(self, scripts):
         self.responses = StrictAzureResponses(scripts)
+
+
+def approved_review(summary):
+    return {
+        "approved": True,
+        "issues": [],
+        "summary": summary,
+        "required_fixes": [],
+        "unplanned_affected_components": [],
+        "missing_tests": [],
+        "boundary_violations": [],
+        "index_uncertainty": [],
+    }
 
 
 def config(tmp_path, *, fallback=False):
@@ -275,6 +294,299 @@ def test_strict_azure_schema_exercises_real_coder_loop_and_managed_write(tmp_pat
     )
     assert len(invocations) == 1
     assert invocations[0].status == ToolInvocationStatus.SUCCEEDED
+
+
+def test_strict_fake_azure_completes_durable_calculator_workflow(tmp_path):
+    workspace = tmp_path / "calculator-repository"
+    workspace.mkdir()
+    calculator = workspace / "calculator.py"
+    tests = workspace / "test_calculator.py"
+    calculator.write_text(
+        "def divide(a, b):\n"
+        "    return a / b\n",
+        encoding="utf-8",
+    )
+    initial_tests = (
+        "from calculator import divide\n\n"
+        "def test_divide():\n"
+        "    assert divide(10, 2) == 5\n\n"
+        "def test_divide_by_zero():\n"
+        "    try:\n"
+        "        divide(10, 0)\n"
+        "        assert False\n"
+        "    except ValueError:\n"
+        "        pass\n"
+    )
+    tests.write_text(initial_tests, encoding="utf-8")
+    for command in (
+        ["git", "init", "-q"],
+        ["git", "config", "user.name", "AgentBus Offline Test"],
+        ["git", "config", "user.email", "agentbus-offline@example.invalid"],
+        ["git", "add", "--", "calculator.py", "test_calculator.py"],
+        ["git", "commit", "-q", "-m", "test: failing calculator baseline"],
+    ):
+        subprocess.run(
+            command,
+            cwd=workspace,
+            check=True,
+            capture_output=True,
+            text=True,
+            shell=False,
+        )
+    baseline = subprocess.run(
+        [
+            sys.executable,
+            "-B",
+            "-m",
+            "pytest",
+            "-p",
+            "no:cacheprovider",
+            "-q",
+        ],
+        cwd=workspace,
+        check=False,
+        capture_output=True,
+        text=True,
+        shell=False,
+    )
+    assert baseline.returncode == 1
+    assert "1 failed" in baseline.stdout
+    assert "1 passed" in baseline.stdout
+
+    fixed_source = (
+        "def divide(a, b):\n"
+        "    if b == 0:\n"
+        "        raise ValueError(\"division by zero is not allowed\")\n"
+        "    return a / b\n"
+    )
+    plan = {
+        "goal": "Make divide reject division by zero without changing normal division",
+        "steps": [
+            {
+                "id": "step-1",
+                "title": "Fix divide",
+                "description": "Raise a clear ValueError when the divisor is zero.",
+                "risk": "low",
+                "dependencies": None,
+                "assigned_role": "coder",
+                "maximum_attempts": 1,
+                "expected_outputs": ["calculator.py"],
+                "done_criteria": ["Both calculator tests pass"],
+                "required_capabilities": [
+                    "filesystem.write",
+                    "filesystem.create",
+                ],
+                "targeted_files": ["calculator.py"],
+                "targeted_symbols": None,
+                "expected_impacted_components": None,
+                "proposed_tests": ["test_calculator.py"],
+                "architecture_constraints": None,
+            }
+        ],
+        "test_strategy": "Run pytest and preserve the existing tests.",
+        "done_criteria": ["pytest reports two passing tests"],
+        "targeted_files": ["calculator.py"],
+        "targeted_symbols": None,
+        "expected_impacted_components": None,
+        "proposed_tests": ["test_calculator.py"],
+        "architecture_constraints": None,
+        "intelligence_snapshot_id": None,
+        "intelligence_context_hash": None,
+        "intelligence_warnings": None,
+        "intelligence_scope_validated": None,
+    }
+    client = StrictAzureClient(
+        {
+            "agentbus-planner": [plan],
+            "agentbus-coder": [
+                {
+                    "action": "tool_call",
+                    "tool_call": {
+                        "tool_name": "filesystem.write",
+                        "arguments_json": json.dumps(
+                            {"path": "calculator.py", "content": fixed_source}
+                        ),
+                        "expected_capabilities": [
+                            "filesystem.write",
+                            "filesystem.create",
+                        ],
+                        "timeout_seconds": None,
+                        "invocation_revision": 1,
+                        "idempotency_key": "fix-calculator-divide",
+                    },
+                    "summary": None,
+                },
+                {
+                    "action": "finish",
+                    "tool_call": None,
+                    "summary": "divide now raises a clear ValueError for zero",
+                },
+            ],
+            "agentbus-reviewer": [
+                approved_review("Current calculator task is complete."),
+                approved_review("The whole calculator run is approved."),
+            ],
+        }
+    )
+    settings = AgentBusConfig(
+        provider_name="azure",
+        workspace_dir=str(workspace),
+        runs_dir=str(tmp_path / "runs"),
+        state_dir=str(tmp_path / "state"),
+        max_steps=2,
+        model_max_retries=0,
+        azure_openai_endpoint="https://sample.openai.azure.com",
+        azure_openai_api_key="offline-fake-key",
+        azure_openai_default_deployment="agentbus-reviewer",
+        azure_openai_planner_deployment="agentbus-planner",
+        azure_openai_coder_deployment="agentbus-coder",
+        azure_openai_reviewer_deployment="agentbus-reviewer",
+        azure_openai_summarizer_deployment="agentbus-reviewer",
+    )
+
+    def builder(route):
+        return AzureOpenAIProvider(
+            endpoint=settings.azure_openai_endpoint,
+            api_key=settings.azure_openai_api_key,
+            deployment=route.model,
+            timeout_seconds=route.timeout_seconds,
+            role=route.role,
+            client=client,
+        )
+
+    store = StateStore(settings.state_database_path)
+    router = ModelRouter(
+        settings,
+        provider_factory=ModelProviderFactory(
+            settings,
+            builders={"azure": builder},
+        ),
+        sleeper=lambda delay: None,
+        jitter=lambda: 0,
+    )
+    runner = MultiAgentOrchestrator(
+        config=settings,
+        state_store=store,
+        model_router=router,
+    )
+    task = (
+        "Fix divide() so division by zero raises ValueError with a clear message. "
+        "Preserve normal division behavior. Make the existing tests pass. "
+        "Do not modify unrelated files."
+    )
+
+    run_id = runner.create_durable_run(task)
+    report = runner.run_durable(run_id)
+
+    assert report.status == RunStatus.SUCCEEDED
+    assert report.successful_tasks == ["step-1"]
+    assert report.failed_tasks == []
+    assert report.blocked_tasks == []
+    assert report.verifier_status == "passed"
+    assert report.reviewer_status == "approved"
+    assert report.changed_files == ["calculator.py"]
+    assert report.relevant_changed_files == ["calculator.py"]
+    assert report.commit_eligible_files == ["calculator.py"]
+    assert calculator.read_text(encoding="utf-8") == fixed_source
+    assert tests.read_text(encoding="utf-8") == initial_tests
+
+    final_tests = subprocess.run(
+        [
+            sys.executable,
+            "-B",
+            "-m",
+            "pytest",
+            "-p",
+            "no:cacheprovider",
+            "-q",
+        ],
+        cwd=workspace,
+        check=False,
+        capture_output=True,
+        text=True,
+        shell=False,
+    )
+    assert final_tests.returncode == 0
+    assert "2 passed" in final_tests.stdout
+    changed = subprocess.run(
+        ["git", "diff", "--name-only", "--", "."],
+        cwd=workspace,
+        check=True,
+        capture_output=True,
+        text=True,
+        shell=False,
+    )
+    assert changed.stdout.strip() == "calculator.py"
+
+    requests = client.responses.parse_calls
+    assert [call["model"] for call in requests] == [
+        "agentbus-planner",
+        "agentbus-coder",
+        "agentbus-coder",
+        "agentbus-reviewer",
+        "agentbus-reviewer",
+    ]
+    assert [call["text_format"] for call in requests] == [
+        AzurePlannerOutputWire,
+        AzureAgentActionWire,
+        AzureAgentActionWire,
+        AzureReviewerOutputWire,
+        AzureReviewerOutputWire,
+    ]
+    assert "Review only the current task" in requests[3]["input"]
+    assert "Planner output" in requests[4]["input"]
+    assert all(not outcomes for outcomes in client.responses.scripts.values())
+
+    attempt = store.list_attempts(run_id, "step-1")[0]
+    assert attempt.metadata["task_review"]["approved"] is True
+    persisted = store.get_run(run_id)
+    assert persisted.metadata["final_review"]["status"] == "approved"
+    write_invocations = [
+        invocation
+        for invocation in store.list_tool_invocations(run_id)
+        if invocation.tool_name == "filesystem.write"
+    ]
+    assert len(write_invocations) == 1
+    assert write_invocations[0].status == ToolInvocationStatus.SUCCEEDED
+
+    trace = store.get_run_trace(run_id)
+    final_verifier = next(
+        span for span in trace.spans if span.name == "final verifier"
+    )
+    final_reviewer = next(
+        span for span in trace.spans if span.name == "final reviewer"
+    )
+    assert final_verifier.sequence < final_reviewer.sequence
+    assert final_reviewer.span_type == TraceSpanType.REVIEWER
+    replay_service = TraceReplayService(settings, state_store=store)
+    assert replay_service.verify(run_id).valid is True
+    replayability = replay_service.replayability(run_id)
+    assert replayability.replayable_offline is True, [
+        (span.span_type.value, span.level.value, span.reasons)
+        for span in replayability.spans
+        if span.level.value == "non_replayable"
+    ]
+    replay = replay_service.replay(
+        run_id,
+        ReplayRequest(
+            source_trace_id=trace.trace_id,
+            source_run_id=run_id,
+            mode=ReplayMode.OFFLINE,
+        ),
+    )
+    assert replay.session.status == ReplaySessionStatus.SUCCEEDED, (
+        replay.session.failure_category,
+        replay.session.failure_message,
+        replay.session.missing_inputs,
+        replay.session.policy_drift,
+        replay.session.substitutions,
+        [
+            (span.action.value, span.succeeded, span.summary)
+            for span in replay.session.span_results
+        ],
+    )
+    assert replay.session.provider_calls == 0
+    assert replay.session.network_calls == 0
 
 
 @pytest.mark.parametrize("provider_name", ["azure", "ollama"])
