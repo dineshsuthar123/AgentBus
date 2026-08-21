@@ -31,6 +31,8 @@ Rules:
 - Request only tools listed in the supplied catalog.
 - Declare every expected capability by its exact catalog name.
 - Use a stable, purpose-specific idempotency key for every tool call.
+- Follow the supplied response schema exactly. If it requests arguments_json,
+  encode the tool arguments object once as JSON in that string field.
 - Prefer small steps.
 - After writing code, run it or test it.
 - If a command fails, inspect the error and fix the issue.

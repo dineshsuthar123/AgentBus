@@ -4,13 +4,19 @@ from typing import Literal
 import pytest
 from pydantic import BaseModel, ConfigDict
 
+from agentbus.agents.planner import PlannerOutput
+from agentbus.agents.reviewer import ReviewerOutput
+from agentbus.doctor import _DoctorSmoke
+from agentbus.main import ProviderSmokeOutput
 from agentbus.models.azure_openai import (
     AzureOpenAIProvider,
     map_azure_exception,
     normalize_azure_v1_endpoint,
 )
 from agentbus.models.azure_schema import (
+    AzureAgentActionWire,
     AzureStructuredOutputSchemaError,
+    azure_structured_output_adapter,
     validate_azure_structured_output_schema,
 )
 from agentbus.models.errors import (
@@ -29,6 +35,7 @@ from agentbus.models.errors import (
     ModelTimeoutError,
     ModelTransportError,
 )
+from agentbus.models.types import ModelRole
 from agentbus.runtime.schemas import AgentAction
 
 
@@ -130,6 +137,49 @@ def test_agent_action_schema_exposes_exact_azure_incompatibilities():
         "$.$defs.ModelToolCall.properties.idempotency_key.maxLength",
     ):
         assert (path, "unsupported_keyword") in issues
+
+
+@pytest.mark.parametrize(
+    "model",
+    [PlannerOutput, AgentAction, ReviewerOutput, ProviderSmokeOutput, _DoctorSmoke],
+)
+def test_every_production_azure_wire_schema_uses_supported_subset(model):
+    adapter = azure_structured_output_adapter(model)
+
+    validate_azure_structured_output_schema(adapter.wire_model.model_json_schema())
+
+
+def test_agent_action_uses_explicit_wire_and_restores_tool_arguments():
+    parsed = {
+        "action": "tool_call",
+        "tool_call": {
+            "tool_name": "filesystem.write",
+            "arguments_json": '{"content":"VALUE = 1\\n","path":"result.py"}',
+            "expected_capabilities": [
+                "filesystem.write",
+                "filesystem.create",
+            ],
+            "timeout_seconds": None,
+            "invocation_revision": 1,
+            "idempotency_key": "create-result",
+        },
+        "summary": None,
+    }
+    client = FakeClient(response(output_parsed=parsed))
+
+    result = provider(
+        client,
+        deployment="coder-deployment",
+        role=ModelRole.CODER,
+    ).generate_json("structured action", schema=AgentAction)
+
+    call = client.responses.parse.calls[0]
+    assert call["model"] == "coder-deployment"
+    assert call["text_format"] is AzureAgentActionWire
+    assert result.json_value()["tool_call"]["arguments"] == {
+        "content": "VALUE = 1\n",
+        "path": "result.py",
+    }
 
 
 @pytest.mark.parametrize(

@@ -13,6 +13,14 @@ from agentbus.execution.cancellation import (
     CancellationState,
     CancellationToken,
 )
+from agentbus.models.azure_schema import (
+    AzureStructuredOutputAdapter,
+    AzureStructuredOutputSchemaError,
+    AzureWireValueError,
+    azure_schema_diagnostic_metadata,
+    azure_structured_output_adapter,
+    validate_azure_structured_output_schema,
+)
 from agentbus.models.base import validate_json_schema
 from agentbus.models.errors import (
     ModelAuthenticationError,
@@ -151,6 +159,7 @@ class AzureOpenAIProvider:
         metadata: dict[str, Any] | None,
         cancellation: CancellationToken | None,
     ) -> ModelResult:
+        structured_output = self._prepare_structured_output(schema, json_requested)
         started = self.clock()
         try:
             operation = (
@@ -167,7 +176,11 @@ class AzureOpenAIProvider:
                 if self.api_mode == "responses":
                     response = self._responses_request(
                         prompt,
-                        schema=schema,
+                        schema=(
+                            structured_output.wire_model
+                            if structured_output is not None
+                            else schema
+                        ),
                         json_requested=json_requested,
                         system_prompt=system_prompt,
                         timeout_seconds=timeout_seconds,
@@ -176,7 +189,11 @@ class AzureOpenAIProvider:
                 else:
                     response = self._chat_request(
                         prompt,
-                        schema=schema,
+                        schema=(
+                            structured_output.wire_model
+                            if structured_output is not None
+                            else schema
+                        ),
                         json_requested=json_requested,
                         system_prompt=system_prompt,
                         timeout_seconds=timeout_seconds,
@@ -218,8 +235,30 @@ class AzureOpenAIProvider:
             text = self._extract_text(response)
             return self._result(text, response, latency, cancellation_state)
 
-        parsed = self._extract_json(response, schema)
+        parsed = self._extract_json(response, schema, structured_output)
         return self._result(parsed, response, latency, cancellation_state)
+
+    def _prepare_structured_output(
+        self,
+        schema: type[BaseModel] | dict[str, Any] | None,
+        json_requested: bool,
+    ) -> AzureStructuredOutputAdapter | None:
+        if not json_requested:
+            return None
+        try:
+            if isinstance(schema, type) and issubclass(schema, BaseModel):
+                return azure_structured_output_adapter(schema)
+            if isinstance(schema, dict):
+                validate_azure_structured_output_schema(schema)
+        except AzureStructuredOutputSchemaError as exc:
+            raise ModelConfigurationError(
+                "Azure structured-output schema is incompatible with the supported "
+                "strict subset.",
+                provider=self.provider_name,
+                model=self.model_name,
+                metadata=azure_schema_diagnostic_metadata(exc),
+            ) from exc
+        return None
 
     def _responses_request(
         self,
@@ -363,15 +402,18 @@ class AzureOpenAIProvider:
         self,
         response: Any,
         schema: type[BaseModel] | dict[str, Any] | None,
+        structured_output: AzureStructuredOutputAdapter | None,
     ) -> dict[str, Any]:
         parsed_value = _parsed_output(response, self.api_mode)
-        if isinstance(schema, type) and issubclass(schema, BaseModel):
+        if structured_output is not None:
             try:
                 if parsed_value is not None:
-                    validated = schema.model_validate(parsed_value)
+                    validated = structured_output.decode_value(parsed_value)
                 else:
-                    validated = schema.model_validate_json(self._extract_text(response))
-            except ValidationError as exc:
+                    validated = structured_output.decode_json(
+                        self._extract_text(response)
+                    )
+            except (ValidationError, AzureWireValueError) as exc:
                 raise ModelSchemaValidationError(
                     "Azure OpenAI output failed local schema validation.",
                     provider=self.provider_name,
