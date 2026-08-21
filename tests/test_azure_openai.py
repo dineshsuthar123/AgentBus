@@ -9,6 +9,10 @@ from agentbus.models.azure_openai import (
     map_azure_exception,
     normalize_azure_v1_endpoint,
 )
+from agentbus.models.azure_schema import (
+    AzureStructuredOutputSchemaError,
+    validate_azure_structured_output_schema,
+)
 from agentbus.models.errors import (
     ModelAuthenticationError,
     ModelAuthorizationError,
@@ -25,6 +29,7 @@ from agentbus.models.errors import (
     ModelTimeoutError,
     ModelTransportError,
 )
+from agentbus.runtime.schemas import AgentAction
 
 
 class Detail(BaseModel):
@@ -92,6 +97,39 @@ def provider(client, **overrides):
     }
     values.update(overrides)
     return AzureOpenAIProvider(**values)
+
+
+def test_agent_action_schema_exposes_exact_azure_incompatibilities():
+    schema = AgentAction.model_json_schema()
+    tool_call = schema["$defs"]["ModelToolCall"]
+
+    assert tool_call["properties"]["arguments"]["additionalProperties"] is True
+    assert set(tool_call["required"]) == {
+        "tool_name",
+        "expected_capabilities",
+        "idempotency_key",
+    }
+
+    with pytest.raises(AzureStructuredOutputSchemaError) as captured:
+        validate_azure_structured_output_schema(schema)
+
+    issues = {(issue.path, issue.code) for issue in captured.value.issues}
+    assert ("$.required", "missing_required_fields") in issues
+    assert (
+        "$.$defs.ModelToolCall.properties.arguments.additionalProperties",
+        "open_object",
+    ) in issues
+    for path in (
+        "$.$defs.ModelToolCall.properties.tool_name.minLength",
+        "$.$defs.ModelToolCall.properties.tool_name.maxLength",
+        "$.$defs.ModelToolCall.properties.timeout_seconds.anyOf[0].exclusiveMinimum",
+        "$.$defs.ModelToolCall.properties.timeout_seconds.anyOf[0].maximum",
+        "$.$defs.ModelToolCall.properties.invocation_revision.minimum",
+        "$.$defs.ModelToolCall.properties.invocation_revision.default",
+        "$.$defs.ModelToolCall.properties.idempotency_key.minLength",
+        "$.$defs.ModelToolCall.properties.idempotency_key.maxLength",
+    ):
+        assert (path, "unsupported_keyword") in issues
 
 
 @pytest.mark.parametrize(
