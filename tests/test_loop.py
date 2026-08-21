@@ -396,3 +396,70 @@ def test_explicit_empty_planner_capability_set_denies_tool_calls(tmp_path):
 
     assert captured.value.requested_capabilities == ["filesystem.read"]
     assert captured.value.declared_capabilities == []
+
+
+def test_planned_write_capability_cannot_escape_managed_workspace(tmp_path):
+    outside = tmp_path / "outside.py"
+
+    class EscapingModel:
+        def __init__(self):
+            self.calls = 0
+
+        def generate_json(self, prompt, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "action": "tool_call",
+                    "tool_call": {
+                        "tool_name": "filesystem.write",
+                        "arguments": {
+                            "path": str(outside),
+                            "content": "SHOULD_NOT_EXIST = True\n",
+                        },
+                        "expected_capabilities": [
+                            "filesystem.write",
+                            "filesystem.create",
+                        ],
+                        "idempotency_key": "outside-planned-scope",
+                    },
+                }
+            assert '"status": "denied"' in prompt
+            return {
+                "action": "finish",
+                "summary": "workspace boundary rejected the write",
+            }
+
+    workspace = tmp_path / "workspace"
+    config = AgentBusConfig(
+        workspace_dir=str(workspace),
+        runs_dir=str(tmp_path / "runs"),
+        state_dir=str(tmp_path / "state"),
+        max_steps=2,
+    )
+    model = EscapingModel()
+    loop = AgentLoop(
+        config=config,
+        model=model,
+        policy_context={
+            "planned_capabilities": [
+                "filesystem.write",
+                "filesystem.create",
+            ]
+        },
+    )
+
+    result = loop.run("write only inside the managed workspace")
+
+    assert result == "workspace boundary rejected the write"
+    assert model.calls == 2
+    assert outside.exists() is False
+    invocations = StateStore(config.state_database_path).list_tool_invocations(
+        loop.run_id
+    )
+    assert len(invocations) == 1
+    assert invocations[0].status == ToolInvocationStatus.DENIED
+    event_types = {
+        json.loads(line)["type"]
+        for line in loop.logger.log_file.read_text(encoding="utf-8").splitlines()
+    }
+    assert "plan_capability_mismatch" not in event_types

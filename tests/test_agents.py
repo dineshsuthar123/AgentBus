@@ -2,6 +2,7 @@ from agentbus.agents.coder import CoderAgent
 from agentbus.agents.planner import PlannerAgent
 from agentbus.agents.reviewer import ReviewerAgent
 from agentbus.config import AgentBusConfig
+from agentbus.execution.task_graph import TaskGraph
 from agentbus.tools.protocol import ToolResourceBudget
 
 
@@ -129,6 +130,60 @@ def test_planner_contract_feedback_is_bounded_and_does_not_grant_capabilities():
     assert "previous durable plan was rejected" in prompt
     assert "Do not add capabilities unless" in prompt
     assert "implementation_without_mutation" in prompt
+
+
+def test_atomic_calculator_fix_is_one_verifiable_implementation_task():
+    model = FakeModel(
+        {
+            "goal": "Fix division by zero without changing normal division",
+            "steps": [
+                {
+                    "id": "step-1",
+                    "title": "Fix and verify divide",
+                    "description": (
+                        "Inspect the calculator and tests, update divide, run the "
+                        "relevant tests, and inspect the resulting diff."
+                    ),
+                    "risk": "low",
+                    "execution_kind": "implementation",
+                    "required_capabilities": [
+                        "filesystem.read",
+                        "filesystem.write",
+                        "test.execute",
+                        "process.execute",
+                        "git.read",
+                    ],
+                    "expected_outputs": ["calculator.py"],
+                    "done_criteria": ["Both calculator tests pass"],
+                }
+            ],
+            "test_strategy": "Run the existing calculator tests",
+            "done_criteria": ["Both calculator tests pass"],
+        }
+    )
+    planner = PlannerAgent(model=model)
+
+    plan = planner.plan(
+        "Fix divide() so division by zero raises ValueError with a clear message. "
+        "Preserve normal division behavior. Make the existing tests pass. "
+        "Do not modify unrelated files.",
+        file_list="calculator.py\ntest_calculator.py",
+    )
+    graph = TaskGraph.from_planner_output(plan)
+
+    assert len(plan["steps"]) == 1
+    assert len(graph.tasks) == 1
+    assert graph.tasks[0].execution_kind.value == "implementation"
+    assert graph.tasks[0].done_criteria == ["Both calculator tests pass"]
+    assert graph.tasks[0].metadata["required_capabilities"] == [
+        "filesystem.read",
+        "filesystem.write",
+        "test.execute",
+        "process.execute",
+        "git.read",
+    ]
+    assert "standalone inspect" in model.prompts[0]
+    assert "prefer one implementation step" in model.prompts[0]
 
 
 def test_reviewer_agent_parses_valid_model_output():

@@ -29,7 +29,11 @@ from agentbus.models.router import (
 )
 from agentbus.models.types import ModelResult, ModelUsage
 from agentbus.replay.service import TraceReplayService
-from agentbus.replay.session import ReplayRequest, ReplaySessionStatus
+from agentbus.replay.session import (
+    ReplayRequest,
+    ReplaySessionStatus,
+    ReplaySpanAction,
+)
 from agentbus.runtime.loop import AgentLoop
 from agentbus.runtime.orchestrator import MultiAgentOrchestrator
 from agentbus.trace import ReplayMode, TraceSpanType
@@ -731,6 +735,13 @@ def test_strict_fake_azure_completes_durable_calculator_workflow(tmp_path):
 
     attempt = store.list_attempts(run_id, "step-1")[0]
     assert attempt.metadata["task_review"]["approved"] is True
+    assert attempt.metadata["task_contract"] == {
+        "execution_kind": "implementation",
+        "required_capabilities": [
+            "filesystem.create",
+            "filesystem.write",
+        ],
+    }
     persisted = store.get_run(run_id)
     assert persisted.metadata["final_review"]["status"] == "approved"
     write_invocations = [
@@ -748,9 +759,18 @@ def test_strict_fake_azure_completes_durable_calculator_workflow(tmp_path):
     final_reviewer = next(
         span for span in trace.spans if span.name == "final reviewer"
     )
+    task_span = next(
+        span for span in trace.spans if span.span_type == TraceSpanType.TASK
+    )
     assert final_verifier.sequence < final_reviewer.sequence
     assert final_reviewer.span_type == TraceSpanType.REVIEWER
     replay_service = TraceReplayService(settings, state_store=store)
+    task_output = replay_service.object_store.get_json(
+        task_span.output_references[0].sha256
+    )
+    assert task_output["metadata"]["task_contract"] == attempt.metadata[
+        "task_contract"
+    ]
     assert replay_service.verify(run_id).valid is True
     replayability = replay_service.replayability(run_id)
     assert replayability.replayable_offline is True, [
@@ -779,6 +799,20 @@ def test_strict_fake_azure_completes_durable_calculator_workflow(tmp_path):
     )
     assert replay.session.provider_calls == 0
     assert replay.session.network_calls == 0
+    assert replay.session.policy_drift == []
+    replayed_task = next(
+        result
+        for result in replay.session.span_results
+        if result.span_id == task_span.span_id
+    )
+    assert replayed_task.action == ReplaySpanAction.REPLAYED
+    assert replayed_task.succeeded is True
+    replayed_output = replay_service.object_store.get_json(
+        task_span.output_references[0].sha256
+    )
+    assert replayed_output["metadata"]["task_contract"] == attempt.metadata[
+        "task_contract"
+    ]
 
 
 @pytest.mark.parametrize("provider_name", ["azure", "ollama"])
@@ -1026,6 +1060,176 @@ def test_offline_azure_capability_mismatch_stops_before_dispatch_and_verifier(
     assert resumed.status == RunStatus.FAILED
     assert len(providers[("azure", "coder")].calls) == calls_before_resume
     assert len(store.list_attempts(run_id, "step-1")) == 1
+
+
+def test_reviewer_feedback_cannot_expand_retry_capabilities(tmp_path):
+    plan = {
+        "goal": "Inspect result handling without repository changes",
+        "steps": [
+            {
+                "id": "step-1",
+                "title": "Inspect result handling",
+                "description": "Produce a read-only result-handling analysis.",
+                "risk": "low",
+                "execution_kind": "analysis",
+                "dependencies": [],
+                "assigned_role": "coder",
+                "maximum_attempts": 2,
+                "expected_outputs": [],
+                "done_criteria": ["A result-handling analysis is available"],
+                "required_capabilities": ["filesystem.read"],
+            }
+        ],
+        "test_strategy": "No code verifier is applicable",
+        "done_criteria": ["A result-handling analysis is available"],
+    }
+    scripts = {
+        ("azure", "planner"): [plan],
+        ("azure", "coder"): [
+            {
+                "action": "finish",
+                "summary": "Read-only analysis completed without changes.",
+            },
+            {
+                "action": "tool_call",
+                "tool_call": {
+                    "tool_name": "filesystem.write",
+                    "arguments": {
+                        "path": "result.py",
+                        "content": "VALUE = 1\n",
+                    },
+                    "expected_capabilities": [
+                        "filesystem.write",
+                        "filesystem.create",
+                    ],
+                    "idempotency_key": "reviewer-requested-write",
+                },
+            },
+        ],
+        ("azure", "reviewer"): [
+            {
+                "approved": False,
+                "issues": [
+                    {
+                        "severity": "high",
+                        "message": "Create a result module.",
+                    }
+                ],
+                "summary": "A repository file is required.",
+                "required_fixes": [
+                    "Use filesystem.write to create result.py."
+                ],
+            }
+        ],
+    }
+    runner, store, _, providers, verifier = build_runner(tmp_path, scripts)
+
+    run_id = runner.create_durable_run(
+        "Inspect result handling, then create result.py if requested."
+    )
+    report = runner.run_durable(run_id)
+    attempts = store.list_attempts(run_id, "step-1")
+
+    assert report.status == RunStatus.FAILED
+    assert [attempt.error_category for attempt in attempts] == [
+        FailureCategory.REVIEWER_REJECTION,
+        FailureCategory.PLAN_CAPABILITY_MISMATCH,
+    ]
+    assert attempts[0].metadata["task_contract"] == {
+        "execution_kind": "analysis",
+        "required_capabilities": ["filesystem.read"],
+    }
+    assert attempts[1].metadata["task_contract"] == attempts[0].metadata[
+        "task_contract"
+    ]
+    assert attempts[1].metadata["plan_capability_mismatch"][
+        "declared_capabilities"
+    ] == ["filesystem.read"]
+    assert attempts[1].metadata["_agentbus"]["retryable_override"] is False
+    assert verifier.calls == 0
+    assert len(providers[("azure", "coder")].calls) == 2
+    assert len(providers[("azure", "reviewer")].calls) == 1
+    retry_prompt = providers[("azure", "coder")].calls[1]["prompt"]
+    assert "Use filesystem.write to create result.py." in retry_prompt
+    assert "Do not request capabilities beyond" in retry_prompt
+    assert store.list_tool_invocations(run_id) == []
+    assert not (runner.config.workspace_path / "result.py").exists()
+
+
+def test_downstream_capabilities_never_leak_into_current_task(tmp_path):
+    plan = {
+        "goal": "Update current behavior before removing a later artifact",
+        "steps": [
+            {
+                "id": "step-1",
+                "title": "Update current behavior",
+                "description": "Complete the first independently verifiable update.",
+                "risk": "low",
+                "execution_kind": "implementation",
+                "dependencies": [],
+                "assigned_role": "coder",
+                "maximum_attempts": 2,
+                "expected_outputs": [],
+                "done_criteria": ["The first update is complete"],
+                "required_capabilities": ["filesystem.write"],
+            },
+            {
+                "id": "step-2",
+                "title": "Remove later artifact",
+                "description": "Remove later.txt as an independent follow-up.",
+                "risk": "low",
+                "execution_kind": "implementation",
+                "dependencies": ["step-1"],
+                "assigned_role": "coder",
+                "maximum_attempts": 2,
+                "expected_outputs": [],
+                "done_criteria": ["The later artifact is removed"],
+                "required_capabilities": ["filesystem.delete"],
+            },
+        ],
+        "test_strategy": "Use the fake verifier after each implementation slice",
+        "done_criteria": ["Both implementation slices are complete"],
+    }
+    scripts = {
+        ("azure", "planner"): [plan],
+        ("azure", "coder"): [
+            {
+                "action": "tool_call",
+                "tool_call": {
+                    "tool_name": "filesystem.delete",
+                    "arguments": {"path": "later.txt"},
+                    "expected_capabilities": ["filesystem.delete"],
+                    "idempotency_key": "premature-downstream-delete",
+                },
+            }
+        ],
+    }
+    runner, store, _, providers, verifier = build_runner(tmp_path, scripts)
+    later = runner.config.workspace_path / "later.txt"
+    later.write_text("preserve until step-2\n", encoding="utf-8")
+
+    run_id = runner.create_durable_run(
+        "Update current behavior, then remove the later artifact."
+    )
+    report = runner.run_durable(run_id)
+    attempt = store.list_attempts(run_id, "step-1")[0]
+
+    assert report.status == RunStatus.FAILED
+    assert report.failed_tasks == ["step-1"]
+    assert report.blocked_tasks == ["step-2"]
+    assert attempt.error_category == FailureCategory.PLAN_CAPABILITY_MISMATCH
+    assert attempt.metadata["plan_capability_mismatch"][
+        "requested_capabilities"
+    ] == ["filesystem.delete"]
+    assert attempt.metadata["plan_capability_mismatch"][
+        "declared_capabilities"
+    ] == ["filesystem.write"]
+    assert verifier.calls == 0
+    assert store.list_tool_invocations(run_id) == []
+    assert later.read_text(encoding="utf-8") == "preserve until step-2\n"
+    coder_prompt = providers[("azure", "coder")].calls[0]["prompt"]
+    assert '"id": "step-1"' in coder_prompt
+    assert '"id": "step-2"' not in coder_prompt
 
 
 def test_offline_fallback_smoke_exhausts_azure_then_uses_ollama_and_gates(
