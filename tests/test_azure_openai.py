@@ -106,6 +106,26 @@ def provider(client, **overrides):
     return AzureOpenAIProvider(**values)
 
 
+def wire_tool_action(**overrides):
+    tool_call = {
+        "tool_name": "filesystem.write",
+        "arguments_json": '{"content":"VALUE = 1\\n","path":"result.py"}',
+        "expected_capabilities": [
+            "filesystem.write",
+            "filesystem.create",
+        ],
+        "timeout_seconds": None,
+        "invocation_revision": 1,
+        "idempotency_key": "create-result",
+    }
+    tool_call.update(overrides)
+    return {
+        "action": "tool_call",
+        "tool_call": tool_call,
+        "summary": None,
+    }
+
+
 def test_agent_action_schema_exposes_exact_azure_incompatibilities():
     schema = AgentAction.model_json_schema()
     tool_call = schema["$defs"]["ModelToolCall"]
@@ -150,21 +170,7 @@ def test_every_production_azure_wire_schema_uses_supported_subset(model):
 
 
 def test_agent_action_uses_explicit_wire_and_restores_tool_arguments():
-    parsed = {
-        "action": "tool_call",
-        "tool_call": {
-            "tool_name": "filesystem.write",
-            "arguments_json": '{"content":"VALUE = 1\\n","path":"result.py"}',
-            "expected_capabilities": [
-                "filesystem.write",
-                "filesystem.create",
-            ],
-            "timeout_seconds": None,
-            "invocation_revision": 1,
-            "idempotency_key": "create-result",
-        },
-        "summary": None,
-    }
+    parsed = wire_tool_action()
     client = FakeClient(response(output_parsed=parsed))
 
     result = provider(
@@ -180,6 +186,101 @@ def test_agent_action_uses_explicit_wire_and_restores_tool_arguments():
         "content": "VALUE = 1\n",
         "path": "result.py",
     }
+
+
+def test_agent_action_wire_requires_nullable_fields_to_be_present():
+    schema = AzureAgentActionWire.model_json_schema()
+    tool_call_schema = schema["$defs"]["AzureModelToolCallWire"]
+
+    assert set(schema["required"]) == {"action", "tool_call", "summary"}
+    assert set(tool_call_schema["required"]) == {
+        "tool_name",
+        "arguments_json",
+        "expected_capabilities",
+        "timeout_seconds",
+        "invocation_revision",
+        "idempotency_key",
+    }
+    assert {item["type"] for item in schema["properties"]["summary"]["anyOf"]} == {
+        "string",
+        "null",
+    }
+    assert {
+        item["type"]
+        for item in tool_call_schema["properties"]["timeout_seconds"]["anyOf"]
+    } == {"number", "null"}
+
+
+def test_agent_action_wire_accepts_required_null_tool_call_for_finish():
+    parsed = {
+        "action": "finish",
+        "tool_call": None,
+        "summary": "Completed and verified the requested change.",
+    }
+
+    result = provider(FakeClient(response(output_parsed=parsed))).generate_json(
+        "finish action",
+        schema=AgentAction,
+    )
+
+    assert result.json_value() == parsed
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [
+        ("tool_name", ""),
+        ("tool_name", "t" * 129),
+        ("arguments_json", "{"),
+        ("arguments_json", "[]"),
+        ("arguments_json", '{"value":"' + ("x" * 1_048_576) + '"}'),
+        ("expected_capabilities", []),
+        ("expected_capabilities", ["filesystem.write", "filesystem.write"]),
+        ("timeout_seconds", 0),
+        ("timeout_seconds", 86_400.1),
+        ("invocation_revision", 0),
+        ("idempotency_key", ""),
+        ("idempotency_key", "i" * 257),
+    ],
+    ids=[
+        "empty-tool-name",
+        "oversized-tool-name",
+        "malformed-arguments-json",
+        "non-object-arguments-json",
+        "oversized-arguments-json",
+        "empty-capabilities",
+        "duplicate-capabilities",
+        "nonpositive-timeout",
+        "excessive-timeout",
+        "invalid-invocation-revision",
+        "empty-idempotency-key",
+        "oversized-idempotency-key",
+    ],
+)
+def test_agent_action_wire_preserves_authoritative_local_validation(
+    field,
+    invalid_value,
+):
+    parsed = wire_tool_action(**{field: invalid_value})
+
+    with pytest.raises(ModelSchemaValidationError):
+        provider(FakeClient(response(output_parsed=parsed))).generate_json(
+            "invalid structured action",
+            schema=AgentAction,
+        )
+
+
+@pytest.mark.parametrize("target", ["root", "tool_call"])
+def test_agent_action_wire_rejects_forbidden_extra_fields(target):
+    parsed = wire_tool_action()
+    selected = parsed if target == "root" else parsed["tool_call"]
+    selected["unexpected"] = True
+
+    with pytest.raises(ModelSchemaValidationError):
+        provider(FakeClient(response(output_parsed=parsed))).generate_json(
+            "extra structured field",
+            schema=AgentAction,
+        )
 
 
 @pytest.mark.parametrize(
