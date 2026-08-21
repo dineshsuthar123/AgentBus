@@ -1,10 +1,12 @@
 import json
+from types import SimpleNamespace
 
 import pytest
 
 from agentbus.config import AgentBusConfig
 from agentbus.execution.state_store import StateStore
-from agentbus.models.errors import ModelOutputError
+from agentbus.models.errors import ModelBadRequestError, ModelOutputError
+from agentbus.product.logging import read_product_logs
 from agentbus.runtime.loop import AgentLoop, ManagedToolApprovalRequired
 from agentbus.tools.protocol import ToolInvocationStatus
 
@@ -45,6 +47,58 @@ def test_loop_recovers_from_model_error(tmp_path):
 
     assert "model_error" in events
     assert "run_finished" in events
+
+
+def test_durable_loop_provider_error_is_discoverable_by_run_id(tmp_path):
+    run_id = "durable-provider-run"
+    workspace = tmp_path / "workspace"
+    config = AgentBusConfig(
+        workspace_dir=str(workspace),
+        runs_dir=str(tmp_path / "runs"),
+        state_dir=str(tmp_path / "state"),
+        max_steps=1,
+    )
+
+    class FailingProviderModel:
+        def generate_json(self, prompt, **kwargs):
+            raise ModelBadRequestError(
+                "Azure OpenAI rejected the request as invalid.",
+                provider="azure",
+                model="coder-deployment",
+                http_status=400,
+                request_id="request-safe-1",
+                metadata={
+                    "azure_error_code": "invalid_request_error",
+                    "azure_error_param": "text.format.schema",
+                },
+            )
+
+    tool_runtime = SimpleNamespace(
+        worktree=workspace.resolve(),
+        cancellations=SimpleNamespace(get=lambda selected_run_id: None),
+        registry=SimpleNamespace(descriptors=lambda: ()),
+    )
+    loop = AgentLoop(
+        config=config,
+        model=FailingProviderModel(),
+        tool_runtime=tool_runtime,
+        run_id=run_id,
+        task_id="step-1",
+    )
+
+    with pytest.raises(ModelBadRequestError):
+        loop.run("fail safely")
+
+    entries = read_product_logs(config, run_id=run_id)
+    assert loop.logger.run_id == run_id
+    assert loop.logger.log_file.name.endswith(f"_{run_id}.jsonl")
+    assert entries
+    assert {entry.run_id for entry in entries} == {run_id}
+    assert any(
+        "model_error" in entry.message
+        and "invalid_request_error" in entry.message
+        for entry in entries
+    )
 
 
 def test_loop_stops_at_max_steps(tmp_path):

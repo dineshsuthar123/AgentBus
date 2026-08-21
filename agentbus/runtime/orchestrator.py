@@ -515,6 +515,8 @@ class MultiAgentOrchestrator:
 
     def run_durable(self, run_id: str, *, resume: bool = False) -> ExecutionReport:
         """Execute or resume a persisted multi-agent run and finalize Git safely."""
+        self.logger = RunLogger(log_dir=self.config.runs_dir, run_id=run_id)
+        self.model_router.set_logger(self.logger)
         if resume and self._explicit_cancellation is None:
             cancellation = self._cancellation_registry_for_use().recover(run_id)
         else:
@@ -703,7 +705,7 @@ class MultiAgentOrchestrator:
         config = self.config.with_overrides(
             workspace_dir=str(workspace), parallel_execution=False
         )
-        logger = RunLogger(log_dir=config.runs_dir)
+        logger = RunLogger(log_dir=config.runs_dir, run_id=run_id)
         factory = ModelProviderFactory(
             config,
             builders=dict(self.model_router.provider_factory.builders),
@@ -1344,7 +1346,7 @@ class MultiAgentOrchestrator:
         router = ModelRouter(
             config,
             provider_factory=factory,
-            logger=RunLogger(log_dir=config.runs_dir),
+            logger=RunLogger(log_dir=config.runs_dir, run_id=run_id),
             usage_ledger=self.model_router.usage_ledger,
             sleeper=self.model_router.sleeper,
             jitter=self.model_router.jitter,

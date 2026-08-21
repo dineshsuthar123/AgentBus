@@ -7,6 +7,7 @@ from agentbus.execution.engine import DurableExecutionEngine
 from agentbus.execution.models import RunStatus, TaskStatus
 from agentbus.execution.models import FailureCategory
 from agentbus.execution.state_store import StateStore, StateStoreError
+from agentbus.memory.run_log import RunLogger
 from agentbus.models.errors import ModelAuthenticationError
 from agentbus.replay.checkpoints import CheckpointKind, CheckpointManager
 from agentbus.runtime.intelligence import (
@@ -487,9 +488,12 @@ def test_durable_verifier_failure_prevents_commit(tmp_path):
     )
 
     run_id = runner.create_durable_run("Create calculator")
+    runner.model_router.set_logger(RunLogger(log_dir=runner.config.runs_dir))
+    assert runner.model_router.logger.run_id != run_id
     report = runner.run_durable(run_id)
 
     assert report.status == RunStatus.FAILED
+    assert runner.model_router.logger.run_id == run_id
     assert report.verifier_status == "failed"
     assert git_repository.commits == []
 
