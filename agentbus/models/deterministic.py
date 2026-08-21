@@ -66,11 +66,10 @@ _PROFILE_REQUIREMENTS: dict[str, list[str]] = {
         "process.execute",
     ],
 }
-_REPOSITORY_MUTATION_CAPABILITIES = {
-    "filesystem.write",
-    "filesystem.create",
-    "filesystem.delete",
-    "filesystem.rename",
+_ANALYSIS_READ_ONLY_CAPABILITIES = {
+    "filesystem.read",
+    "git.read",
+    "environment.read_safe",
 }
 _PROFILE_OUTPUTS: dict[str, list[str]] = {
     "tool-atomic-write": ["profile_result.txt"],
@@ -344,11 +343,11 @@ class DeterministicProvider:
                         ),
                         "risk": "low",
                         "execution_kind": (
-                            "implementation"
-                            if _REPOSITORY_MUTATION_CAPABILITIES.intersection(
-                                _PROFILE_REQUIREMENTS[self.profile]
+                            "analysis"
+                            if set(_PROFILE_REQUIREMENTS[self.profile]).issubset(
+                                _ANALYSIS_READ_ONLY_CAPABILITIES
                             )
-                            else "analysis"
+                            else "implementation"
                         ),
                         "dependencies": [],
                         "assigned_role": "coder",

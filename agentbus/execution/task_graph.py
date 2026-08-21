@@ -72,6 +72,9 @@ _ANALYSIS_READ_ONLY_CAPABILITIES = frozenset(
         ToolCapabilityName.ENVIRONMENT_READ_SAFE,
     }
 )
+_IMPLEMENTATION_EFFECT_CAPABILITIES = frozenset(ToolCapabilityName).difference(
+    _ANALYSIS_READ_ONLY_CAPABILITIES
+)
 
 
 FAILED_DEPENDENCY_STATUSES = {
@@ -329,6 +332,9 @@ class TaskGraph:
             mutation_capabilities = capabilities.intersection(
                 _REPOSITORY_MUTATION_CAPABILITIES
             )
+            effect_capabilities = capabilities.intersection(
+                _IMPLEMENTATION_EFFECT_CAPABILITIES
+            )
             if kind == TaskExecutionKind.IMPLEMENTATION:
                 if not capabilities:
                     issues.append(
@@ -338,12 +344,13 @@ class TaskGraph:
                             "implementation tasks must declare their capability upper bound",
                         )
                     )
-                if not mutation_capabilities:
+                if not effect_capabilities:
                     issues.append(
                         PlanContractIssue(
                             "implementation_without_mutation",
                             task.task_id,
-                            "implementation tasks must declare a filesystem mutation capability",
+                            "implementation tasks must declare a mutation or other "
+                            "effectful capability",
                         )
                     )
             else:
