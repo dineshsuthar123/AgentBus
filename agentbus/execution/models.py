@@ -59,6 +59,7 @@ class FailureCategory(str, Enum):
     CANCELLED = "cancelled"
     MODEL_OUTPUT_ERROR = "model_output_error"
     MODEL_TRANSPORT_ERROR = "model_transport_error"
+    MODEL_PROVIDER_ERROR = "model_provider_error"
     TOOL_VALIDATION_ERROR = "tool_validation_error"
     COMMAND_FAILURE = "command_failure"
     VERIFIER_FAILURE = "verifier_failure"

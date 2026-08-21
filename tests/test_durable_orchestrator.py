@@ -641,7 +641,7 @@ def test_durable_provider_failure_is_classified_and_prevents_git_finalization(
     attempt = store.list_attempts(run_id, "step-1")[0]
 
     assert report.status == RunStatus.FAILED
-    assert attempt.error_category == FailureCategory.POLICY_VIOLATION
+    assert attempt.error_category == FailureCategory.MODEL_PROVIDER_ERROR
     assert attempt.metadata["provider_failure"]["provider"] == "azure"
     assert attempt.metadata["provider_failure"]["model"] == "coder-deployment"
     assert "must-not-persist" not in str(attempt.metadata)

@@ -17,6 +17,16 @@ from agentbus.execution.transitions import (
     validate_run_transition,
     validate_task_transition,
 )
+from agentbus.models.errors import (
+    ModelAuthenticationError,
+    ModelAuthorizationError,
+    ModelBadRequestError,
+    ModelConfigurationError,
+    ModelContentPolicyError,
+    ModelNotFoundError,
+    ModelQuotaExceededError,
+    ModelRateLimitError,
+)
 
 
 def test_valid_transitions_are_accepted():
@@ -93,3 +103,56 @@ def test_failure_classifier_distinguishes_retryable_model_output():
     assert json_error.retryable is None
     assert policy_error.category == FailureCategory.POLICY_VIOLATION
     assert policy_error.retryable is False
+
+
+@pytest.mark.parametrize(
+    "error_type",
+    [
+        ModelBadRequestError,
+        ModelAuthenticationError,
+        ModelAuthorizationError,
+        ModelConfigurationError,
+        ModelNotFoundError,
+        ModelQuotaExceededError,
+        ModelContentPolicyError,
+    ],
+)
+def test_failure_classifier_reports_nonretryable_provider_request_errors(
+    error_type,
+):
+    error = error_type(
+        "Safe provider request failure.",
+        provider="azure",
+        model="coder-deployment",
+        http_status=400,
+        request_id="request-safe-1",
+        metadata={
+            "azure_error_code": "invalid_request",
+            "api_key": "must-not-persist",
+        },
+    )
+
+    classification = FailureClassifier().classify(error)
+
+    assert classification.category == FailureCategory.MODEL_PROVIDER_ERROR
+    assert classification.retryable is False
+    assert classification.metadata["provider"] == "azure"
+    assert classification.metadata["model"] == "coder-deployment"
+    assert classification.metadata["request_id"] == "request-safe-1"
+    assert classification.metadata["metadata"] == {
+        "azure_error_code": "invalid_request",
+        "api_key": "[REDACTED]",
+    }
+
+
+def test_failure_classifier_keeps_transient_provider_errors_as_transport():
+    classification = FailureClassifier().classify(
+        ModelRateLimitError(
+            "Rate limited.",
+            provider="azure",
+            model="coder-deployment",
+        )
+    )
+
+    assert classification.category == FailureCategory.MODEL_TRANSPORT_ERROR
+    assert classification.retryable is True

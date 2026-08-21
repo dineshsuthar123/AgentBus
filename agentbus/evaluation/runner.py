@@ -834,7 +834,11 @@ class OfflineTaskExecutor:
             return _task_failure(FailureCategory.MODEL_OUTPUT_ERROR, exc, retryable=True)
         except ModelProviderError as exc:
             return _task_failure(
-                FailureCategory.MODEL_TRANSPORT_ERROR,
+                (
+                    FailureCategory.MODEL_TRANSPORT_ERROR
+                    if exc.retryable
+                    else FailureCategory.MODEL_PROVIDER_ERROR
+                ),
                 exc,
                 retryable=exc.retryable,
             )

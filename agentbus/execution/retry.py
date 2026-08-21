@@ -95,8 +95,8 @@ class FailureClassifier:
 
         if isinstance(error, ModelProviderError):
             return FailureClassification(
-                FailureCategory.POLICY_VIOLATION,
-                False,
+                FailureCategory.MODEL_PROVIDER_ERROR,
+                error.retryable,
                 error.safe_message,
                 error.safe_metadata(),
             )
