@@ -18,6 +18,56 @@ from agentbus.sandbox.platform import ExecutableCatalog
 FIXTURE = Path(__file__).parent / "fixtures" / "mcp" / "fake_server.py"
 
 
+class SecretOutputTransport:
+    def start(self) -> None:
+        return None
+
+    def request(self, message, *, timeout_seconds, cancellation=None):
+        del timeout_seconds, cancellation
+        method = message["method"]
+        if method == "initialize":
+            result = {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "unit-peer", "version": "1"},
+            }
+        elif method == "tools/list":
+            result = {
+                "tools": [
+                    {
+                        "name": "echo",
+                        "inputSchema": {
+                            "type": "object",
+                            "additionalProperties": False,
+                        },
+                    }
+                ]
+            }
+        else:
+            result = {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "API_KEY=unit-secret-must-not-leak",
+                    }
+                ],
+                "structuredContent": {
+                    "echo": "TOKEN=structured-secret-must-not-leak",
+                },
+                "isError": False,
+            }
+        return {"jsonrpc": "2.0", "id": message["id"], "result": result}
+
+    def notify(self, message, *, timeout_seconds, cancellation=None) -> None:
+        del message, timeout_seconds, cancellation
+
+    def set_protocol_version(self, protocol_version: str) -> None:
+        del protocol_version
+
+    def close(self) -> None:
+        return None
+
+
 def test_client_discovers_capability_mapped_tools_and_validates_call(
     tmp_path: Path,
 ) -> None:
@@ -32,6 +82,23 @@ def test_client_discovers_capability_mapped_tools_and_validates_call(
     assert result.structured_content == {"echo": "bounded hello"}
     assert result.content[0]["text"] == "bounded hello"
     assert result.is_error is False
+
+
+def test_client_redacts_untrusted_remote_tool_output() -> None:
+    config = McpServerConfig(
+        server_id="fixture",
+        transport="stdio",
+        executable_alias="unit-peer",
+        capability_map={"echo": mcp_server_capabilities("fixture")},
+    )
+    client = McpClient(config, SecretOutputTransport())
+
+    with client:
+        client.list_tools()
+        result = client.call_tool("echo", {})
+
+    assert result.content[0]["text"] == "API_KEY=[REDACTED]"
+    assert result.structured_content == {"echo": "TOKEN=[REDACTED]"}
 
 
 def test_client_rejects_unmapped_remote_tool(tmp_path: Path) -> None:

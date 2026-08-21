@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -319,7 +320,7 @@ def repository_intelligence_suite() -> EvaluationSuite:
         "expected_languages": {
             "go": 2,
             "java": 3,
-            "python": 8,
+            "python": 9,
             "typescript": 3,
         },
         "expected_projects": [
@@ -331,7 +332,7 @@ def repository_intelligence_suite() -> EvaluationSuite:
             "intelligence-shared-python",
         ],
         "minimum_counts": {
-            "files": 16,
+            "files": 17,
             "symbols": 40,
             "references": 50,
             "edges": 50,
@@ -420,13 +421,92 @@ def repository_intelligence_suite() -> EvaluationSuite:
                     **mixed_inventory,
                     "scenario": "planning",
                     "retrieval_precision_minimum": 1.0,
+                    "expected_search_stale": True,
                     "impact_recall_minimum": 1.0,
                     "test_recall_minimum": 1.0,
                     "search_probes": [
-                        _search_probe("calculate_total", "services/python_service/calculator.py", 1),
-                        _search_probe("CalculatorPanel", "packages/web/src/calculator.ts", 1),
-                        _search_probe("OrderService", "services/java/src/main/java/fixture/OrderService.java", 5),
-                        _search_probe("healthHandler", "services/go/main.go", 1),
+                        _search_probe(
+                            "exact_identifier",
+                            "calculate_total",
+                            ("services/python_service/calculator.py",),
+                            1,
+                            expected_components=("lexical", "symbol_match"),
+                        ),
+                        _search_probe(
+                            "fuzzy_identifier",
+                            "calculate total",
+                            (
+                                "services/python_service/calculator.py",
+                                "services/python_service/tests/test_calculator.py",
+                            ),
+                            2,
+                            expected_components=("lexical",),
+                        ),
+                        _search_probe(
+                            "endpoint",
+                            "GET /calculate",
+                            ("services/python_service/app.py",),
+                            1,
+                            expected_components=("lexical",),
+                        ),
+                        _search_probe(
+                            "implementation_location",
+                            "services/python_service/pricing.py",
+                            ("services/python_service/pricing.py",),
+                            3,
+                            expected_components=("lexical", "symbol_match"),
+                        ),
+                        _search_probe(
+                            "test_location",
+                            "services/python_service/tests/test_calculator.py",
+                            (
+                                "services/python_service/tests/test_calculator.py",
+                            ),
+                            3,
+                            expected_components=("lexical", "symbol_match"),
+                        ),
+                        _search_probe(
+                            "configuration",
+                            "PAYMENT_TIMEOUT_SECONDS",
+                            ("services/python_service/settings.py",),
+                            1,
+                            expected_components=("lexical", "symbol_match"),
+                        ),
+                        _search_probe(
+                            "dependency_related_symbol",
+                            "add_values",
+                            (
+                                "packages/shared_python/rules.py",
+                                "services/python_service/calculator.py",
+                                "services/python_service/pricing.py",
+                                "services/python_service/tests/test_calculator.py",
+                            ),
+                            5,
+                            required_paths=(
+                                "packages/shared_python/rules.py",
+                                "services/python_service/pricing.py",
+                            ),
+                            expected_components=("dependency", "lexical"),
+                        ),
+                        _search_probe(
+                            "architecture_boundary",
+                            "intelligence-python-service",
+                            (
+                                "services/python_service/app.py",
+                                "services/python_service/calculator.py",
+                                "services/python_service/pricing.py",
+                                "services/python_service/tests/test_calculator.py",
+                            ),
+                            8,
+                            expected_components=(
+                                "architecture",
+                                "project_proximity",
+                            ),
+                        ),
+                        _empty_search_probe(
+                            "protected_file_exclusion",
+                            "synthetic-protected-marker",
+                        ),
                     ],
                     "impact_probes": [
                         {
@@ -460,6 +540,11 @@ def repository_intelligence_suite() -> EvaluationSuite:
                         ],
                         "byte_budget": 12_000,
                         "token_budget": 2_000,
+                        "expected_stale_warning": True,
+                        "forbidden_paths": [".env"],
+                        "maximum_candidates": 100,
+                        "maximum_selected_source_hash_duplicates": 0,
+                        "minimum_duplicate_content_exclusions": 1,
                     },
                 },
             },
@@ -525,7 +610,13 @@ def repository_intelligence_suite() -> EvaluationSuite:
                     "maximum_storage_bytes": 32 * 1024 * 1024,
                     "retrieval_precision_minimum": 1.0,
                     "search_probes": [
-                        _search_probe("value_0119", "src/module_0119.py", 1),
+                        _search_probe(
+                            "exact_identifier",
+                            "value_0119",
+                            ("src/module_0119.py",),
+                            1,
+                            expected_components=("lexical", "symbol_match"),
+                        ),
                     ],
                     "context_probe": {
                         "task": "Change value_0119 without loading the whole repository",
@@ -533,6 +624,11 @@ def repository_intelligence_suite() -> EvaluationSuite:
                         "expected_paths": ["src/module_0119.py"],
                         "byte_budget": 8_000,
                         "token_budget": 1_000,
+                        "expected_stale_warning": False,
+                        "maximum_candidates": 100,
+                        "maximum_selected_source_hash_duplicates": 0,
+                        "minimum_budget_exclusions": 1,
+                        "minimum_duplicate_content_exclusions": 1,
                     },
                 },
             },
@@ -715,18 +811,84 @@ def _evaluate_search(
     probes = benchmark.get("search_probes", [])
     if not probes:
         return None
-    outcomes: dict[str, bool] = {}
-    hits = 0
+    outcomes: dict[str, dict[str, Any]] = {}
+    relevant_hits = 0
+    evaluated_slots = 0
+    categories: set[str] = set()
     for index, probe in enumerate(probes):
+        category = str(probe.get("category", f"probe_{index}"))
+        if category in categories:
+            raise ValueError("search probe categories must be unique")
+        categories.add(category)
         limit = int(probe["top_k"])
         report = service.search(probe["query"], limit=limit)
         reports.append(report)
-        paths = [item.relative_path for item in report.results[:limit]]
-        matched = probe["expected_path"] in paths
-        hits += int(matched)
-        checks[f"search_{index}_{_check_name(probe['query'])}"] = matched
-        outcomes[probe["query"]] = matched
-    precision = hits / len(probes)
+        results = report.results[:limit]
+        paths = [item.relative_path for item in results]
+        check_prefix = f"search_{index}_{_check_name(category)}"
+        explanation_correct = all(
+            _search_explanation_correct(item) for item in results
+        )
+        checks[f"{check_prefix}_explanations"] = explanation_correct
+        if bool(probe.get("expect_empty", False)):
+            empty = not results
+            checks[f"{check_prefix}_empty"] = empty
+            outcomes[category] = {
+                "query": probe["query"],
+                "top_k": limit,
+                "result_paths": paths,
+                "expected_empty": True,
+                "explanations_correct": explanation_correct,
+            }
+            continue
+
+        relevant_paths = set(probe["relevant_paths"])
+        required_paths = set(
+            probe.get("required_paths", probe["relevant_paths"])
+        )
+        expected_components = set(probe.get("expected_components", ()))
+        expected_stale = bool(
+            benchmark.get("expected_search_stale", False)
+        )
+        relevant_results = tuple(
+            item for item in results if item.relative_path in relevant_paths
+        )
+        probe_hits = len(relevant_results)
+        probe_precision = probe_hits / limit
+        relevant_hits += probe_hits
+        evaluated_slots += limit
+        required_present = required_paths.issubset(paths)
+        available_components = {
+            component
+            for item in relevant_results
+            for component in item.score_components
+        }
+        components_present = expected_components.issubset(
+            available_components
+        )
+        stale_correct = all(
+            item.stale is expected_stale for item in results
+        )
+        minimum_precision = float(probe.get("minimum_precision", 1.0))
+        checks[f"{check_prefix}_precision_at_k"] = (
+            probe_precision >= minimum_precision
+        )
+        checks[f"{check_prefix}_required_paths"] = required_present
+        checks[f"{check_prefix}_score_components"] = components_present
+        checks[f"{check_prefix}_stale_state"] = stale_correct
+        outcomes[category] = {
+            "query": probe["query"],
+            "top_k": limit,
+            "precision_at_k": probe_precision,
+            "result_paths": paths,
+            "required_paths_present": required_present,
+            "expected_components_present": components_present,
+            "explanations_correct": explanation_correct,
+            "stale_state_correct": stale_correct,
+        }
+    if evaluated_slots == 0:
+        raise ValueError("search evaluation requires a positive retrieval probe")
+    precision = relevant_hits / evaluated_slots
     checks["retrieval_precision_threshold"] = precision >= float(
         benchmark.get("retrieval_precision_minimum", 0)
     )
@@ -802,23 +964,92 @@ def _evaluate_planning(
             changed_paths=context_probe.get("changed_paths", []),
         )
         reports.append(context)
-        selected = {
-            item.relative_path for item in context.candidates if item.selected
-        }
+        selected_candidates = tuple(
+            item for item in context.candidates if item.selected
+        )
+        selected = {item.relative_path for item in selected_candidates}
+        exclusions = Counter(
+            item.exclusion_reason
+            for item in context.candidates
+            if not item.selected and item.exclusion_reason is not None
+        )
+        selected_hash_counts = Counter(
+            item.source_hash for item in selected_candidates
+        )
+        selected_hash_duplicates = sum(
+            count - 1 for count in selected_hash_counts.values()
+        )
+        forbidden_paths = set(context_probe.get("forbidden_paths", ()))
+        expected_stale_warning = bool(
+            context_probe.get("expected_stale_warning", False)
+        )
+        byte_accounted = sum(
+            item.byte_count for item in selected_candidates
+        ) == context.selected_bytes
+        token_accounted = sum(
+            item.estimated_tokens for item in selected_candidates
+        ) == context.selected_tokens
+        candidate_ids_unique = len(context.candidates) == len(
+            {item.candidate_id for item in context.candidates}
+        )
+        selected_exclusions_clear = all(
+            item.exclusion_reason is None for item in selected_candidates
+        )
         outcomes = [
             context.selected_bytes <= context.byte_budget,
             context.selected_tokens <= context.token_budget,
             set(context_probe.get("expected_paths", [])).issubset(selected),
+            byte_accounted,
+            token_accounted,
+            candidate_ids_unique,
+            selected_exclusions_clear,
+            not forbidden_paths.intersection(
+                item.relative_path for item in context.candidates
+            ),
+            bool(context.stale_warning) is expected_stale_warning,
+            len(context.candidates)
+            <= int(context_probe.get("maximum_candidates", 2_000)),
+            exclusions.get("budget_exceeded", 0)
+            >= int(context_probe.get("minimum_budget_exclusions", 0)),
+            exclusions.get("duplicate_content", 0)
+            >= int(
+                context_probe.get(
+                    "minimum_duplicate_content_exclusions",
+                    0,
+                )
+            ),
+            selected_hash_duplicates
+            <= int(
+                context_probe.get(
+                    "maximum_selected_source_hash_duplicates",
+                    2_000,
+                )
+            ),
         ]
         checks["context_byte_budget"] = outcomes[0]
         checks["context_token_budget"] = outcomes[1]
         checks["context_expected_paths"] = outcomes[2]
+        checks["context_byte_accounting"] = outcomes[3]
+        checks["context_token_accounting"] = outcomes[4]
+        checks["context_candidate_ids_unique"] = outcomes[5]
+        checks["context_selected_exclusions_clear"] = outcomes[6]
+        checks["context_forbidden_paths_excluded"] = outcomes[7]
+        checks["context_stale_warning"] = outcomes[8]
+        checks["context_candidate_limit"] = outcomes[9]
+        checks["context_budget_exclusions"] = outcomes[10]
+        checks["context_duplicate_content_exclusions"] = outcomes[11]
+        checks["context_selected_source_deduplication"] = outcomes[12]
         context_adherence = _ratio(outcomes)
         details["context_plan"] = {
+            "candidate_count": len(context.candidates),
+            "selected_candidate_count": len(selected_candidates),
             "selected_bytes": context.selected_bytes,
             "selected_tokens": context.selected_tokens,
             "byte_budget": context.byte_budget,
             "token_budget": context.token_budget,
+            "exclusion_counts": dict(sorted(exclusions.items())),
+            "selected_source_hash_duplicates": selected_hash_duplicates,
+            "stale_warning_present": bool(context.stale_warning),
             "selected_paths": sorted(selected),
         }
     return impact_recall, test_recall, context_adherence
@@ -908,6 +1139,7 @@ def _prepare_large_repository(repository: Path, module_count: int) -> dict[str, 
     (repository / "pyproject.toml").write_text(
         "[project]\nname = \"intelligence-large\"\nversion = \"0.1.0\"\n",
         encoding="utf-8",
+        newline="\n",
     )
     test_count = 0
     for index in range(module_count):
@@ -921,13 +1153,18 @@ def _prepare_large_repository(repository: Path, module_count: int) -> dict[str, 
                 f"def value_{name}() -> int:\n"
                 f"    return value_{previous}() + 1\n"
             )
-        (source / f"module_{name}.py").write_text(body, encoding="utf-8")
+        (source / f"module_{name}.py").write_text(
+            body,
+            encoding="utf-8",
+            newline="\n",
+        )
         if (index + 1) % 10 == 0:
             (tests / f"test_module_{name}.py").write_text(
                 f"from src.module_{name} import value_{name}\n\n\n"
                 f"def test_value_{name}() -> None:\n"
                 f"    assert value_{name}() == {index}\n",
                 encoding="utf-8",
+                newline="\n",
             )
             test_count += 1
     return {"module_count": module_count, "test_count": test_count}
@@ -1024,8 +1261,45 @@ def _reference_probe(
     }
 
 
-def _search_probe(query: str, expected_path: str, top_k: int) -> dict[str, Any]:
-    return {"query": query, "expected_path": expected_path, "top_k": top_k}
+def _search_probe(
+    category: str,
+    query: str,
+    relevant_paths: tuple[str, ...],
+    top_k: int,
+    *,
+    required_paths: tuple[str, ...] | None = None,
+    expected_components: tuple[str, ...] = (),
+    minimum_precision: float = 1.0,
+) -> dict[str, Any]:
+    return {
+        "category": category,
+        "query": query,
+        "relevant_paths": list(relevant_paths),
+        "required_paths": list(required_paths or relevant_paths),
+        "expected_components": list(expected_components),
+        "minimum_precision": minimum_precision,
+        "top_k": top_k,
+    }
+
+
+def _empty_search_probe(category: str, query: str) -> dict[str, Any]:
+    return {
+        "category": category,
+        "query": query,
+        "expect_empty": True,
+        "top_k": 5,
+    }
+
+
+def _search_explanation_correct(result: Any) -> bool:
+    if not result.explanation.startswith("Explainable hybrid ranking: "):
+        return False
+    if not result.explanation.endswith(".") or not result.score_components:
+        return False
+    return all(
+        f"{name.replace('_', ' ')}={score:g}" in result.explanation
+        for name, score in result.score_components.items()
+    )
 
 
 def _test_probe(subject: str, expected_test: str) -> dict[str, Any]:

@@ -140,3 +140,25 @@ def test_fork_rejects_unknown_change_surface() -> None:
             source_run_id="run-1",
             changed_inputs={"arbitrary_command": "do not run"},
         )
+
+
+def test_fork_trace_rejects_inconsistent_ancestry(tmp_path: Path) -> None:
+    store, source = _source(tmp_path)
+    result = ForkManager(
+        store,
+        ReplayEngine(store),
+        clock=lambda: NOW,
+    ).fork(
+        source,
+        ForkRequest(
+            replay_id="replay-ancestry",
+            source_trace_id=source.trace_id,
+            source_run_id=source.run_id,
+            changed_inputs={"retry_limit": 2},
+        ),
+    )
+    payload = result.fork_trace.model_dump(mode="json")
+    payload["replay"]["source_trace_id"] = "different-source-trace"
+
+    with pytest.raises(ValueError, match="fork ancestry"):
+        Trace.model_validate(payload)

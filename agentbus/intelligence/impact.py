@@ -324,8 +324,13 @@ class ChangeImpactAnalyzer:
             )
 
         projected_edges = _merge_edges(self.graph.edges, proposed)
+        working_edges = projected_edges
+        if len(working_edges) > self.limits.maximum_graph_edges:
+            working_edges = working_edges[: self.limits.maximum_graph_edges]
+            uncertainty.append("impact_graph_edge_limit_reached")
+            truncated = True
         working_graph = DependencyGraph(
-            projected_edges,
+            working_edges,
             files=self.files,
             symbols=self.symbols,
             modules=self.modules,

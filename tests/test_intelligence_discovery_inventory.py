@@ -88,6 +88,33 @@ def test_inventory_excludes_protected_generated_and_vendored_paths(
     assert "SECRET" not in protected.model_dump_json()
 
 
+def test_inventory_treats_nested_git_repository_as_separate_root(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "root.py").write_text("def shared(): return 'root'\n", encoding="utf-8")
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    (nested / ".git").write_text("gitdir: ../metadata\n", encoding="utf-8")
+    (nested / "child.py").write_text(
+        "def shared(): return 'nested'\n",
+        encoding="utf-8",
+    )
+
+    parent_inventory = RepositoryInventoryScanner(tmp_path).scan()
+    nested_inventory = RepositoryInventoryScanner(nested).scan()
+
+    assert parent_inventory.contains("root.py") is True
+    assert parent_inventory.contains("nested/child.py") is False
+    boundary = next(
+        item
+        for item in parent_inventory.diagnostics
+        if item.code == "discovery.nested_repository_boundary"
+    )
+    assert boundary.relative_path == "nested"
+    assert nested_inventory.contains("child.py") is True
+
+
 def test_inventory_rejects_symlink_escape_and_safe_reader_traversal(
     tmp_path: Path,
 ) -> None:

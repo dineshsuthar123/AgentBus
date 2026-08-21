@@ -12,6 +12,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
 
+from agentbus._failure_injection import (
+    FailureInjectionPoint,
+    FailureProbe,
+    failure_due,
+)
 from agentbus.execution.cancellation import CancellationRequested, CancellationToken
 from agentbus.sandbox.environment import (
     environment_diagnostics,
@@ -86,6 +91,7 @@ class ControlledProcessSupervisor:
         source_environment: Mapping[str, str] | None = None,
         poll_interval_seconds: float = 0.05,
         termination_grace_seconds: float = 1.0,
+        failure_probe: FailureProbe | None = None,
     ) -> None:
         self.worktree = validate_working_directory(worktree)
         self.catalog = catalog or ExecutableCatalog.standard()
@@ -100,6 +106,7 @@ class ControlledProcessSupervisor:
             raise ValueError("Process polling and termination grace must be positive.")
         self.poll_interval_seconds = poll_interval_seconds
         self.termination_grace_seconds = termination_grace_seconds
+        self._failure_probe = failure_probe
         self._executable_directories = self.catalog.executable_directories
         self._base_environment = sanitized_process_environment(
             source=source_environment,
@@ -181,7 +188,16 @@ class ControlledProcessSupervisor:
         command, launch_backend, command_processor, executable_override = (
             self._launch_command(identity, arguments)
         )
-        with tempfile.TemporaryDirectory(prefix="agentbus-tool-") as isolated_home:
+        try:
+            isolated_home_context = tempfile.TemporaryDirectory(
+                prefix="agentbus-tool-"
+            )
+        except OSError as exc:
+            raise ProcessSupervisionError(
+                "Could not create the isolated process temporary directory; verify "
+                "the temporary directory is writable and has available space."
+            ) from exc
+        with isolated_home_context as isolated_home:
             environment = sanitized_process_environment(
                 source=self._base_environment,
                 executable_directories=self._executable_directories,
@@ -218,27 +234,40 @@ class ControlledProcessSupervisor:
             cancelled = False
             termination_reason: str | None = None
             try:
-                while process.poll() is None:
-                    if cancellation is not None and cancellation.is_requested:
-                        cancellation.mark_propagated("sandbox-process")
-                        cancelled = True
-                        termination_reason = "cancellation_requested"
-                        tree.terminate(grace_seconds=self.termination_grace_seconds)
-                        cancellation.acknowledge(
-                            "sandbox-process",
-                            stage="process-tree-terminated",
-                        )
-                        break
-                    elapsed = time.monotonic() - started
-                    if elapsed >= effective_timeout:
-                        timed_out = True
-                        termination_reason = "wall_clock_timeout"
-                        tree.terminate(grace_seconds=self.termination_grace_seconds)
-                        break
-                    try:
-                        process.wait(timeout=self.poll_interval_seconds)
-                    except subprocess.TimeoutExpired:
-                        continue
+                if failure_due(
+                    self._failure_probe,
+                    FailureInjectionPoint.SUBPROCESS_TIMEOUT,
+                    scope=identity.alias,
+                ):
+                    timed_out = True
+                    termination_reason = "controlled_timeout"
+                    tree.terminate(grace_seconds=self.termination_grace_seconds)
+                else:
+                    while process.poll() is None:
+                        if cancellation is not None and cancellation.is_requested:
+                            cancellation.mark_propagated("sandbox-process")
+                            cancelled = True
+                            termination_reason = "cancellation_requested"
+                            tree.terminate(
+                                grace_seconds=self.termination_grace_seconds
+                            )
+                            cancellation.acknowledge(
+                                "sandbox-process",
+                                stage="process-tree-terminated",
+                            )
+                            break
+                        elapsed = time.monotonic() - started
+                        if elapsed >= effective_timeout:
+                            timed_out = True
+                            termination_reason = "wall_clock_timeout"
+                            tree.terminate(
+                                grace_seconds=self.termination_grace_seconds
+                            )
+                            break
+                        try:
+                            process.wait(timeout=self.poll_interval_seconds)
+                        except subprocess.TimeoutExpired:
+                            continue
             finally:
                 if process.poll() is None:
                     tree.terminate(grace_seconds=self.termination_grace_seconds)

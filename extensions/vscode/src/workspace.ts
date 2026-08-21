@@ -1,6 +1,11 @@
 import { realpath } from "node:fs/promises";
 import * as vscode from "vscode";
 import { requireWorkspaceTrust } from "./workspaceTrust";
+import {
+  chooseWorkspace,
+  type WorkspaceChoice,
+  type WorkspaceChoicePicker
+} from "./workspaceSelection";
 
 export { isSafeRepositoryPath } from "./repositoryPath";
 
@@ -21,7 +26,8 @@ export async function ensureWorkspaceTrust(
 }
 
 export async function selectWorkspace(
-  requireTrust: boolean
+  requireTrust: boolean,
+  picker?: WorkspaceChoicePicker<vscode.WorkspaceFolder>
 ): Promise<vscode.WorkspaceFolder | undefined> {
   if (requireTrust && !(await ensureWorkspaceTrust())) {
     return undefined;
@@ -33,21 +39,20 @@ export async function selectWorkspace(
     );
     return undefined;
   }
-  if (folders.length === 1) {
-    return folders[0];
-  }
-  const picked = await vscode.window.showQuickPick(
-    folders.map((folder) => ({
+  const choices: WorkspaceChoice<vscode.WorkspaceFolder>[] = folders.map(
+    (folder) => ({
       label: folder.name,
       description: folder.uri.fsPath,
       folder
-    })),
-    {
+    })
+  );
+  return chooseWorkspace(
+    choices,
+    picker ?? ((items) => vscode.window.showQuickPick(items, {
       title: "Select the repository AgentBus may operate on",
       placeHolder: "AgentBus never silently selects another workspace root"
-    }
+    }))
   );
-  return picked?.folder;
 }
 
 export async function canonicalWorkspacePath(

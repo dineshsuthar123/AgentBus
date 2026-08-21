@@ -25,7 +25,7 @@ from agentbus.execution.models import (
     TaskStatus,
 )
 from agentbus.execution.retry import FailureClassifier, RetryController
-from agentbus.execution.state_store import StateStore
+from agentbus.execution.state_store import RunNotFoundError, StateStore
 from agentbus.execution.task_graph import TaskGraph
 from agentbus.trace import RuntimeTrace
 
@@ -114,7 +114,12 @@ class DurableExecutionEngine:
             graph_data=graph.to_dict(),
             metadata=run_metadata,
         )
-        self.store.create_run_with_tasks(record, graph.tasks)
+        try:
+            self.store.get_run(record.run_id)
+        except RunNotFoundError:
+            self.store.create_run_with_tasks(record, graph.tasks)
+        else:
+            self.store.finalize_provisional_run(record, graph.tasks)
         self._cancellation_token(record.run_id)
         self.cancellations.synchronize(record.run_id)
         self._log(

@@ -571,6 +571,12 @@ def test_tool_approval_decision_survives_restart_without_raw_invocation(
 
     reopened = StateStore(store.database_path)
     pending = reopened.get_tool_approval("run-1", request.approval_id)
+    assert pending.request.workspace_identity == current.context.workspace_identity
+    assert pending.request.worktree_identity == current.context.worktree_identity
+    assert (
+        pending.request.requested_capabilities[0].scope.roots
+        == current.requested_capabilities[0].scope.roots
+    )
     grant = decide_persisted_tool_approval(
         pending.request,
         disposition=ToolApprovalDisposition.APPROVED,

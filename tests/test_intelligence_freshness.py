@@ -62,6 +62,33 @@ def test_freshness_reports_absent_and_current_indexes(
     assert status.total_files == 1
 
 
+def test_unchanged_failed_source_remains_partial_until_content_changes(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "broken.py"
+    source.write_bytes(b"\xff\xfe\x00")
+    indexer, checker = _components(tmp_path)
+
+    result = indexer.build()
+    unchanged = checker.status()
+
+    assert result.snapshot.state == IndexState.PARTIALLY_CURRENT
+    assert unchanged.state == IndexState.PARTIALLY_CURRENT
+    assert unchanged.stale_paths == ()
+    failure = next(
+        item
+        for item in result.snapshot.diagnostics
+        if item.code == "index.file_failed"
+    )
+    assert failure.details["observed_hash"]
+
+    source.write_bytes(b"\xff\xfe\x01")
+    changed = checker.status()
+
+    assert changed.state == IndexState.STALE
+    assert changed.stale_paths == ("broken.py",)
+
+
 def test_freshness_detects_modified_added_and_deleted_sources(
     tmp_path: Path,
 ) -> None:

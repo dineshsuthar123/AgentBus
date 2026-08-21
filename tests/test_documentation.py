@@ -8,6 +8,13 @@ from agentbus.cli import _root_parser
 
 
 ROOT = Path(__file__).resolve().parents[1]
+VALIDATION_DOCUMENTS = (
+    "docs/validation/real-repositories.md",
+    "docs/validation/adversarial-testing.md",
+    "docs/validation/reliability.md",
+    "docs/validation/performance.md",
+    "docs/validation/release-candidate.md",
+)
 REQUIRED_DOCUMENTS = (
     "docs/getting-started/install.md",
     "docs/getting-started/quickstart.md",
@@ -26,6 +33,7 @@ REQUIRED_DOCUMENTS = (
     "docs/troubleshooting/daemon.md",
     "docs/troubleshooting/providers.md",
     "docs/troubleshooting/indexing.md",
+    *VALIDATION_DOCUMENTS,
 )
 USER_GUIDES = tuple(Path(path) for path in REQUIRED_DOCUMENTS) + (
     Path("README.md"),
@@ -97,3 +105,23 @@ def test_quickstart_examples_match_current_cli() -> None:
         "agentbus cleanup --dry-run --stale --json",
     ):
         assert snippet in quickstart
+
+
+def test_validation_documentation_preserves_evidence_boundaries() -> None:
+    documents = {
+        Path(path).name: (ROOT / path).read_text(encoding="utf-8")
+        for path in VALIDATION_DOCUMENTS
+    }
+
+    assert "## Authorization boundary" in documents["real-repositories.md"]
+    assert "## Resource limits" in documents["real-repositories.md"]
+    assert "## Known gaps" in documents["real-repositories.md"]
+    assert "## Fixture methodology" in documents["adversarial-testing.md"]
+    assert "local defensive testing" in documents["adversarial-testing.md"]
+    assert "## What this does not prove" in documents["adversarial-testing.md"]
+    assert "## Bounded profiles" in documents["reliability.md"]
+    assert "Windows and Linux" in documents["reliability.md"]
+    assert "## Comparison policy" in documents["performance.md"]
+    assert "50,000" in documents["performance.md"]
+    assert "## Required gates" in documents["release-candidate.md"]
+    assert "No live model provider" in documents["release-candidate.md"]

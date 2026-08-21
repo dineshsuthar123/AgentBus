@@ -22,7 +22,7 @@ from agentbus.models.errors import ModelProviderError
 from agentbus.models.router import ModelRouter
 from agentbus.models.types import ModelRole
 from agentbus.repo.test_detection import TestCommandDetector
-from agentbus.security.redaction import sanitize_json
+from agentbus.security.redaction import sanitize_diagnostic_json
 
 
 class CheckStatus(str, Enum):
@@ -64,7 +64,7 @@ class DoctorReport:
         return CheckStatus.OK
 
     def to_dict(self) -> dict[str, Any]:
-        return sanitize_json(
+        return sanitize_diagnostic_json(
             {
                 "status": self.status.value,
                 "version": self.version,
@@ -111,18 +111,21 @@ def run_doctor(
 
 
 def render_doctor(report: DoctorReport, *, verbose: bool = False) -> str:
+    payload = report.to_dict()
     lines = [
-        f"AgentBus doctor {report.version}",
-        f"Overall: {report.status.value}",
-        f"Workspace: {report.workspace}",
-        f"Network used: {'yes' if report.network_used else 'no'}",
+        f"AgentBus doctor {payload['version']}",
+        f"Overall: {payload['status']}",
+        f"Workspace: {payload['workspace']}",
+        f"Network used: {'yes' if payload['network_used'] else 'no'}",
     ]
-    for check in report.checks:
-        lines.append(f"[{check.status.value}] {check.name}: {check.summary}")
-        if check.remediation:
-            lines.append(f"  Remediation: {check.remediation}")
-        if verbose and check.details:
-            for name, value in sorted(check.details.items()):
+    for check in payload["checks"]:
+        lines.append(
+            f"[{check['status']}] {check['name']}: {check['summary']}"
+        )
+        if check["remediation"]:
+            lines.append(f"  Remediation: {check['remediation']}")
+        if verbose and check["details"]:
+            for name, value in sorted(check["details"].items()):
                 lines.append(f"  {name}: {value}")
     return "\n".join(lines)
 

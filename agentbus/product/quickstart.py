@@ -453,15 +453,30 @@ def _remove_owned_container(
         "root": str(resolved),
     }:
         raise RuntimeError("Quickstart ownership marker does not match this process.")
-    # Git object files are read-only on Windows. Make only files beneath the
-    # already validated, marker-owned root writable before removing it.
+    # Make only entries beneath the validated, marker-owned root removable.
+    # POSIX traversal needs owner access on directories; Windows Git objects
+    # can require the write bit on files.
     for directory, child_directories, files in os.walk(resolved, followlinks=False):
         directory_path = Path(directory)
+        directory_path.chmod(
+            directory_path.stat().st_mode
+            | stat.S_IREAD
+            | stat.S_IWRITE
+            | stat.S_IEXEC
+        )
         child_directories[:] = [
             name
             for name in child_directories
             if not (directory_path / name).is_symlink()
         ]
+        for name in child_directories:
+            target = directory_path / name
+            target.chmod(
+                target.stat().st_mode
+                | stat.S_IREAD
+                | stat.S_IWRITE
+                | stat.S_IEXEC
+            )
         for name in files:
             target = directory_path / name
             if not target.is_symlink():

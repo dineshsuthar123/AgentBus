@@ -456,16 +456,23 @@ def _documentation_links_gate(root: Path) -> ReleaseGate:
 def _security_gate(root: Path) -> ReleaseGate:
     started = time.monotonic()
     try:
-        report = audit_release_security(root)
+        report = audit_release_security(root, include_validation=True)
     except (OSError, RuntimeError, ValueError) as exc:
         return _gate_failure("security-audit", "Release security audit", exc, started)
+    defensive = report.defensive_validation
+    defensive_summary = (
+        f"; defensive_validation={defensive.classification.value}; "
+        f"limitations={len(defensive.unresolved_limitations)}"
+        if defensive is not None
+        else ""
+    )
     return ReleaseGate(
         "security-audit",
         "Release security audit",
         GateStatus.PASSED if report.ok else GateStatus.FAILED,
         f"Scanned {report.scanned_files} tracked files and "
         f"{len(report.scanned_artifacts)} artifact(s); "
-        f"findings={len(report.findings)}.",
+        f"findings={len(report.findings)}{defensive_summary}.",
         time.monotonic() - started,
     )
 

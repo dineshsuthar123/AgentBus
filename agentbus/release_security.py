@@ -12,9 +12,12 @@ import zipfile
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterable
+from typing import TYPE_CHECKING, Any, Iterable
 
 from agentbus import __version__
+
+if TYPE_CHECKING:
+    from agentbus.security.validation import DefensiveSecurityScorecard
 
 
 _MAX_TEXT_BYTES = 16 * 1024 * 1024
@@ -108,13 +111,16 @@ class ReleaseSecurityReport:
     scanned_files: int
     scanned_artifacts: tuple[str, ...]
     findings: tuple[SecurityFinding, ...]
+    defensive_validation: DefensiveSecurityScorecard | None = None
 
     @property
     def ok(self) -> bool:
-        return not self.findings
+        return not self.findings and (
+            self.defensive_validation is None or self.defensive_validation.ok
+        )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "ok": self.ok,
             "scanned_files": self.scanned_files,
             "scanned_artifacts": list(self.scanned_artifacts),
@@ -122,6 +128,11 @@ class ReleaseSecurityReport:
             "findings": [finding.to_dict() for finding in self.findings],
             "network_used": False,
         }
+        if self.defensive_validation is not None:
+            payload["defensive_security_scorecard"] = (
+                self.defensive_validation.to_dict()
+            )
+        return payload
 
 
 def audit_release_security(
@@ -129,6 +140,7 @@ def audit_release_security(
     *,
     artifacts: Iterable[str | Path] | None = None,
     tracked_paths: Iterable[str | Path] | None = None,
+    include_validation: bool = False,
 ) -> ReleaseSecurityReport:
     repository = Path(root).expanduser().resolve()
     if not repository.is_dir():
@@ -187,10 +199,19 @@ def audit_release_security(
         unique[key]
         for key in sorted(unique, key=lambda item: (item[1], item[0], item[2]))
     )
+    defensive_validation = None
+    if include_validation:
+        from agentbus.security.validation import run_defensive_security_validation
+
+        defensive_validation = run_defensive_security_validation(
+            repository,
+            artifacts=tuple(selected_artifacts),
+        )
     return ReleaseSecurityReport(
         scanned_files=scanned,
         scanned_artifacts=tuple(sorted(artifact_names)),
         findings=ordered,
+        defensive_validation=defensive_validation,
     )
 
 
@@ -201,10 +222,19 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--root", default=".")
     parser.add_argument("--artifact", action="append", default=None)
+    parser.add_argument(
+        "--static-only",
+        action="store_true",
+        help="Skip controlled local defensive probes and scan release inputs only.",
+    )
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
     try:
-        report = audit_release_security(args.root, artifacts=args.artifact)
+        report = audit_release_security(
+            args.root,
+            artifacts=args.artifact,
+            include_validation=not args.static_only,
+        )
     except (OSError, RuntimeError, ValueError) as exc:
         payload = {"ok": False, "error": str(exc), "network_used": False}
         print(
@@ -215,17 +245,48 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if args.json:
         print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
-    elif report.ok:
-        print(
-            "AgentBus release security audit passed: "
-            f"{report.scanned_files} tracked files, "
-            f"{len(report.scanned_artifacts)} artifact(s)."
-        )
     else:
-        print(f"AgentBus release security audit failed: {len(report.findings)} finding(s).")
-        for finding in report.findings:
-            print(f"  [{finding.code}] {finding.location}: {finding.detail}")
+        if report.ok:
+            classification = (
+                report.defensive_validation.classification.value
+                if report.defensive_validation is not None
+                else "static_only"
+            )
+            print(
+                "AgentBus release security audit passed: "
+                f"{report.scanned_files} tracked files, "
+                f"{len(report.scanned_artifacts)} artifact(s), "
+                f"defensive_validation={classification}."
+            )
+        else:
+            print(
+                "AgentBus release security audit failed: "
+                f"{len(report.findings)} static finding(s)."
+            )
+            for finding in report.findings:
+                print(f"  [{finding.code}] {finding.location}: {finding.detail}")
+        _print_defensive_validation(report.defensive_validation)
     return 0 if report.ok else 1
+
+
+def _print_defensive_validation(
+    scorecard: DefensiveSecurityScorecard | None,
+) -> None:
+    if scorecard is None:
+        return
+    print(
+        "Defensive security scorecard: "
+        f"{scorecard.classification.value}; "
+        f"evidence={len(scorecard.evidence)}; "
+        f"limitations={len(scorecard.unresolved_limitations)}."
+    )
+    for item in scorecard.evidence:
+        print(f"  [{item.status.value}] {item.title}: {item.observation}")
+        for boundary in item.tested_boundaries:
+            print(f"    Tested: {boundary}")
+    for limitation in scorecard.unresolved_limitations:
+        print(f"  Limitation: {limitation}")
+    print(f"  {scorecard.disclaimer}")
 
 
 def _tracked_files(root: Path) -> tuple[Path, ...]:

@@ -18,6 +18,7 @@ from agentbus.intelligence.migrations import (
     verify_schema as verify_index_schema,
 )
 from agentbus.intelligence.schema import LATEST_SCHEMA_VERSION
+from agentbus.security.redaction import redact_diagnostic_text
 
 
 class MigrationState(StrEnum):
@@ -41,12 +42,12 @@ class MigrationTarget:
     def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
-            "path": str(self.path),
+            "path": redact_diagnostic_text(str(self.path), max_chars=4_096),
             "current_version": self.current_version,
             "target_version": self.target_version,
             "state": self.state.value,
             "safe_forward": self.safe_forward,
-            "message": self.message,
+            "message": redact_diagnostic_text(self.message, max_chars=4_096),
         }
 
 
@@ -72,7 +73,10 @@ class MigrationReport:
             "dry_run": self.dry_run,
             "recovered_interrupted_operation": self.recovered_interrupted_operation,
             "targets": [target.to_dict() for target in self.targets],
-            "backups": [str(path) for path in self.backups],
+            "backups": [
+                redact_diagnostic_text(str(path), max_chars=4_096)
+                for path in self.backups
+            ],
         }
 
 

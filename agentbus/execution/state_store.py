@@ -10,6 +10,13 @@ from functools import wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterator
 
+from agentbus._failure_injection import FailureProbe
+from agentbus._sqlite import (
+    DEFAULT_TRANSACTION_RETRY_DELAYS,
+    begin_immediate_with_retry,
+    is_sqlite_busy_error,
+    normalize_transaction_retry_delays,
+)
 from agentbus.execution.cancellation import (
     CancellationOperation,
     CancellationState,
@@ -109,6 +116,10 @@ class StateStoreError(RuntimeError):
     """Base error for durable state operations."""
 
 
+class StateStoreBusyError(StateStoreError):
+    """Raised after bounded retries cannot acquire the durable-state writer lock."""
+
+
 class RunNotFoundError(StateStoreError):
     pass
 
@@ -173,8 +184,13 @@ class ComparisonRecordConflictError(StateStoreError):
     pass
 
 
+class WorktreeRecordConflictError(StateStoreError):
+    pass
+
+
 _MAX_TEXT_CHARS = 20_000
 _PRIVATE_REPLAY_WORKSPACE = "[ISOLATED_REPLAY_WORKSPACE]"
+_DEFAULT_BUSY_TIMEOUT_MS = 5_000
 
 
 def _domain_decode(description: str) -> Callable:
@@ -202,8 +218,22 @@ class StateStore:
     transaction so transition validation and its audit event see one state.
     """
 
-    def __init__(self, database_path: str | Path):
+    def __init__(
+        self,
+        database_path: str | Path,
+        *,
+        busy_timeout_ms: int = _DEFAULT_BUSY_TIMEOUT_MS,
+        transaction_retry_delays: tuple[float, ...] = DEFAULT_TRANSACTION_RETRY_DELAYS,
+        failure_probe: FailureProbe | None = None,
+    ) -> None:
+        if busy_timeout_ms < 1 or busy_timeout_ms > 120_000:
+            raise ValueError("busy_timeout_ms must be between 1 and 120000")
         self.database_path = Path(database_path).expanduser().resolve()
+        self.busy_timeout_ms = busy_timeout_ms
+        self.transaction_retry_delays = normalize_transaction_retry_delays(
+            transaction_retry_delays
+        )
+        self._failure_probe = failure_probe
         try:
             self.database_path.parent.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
@@ -277,7 +307,12 @@ class StateStore:
                     f"{current} to {current + 1}."
                 )
             try:
-                connection.execute("BEGIN IMMEDIATE")
+                begin_immediate_with_retry(
+                    connection,
+                    retry_delays=self.transaction_retry_delays,
+                    failure_probe=self._failure_probe,
+                    failure_scope="state-write",
+                )
                 for statement in statements:
                     connection.execute(statement)
                 connection.execute(
@@ -285,6 +320,15 @@ class StateStore:
                     (str(current + 1), "schema_version"),
                 )
                 connection.commit()
+            except sqlite3.OperationalError as exc:
+                connection.rollback()
+                if is_sqlite_busy_error(exc):
+                    raise StateStoreBusyError(
+                        "State database remained busy during schema migration."
+                    ) from exc
+                raise StateStoreError(
+                    f"State schema migration {current} -> {current + 1} failed."
+                ) from exc
             except sqlite3.Error as exc:
                 connection.rollback()
                 raise StateStoreError(
@@ -314,12 +358,12 @@ class StateStore:
         try:
             connection = sqlite3.connect(
                 self.database_path,
-                timeout=10,
+                timeout=self.busy_timeout_ms / 1_000,
                 isolation_level=None,
             )
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA foreign_keys = ON")
-            connection.execute("PRAGMA busy_timeout = 5000")
+            connection.execute(f"PRAGMA busy_timeout = {self.busy_timeout_ms}")
             yield connection
         except StateStoreError:
             raise
@@ -335,7 +379,12 @@ class StateStore:
     def _write_transaction(self) -> Iterator[sqlite3.Connection]:
         with self._connection() as connection:
             try:
-                connection.execute("BEGIN IMMEDIATE")
+                begin_immediate_with_retry(
+                    connection,
+                    retry_delays=self.transaction_retry_delays,
+                    failure_probe=self._failure_probe,
+                    failure_scope="state-write",
+                )
                 yield connection
                 connection.commit()
             except (StateStoreError, InvalidStateTransition):
@@ -346,6 +395,13 @@ class StateStore:
                 raise StateStoreError(
                     "Durable state violates a uniqueness or relationship constraint."
                 ) from exc
+            except sqlite3.OperationalError as exc:
+                connection.rollback()
+                if is_sqlite_busy_error(exc):
+                    raise StateStoreBusyError(
+                        f"State database is busy: '{self.database_path}'."
+                    ) from exc
+                raise StateStoreError("Unable to update durable state.") from exc
             except sqlite3.Error as exc:
                 connection.rollback()
                 raise StateStoreError("Unable to update durable state.") from exc
@@ -377,6 +433,92 @@ class StateStore:
                 None,
                 "durable_run_created",
                 {"workflow_type": run.workflow_type, "status": run.status.value},
+            )
+            self._insert_event(
+                connection,
+                run.run_id,
+                None,
+                "task_graph_validated",
+                {"task_count": len(tasks), "graph_version": 1},
+            )
+        return self.load_snapshot(run.run_id)
+
+    def finalize_provisional_run(
+        self,
+        run: RunRecord,
+        tasks: list[TaskSpec],
+    ) -> RunSnapshot:
+        """Atomically replace a control-plane planning placeholder."""
+        with self._write_transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM runs WHERE run_id = ?",
+                (run.run_id,),
+            ).fetchone()
+            if row is None:
+                raise RunNotFoundError(f"Run '{run.run_id}' was not found.")
+            current = self._run_from_row(row)
+            submission = current.metadata.get("control_submission")
+            if (
+                current.status != RunStatus.PENDING
+                or not isinstance(submission, dict)
+                or submission.get("state") != "planning"
+            ):
+                raise StateStoreError(
+                    f"Run '{run.run_id}' is not a provisional planning submission."
+                )
+            identity = (
+                "original_task",
+                "workflow_type",
+                "model",
+                "workspace",
+            )
+            if any(
+                getattr(current, field) != getattr(run, field)
+                for field in identity
+            ):
+                raise StateStoreError(
+                    "Planned run identity does not match its accepted submission."
+                )
+            task_count = connection.execute(
+                "SELECT COUNT(*) FROM tasks WHERE run_id = ?",
+                (run.run_id,),
+            ).fetchone()[0]
+            if task_count:
+                raise StateStoreError(
+                    "A provisional planning submission cannot already contain tasks."
+                )
+            metadata = {
+                **current.metadata,
+                **run.metadata,
+                "control_submission": {
+                    **submission,
+                    "state": "planned",
+                },
+            }
+            now = utc_now()
+            connection.execute(
+                """
+                UPDATE runs SET
+                    planner_output_json = ?, context_summary = ?, graph_json = ?,
+                    metadata_json = ?, updated_at = ?, version = version + 1
+                WHERE run_id = ?
+                """,
+                (
+                    _dump_json(run.planner_output),
+                    _safe_text(run.context_summary),
+                    _dump_json(run.graph_data),
+                    _dump_json(metadata),
+                    _timestamp(now),
+                    run.run_id,
+                ),
+            )
+            self._insert_tasks(connection, run.run_id, tasks)
+            self._insert_event(
+                connection,
+                run.run_id,
+                None,
+                "durable_planning_completed",
+                {"task_count": len(tasks)},
             )
             self._insert_event(
                 connection,
@@ -2124,6 +2266,64 @@ class StateStore:
             ).fetchall()
         return [_replay_session_from_row(row) for row in rows]
 
+    def reconcile_interrupted_replay_sessions(
+        self,
+        *,
+        limit: int = 1_000,
+    ) -> list[ReplaySession]:
+        """Fail replay work that cannot still be owned after daemon restart."""
+        from agentbus.replay.session import ReplaySession, ReplaySessionStatus
+
+        if limit < 1 or limit > 1_000:
+            raise StateStoreError(
+                "Replay reconciliation limit must be between 1 and 1000."
+            )
+        active: list[ReplaySession] = []
+        for status in (
+            ReplaySessionStatus.PENDING,
+            ReplaySessionStatus.RUNNING,
+        ):
+            remaining = limit - len(active)
+            if remaining <= 0:
+                break
+            active.extend(
+                self.list_replay_sessions(status=status, limit=remaining)
+            )
+        reconciled: list[ReplaySession] = []
+        now = utc_now()
+        for session in active:
+            request = self.get_replay_request(session.replay_id)
+            completed_at = max(
+                now,
+                session.started_at or session.created_at,
+            )
+            failed = ReplaySession.model_validate(
+                session.model_copy(
+                    update={
+                        "status": ReplaySessionStatus.FAILED,
+                        "completed_at": completed_at,
+                        "failure_category": "DaemonRestartInterrupted",
+                        "failure_message": (
+                            "Replay ownership was lost during daemon restart; "
+                            "the replay was not rerun."
+                        ),
+                    }
+                ).model_dump()
+            )
+            persisted = self.record_replay_session(request, failed)
+            self.record_event(
+                session.source_run_id,
+                "replay_restart_reconciled",
+                {
+                    "replay_id": session.replay_id,
+                    "from_status": session.status.value,
+                    "to_status": persisted.status.value,
+                    "automatic_retry_allowed": False,
+                },
+            )
+            reconciled.append(persisted)
+        return reconciled
+
     def record_trace_comparison(
         self,
         comparison: RunComparison,
@@ -2588,7 +2788,9 @@ class StateStore:
                     request.invocation_revision,
                     request.run_id,
                     request.task_id,
-                    _dump_json(persisted_request.model_dump(mode="json")),
+                    _dump_validated_json(
+                        persisted_request.model_dump(mode="json")
+                    ),
                     request_sha256,
                     _timestamp(request.created_at),
                 ),
@@ -3753,6 +3955,34 @@ class StateStore:
             self._require_run_row(connection, record.run_id)
             if record.task_id is not None:
                 self._require_task_row(connection, record.run_id, record.task_id)
+            existing = None
+            if record.purpose == WorktreePurpose.TASK:
+                existing = connection.execute(
+                    """SELECT worktree_id FROM worktrees
+                    WHERE run_id = ? AND task_id = ? AND purpose = ? AND status != ?
+                    LIMIT 1""",
+                    (
+                        record.run_id,
+                        record.task_id,
+                        record.purpose.value,
+                        WorktreeStatus.REMOVED.value,
+                    ),
+                ).fetchone()
+            elif record.purpose == WorktreePurpose.INTEGRATION:
+                existing = connection.execute(
+                    """SELECT worktree_id FROM worktrees
+                    WHERE run_id = ? AND task_id IS NULL AND purpose = ? AND status != ?
+                    LIMIT 1""",
+                    (
+                        record.run_id,
+                        record.purpose.value,
+                        WorktreeStatus.REMOVED.value,
+                    ),
+                ).fetchone()
+            if existing is not None:
+                raise WorktreeRecordConflictError(
+                    "A non-removed worktree already owns this run and task scope."
+                )
             connection.execute(
                 """
                 INSERT INTO worktrees(
@@ -4998,6 +5228,20 @@ def _dump_json(value: Any) -> str:
     try:
         return json.dumps(
             _sanitize(value),
+            allow_nan=False,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    except (TypeError, ValueError) as exc:
+        raise StateStoreError("Durable state value is not JSON serializable.") from exc
+
+
+def _dump_validated_json(value: Any) -> str:
+    """Serialize an already-sanitized model without changing bound identities."""
+    try:
+        return json.dumps(
+            value,
             allow_nan=False,
             ensure_ascii=True,
             separators=(",", ":"),

@@ -4,11 +4,23 @@ import hashlib
 import os
 import re
 import subprocess
+import threading
 import uuid
+import weakref
 from pathlib import Path
 
-from agentbus.execution.state_store import StateStore, StateStoreError
-from agentbus.git.repository import GitRepository, GitRepositoryError
+from agentbus.execution.state_store import (
+    StateStore,
+    StateStoreError,
+    WorktreeRecordConflictError,
+)
+from agentbus.git.repository import (
+    GitRepository,
+    GitRepositoryError,
+    safe_git_environment,
+)
+from agentbus.sandbox.platform import ExecutableCatalog
+from agentbus.security.redaction import redact_text
 from agentbus.worktrees.errors import (
     WorktreeAlreadyExistsError,
     WorktreeDirtyError,
@@ -24,6 +36,18 @@ from agentbus.worktrees.models import (
 )
 
 
+_GIT_LOCKS_GUARD = threading.Lock()
+_GIT_LOCKS: weakref.WeakValueDictionary[str, threading.RLock] = (
+    weakref.WeakValueDictionary()
+)
+
+
+def _git_lock_for(path: Path) -> threading.RLock:
+    key = os.path.normcase(str(path.expanduser().resolve()))
+    with _GIT_LOCKS_GUARD:
+        return _GIT_LOCKS.setdefault(key, threading.RLock())
+
+
 class GitWorktreeManager:
     def __init__(
         self,
@@ -32,13 +56,33 @@ class GitWorktreeManager:
         store: StateStore,
         *,
         timeout_seconds: int = 60,
-    ):
+        executable_catalog: ExecutableCatalog | None = None,
+        maximum_command_output_chars: int = 65_536,
+    ) -> None:
+        if timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be greater than zero")
+        if (
+            maximum_command_output_chars < 1
+            or maximum_command_output_chars > 4_194_304
+        ):
+            raise ValueError(
+                "maximum_command_output_chars must be between 1 and 4194304"
+            )
         self.repository_root = Path(repository_root).expanduser().resolve()
         self.worktree_root = Path(worktree_root).expanduser().resolve()
         self.store = store
         self.timeout_seconds = timeout_seconds
+        self.executable_catalog = executable_catalog or ExecutableCatalog.standard(
+            ("git",)
+        )
+        self.maximum_command_output_chars = maximum_command_output_chars
+        self._git_lock = _git_lock_for(self.repository_root)
         try:
-            GitRepository(str(self.repository_root)).validate_workspace()
+            GitRepository(
+                str(self.repository_root),
+                timeout_seconds=timeout_seconds,
+                executable_catalog=self.executable_catalog,
+            ).validate_workspace()
         except GitRepositoryError as exc:
             raise WorktreeRepositoryMismatchError(str(exc)) from exc
         if self._is_within(self.worktree_root, self.repository_root):
@@ -47,6 +91,7 @@ class GitWorktreeManager:
             )
         self.worktree_root.mkdir(parents=True, exist_ok=True)
         self._source_common_dir = self._common_git_dir(self.repository_root)
+        self._git_lock = _git_lock_for(self._source_common_dir)
 
     def create_integration_worktree(
         self,
@@ -59,8 +104,16 @@ class GitWorktreeManager:
             if item.purpose == WorktreePurpose.INTEGRATION
             and item.status != WorktreeStatus.REMOVED
         ]
+        if len(existing) > 1:
+            raise WorktreeOwnershipError(
+                "Multiple non-removed integration worktrees claim the same run."
+            )
         if existing:
-            return self.recover(existing[0].worktree_id)
+            return self._recover_reusable(
+                existing[0],
+                expected_status=WorktreeStatus.READY,
+                scope="integration",
+            )
         return self._create(
             run_id=run_id,
             task_id=None,
@@ -82,8 +135,16 @@ class GitWorktreeManager:
             if item.purpose == WorktreePurpose.TASK
             and item.status != WorktreeStatus.REMOVED
         ]
+        if len(existing) > 1:
+            raise WorktreeOwnershipError(
+                f"Multiple non-removed worktrees claim task '{task_id}'."
+            )
         if existing:
-            record = self.recover(existing[-1].worktree_id)
+            record = self._recover_reusable(
+                existing[-1],
+                expected_status=WorktreeStatus.ACTIVE,
+                scope=f"task '{task_id}'",
+            )
             if record.base_commit != base_commit:
                 raise WorktreeAlreadyExistsError(
                     f"Task '{task_id}' has a worktree from a different base commit."
@@ -132,6 +193,24 @@ class GitWorktreeManager:
         self.validate(record)
         return record
 
+    def _recover_reusable(
+        self,
+        record: WorktreeRecord,
+        *,
+        expected_status: WorktreeStatus,
+        scope: str,
+    ) -> WorktreeRecord:
+        if record.status != expected_status:
+            raise WorktreeAlreadyExistsError(
+                f"The {scope} worktree has unresolved status '{record.status.value}'."
+            )
+        recovered = self.recover(record.worktree_id)
+        if recovered.status != expected_status:
+            raise WorktreeOwnershipError(
+                f"The {scope} worktree is missing or no longer recoverable."
+            )
+        return recovered
+
     def validate(self, record: WorktreeRecord) -> Path:
         path = Path(record.path).expanduser().resolve()
         if not self._is_within(path, self.worktree_root):
@@ -154,6 +233,20 @@ class GitWorktreeManager:
         if self._common_git_dir(path) != self._source_common_dir:
             raise WorktreeRepositoryMismatchError(
                 "Worktree belongs to a different Git common repository."
+            )
+        expected_branch = f"refs/heads/{record.branch_ref}"
+        try:
+            actual_branch = self._run_git(
+                ["symbolic-ref", "--quiet", "HEAD"],
+                cwd=path,
+            )
+        except WorktreeError as exc:
+            raise WorktreeOwnershipError(
+                "Persisted worktree branch identity could not be verified."
+            ) from exc
+        if actual_branch != expected_branch:
+            raise WorktreeOwnershipError(
+                "Persisted worktree branch does not match the checked-out branch."
             )
         return path
 
@@ -258,7 +351,12 @@ class GitWorktreeManager:
             status=WorktreeStatus.CREATING,
             worker_id=worker_id,
         )
-        self.store.record_worktree(record)
+        try:
+            self.store.record_worktree(record)
+        except WorktreeRecordConflictError as exc:
+            raise WorktreeAlreadyExistsError(
+                "Another non-removed worktree already owns this run and task scope."
+            ) from exc
         path.parent.mkdir(parents=True, exist_ok=True)
         try:
             self._run_git(
@@ -295,21 +393,52 @@ class GitWorktreeManager:
         return candidate.resolve()
 
     def _run_git(self, arguments: list[str], *, cwd: Path) -> str:
+        if not arguments:
+            raise WorktreeError("A Git worktree operation must be specified.")
+        operation = arguments[0]
+        identity = self.executable_catalog.resolve("git")
+        command = identity.command(
+            [
+                "--no-pager",
+                "--literal-pathspecs",
+                "-c",
+                f"core.hooksPath={os.devnull}",
+                "-c",
+                "core.fsmonitor=false",
+                "-c",
+                "commit.gpgSign=false",
+                *arguments,
+            ]
+        )
         try:
-            result = subprocess.run(
-                ["git", *arguments],
-                cwd=cwd,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout_seconds,
-                shell=False,
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            raise WorktreeError(f"Git worktree command could not run: {exc}") from exc
+            with self._git_lock:
+                result = subprocess.run(
+                    command,
+                    cwd=cwd,
+                    capture_output=True,
+                    text=True,
+                    timeout=self.timeout_seconds,
+                    shell=False,
+                    env=safe_git_environment(),
+                )
+        except subprocess.TimeoutExpired as exc:
+            raise WorktreeError(
+                f"Git worktree operation '{operation}' timed out."
+            ) from exc
+        except OSError as exc:
+            raise WorktreeError(
+                f"Git worktree operation '{operation}' could not run: "
+                f"{redact_text(type(exc).__name__, max_chars=128)}"
+            ) from exc
         if result.returncode != 0:
             detail = result.stderr.strip() or result.stdout.strip()
             raise WorktreeError(
-                f"Git worktree command failed ({' '.join(arguments)}): {detail}"
+                f"Git worktree operation '{operation}' failed: "
+                f"{redact_text(detail, max_chars=2_048)}"
+            )
+        if len(result.stdout) > self.maximum_command_output_chars:
+            raise WorktreeError(
+                f"Git worktree operation '{operation}' exceeded the output limit."
             )
         return result.stdout.rstrip("\r\n")
 

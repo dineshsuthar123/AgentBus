@@ -55,6 +55,7 @@ class BackgroundReplaySupervisor:
         *,
         max_background_replays: int = 4,
         service_factory: ReplayServiceFactory | None = None,
+        reconcile_interrupted: bool = False,
     ) -> None:
         if max_background_replays < 1 or max_background_replays > 32:
             raise ValueError(
@@ -70,6 +71,13 @@ class BackgroundReplaySupervisor:
         self._active: dict[str, ActiveReplay] = {}
         self._lock = threading.RLock()
         self._closed = False
+        self.reconciled_replays = (
+            tuple(
+                self.query_service.store.reconcile_interrupted_replay_sessions()
+            )
+            if reconcile_interrupted
+            else ()
+        )
 
     def submit(
         self,

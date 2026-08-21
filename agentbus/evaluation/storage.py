@@ -118,10 +118,10 @@ def _read_json(path: Path) -> dict:
 
 
 def _write_json(path: Path, value: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(sanitize_json(value), indent=2, sort_keys=True) + "\n"
-    temporary = None
+    temporary: Path | None = None
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(
             "w",
             encoding="utf-8",
@@ -130,10 +130,19 @@ def _write_json(path: Path, value: dict) -> None:
             suffix=".tmp",
             delete=False,
         ) as handle:
-            handle.write(payload)
             temporary = Path(handle.name)
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(temporary, path)
+        temporary = None
     except OSError as exc:
         if temporary is not None:
-            temporary.unlink(missing_ok=True)
-        raise EvaluationStorageError(f"Unable to write evaluation JSON: {path}") from exc
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+        raise EvaluationStorageError(
+            "Unable to write evaluation JSON; verify the destination is writable "
+            "and has available disk space."
+        ) from exc

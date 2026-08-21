@@ -334,6 +334,17 @@ class CancellationSignal(Protocol):
         """Return whether cooperative cancellation was requested."""
 
 
+def source_exceeds_byte_limit(content: str, maximum_bytes: int) -> bool:
+    if len(content) > maximum_bytes:
+        return True
+    total = 0
+    for offset in range(0, len(content), 4_096):
+        total += len(content[offset : offset + 4_096].encode("utf-8"))
+        if total > maximum_bytes:
+            return True
+    return False
+
+
 def _bounded(value: int, name: str, minimum: int, maximum: int) -> None:
     if value < minimum or value > maximum:
         raise ValueError(f"{name} must be between {minimum} and {maximum}")

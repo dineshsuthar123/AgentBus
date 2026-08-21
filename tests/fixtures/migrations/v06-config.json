@@ -1,0 +1,19 @@
+{
+  "agentbus": {
+    "command_timeout_seconds": 30,
+    "deterministic_profile": "python-calculator",
+    "durable_execution": true,
+    "enable_provider_fallback": false,
+    "fallback_provider_name": "deterministic",
+    "keep_worktrees": false,
+    "model_max_retries": 0,
+    "parallel_execution": false,
+    "provider_name": "deterministic",
+    "repository_intelligence": false,
+    "runs_dir": "__RUNS_DIR__",
+    "state_db": "state.db",
+    "state_dir": "__STATE_DIR__",
+    "workspace_dir": "__WORKSPACE_DIR__",
+    "worktree_root": "__WORKTREE_ROOT__"
+  }
+}

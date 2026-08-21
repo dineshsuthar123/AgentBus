@@ -274,6 +274,19 @@ class RepositoryInventoryScanner:
             )
             return
 
+        if relative_directory and any(
+            entry.name.casefold() == ".git" for entry in entries
+        ):
+            state.ignored_count += 1
+            self._diagnostic(
+                state,
+                "discovery.nested_repository_boundary",
+                DiagnosticSeverity.INFO,
+                "Nested repositories are indexed as separate workspace roots.",
+                relative_directory,
+            )
+            return
+
         local_matcher = self._extend_matcher(
             relative_directory,
             entries,

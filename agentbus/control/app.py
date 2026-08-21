@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -12,6 +13,7 @@ try:
     from fastapi import FastAPI, Query, Request
     from fastapi.exceptions import RequestValidationError
     from fastapi.responses import JSONResponse, Response, StreamingResponse
+    from starlette.exceptions import HTTPException as StarletteHTTPException
 except ImportError as exc:  # pragma: no cover - exercised by the CLI dependency test
     raise RuntimeError(
         'The control plane requires optional dependencies. Install "agentbus[ide]".'
@@ -114,10 +116,13 @@ from agentbus.execution.state_store import StateStoreError
 from agentbus.git.repository import GitRepositoryError
 from agentbus.mcp.server import AgentBusMcpServer
 from agentbus.replay.session import ReplaySessionStatus
-from agentbus.security.redaction import sanitize_json
+from agentbus.security.redaction import redact_text, sanitize_json
 from agentbus.tools.descriptors import builtin_descriptors
 
 MAX_REQUEST_BYTES = 1_000_000
+MAX_VALIDATION_ISSUES = 50
+MAX_VALIDATION_LOCATION_PARTS = 8
+MAX_VALIDATION_TEXT_CHARS = 128
 
 
 @dataclass(frozen=True)
@@ -197,6 +202,7 @@ def create_app(
                 )
             if request.url.path != "/health":
                 authenticator.authenticate(request.headers)
+            body_is_bounded = await _buffer_bounded_request_body(request)
         except (ControlPlaneError, ValueError) as exc:
             status_code = getattr(exc, "status_code", 400)
             return _error_json(
@@ -205,6 +211,13 @@ def create_app(
                 message=safe_error_message(exc),
                 retryable=bool(getattr(exc, "retryable", False)),
                 status_code=status_code,
+            )
+        if not body_is_bounded:
+            return _error_json(
+                JSONResponse,
+                code="request_too_large",
+                message="The request body exceeds the control-plane limit.",
+                status_code=413,
             )
         response = await call_next(request)
         response.headers["Cache-Control"] = "no-store"
@@ -225,20 +238,23 @@ def create_app(
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(_request: Request, exc: RequestValidationError):
-        details = [
-            {
-                "location": [str(part) for part in item.get("loc", ())],
-                "message": item.get("msg", "Invalid value."),
-                "type": item.get("type", "validation_error"),
-            }
-            for item in exc.errors()
-        ]
         return _error_json(
             JSONResponse,
             code="validation_error",
             message="The request did not match the control protocol.",
-            details={"issues": details[:50]},
+            details={"issues": _bounded_validation_issues(exc.errors())},
             status_code=422,
+        )
+
+    @app.exception_handler(StarletteHTTPException)
+    async def http_error_handler(_request: Request, exc: StarletteHTTPException):
+        code, message = _safe_http_error(exc.status_code)
+        return _error_json(
+            JSONResponse,
+            code=code,
+            message=message,
+            status_code=exc.status_code,
+            headers=exc.headers,
         )
 
     @app.exception_handler(StateStoreError)
@@ -955,6 +971,19 @@ def create_app(
     return app
 
 
+async def _buffer_bounded_request_body(request: Request) -> bool:
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > MAX_REQUEST_BYTES:
+            return False
+        if chunk:
+            chunks.append(chunk)
+    request._body = b"".join(chunks)
+    return True
+
+
 def default_app(
     *,
     token: str,
@@ -987,6 +1016,7 @@ def _error_json(
     status_code: int,
     retryable: bool = False,
     details: dict[str, Any] | None = None,
+    headers: Mapping[str, str] | None = None,
 ):
     payload = ErrorResponse(
         error=ErrorBody(
@@ -999,8 +1029,58 @@ def _error_json(
     return response_type(
         status_code=status_code,
         content=payload.model_dump(mode="json"),
+        headers=headers,
     )
 
 
 def _reject_nonfinite_json() -> None:
     raise ValueError("Non-finite JSON values are not supported.")
+
+
+def _safe_http_error(status_code: int) -> tuple[str, str]:
+    errors = {
+        400: ("invalid_request", "The request body could not be parsed."),
+        404: ("not_found", "The requested control-plane resource was not found."),
+        405: ("method_not_allowed", "The request method is not supported."),
+        413: ("request_too_large", "The request exceeds the control-plane limit."),
+        415: ("invalid_content_type", "The request content type is not supported."),
+    }
+    return errors.get(
+        status_code,
+        ("http_error", "The control-plane request was rejected."),
+    )
+
+
+def _bounded_validation_issues(
+    errors: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    issues: list[dict[str, Any]] = []
+    for error in errors[:MAX_VALIDATION_ISSUES]:
+        issue_type = _bounded_validation_text(
+            error.get("type"),
+            default="validation_error",
+        )
+        location = list(error.get("loc", ()))[:MAX_VALIDATION_LOCATION_PARTS]
+        if issue_type == "extra_forbidden" and location:
+            location[-1] = "[unexpected field]"
+        issues.append(
+            {
+                "location": [
+                    _bounded_validation_text(part, default="[invalid]")
+                    for part in location
+                ],
+                "message": _bounded_validation_text(
+                    error.get("msg"),
+                    default="Invalid value.",
+                ),
+                "type": issue_type,
+            }
+        )
+    return issues
+
+
+def _bounded_validation_text(value: Any, *, default: str) -> str:
+    if value is None:
+        return default
+    safe = redact_text(str(value), max_chars=MAX_VALIDATION_TEXT_CHARS)
+    return safe or default

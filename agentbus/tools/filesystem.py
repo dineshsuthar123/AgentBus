@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
+from agentbus._failure_injection import FailureProbe
 from agentbus.tools.filesystem_operations import (
     ContainedFileSystem,
     FileListResult,
@@ -21,12 +22,14 @@ class FileSystemTools:
         *,
         maximum_file_bytes: int = 2_097_152,
         maximum_list_entries: int = 10_000,
+        failure_probe: FailureProbe | None = None,
     ) -> None:
         self._filesystem = ContainedFileSystem(
             workspace,
             create_root=True,
             maximum_file_bytes=maximum_file_bytes,
             maximum_list_entries=maximum_list_entries,
+            failure_probe=failure_probe,
         )
         self.workspace = self._filesystem.root
 

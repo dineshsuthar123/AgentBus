@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from importlib import metadata
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Protocol, TypeVar
 
 from agentbus import __version__
 from agentbus.agents.planner import PlannerOutput
@@ -24,6 +24,10 @@ from agentbus.models.types import ModelRole
 from agentbus.product.synthetic import generate_synthetic_repository
 from agentbus.replay.engine import ReplayEngine
 from agentbus.replay.session import ReplayRequest
+from agentbus.security.redaction import (
+    redact_diagnostic_text,
+    sanitize_diagnostic_json,
+)
 from agentbus.tools.filesystem import FileSystemTools
 from agentbus.trace.models import (
     ReplayMode,
@@ -35,7 +39,11 @@ from agentbus.trace.models import (
 from agentbus.trace.storage import ContentAddressedStore
 
 
+BENCHMARK_SCHEMA_VERSION = 1
 BENCHMARK_GROUPS = ("startup", "index", "search", "control", "replay", "tools")
+_PERSISTENT_STORAGE_SCOPE = (
+    "AgentBus-owned benchmark persistence; generated repository bytes excluded."
+)
 _BASE_BUDGETS_MS = {
     "deterministic_run_startup": 5_000.0,
     "initial_index": 30_000.0,
@@ -49,6 +57,10 @@ _BASE_BUDGETS_MS = {
     "filesystem_tool_read": 2_000.0,
     "trace_recording": 2_000.0,
 }
+
+
+class _SerializableBenchmarkReport(Protocol):
+    def to_dict(self) -> dict[str, Any]: ...
 
 
 @dataclass(frozen=True)
@@ -67,9 +79,9 @@ class OperationMetrics:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "name": self.name,
-            "group": self.group,
-            "status": self.status,
+            "name": redact_diagnostic_text(self.name, max_chars=256),
+            "group": redact_diagnostic_text(self.group, max_chars=256),
+            "status": redact_diagnostic_text(self.status, max_chars=256),
             "samples_ms": [round(value, 3) for value in self.samples_ms],
             "median_ms": _round(self.median_ms),
             "p95_ms": _round(self.p95_ms),
@@ -77,7 +89,7 @@ class OperationMetrics:
             "operation_count": self.operation_count,
             "budget_ms": _round(self.budget_ms),
             "budget_passed": self.budget_passed,
-            "detail": self.detail,
+            "detail": redact_diagnostic_text(self.detail, max_chars=4_000),
         }
 
 
@@ -95,6 +107,8 @@ class BenchmarkReport:
     environment_fingerprint: str
     operations: tuple[OperationMetrics, ...]
     generated_at: str
+    daemon_peak_memory_bytes: int | None = None
+    persistent_storage_bytes: int = 0
 
     @property
     def passed(self) -> bool:
@@ -106,6 +120,7 @@ class BenchmarkReport:
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "schema_version": BENCHMARK_SCHEMA_VERSION,
             "ok": self.passed,
             "selected_group": self.selected_group,
             "iterations": self.iterations,
@@ -119,11 +134,21 @@ class BenchmarkReport:
             "peak_memory_bytes": self.peak_memory_bytes,
             "memory_budget_bytes": self.memory_budget_bytes,
             "memory_budget_passed": self.peak_memory_bytes <= self.memory_budget_bytes,
+            "daemon_peak_memory_bytes": self.daemon_peak_memory_bytes,
+            "daemon_memory_measured": self.daemon_peak_memory_bytes is not None,
+            "daemon_memory_measurement": (
+                "isolated_python_allocation_peak"
+                if self.daemon_peak_memory_bytes is not None
+                else "unavailable"
+            ),
+            "persistent_storage_bytes": self.persistent_storage_bytes,
+            "persistent_storage_scope": _PERSISTENT_STORAGE_SCOPE,
             "budget_policy": "broad-regression-v1",
-            "environment": self.environment,
+            "environment": _safe_environment(self.environment),
             "environment_fingerprint": self.environment_fingerprint,
             "operations": [operation.to_dict() for operation in self.operations],
             "generated_at": self.generated_at,
+            "provider_calls": 0,
             "network_used": False,
         }
 
@@ -146,6 +171,8 @@ def run_benchmark(
     repository_bytes = 0
     repository_fingerprint: str | None = None
     peak_memory_bytes = 0
+    daemon_peak_memory_bytes: int | None = None
+    persistent_storage_bytes = 0
     with tempfile.TemporaryDirectory(prefix="agentbus-benchmark-") as temporary:
         root = Path(temporary)
         workspace = root / "repository"
@@ -221,7 +248,16 @@ def run_benchmark(
                 )
             )
         if "control" in selected_groups:
-            operations.extend(_control_metrics(iterations))
+            control_metrics = _control_metrics(iterations)
+            operations.extend(control_metrics)
+            if any(
+                operation.name == "daemon_app_startup"
+                and operation.status != "skipped"
+                for operation in control_metrics
+            ):
+                _, daemon_peak_memory_bytes = _measure_python_allocation_peak(
+                    _daemon_memory_probe
+                )
         if "replay" in selected_groups:
             replay = _replay_fixture(root)
             operations.append(
@@ -262,6 +298,7 @@ def run_benchmark(
                     ),
                 )
             )
+        persistent_storage_bytes = _persistent_storage_size(root, workspace)
     environment = _environment()
     environment_payload = json.dumps(
         environment,
@@ -283,17 +320,29 @@ def run_benchmark(
         environment_fingerprint=hashlib.sha256(environment_payload).hexdigest(),
         operations=tuple(operations),
         generated_at=datetime.now(UTC).isoformat(),
+        daemon_peak_memory_bytes=daemon_peak_memory_bytes,
+        persistent_storage_bytes=persistent_storage_bytes,
     )
 
 
-def write_benchmark_report(report: BenchmarkReport, output: str | Path) -> Path:
+def write_benchmark_report(
+    report: _SerializableBenchmarkReport,
+    output: str | Path,
+) -> Path:
     destination = Path(output).expanduser().absolute()
     if destination.suffix.lower() != ".json":
         raise ValueError("Benchmark report output must use a .json extension.")
     if destination.exists() or destination.is_symlink():
         raise ValueError("Benchmark report output already exists or is a link.")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps(report.to_dict(), indent=2, sort_keys=True) + "\n"
+    report_payload = report.to_dict()
+    if not isinstance(report_payload, dict):
+        raise ValueError("Benchmark report must serialize to a JSON object.")
+    environment = report_payload.get("environment")
+    sanitized_payload = sanitize_diagnostic_json(report_payload)
+    if environment is not None:
+        sanitized_payload["environment"] = _safe_environment(environment)
+    payload = json.dumps(sanitized_payload, indent=2, sort_keys=True) + "\n"
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{destination.name}.",
         suffix=".tmp",
@@ -355,6 +404,35 @@ def _measure(
     )
 
 
+_T = TypeVar("_T")
+
+
+def _measure_python_allocation_peak(
+    operation: Callable[[], _T],
+) -> tuple[_T, int | None]:
+    if tracemalloc.is_tracing():
+        return operation(), None
+    tracemalloc.start()
+    try:
+        result = operation()
+        _, peak_memory_bytes = tracemalloc.get_traced_memory()
+        return result, peak_memory_bytes
+    finally:
+        tracemalloc.stop()
+
+
+def _persistent_storage_size(root: Path, workspace: Path) -> int:
+    total = 0
+    for candidate in root.rglob("*"):
+        if candidate.is_symlink() or not candidate.is_file():
+            continue
+        try:
+            candidate.relative_to(workspace)
+        except ValueError:
+            total += candidate.stat().st_size
+    return total
+
+
 def _deterministic_startup(workspace: Path) -> None:
     workspace.mkdir(parents=True, exist_ok=True)
     config = AgentBusConfig(
@@ -395,6 +473,13 @@ def _control_metrics(iterations: int) -> tuple[OperationMetrics, ...]:
         _measure("daemon_app_startup", "control", build_openapi, iterations),
         _measure("protocol_readiness", "control", build_json_schema, iterations),
     )
+
+
+def _daemon_memory_probe() -> None:
+    from agentbus.control.protocol import build_json_schema, build_openapi
+
+    build_openapi()
+    build_json_schema()
 
 
 def _replay_fixture(root: Path) -> Callable[[], Any]:
@@ -462,6 +547,25 @@ def _environment() -> dict[str, Any]:
         "machine": platform.machine(),
         "processor_count": os.cpu_count(),
         "dependencies": dependencies,
+    }
+
+
+def _safe_environment(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    allowed = {
+        "agentbus_version",
+        "dependencies",
+        "implementation",
+        "machine",
+        "processor_count",
+        "python",
+        "system",
+    }
+    return {
+        key: sanitize_diagnostic_json(item)
+        for key, item in value.items()
+        if key in allowed
     }
 
 

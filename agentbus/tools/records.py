@@ -224,7 +224,12 @@ def safe_policy_decision(decision: ToolPolicyDecision) -> ToolPolicyDecision:
 def safe_tool_approval_request(
     request: ToolApprovalRequest,
 ) -> ToolApprovalRequest:
-    return ToolApprovalRequest.model_validate(safe_protocol_dict(request))
+    payload = safe_protocol_dict(request)
+    # Repository identities are authorization bindings, not diagnostic text.
+    # Preserve them exactly so persisted approvals cannot change scope.
+    payload["workspace_identity"] = request.workspace_identity
+    payload["worktree_identity"] = request.worktree_identity
+    return ToolApprovalRequest.model_validate(payload)
 
 
 def build_tool_audit_record(

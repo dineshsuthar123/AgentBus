@@ -26,7 +26,8 @@ live model provider.
 - [ ] Run `python -m agentbus.beta_acceptance`.
 - [ ] Run `agentbus-eval run --suite release-offline --variant durable-parallel-fake`.
 - [ ] Run `agentbus-eval run --suite repository-intelligence --variant deterministic`.
-- [ ] Run `python -m agentbus.release_security`.
+- [ ] Run `python -m agentbus.release_security`; inspect every tested boundary
+  and unresolved limitation in the local defensive-security scorecard.
 - [ ] Run `agentbus release-check --full` from a clean tracked worktree.
 - [ ] Run `git diff --check`.
 

@@ -87,7 +87,9 @@ class McpStdioTransport:
         self._request_lock = threading.Lock()
         self._state_lock = threading.RLock()
         self._output_lock = threading.Lock()
+        self._stderr_lock = threading.Lock()
         self._closing = threading.Event()
+        self._stderr_drained = threading.Event()
         self._readers: tuple[threading.Thread, threading.Thread] = ()
         self._output_bytes = 0
         self._stderr = bytearray()
@@ -394,6 +396,7 @@ class McpStdioTransport:
             while not self._closing.is_set():
                 line = stream.readline(maximum_line + 2)
                 if not line:
+                    self._stderr_drained.wait(timeout=self.shutdown_grace_seconds)
                     self._offer(_END_OF_STREAM)
                     return
                 self._account_output(len(line))
@@ -412,15 +415,18 @@ class McpStdioTransport:
                 if self._closing.is_set():
                     return
                 self._account_output(len(chunk))
-                remaining = min(
-                    65_536,
-                    self.config.maximum_server_output_bytes,
-                ) - len(self._stderr)
-                if remaining > 0:
-                    self._stderr.extend(chunk[:remaining])
+                with self._stderr_lock:
+                    remaining = min(
+                        65_536,
+                        self.config.maximum_server_output_bytes,
+                    ) - len(self._stderr)
+                    if remaining > 0:
+                        self._stderr.extend(chunk[:remaining])
         except BaseException as exc:
             if not self._closing.is_set():
                 self._fail(exc)
+        finally:
+            self._stderr_drained.set()
 
     def _decode_and_offer(self, raw: bytes) -> None:
         try:
@@ -480,8 +486,11 @@ class McpStdioTransport:
         return process
 
     def _closed_server_message(self) -> str:
+        self._stderr_drained.wait(timeout=self.shutdown_grace_seconds)
+        with self._stderr_lock:
+            raw_stderr = bytes(self._stderr)
         stderr = redact_text(
-            self._stderr.decode("utf-8", errors="replace"),
+            raw_stderr.decode("utf-8", errors="replace"),
             max_chars=2_000,
         )
         suffix = f" Diagnostic: {stderr}" if stderr else ""

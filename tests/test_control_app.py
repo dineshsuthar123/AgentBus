@@ -10,7 +10,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from agentbus.config import AgentBusConfig
-from agentbus.control.app import ControlAppContext, create_app
+from agentbus.control.app import MAX_REQUEST_BYTES, ControlAppContext, create_app
 from agentbus.control.models import (
     CancellationLifecycle,
     CancelResponse,
@@ -291,6 +291,27 @@ def test_validation_errors_use_stable_error_envelope(tmp_path: Path) -> None:
     assert "traceback" not in response.text.lower()
 
 
+def test_validation_errors_bound_and_hide_attacker_controlled_locations(
+    tmp_path: Path,
+) -> None:
+    client, _ = _client(tmp_path)
+    secret = "AZURE_OPENAI_API_KEY=control-private-value"
+    hostile_field = secret + "-" + "x" * 20_000
+
+    response = client.post(
+        "/api/v1/runs",
+        headers=_auth(),
+        json={"task": "", "workspace": str(tmp_path), hostile_field: "ignored"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "validation_error"
+    assert "[unexpected field]" in response.text
+    assert len(response.content) < 16_384
+    assert secret not in response.text
+    assert "traceback" not in response.text.lower()
+
+
 def test_request_body_limit_is_enforced_before_routing(tmp_path: Path) -> None:
     client, _ = _client(tmp_path)
 
@@ -306,6 +327,49 @@ def test_request_body_limit_is_enforced_before_routing(tmp_path: Path) -> None:
 
     assert response.status_code == 413
     assert response.json()["error"]["code"] == "request_too_large"
+
+
+def test_streamed_request_body_limit_is_enforced_without_content_length(
+    tmp_path: Path,
+) -> None:
+    client, supervisor = _client(tmp_path)
+    chunk = b"x" * 16_384
+
+    def streamed_body():
+        remaining = MAX_REQUEST_BYTES + 1
+        while remaining:
+            selected = chunk[:remaining]
+            remaining -= len(selected)
+            yield selected
+
+    response = client.post(
+        "/api/v1/runs",
+        headers={**_auth(), "Content-Type": "application/json"},
+        content=streamed_body(),
+    )
+
+    assert response.status_code == 413
+    assert response.json()["error"]["code"] == "request_too_large"
+    assert supervisor.submissions == []
+
+
+def test_framework_http_errors_use_stable_safe_envelopes(tmp_path: Path) -> None:
+    client, _ = _client(tmp_path)
+
+    malformed = client.post(
+        "/api/v1/runs",
+        headers={**_auth(), "Content-Type": "application/json"},
+        content=b"\x80" + b"AZURE_OPENAI_API_KEY=must-not-echo",
+    )
+    missing = client.get("/api/v1/not-a-route", headers=_auth())
+
+    assert malformed.status_code == 400
+    assert malformed.json()["error"]["code"] == "invalid_request"
+    assert missing.status_code == 404
+    assert missing.json()["error"]["code"] == "not_found"
+    serialized = malformed.text + missing.text
+    assert "must-not-echo" not in serialized
+    assert "traceback" not in serialized.lower()
 
 
 def test_run_list_and_inspection_return_transport_models(tmp_path: Path) -> None:

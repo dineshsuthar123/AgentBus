@@ -192,6 +192,44 @@ def test_run_backend_propagates_the_request_tool_budget(tmp_path: Path) -> None:
     ) == budget
 
 
+def test_durable_orchestrator_startup_failure_is_persisted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _isolated_repository(tmp_path / "workspace")
+    backend = AgentBusRunBackend(
+        AgentBusConfig(
+            workspace_dir=str(workspace),
+            state_db=str(tmp_path / "state.db"),
+            provider_name="deterministic",
+        )
+    )
+    request = RunCreateRequest(
+        task="Fail before durable planning starts.",
+        workspace=str(workspace),
+        provider="deterministic",
+        workflow="multi",
+        durable=True,
+    )
+    run_id = "orchestrator-startup-failure"
+    backend.prepare_submission(request, run_id)
+
+    def fail_orchestrator(*_args, **_kwargs):
+        raise RuntimeError("synthetic MCP startup failure")
+
+    monkeypatch.setattr(backend, "_orchestrator", fail_orchestrator)
+
+    with pytest.raises(RuntimeError, match="synthetic MCP startup failure"):
+        backend.execute_new(request, run_id)
+
+    run = backend.store.get_run(run_id)
+    assert run.status == RunStatus.FAILED
+    assert run.failure_reason == "synthetic MCP startup failure"
+    assert backend.store.list_events(run_id)[-1]["event_type"] == (
+        "durable_planning_failed"
+    )
+
+
 def test_run_backend_restores_deterministic_routing_for_resume(
     tmp_path: Path,
 ) -> None:

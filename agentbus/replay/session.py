@@ -7,7 +7,7 @@ from typing import Any
 
 from pydantic import Field, field_validator
 
-from agentbus.security.redaction import redact_text
+from agentbus.security.redaction import redact_diagnostic_text
 from agentbus.trace.models import (
     ReplayMode,
     Sha256Digest,
@@ -85,10 +85,10 @@ class ReplaySpanResult(TraceModel):
     def text_is_safe(cls, value):
         if isinstance(value, list):
             return [
-                redact_text(item, max_chars=1_000) or "unspecified"
+                redact_diagnostic_text(item, max_chars=1_000) or "unspecified"
                 for item in value
             ]
-        return redact_text(value, max_chars=4_000) or "unspecified"
+        return redact_diagnostic_text(value, max_chars=4_000) or "unspecified"
 
 
 class ReplaySession(TraceModel):
@@ -123,7 +123,7 @@ class ReplaySession(TraceModel):
     @field_validator("failure_category", "failure_message")
     @classmethod
     def failure_is_safe(cls, value: str | None) -> str | None:
-        return redact_text(value, max_chars=4_000)
+        return redact_diagnostic_text(value, max_chars=4_000)
 
 
 class ReplayResult(TraceModel):

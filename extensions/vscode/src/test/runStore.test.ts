@@ -81,3 +81,19 @@ test("active optimistic runs survive pre-planning refresh and accept durable sta
   store.apply(event(1, "durable_run_succeeded"));
   assert.equal(store.run("run-1")?.status, "succeeded");
 });
+
+test("repeated restored snapshots never duplicate run tree entries", () => {
+  const store = new RunStore();
+  const restored = run();
+
+  for (let refresh = 0; refresh < 20; refresh += 1) {
+    const newest = { ...structuredClone(restored), version: refresh + 2 };
+    store.replaceRuns([
+      newest,
+      structuredClone(restored)
+    ]);
+    assert.equal(store.run("run-1")?.version, newest.version);
+  }
+
+  assert.deepEqual(store.runs().map((item) => item.run_id), ["run-1"]);
+});

@@ -9,7 +9,10 @@ from pathlib import Path
 from typing import Any
 
 from agentbus.config import AgentBusConfig
-from agentbus.security.redaction import redact_text, sanitize_json
+from agentbus.security.redaction import (
+    redact_diagnostic_text,
+    sanitize_diagnostic_json,
+)
 
 
 LOG_LEVELS = ("error", "warning", "info", "debug", "trace")
@@ -17,6 +20,10 @@ _MAX_LINE_BYTES = 16_384
 _MAX_READ_BYTES = 2 * 1024 * 1024
 _MAX_RUN_FILES = 20
 _WRITE_LOCK = threading.Lock()
+
+
+class ProductLogError(OSError):
+    """Raised when a product log cannot be written safely."""
 
 
 @dataclass(frozen=True)
@@ -80,11 +87,11 @@ class ProductLogWriter:
             "timestamp": datetime.now(UTC).isoformat(),
             "level": selected_level,
             "component": _safe_component(component),
-            "message": redact_text(message, max_chars=4_000) or "[empty]",
+            "message": redact_diagnostic_text(message, max_chars=4_000) or "[empty]",
             "run_id": _safe_identifier(run_id),
             "task_id": _safe_identifier(task_id),
             "invocation_id": _safe_identifier(invocation_id),
-            "fields": sanitize_json(fields or {}, max_chars=8_000),
+            "fields": sanitize_diagnostic_json(fields or {}, max_chars=8_000),
         }
         encoded = (
             json.dumps(payload, sort_keys=True, ensure_ascii=True, allow_nan=False)
@@ -97,14 +104,23 @@ class ProductLogWriter:
                 json.dumps(payload, sort_keys=True, ensure_ascii=True, allow_nan=False)
                 + "\n"
             ).encode("utf-8")
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with _WRITE_LOCK:
-            if self.path.is_symlink():
-                raise OSError("Product log path became a symbolic link.")
-            if self.path.is_file() and self.path.stat().st_size + len(encoded) > self.max_bytes:
-                self._rotate()
-            with self.path.open("ab") as handle:
-                handle.write(encoded)
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with _WRITE_LOCK:
+                if self.path.is_symlink():
+                    raise OSError("Product log path became a symbolic link.")
+                if (
+                    self.path.is_file()
+                    and self.path.stat().st_size + len(encoded) > self.max_bytes
+                ):
+                    self._rotate()
+                with self.path.open("ab") as handle:
+                    handle.write(encoded)
+        except OSError as exc:
+            raise ProductLogError(
+                "Unable to write the AgentBus product log; verify the log directory "
+                "is writable and has available disk space."
+            ) from exc
 
     def _rotate(self) -> None:
         oldest = self.path.with_name(f"{self.path.name}.{self.retained_files}")
@@ -201,7 +217,7 @@ def _parse_log_line(line: str, *, source: str) -> ProductLogEntry | None:
     try:
         payload = json.loads(line)
     except (json.JSONDecodeError, TypeError):
-        safe_line = redact_text(line, max_chars=_MAX_LINE_BYTES) or ""
+        safe_line = redact_diagnostic_text(line, max_chars=_MAX_LINE_BYTES) or ""
         return ProductLogEntry(
             timestamp="",
             level="info",
@@ -211,8 +227,11 @@ def _parse_log_line(line: str, *, source: str) -> ProductLogEntry | None:
         )
     if not isinstance(payload, dict):
         return None
-    payload = sanitize_json(payload, max_chars=_MAX_LINE_BYTES)
-    timestamp = redact_text(str(payload.get("timestamp", "")), max_chars=100) or ""
+    payload = sanitize_diagnostic_json(payload, max_chars=_MAX_LINE_BYTES)
+    timestamp = (
+        redact_diagnostic_text(str(payload.get("timestamp", "")), max_chars=100)
+        or ""
+    )
     level = str(payload.get("level", "info")).lower()
     if level not in LOG_LEVELS:
         level = "info"
@@ -220,13 +239,13 @@ def _parse_log_line(line: str, *, source: str) -> ProductLogEntry | None:
     message = payload.get("message") or payload.get("event") or payload.get("type") or "log"
     fields = payload.get("fields", payload.get("data", {}))
     if fields:
-        safe_fields = sanitize_json(fields, max_chars=4_000)
+        safe_fields = sanitize_diagnostic_json(fields, max_chars=4_000)
         message = f"{message} {json.dumps(safe_fields, sort_keys=True)}"
     return ProductLogEntry(
         timestamp=timestamp,
         level=level,
         component=_safe_component(str(component)),
-        message=redact_text(str(message), max_chars=8_000) or "log",
+        message=redact_diagnostic_text(str(message), max_chars=8_000) or "log",
         run_id=_safe_identifier(payload.get("run_id")),
         task_id=_safe_identifier(payload.get("task_id")),
         invocation_id=_safe_identifier(payload.get("invocation_id")),

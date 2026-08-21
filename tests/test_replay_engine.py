@@ -1,6 +1,7 @@
 import hashlib
 from pathlib import Path
 
+import pytest
 from pydantic import BaseModel, ConfigDict
 
 from agentbus.models.types import ModelResult, ModelRole
@@ -523,3 +524,79 @@ def test_partial_replay_allocates_isolated_state_and_validates_checkpoint(
     assert result.session.status == ReplaySessionStatus.SUCCEEDED
     assert result.session.isolated_workspace == "[ISOLATED_REPLAY_WORKSPACE]"
     assert isolation.actual_database_path("replay-1").is_file()
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    (
+        "absent_content",
+        "altered_content",
+        "mismatched_hash",
+        "mismatched_metadata_identity",
+    ),
+)
+def test_replay_preflights_all_references_before_callbacks(
+    tmp_path: Path,
+    corruption: str,
+) -> None:
+    store, trace = _fixture(tmp_path)
+    marker = tmp_path / "source-workspace-marker.txt"
+    marker.write_text("original\n", encoding="utf-8")
+    late_metadata = store.put_json(
+        {"passed": True},
+        producing_span_id="verifier",
+        media_type="application/vnd.agentbus.verifier+json",
+    )
+    late_reference = store.reference_output(
+        late_metadata,
+        reference_id="late-verifier-output",
+        name="verifier result",
+    )
+    if corruption == "mismatched_hash":
+        late_reference = late_reference.model_copy(update={"sha256": "f" * 64})
+    elif corruption == "mismatched_metadata_identity":
+        late_reference = late_reference.model_copy(
+            update={"media_type": "application/json"}
+        )
+    trace = Trace.model_validate(
+        trace.model_copy(
+            update={
+                "spans": [
+                    span.model_copy(update={"output_references": [late_reference]})
+                    if span.span_id == "verifier"
+                    else span
+                    for span in trace.spans
+                ]
+            }
+        ).model_dump()
+    )
+    blob_path, _ = store._object_paths(late_metadata.sha256)
+    if corruption == "absent_content":
+        blob_path.unlink()
+    elif corruption == "altered_content":
+        blob_path.write_bytes(b"altered")
+
+    calls = {"policy": 0, "verifier": 0}
+
+    def policy(span, inputs):
+        calls["policy"] += 1
+        return {"outcome": "allow"}
+
+    def verifier(span, inputs):
+        calls["verifier"] += 1
+        return {"passed": True}
+
+    result = ReplayEngine(
+        store,
+        schemas={"parse": ParsedOutput},
+        policy_evaluator=policy,
+        verifier=verifier,
+    ).replay(trace, _request())
+
+    assert result.session.status == ReplaySessionStatus.AWAITING_INPUT
+    assert result.session.failure_category == "ReplayInputUnavailableError"
+    assert result.session.span_results == []
+    assert result.session.provider_calls == 0
+    assert result.session.network_calls == 0
+    assert calls == {"policy": 0, "verifier": 0}
+    assert marker.read_text(encoding="utf-8") == "original\n"

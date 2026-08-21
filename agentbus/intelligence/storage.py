@@ -7,6 +7,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable, Iterator, Sequence, TypeVar
 
+from agentbus._failure_injection import FailureProbe
+from agentbus._sqlite import (
+    DEFAULT_TRANSACTION_RETRY_DELAYS,
+    begin_immediate_with_retry,
+    is_sqlite_busy_error,
+    normalize_transaction_retry_delays,
+)
 from agentbus.intelligence.errors import (
     IndexBusyError,
     IndexCorruptedError,
@@ -57,11 +64,17 @@ class IndexStore:
         database_path: str | Path,
         *,
         busy_timeout_ms: int = _DEFAULT_BUSY_TIMEOUT_MS,
+        transaction_retry_delays: tuple[float, ...] = DEFAULT_TRANSACTION_RETRY_DELAYS,
+        failure_probe: FailureProbe | None = None,
     ) -> None:
         if busy_timeout_ms < 1 or busy_timeout_ms > 120_000:
             raise ValueError("busy_timeout_ms must be between 1 and 120000")
         self.database_path = Path(database_path).expanduser().resolve()
         self.busy_timeout_ms = busy_timeout_ms
+        self.transaction_retry_delays = normalize_transaction_retry_delays(
+            transaction_retry_delays
+        )
+        self._failure_probe = failure_probe
         try:
             self.database_path.parent.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
@@ -826,7 +839,7 @@ class IndexStore:
         ):
             raise
         except sqlite3.OperationalError as exc:
-            if _is_busy_error(exc):
+            if is_sqlite_busy_error(exc):
                 raise IndexBusyError(
                     f"Repository intelligence index is busy: '{self.database_path}'."
                 ) from exc
@@ -847,7 +860,12 @@ class IndexStore:
     def _write_transaction(self) -> Iterator[sqlite3.Connection]:
         with self._connection() as connection:
             try:
-                connection.execute("BEGIN IMMEDIATE")
+                begin_immediate_with_retry(
+                    connection,
+                    retry_delays=self.transaction_retry_delays,
+                    failure_probe=self._failure_probe,
+                    failure_scope="index-write",
+                )
                 yield connection
                 connection.commit()
             except (
@@ -870,7 +888,7 @@ class IndexStore:
             except sqlite3.OperationalError as exc:
                 if connection.in_transaction:
                     connection.rollback()
-                if _is_busy_error(exc):
+                if is_sqlite_busy_error(exc):
                     raise IndexBusyError(
                         f"Repository intelligence index is busy: "
                         f"'{self.database_path}'."
@@ -1998,8 +2016,3 @@ def _datetime_text(value: datetime | None) -> str | None:
 
 def _utc_now() -> str:
     return _datetime_text(datetime.now(timezone.utc)) or ""
-
-
-def _is_busy_error(error: sqlite3.Error) -> bool:
-    message = str(error).casefold()
-    return "locked" in message or "busy" in message

@@ -419,6 +419,31 @@ class Trace(TraceModel):
                 raise ValueError(
                     f"checkpoint '{checkpoint.checkpoint_id}' references an unknown span"
                 )
+        if self.replay is not None and self.replay.forked:
+            fork_links = [
+                link
+                for link in self.links
+                if link.link_type == TraceLinkType.FORKED_FROM
+            ]
+            fork_attributes = self.attributes.get("fork")
+            if (
+                self.replay.source_trace_id == self.trace_id
+                or len(fork_links) != 1
+                or fork_links[0].trace_id != self.replay.source_trace_id
+                or not isinstance(fork_attributes, dict)
+                or fork_attributes.get("source_trace_id")
+                != self.replay.source_trace_id
+            ):
+                raise ValueError("fork ancestry is inconsistent")
+            for span in self.spans:
+                source_span_id = span.attributes.get("fork_source_span_id")
+                if not isinstance(source_span_id, str) or not any(
+                    link.link_type == TraceLinkType.FORKED_FROM
+                    and link.trace_id == self.replay.source_trace_id
+                    and link.span_id == source_span_id
+                    for link in span.links
+                ):
+                    raise ValueError("fork ancestry is inconsistent")
         return self
 
 

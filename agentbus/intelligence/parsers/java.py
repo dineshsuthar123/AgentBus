@@ -18,6 +18,7 @@ from agentbus.intelligence.parsers.base import (
     ParsedReference,
     ParserDescriptor,
     ParserLimits,
+    source_exceeds_byte_limit,
 )
 from agentbus.intelligence.parsers.common import (
     LineMap,
@@ -130,9 +131,12 @@ class JavaStaticParser:
                 partial=True,
                 cancelled=True,
             )
-        if len(request.content.encode("utf-8")) > min(
-            active_limits.maximum_source_bytes,
-            self.descriptor.maximum_source_bytes,
+        if source_exceeds_byte_limit(
+            request.content,
+            min(
+                active_limits.maximum_source_bytes,
+                self.descriptor.maximum_source_bytes,
+            ),
         ):
             return finalize_result(
                 self.descriptor,

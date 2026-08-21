@@ -18,6 +18,18 @@ from agentbus.execution.schema import SCHEMA_VERSION
 from agentbus.security.redaction import sanitize_json
 
 
+_SENSITIVE_GIT_PATHSPECS = (
+    ":(glob)**/.env",
+    ":(glob)**/.env.local",
+    ":(glob)**/credentials.json",
+    ":(glob)**/secrets.json",
+    ":(glob)**/*.db",
+    ":(glob)**/*.sqlite",
+    ":(glob)**/*.sqlite3",
+    ":(glob)**/*.jsonl",
+)
+
+
 class ReleaseStatus(str, Enum):
     PASS = "PASS"
     WARN = "WARN"
@@ -90,12 +102,7 @@ def build_release_report(
             ReleaseStatus.PASS,
             f"Authoritative version is {__version__}.",
         ),
-        ReleaseCheck(
-            "worktree",
-            ReleaseStatus.WARN if status else ReleaseStatus.PASS,
-            "Git worktree has uncommitted files." if status else "Git worktree is clean.",
-            {"dirty": bool(status)},
-        ),
+        _worktree_check(status),
         _sensitive_file_check(root, status),
         _evidence_check("tests", test_evidence),
         _build_check(Path(dist_dir).expanduser().resolve()),
@@ -316,6 +323,22 @@ def _ci_check(root: Path) -> ReleaseCheck:
     )
 
 
+def _worktree_check(status: str | None) -> ReleaseCheck:
+    if status is None:
+        return ReleaseCheck(
+            "worktree",
+            ReleaseStatus.WARN,
+            "Git worktree status could not be inspected.",
+            {"dirty": None, "inspection_complete": False},
+        )
+    return ReleaseCheck(
+        "worktree",
+        ReleaseStatus.WARN if status else ReleaseStatus.PASS,
+        "Git worktree has uncommitted files." if status else "Git worktree is clean.",
+        {"dirty": bool(status), "inspection_complete": True},
+    )
+
+
 def _sensitive_file_check(root: Path, status: str | None) -> ReleaseCheck:
     sensitive: set[str] = set()
     for line in (status or "").splitlines():
@@ -323,7 +346,7 @@ def _sensitive_file_check(root: Path, status: str | None) -> ReleaseCheck:
         name = Path(path).name.lower()
         if name in {".env", ".env.local", "credentials.json", "secrets.json"} or path.endswith((".db", ".sqlite", ".sqlite3", ".jsonl")):
             sensitive.add(path)
-    tracked_output = _git(root, "ls-files", "-z") or ""
+    tracked_output = _git(root, "ls-files", "-z")
     ignored_output = _git(
         root,
         "ls-files",
@@ -331,7 +354,20 @@ def _sensitive_file_check(root: Path, status: str | None) -> ReleaseCheck:
         "--ignored",
         "--exclude-standard",
         "-z",
-    ) or ""
+        "--",
+        *_SENSITIVE_GIT_PATHSPECS,
+    )
+    if status is None or tracked_output is None or ignored_output is None:
+        return ReleaseCheck(
+            "sensitive-files",
+            ReleaseStatus.FAIL,
+            "Sensitive/runtime file inventory could not be completed.",
+            {
+                "paths": sorted(sensitive),
+                "tracked_sensitive_paths": [],
+                "inspection_complete": False,
+            },
+        )
     tracked = {
         path.replace("\\", "/")
         for path in tracked_output.split("\0")
@@ -355,7 +391,11 @@ def _sensitive_file_check(root: Path, status: str | None) -> ReleaseCheck:
         f"Found {len(sensitive)} uncommitted sensitive/runtime-looking path(s); contents were not read."
         if sensitive
         else "No uncommitted sensitive/runtime-looking paths were detected.",
-        {"paths": sorted(sensitive), "tracked_sensitive_paths": sorted(tracked)},
+        {
+            "paths": sorted(sensitive),
+            "tracked_sensitive_paths": sorted(tracked),
+            "inspection_complete": True,
+        },
     )
 
 
@@ -368,17 +408,20 @@ def _sensitive_name(value: str) -> bool:
 
 
 def _git(root: Path, *arguments: str) -> str | None:
-    result = subprocess.run(
-        ["git", *arguments],
-        cwd=root,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        shell=False,
-        check=False,
-        timeout=15,
-    )
+    try:
+        result = subprocess.run(
+            ["git", *arguments],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            shell=False,
+            check=False,
+            timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
     return result.stdout.strip() if result.returncode == 0 else None
 
 

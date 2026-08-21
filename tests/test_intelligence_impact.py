@@ -10,6 +10,7 @@ from agentbus.intelligence import (
     DependencyGraph,
     DependencyKind,
     EvidenceBackedRiskAssessor,
+    ImpactAnalysisLimits,
     ImpactRequest,
     ImpactRisk,
     OwnershipExtraction,
@@ -308,6 +309,28 @@ def test_change_impact_propagates_across_projects_and_selects_tests() -> None:
     assert "mandatory_test_not_indexed" in (
         configured.tests.escalation_reasons
     )
+
+
+def test_change_impact_fails_closed_at_the_graph_edge_budget() -> None:
+    fixture = _fixture()
+    limited = ChangeImpactAnalyzer(
+        fixture.analyzer.graph,
+        projects=fixture.analyzer.projects,
+        files=fixture.analyzer.files,
+        symbols=fixture.analyzer.symbols,
+        architecture=fixture.analyzer.architecture,
+        ownership=fixture.analyzer.ownership,
+        limits=ImpactAnalysisLimits(maximum_graph_edges=1),
+    )
+
+    result = limited.analyze(
+        ImpactRequest(paths=("shared/config.py",), max_depth=4)
+    )
+
+    assert result.truncated is True
+    assert "impact_graph_edge_limit_reached" in result.uncertainty
+    assert result.tests.full_suite_recommended is True
+    assert "impact_analysis_truncated" in result.tests.escalation_reasons
 
 
 def test_proposed_dependency_cycle_is_reported_as_high_risk() -> None:

@@ -36,6 +36,7 @@ dependencies = [
 azure = ["openai>=1.66"]
 dev = [
   "build>=1.2",
+  "hypothesis>=6.112",
   "httpx>=0.28",
   "pytest>=8",
   "setuptools>=69",
@@ -78,3 +79,4 @@ agentbus = ["py.typed"]
   "fixtures_data/generated-artifact/.gitignore",
   "fixtures_data/repository-intelligence-mixed/.gitignore",
 ]
+"agentbus.validation" = ["corpus.json"]

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import os
 import stat as stat_module
@@ -10,6 +11,11 @@ from enum import Enum
 from itertools import islice
 from pathlib import Path, PurePosixPath
 
+from agentbus._failure_injection import (
+    FailureInjectionPoint,
+    FailureProbe,
+    failure_due,
+)
 from agentbus.security.redaction import redact_text
 from agentbus.tools.filesystem_security import (
     ContainedPathResolver,
@@ -127,6 +133,7 @@ class ContainedFileSystem:
         create_root: bool = False,
         maximum_file_bytes: int = 2_097_152,
         maximum_list_entries: int = 10_000,
+        failure_probe: FailureProbe | None = None,
     ) -> None:
         if maximum_file_bytes < 1:
             raise ValueError("maximum_file_bytes must be positive")
@@ -136,6 +143,7 @@ class ContainedFileSystem:
         self.root = self.resolver.root
         self.maximum_file_bytes = maximum_file_bytes
         self.maximum_list_entries = maximum_list_entries
+        self._failure_probe = failure_probe
 
     def create(
         self,
@@ -607,6 +615,11 @@ class ContainedFileSystem:
             )
             temporary = Path(temporary_name)
             try:
+                self._confirm_temporary_descriptor(temporary, descriptor)
+            except BaseException:
+                os.close(descriptor)
+                raise
+            try:
                 handle = os.fdopen(descriptor, "wb")
             except BaseException:
                 os.close(descriptor)
@@ -615,6 +628,15 @@ class ContainedFileSystem:
                 handle.write(encoded)
                 handle.flush()
                 os.fsync(handle.fileno())
+            if failure_due(
+                self._failure_probe,
+                FailureInjectionPoint.FILESYSTEM_WRITE_FAILURE,
+                scope=operation.value,
+            ):
+                raise OSError(
+                    errno.ENOSPC,
+                    "controlled filesystem write failure",
+                )
             if before is not None:
                 os.chmod(temporary, stat_module.S_IMODE(before.mode))
                 self._require_unchanged(resolved, before)
@@ -665,6 +687,30 @@ class ContainedFileSystem:
             created=before is None,
             atomic=True,
         )
+
+    def _confirm_temporary_descriptor(
+        self,
+        temporary: Path,
+        descriptor: int,
+    ) -> None:
+        try:
+            relative = temporary.relative_to(self.root).as_posix()
+        except ValueError as exc:
+            raise FileSystemContainmentError(
+                "Temporary mutation file escaped the assigned worktree."
+            ) from exc
+        resolved = self.resolver.resolve(relative, reject_any_link=True)
+        try:
+            descriptor_stat = os.fstat(descriptor)
+            path_stat = resolved.lexical_path.stat(follow_symlinks=False)
+        except OSError as exc:
+            raise FileMutationConflict(
+                "Temporary mutation file cannot be verified."
+            ) from exc
+        if _stat_identity(descriptor_stat) != _stat_identity(path_stat):
+            raise FileMutationConflict(
+                "Temporary mutation file identity changed before writing."
+            )
 
     def _ensure_parent_directories(self, relative_path: str) -> None:
         parent_parts = PurePosixPath(relative_path).parent.parts

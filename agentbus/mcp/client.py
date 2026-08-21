@@ -3,20 +3,26 @@ from __future__ import annotations
 import json
 import threading
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import jsonschema
 
 from agentbus import __version__
+from agentbus._failure_injection import (
+    FailureInjectionPoint,
+    FailureProbe,
+    failure_due,
+)
 from agentbus.execution.cancellation import CancellationToken
 from agentbus.mcp.errors import (
     McpProtocolError,
     McpRemoteError,
+    McpTransportError,
     McpUnsupportedProtocolVersion,
 )
 from agentbus.mcp.models import McpServerConfig, namespace_mcp_tool
 from agentbus.mcp.transport import McpTransport
-from agentbus.security.redaction import redact_text
+from agentbus.security.redaction import redact_text, sanitize_json
 
 
 MAX_MCP_REMOTE_METADATA_BYTES = 65_536
@@ -57,9 +63,12 @@ class McpClient:
         self,
         config: McpServerConfig,
         transport: McpTransport,
+        *,
+        failure_probe: FailureProbe | None = None,
     ) -> None:
         self.config = config
         self.transport = transport
+        self._failure_probe = failure_probe
         self._lock = threading.RLock()
         self._next_request_id = 0
         self._connection: McpConnectionInfo | None = None
@@ -233,9 +242,18 @@ class McpClient:
                 tool.output_schema,
                 "MCP structured tool output",
             )
+        safe_content = tuple(
+            cast(dict[str, Any], sanitize_json(item))
+            for item in content
+        )
+        safe_structured = (
+            cast(dict[str, Any], sanitize_json(structured))
+            if structured is not None
+            else None
+        )
         return McpToolCallResult(
-            content=tuple(content),
-            structured_content=structured,
+            content=safe_content,
+            structured_content=safe_structured,
             is_error=is_error,
         )
 
@@ -263,6 +281,14 @@ class McpClient:
     ) -> dict[str, Any]:
         if require_connection and self._connection is None:
             raise McpProtocolError("MCP client must initialize before requests.")
+        if failure_due(
+            self._failure_probe,
+            FailureInjectionPoint.MCP_FAILURE,
+            scope=method,
+        ):
+            raise McpTransportError(
+                f"Controlled local MCP failure during '{method}'."
+            )
         with self._lock:
             self._next_request_id += 1
             request_id = self._next_request_id

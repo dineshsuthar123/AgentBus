@@ -8,6 +8,11 @@ import uuid
 from pathlib import Path
 
 from agentbus import __version__
+from agentbus._failure_injection import (
+    FailureInjectionPoint,
+    FailureProbe,
+    failure_due,
+)
 from agentbus.config import AgentBusConfig
 from agentbus.control.app import ControlAppContext, create_app
 from agentbus.control.authentication import (
@@ -45,6 +50,7 @@ def serve(
     registry_path: str | Path | None = None,
     daemon_id: str | None = None,
     log_level: str = "warning",
+    failure_probe: FailureProbe | None = None,
 ) -> int:
     _startup_stage("serve-entered")
     normalized_host = validate_loopback_host(host)
@@ -63,12 +69,20 @@ def serve(
     token = generate_session_token()
     started_at = utc_now()
     registry = DaemonRegistry(registry_path)
+    registry.cleanup_stale()
     store = StateStore(config.state_database_path)
     _startup_stage("state-ready")
     query = ControlQueryService(config, store)
-    backend = AgentBusRunBackend(config, store)
+    backend = AgentBusRunBackend(
+        config,
+        store,
+        reconcile_interrupted=True,
+    )
     supervisor = BackgroundRunSupervisor(backend)
-    replay_supervisor = BackgroundReplaySupervisor(query)
+    replay_supervisor = BackgroundReplaySupervisor(
+        query,
+        reconcile_interrupted=True,
+    )
     _startup_stage("services-ready")
     context = ControlAppContext(
         daemon_id=daemon_id,
@@ -126,6 +140,12 @@ def serve(
     try:
         heartbeat.start()
         idle.start()
+        if failure_due(
+            failure_probe,
+            FailureInjectionPoint.DAEMON_TERMINATION,
+            scope="before-server-run",
+        ):
+            raise RuntimeError("Controlled AgentBus daemon termination.")
         if json_ready:
             handshake = ReadyHandshake(
                 host=normalized_host,

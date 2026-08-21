@@ -75,19 +75,62 @@ class ActiveRun:
 
 
 class AgentBusRunBackend:
-    def __init__(self, config: AgentBusConfig, store: StateStore | None = None):
+    def __init__(
+        self,
+        config: AgentBusConfig,
+        store: StateStore | None = None,
+        *,
+        reconcile_interrupted: bool = False,
+    ):
         self.base_config = config
         self.store = store or StateStore(config.state_database_path)
         self.cancellations = CancellationRegistry(self.store)
+        self.reconciled_submissions = (
+            tuple(self._reconcile_interrupted_submissions())
+            if reconcile_interrupted
+            else ()
+        )
 
     def prepare(self, run_id: str) -> None:
         self.cancellations.prepare(run_id)
 
+    def prepare_submission(
+        self,
+        request: RunCreateRequest,
+        run_id: str,
+    ) -> None:
+        self.prepare(run_id)
+        if not request.durable:
+            return
+        config = self._config_for(request)
+        self.store.create_run(
+            RunRecord(
+                run_id=run_id,
+                original_task=request.task,
+                workflow_type=request.workflow,
+                model=config.resolve_model("coder"),
+                workspace=str(config.workspace_path),
+                graph_data={"version": 1, "tasks": []},
+                metadata={
+                    "control_request": request.model_dump(
+                        mode="json",
+                        exclude={"metadata"},
+                    ),
+                    "model_routing": config.safe_model_summary(),
+                    "control_submission": {
+                        "durable": True,
+                        "state": "planning",
+                    },
+                },
+            )
+        )
+        self.cancellations.synchronize(run_id)
+
     def execute_new(self, request: RunCreateRequest, run_id: str) -> None:
         config = self._config_for(request)
         if request.durable:
-            orchestrator = self._orchestrator(config, request, run_id)
             try:
+                orchestrator = self._orchestrator(config, request, run_id)
                 orchestrator.create_durable_run(request.task, run_id=run_id)
             except (CancellationRequested, ModelCancellationError):
                 self._persist_preplanning_cancellation(
@@ -96,6 +139,13 @@ class AgentBusRunBackend:
                     run_id,
                 )
                 return
+            except Exception as exc:
+                self._fail_planning_submission(
+                    run_id,
+                    safe_error_message(exc),
+                    event_type="durable_planning_failed",
+                )
+                raise
             orchestrator.run_durable(run_id)
             return
         self._execute_persisted_non_durable(config, request, run_id)
@@ -481,6 +531,51 @@ class AgentBusRunBackend:
         )
         engine.finalize_cancellation(run_id)
 
+    def _reconcile_interrupted_submissions(self) -> list[str]:
+        reconciled: list[str] = []
+        for run in self.store.list_runs(status=RunStatus.PENDING, limit=1_000):
+            submission = run.metadata.get("control_submission")
+            if (
+                isinstance(submission, dict)
+                and submission.get("state") == "planning"
+            ):
+                self._fail_planning_submission(
+                    run.run_id,
+                    "Planning was interrupted by a daemon restart and was not rerun.",
+                    event_type="durable_planning_restart_reconciled",
+                )
+                reconciled.append(run.run_id)
+        return reconciled
+
+    def _fail_planning_submission(
+        self,
+        run_id: str,
+        reason: str,
+        *,
+        event_type: str,
+    ) -> None:
+        try:
+            run = self.store.get_run(run_id)
+        except RunNotFoundError:
+            return
+        submission = run.metadata.get("control_submission")
+        if (
+            run.status != RunStatus.PENDING
+            or not isinstance(submission, dict)
+            or submission.get("state") != "planning"
+        ):
+            return
+        self.store.update_run_status(
+            run_id,
+            RunStatus.FAILED,
+            failure_reason=reason,
+            event_type=event_type,
+            event_payload={
+                "failure_category": "interrupted_planning",
+                "automatic_retry_allowed": False,
+            },
+        )
+
     @staticmethod
     def _changed_files(workspace: Path) -> list[str]:
         try:
@@ -522,16 +617,26 @@ class BackgroundRunSupervisor:
             )
         run_id = uuid.uuid4().hex
         created_at = utc_now()
+        prepared_request = request.model_copy(
+            update={"workspace": workspace.workspace}
+        )
         with self._lock:
             self._ensure_open()
             self._claim_workspace(run_id, workspace.workspace)
             try:
+                prepare_submission = getattr(
+                    self.backend,
+                    "prepare_submission",
+                    None,
+                )
                 prepare = getattr(self.backend, "prepare", None)
-                if prepare is not None:
+                if prepare_submission is not None:
+                    prepare_submission(prepared_request, run_id)
+                elif prepare is not None:
                     prepare(run_id)
                 future = self._executor.submit(
                     self.backend.execute_new,
-                    request.model_copy(update={"workspace": workspace.workspace}),
+                    prepared_request,
                     run_id,
                 )
             except Exception:

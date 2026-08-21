@@ -11,6 +11,7 @@ from agentbus.bootstrap import BootstrapError, initialize
 from agentbus.config import SUPPORTED_PROVIDERS
 from agentbus.configuration import configuration_paths, resolve_configuration
 from agentbus.doctor import CheckStatus, render_doctor, run_doctor
+from agentbus.security.redaction import redact_diagnostic_text
 
 
 COMMANDS = (
@@ -29,6 +30,7 @@ COMMANDS = (
     "cleanup",
     "logs",
     "support-bundle",
+    "validate",
     "benchmark",
     "soak",
     "release-check",
@@ -57,6 +59,8 @@ COMMANDS = (
 
 
 def main(argv: list[str] | None = None) -> int:
+    _configure_console_output(sys.stdout)
+    _configure_console_output(sys.stderr)
     arguments = list(sys.argv[1:] if argv is None else argv)
     if not arguments:
         _root_parser().print_help()
@@ -131,6 +135,10 @@ def main(argv: list[str] | None = None) -> int:
         return _logs_command(rest)
     if command == "support-bundle":
         return _support_bundle_command(rest)
+    if command == "validate":
+        from agentbus.validation.commands import validation_command
+
+        return validation_command(rest)
     if command == "benchmark":
         return _benchmark_command(rest)
     if command == "soak":
@@ -185,6 +193,7 @@ def _root_parser() -> argparse.ArgumentParser:
         "cleanup": "Remove only proven AgentBus-owned stale runtime artifacts.",
         "logs": "Inspect bounded redacted product and run logs.",
         "support-bundle": "Create a sanitized local diagnostic ZIP.",
+        "validate": "Validate repositories, corpus fixtures, and reliability.",
         "benchmark": "Measure bounded offline product performance.",
         "soak": "Exercise bounded offline reliability and leak checks.",
         "release-check": "Run non-publishing public beta release gates.",
@@ -562,23 +571,36 @@ def _migration_command(arguments: list[str]) -> int:
         else:
             report = coordinator.apply(dry_run=args.dry_run)
     except (OSError, RuntimeError, ValueError) as exc:
-        payload = {"ok": False, "error": str(exc), "network_used": False}
-        print(json.dumps(payload, indent=2, sort_keys=True) if args.json else f"Migration error: {exc}")
+        safe_error = (
+            redact_diagnostic_text(str(exc), max_chars=4_096)
+            or type(exc).__name__
+        )
+        payload = {"ok": False, "error": safe_error, "network_used": False}
+        print(
+            json.dumps(payload, indent=2, sort_keys=True)
+            if args.json
+            else f"Migration error: {safe_error}"
+        )
         return 2
     payload = report.to_dict()
     payload["network_used"] = False
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
-        print(f"Migration {report.operation}: {'OK' if report.ok else 'FAILED'}")
-        for target in report.targets:
-            version = "absent" if target.current_version is None else target.current_version
-            print(
-                f"  {target.name}: {target.state.value} "
-                f"({version} -> {target.target_version})"
+        summary = "OK" if report.ok else "FAILED"
+        print(f"Migration {payload['operation']}: {summary}")
+        for target in payload["targets"]:
+            version = (
+                "absent"
+                if target["current_version"] is None
+                else target["current_version"]
             )
-            print(f"    {target.message}")
-        for backup in report.backups:
+            print(
+                f"  {target['name']}: {target['state']} "
+                f"({version} -> {target['target_version']})"
+            )
+            print(f"    {target['message']}")
+        for backup in payload["backups"]:
             print(f"  Backup: {backup}")
     return 0 if report.ok else 2
 
@@ -1175,32 +1197,83 @@ def _benchmark_command(arguments: list[str]) -> int:
         run_benchmark,
         write_benchmark_report,
     )
+    from agentbus.product.index_scale import (
+        INDEX_SCALE_GROUP,
+        run_index_scale_benchmark,
+    )
+    from agentbus.product.performance import (
+        compare_benchmark_reports,
+        load_benchmark_report,
+    )
     from agentbus.product.synthetic import SYNTHETIC_SIZES
 
     parser = argparse.ArgumentParser(prog="agentbus benchmark")
     parser.add_argument(
         "group",
         nargs="?",
-        choices=(*BENCHMARK_GROUPS, "all"),
+        choices=(*BENCHMARK_GROUPS, INDEX_SCALE_GROUP, "all"),
         default="all",
     )
-    parser.add_argument("--size", choices=tuple(SYNTHETIC_SIZES), default="small")
+    parser.add_argument("--size", choices=tuple(SYNTHETIC_SIZES))
     parser.add_argument("--files", type=int)
-    parser.add_argument("--iterations", type=int, default=5)
+    parser.add_argument("--iterations", type=int)
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--output", help="Write an atomic JSON benchmark report.")
+    parser.add_argument(
+        "--baseline",
+        help="Compare an `all` benchmark with a compatible JSON baseline.",
+    )
+    parser.add_argument(
+        "--comparison-output",
+        help="Write the baseline comparison as a separate atomic JSON scorecard.",
+    )
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(arguments)
     try:
-        report = run_benchmark(
-            args.group,
-            profile=args.size,
-            file_count=args.files,
-            iterations=args.iterations,
-            seed=args.seed,
+        if args.baseline and args.group != "all":
+            raise ValueError(
+                "Performance baselines require the `all` benchmark group."
+            )
+        if args.comparison_output and not args.baseline:
+            raise ValueError("--comparison-output requires --baseline.")
+        baseline = (
+            load_benchmark_report(args.baseline) if args.baseline else None
+        )
+        profile = args.size or (
+            "medium" if args.group == INDEX_SCALE_GROUP else "small"
+        )
+        if args.group == INDEX_SCALE_GROUP:
+            if args.iterations not in {None, 1}:
+                raise ValueError(
+                    "Index scale is one stateful lifecycle; --iterations must be 1."
+                )
+            report = run_index_scale_benchmark(
+                profile=profile,
+                file_count=args.files,
+                seed=args.seed,
+            )
+        else:
+            report = run_benchmark(
+                args.group,
+                profile=profile,
+                file_count=args.files,
+                iterations=(
+                    5 if args.iterations is None else args.iterations
+                ),
+                seed=args.seed,
+            )
+        comparison = (
+            compare_benchmark_reports(baseline, report)
+            if baseline is not None
+            else None
         )
         report_path = (
             write_benchmark_report(report, args.output) if args.output else None
+        )
+        comparison_path = (
+            write_benchmark_report(comparison, args.comparison_output)
+            if comparison is not None and args.comparison_output
+            else None
         )
     except (OSError, RuntimeError, ValueError) as exc:
         payload = {"ok": False, "error": str(exc), "network_used": False}
@@ -1212,8 +1285,41 @@ def _benchmark_command(arguments: list[str]) -> int:
         return 2
     payload = report.to_dict()
     payload["report_path"] = str(report_path) if report_path else None
+    payload["comparison_report_path"] = (
+        str(comparison_path) if comparison_path else None
+    )
+    if comparison is not None:
+        payload["benchmark_ok"] = report.passed
+        payload["performance_scorecard"] = comparison.to_dict()
+        payload["ok"] = report.passed and comparison.ok
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))
+    elif args.group == INDEX_SCALE_GROUP:
+        repository = payload["repository"]
+        print(
+            "AgentBus index scale benchmark "
+            f"({repository['profile']}, {repository['file_count']} generated files)"
+        )
+        for operation in report.operations:
+            print(
+                f"  [{'OK' if operation.passed else 'FAIL'}] "
+                f"{operation.name}: {operation.duration_ms:.3f}ms, "
+                f"indexed={operation.indexed_files}, "
+                f"unnecessary={operation.unnecessarily_reindexed_files}, "
+                f"efficiency={operation.invalidation_efficiency:.3f}"
+            )
+        print(f"Environment: {report.environment_fingerprint}")
+        print(f"Database: {report.database_bytes} bytes")
+        print(
+            "Peak memory: "
+            + (
+                f"{report.peak_memory_bytes} bytes"
+                if report.peak_memory_bytes is not None
+                else "not measured"
+            )
+        )
+        if report_path:
+            print(f"Report: {report_path}")
     else:
         repository = payload["repository"]
         print(
@@ -1235,27 +1341,62 @@ def _benchmark_command(arguments: list[str]) -> int:
             f"Peak memory: {report.peak_memory_bytes} / "
             f"{report.memory_budget_bytes} bytes"
         )
+        print(
+            "Daemon memory: "
+            + (
+                f"{report.daemon_peak_memory_bytes} bytes"
+                if report.daemon_peak_memory_bytes is not None
+                else "not measured"
+            )
+        )
+        print(f"Persistent storage: {report.persistent_storage_bytes} bytes")
+        if comparison is not None:
+            print(
+                "Performance scorecard: "
+                f"{comparison.status.value} ({comparison.classification.value})"
+            )
+            for metric in comparison.metrics:
+                if not metric.available:
+                    print(f"  [UNAVAILABLE] {metric.title}: {metric.observation}")
+                    continue
+                print(
+                    f"  [{metric.classification.value.upper()}] {metric.title}: "
+                    f"baseline={metric.baseline_value:.3f} "
+                    f"current={metric.current_value:.3f} {metric.unit}"
+                )
+            for warning in comparison.warnings:
+                print(f"  Warning: {warning}")
         if report_path:
             print(f"Report: {report_path}")
-    return 0 if report.passed else 1
+        if comparison_path:
+            print(f"Comparison report: {comparison_path}")
+    return 0 if report.passed and (comparison is None or comparison.ok) else 1
 
 
 def _soak_command(arguments: list[str]) -> int:
-    from agentbus.product.soak import run_soak
+    from agentbus.product.soak import SOAK_PROFILE_NAMES, run_soak
 
     parser = argparse.ArgumentParser(prog="agentbus soak")
-    parser.add_argument("--duration", type=float, default=30.0, metavar="SECONDS")
-    parser.add_argument("--runs", type=int, default=10)
-    parser.add_argument("--parallelism", type=int, default=2)
+    parser.add_argument(
+        "--profile",
+        choices=SOAK_PROFILE_NAMES,
+        default="quick",
+    )
+    parser.add_argument("--duration", type=float, default=None, metavar="SECONDS")
+    parser.add_argument("--runs", type=int, default=None)
+    parser.add_argument("--parallelism", type=int, default=None)
+    parser.add_argument("--repository-files", type=int, default=None)
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(arguments)
     try:
         report = run_soak(
+            profile=args.profile,
             duration_seconds=args.duration,
             runs=args.runs,
             parallelism=args.parallelism,
             seed=args.seed,
+            repository_files=args.repository_files,
         )
     except (OSError, RuntimeError, ValueError) as exc:
         payload = {"ok": False, "error": str(exc), "network_used": False}
@@ -1270,8 +1411,9 @@ def _soak_command(arguments: list[str]) -> int:
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         print(
-            f"AgentBus offline soak: {report.completed_runs}/{report.requested_runs} "
-            f"cycles in {report.duration_seconds:.3f}s"
+            f"AgentBus offline soak ({report.profile}): "
+            f"{report.completed_runs}/{report.requested_runs} cycles in "
+            f"{report.duration_seconds:.3f}s"
         )
         print(
             f"  successful={report.successful_runs} "
@@ -1282,6 +1424,11 @@ def _soak_command(arguments: list[str]) -> int:
             f"stale_leases={report.stale_lease_count}"
         )
         print(
+            f"  tools={report.tool_calls} approvals={report.approval_count} "
+            f"mcp_calls={report.mcp_call_count} "
+            f"daemon_restarts={report.daemon_restart_count}"
+        )
+        print(
             f"  leaked_worktrees={report.leaked_worktree_count} "
             f"leaked_processes={report.leaked_process_count} "
             f"cleanup_failures={report.failed_cleanup_count}"
@@ -1289,6 +1436,12 @@ def _soak_command(arguments: list[str]) -> int:
         print(
             f"  memory_growth={report.memory_growth_bytes} "
             f"budget={report.memory_budget_bytes} bytes"
+        )
+        trends = {trend.name: trend for trend in report.resource_trends}
+        print(
+            f"  state_db={trends['state_database_bytes'].after} "
+            f"index_db={trends['index_database_bytes'].after} "
+            f"trace={trends['trace_bytes'].after} bytes"
         )
         if report.stopped_by_duration:
             print("  duration limit stopped scheduling additional cycles")
@@ -1339,6 +1492,16 @@ def _print_console_safe(value: str) -> None:
     except (LookupError, UnicodeError):
         rendered = value.encode("ascii", errors="backslashreplace").decode("ascii")
     print(rendered)
+
+
+def _configure_console_output(stream: object) -> None:
+    reconfigure = getattr(stream, "reconfigure", None)
+    if not callable(reconfigure):
+        return
+    try:
+        reconfigure(errors="backslashreplace")
+    except (LookupError, OSError, TypeError, ValueError):
+        return
 
 
 if __name__ == "__main__":

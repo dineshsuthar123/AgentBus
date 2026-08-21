@@ -33,7 +33,11 @@ import {
   spanTooltip,
   timelineChildren
 } from "./tracePresentation";
-import { formatApprovalTooltip } from "./approvalPresentation";
+import {
+  ApprovalStateConflictError,
+  formatApprovalTooltip,
+  reconcileApprovalSummaries
+} from "./approvalPresentation";
 import { formatMcpServerTooltip } from "./mcpPresentation";
 import {
   canCancel,
@@ -231,7 +235,18 @@ export class ApprovalsProvider extends RefreshableProvider {
       return [messageItem("Select a run to inspect approvals.")];
     }
     const response = await (await this.client()).approvals(runId);
-    return response.approvals.map(approvalItem);
+    try {
+      return reconcileApprovalSummaries(response.approvals).map(approvalItem);
+    } catch (error) {
+      if (error instanceof ApprovalStateConflictError) {
+        return [
+          messageItem(
+            "Conflicting restored approval state was blocked; refresh after inspecting the run."
+          )
+        ];
+      }
+      throw error;
+    }
   }
 }
 
