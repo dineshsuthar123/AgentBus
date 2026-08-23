@@ -22,6 +22,7 @@ from agentbus.tools.interfaces import ToolExecutionOutput, ToolOutputCallback
 from agentbus.tools.protocol import (
     ToolArtifact,
     ToolArtifactKind,
+    ToolCapabilityName,
     ToolDescriptor,
     ToolInvocation,
     ToolProtocolValidationError,
@@ -234,6 +235,10 @@ class FileSystemManagedTool(_PinnedManagedTool):
                 task_id=invocation.task_id,
                 invocation_id=invocation.invocation_id,
                 expected_sha256=arguments.get("expected_sha256"),
+                allow_create=any(
+                    capability.name == ToolCapabilityName.FILESYSTEM_CREATE
+                    for capability in invocation.requested_capabilities
+                ),
             )
         elif name == "filesystem.patch":
             _require_file_budget(arguments["replacement"], invocation)

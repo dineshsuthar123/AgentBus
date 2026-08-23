@@ -94,7 +94,10 @@ class DurableExecutionEngine:
         metadata: dict[str, Any] | None = None,
         run_id: str | None = None,
     ) -> RunRecord:
-        graph = TaskGraph.from_planner_output(planner_output)
+        graph = TaskGraph.from_planner_output(
+            planner_output,
+            workspace=workspace,
+        )
         run_metadata = dict(metadata or {})
         run_metadata["agentbus_version"] = __version__
         raw_execution_metadata = run_metadata.get("execution", {})

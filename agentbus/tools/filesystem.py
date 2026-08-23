@@ -84,13 +84,24 @@ class FileSystemTools:
         invocation_id: str | None = None,
         expected_sha256: str | None = None,
     ) -> str:
-        self.write_file_result(
-            path,
-            content,
-            task_id=task_id,
-            invocation_id=invocation_id or uuid.uuid4().hex,
-            expected_sha256=expected_sha256,
-        )
+        operation_id = invocation_id or uuid.uuid4().hex
+        if self._safe_path(path).exists():
+            self.write_file_result(
+                path,
+                content,
+                task_id=task_id,
+                invocation_id=operation_id,
+                expected_sha256=expected_sha256,
+            )
+        else:
+            if expected_sha256 is not None:
+                raise FileNotFoundError(f"File not found: {path}")
+            self.create_file(
+                path,
+                content,
+                task_id=task_id,
+                invocation_id=operation_id,
+            )
         return f"Wrote file: {path}"
 
     def read_file_result(
@@ -142,6 +153,7 @@ class FileSystemTools:
         task_id: str,
         invocation_id: str,
         expected_sha256: str | None = None,
+        allow_create: bool = False,
     ) -> FileMutationRecord:
         return self._filesystem.write(
             path,
@@ -149,6 +161,7 @@ class FileSystemTools:
             task_id=task_id,
             invocation_id=invocation_id,
             expected_sha256=expected_sha256,
+            allow_create=allow_create,
         )
 
     def patch_file(

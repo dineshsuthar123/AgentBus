@@ -117,6 +117,14 @@ Task boundary:
 - Do not perform downstream work or infer capabilities from the overall request.
 - The current task's required_capabilities are an upper bound. Runtime path,
   scope, approval, and policy checks remain authoritative.
+- Existing-file mutation requires filesystem.write. Creating a previously nonexistent file requires filesystem.create.
+- Do not attempt file creation when filesystem.create is absent from the current
+  task's declared capability set. Prefer modifying appropriate existing files
+  when that produces the correct architecture.
+- Do not distort the solution merely to avoid a capability that the planner
+  legitimately should have declared. If creation is genuinely necessary but
+  undeclared, fail with PLAN_CAPABILITY_MISMATCH rather than requesting or
+  attempting authorization escalation.
 - Do not request capabilities beyond the current task's declared set.
 - If the current task cannot satisfy its done criteria within that set, state
   that the plan contract is insufficient. Do not claim completion or attempt

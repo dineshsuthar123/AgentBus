@@ -85,7 +85,11 @@ def builtin_descriptors(
         ),
         _descriptor(
             "filesystem.write",
-            "Atomically write a bounded file inside the assigned worktree.",
+            (
+                "Atomically write a bounded file inside the assigned worktree. "
+                "Existing targets require filesystem.write; missing targets also "
+                "require filesystem.create."
+            ),
             (
                 _capability(ToolCapabilityName.FILESYSTEM_WRITE, filesystem_scope),
                 _capability(ToolCapabilityName.FILESYSTEM_CREATE, filesystem_scope),

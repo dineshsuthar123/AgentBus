@@ -170,6 +170,7 @@ class ContainedFileSystem:
         task_id: str,
         invocation_id: str,
         expected_sha256: str | None = None,
+        allow_create: bool = False,
     ) -> FileMutationRecord:
         return self._atomic_write(
             path,
@@ -178,6 +179,7 @@ class ContainedFileSystem:
             task_id=task_id,
             invocation_id=invocation_id,
             expected_sha256=expected_sha256,
+            require_present=not allow_create,
         )
 
     def patch(
@@ -579,6 +581,7 @@ class ContainedFileSystem:
         invocation_id: str,
         expected_sha256: str | None = None,
         require_absent: bool = False,
+        require_present: bool = False,
     ) -> FileMutationRecord:
         self._validate_attribution(task_id, invocation_id)
         self._validate_expected_hash(expected_sha256)
@@ -591,6 +594,8 @@ class ContainedFileSystem:
         before = self._snapshot_file(resolved) if resolved.exists else None
         if require_absent and before is not None:
             raise FileExistsError(f"File already exists: {resolved.relative_path}")
+        if require_present and before is None:
+            raise FileNotFoundError(f"File not found: {resolved.relative_path}")
         if before is None and expected_sha256 is not None:
             raise FileMutationConflict("Expected file is missing.")
         if before is not None:

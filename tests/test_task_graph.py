@@ -222,14 +222,18 @@ def test_genuine_multi_step_implementation_slices_remain_supported():
     assert graph.get("webhook").dependency_ids == ["storage"]
 
 
-def test_repository_contract_requires_create_for_missing_output(tmp_path):
+@pytest.mark.parametrize(
+    "field_name",
+    ["expected_outputs", "targeted_files", "proposed_tests"],
+)
+def test_repository_contract_requires_create_for_missing_structured_path(
+    tmp_path,
+    field_name,
+):
     planned = step("new-record", dependencies=[])
     planned.update(
         {
-            "expected_outputs": [
-                "src/main/java/com/example/payment/NewIdempotencyRecord.java"
-            ],
-            "targeted_files": [
+            field_name: [
                 "src/main/java/com/example/payment/NewIdempotencyRecord.java"
             ],
             "done_criteria": ["The idempotency record is implemented"],

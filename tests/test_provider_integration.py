@@ -373,7 +373,11 @@ def test_payment_plan_is_corrected_for_explicit_new_file_before_persistence(
     assert "missing_create_capability" in correction_prompt
     assert NEW_IDEMPOTENCY_RECORD in correction_prompt
     assert "filesystem.create" in correction_prompt
-    assert persisted.planner_output == corrected
+    expected_persisted = json.loads(json.dumps(corrected))
+    for scope in (expected_persisted, *expected_persisted["steps"]):
+        scope.pop("targeted_files", None)
+        scope.pop("proposed_tests", None)
+    assert persisted.planner_output == expected_persisted
     assert store.get_task(run_id, "step-1").spec.metadata[
         "required_capabilities"
     ] == corrected["steps"][0]["required_capabilities"]
@@ -447,7 +451,7 @@ def test_payment_plan_existing_files_needs_no_create_capability(tmp_path):
     ) == updated_service
     invocation = store.list_tool_invocations(run_id)[0]
     assert [
-        capability.name.value for capability in invocation.requested_capabilities
+        capability.name.value for capability in invocation.capabilities
     ] == ["filesystem.write"]
 
 
@@ -791,7 +795,6 @@ def test_strict_fake_azure_completes_durable_calculator_workflow(tmp_path):
                 "done_criteria": ["Both calculator tests pass"],
                 "required_capabilities": [
                     "filesystem.write",
-                    "filesystem.create",
                 ],
                 "targeted_files": ["calculator.py"],
                 "targeted_symbols": None,
@@ -825,7 +828,6 @@ def test_strict_fake_azure_completes_durable_calculator_workflow(tmp_path):
                         ),
                         "expected_capabilities": [
                             "filesystem.write",
-                            "filesystem.create",
                         ],
                         "timeout_seconds": None,
                         "invocation_revision": 1,
@@ -959,7 +961,6 @@ def test_strict_fake_azure_completes_durable_calculator_workflow(tmp_path):
     assert attempt.metadata["task_contract"] == {
         "execution_kind": "implementation",
         "required_capabilities": [
-            "filesystem.create",
             "filesystem.write",
         ],
     }

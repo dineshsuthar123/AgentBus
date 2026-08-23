@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Iterable
 
 from agentbus.execution.models import (
@@ -9,6 +10,10 @@ from agentbus.execution.models import (
     TaskExecutionKind,
     TaskSpec,
     TaskStatus,
+)
+from agentbus.tools.filesystem_security import (
+    ContainedPathResolver,
+    FileSystemSecurityError,
 )
 from agentbus.tools.protocol import ToolCapabilityName
 
@@ -75,6 +80,11 @@ _ANALYSIS_READ_ONLY_CAPABILITIES = frozenset(
 _IMPLEMENTATION_EFFECT_CAPABILITIES = frozenset(ToolCapabilityName).difference(
     _ANALYSIS_READ_ONLY_CAPABILITIES
 )
+_PLANNED_REPOSITORY_PATH_FIELDS = (
+    "expected_outputs",
+    "targeted_files",
+    "proposed_tests",
+)
 
 
 FAILED_DEPENDENCY_STATUSES = {
@@ -95,7 +105,12 @@ class TaskGraph:
         self._validate()
 
     @classmethod
-    def from_planner_output(cls, planner_output: dict[str, Any]) -> "TaskGraph":
+    def from_planner_output(
+        cls,
+        planner_output: dict[str, Any],
+        *,
+        workspace: str | Path | None = None,
+    ) -> "TaskGraph":
         raw_steps = planner_output.get("steps")
         if not isinstance(raw_steps, list) or not raw_steps:
             raise TaskGraphValidationError(
@@ -210,6 +225,8 @@ class TaskGraph:
         graph = cls(tasks)
         if all(contract_declarations):
             graph._validate_planner_contract()
+            if workspace is not None:
+                graph._validate_repository_capability_contract(workspace)
         return graph
 
     @classmethod
@@ -402,6 +419,99 @@ class TaskGraph:
 
         if issues:
             raise PlanContractValidationError(issues)
+
+    def _validate_repository_capability_contract(
+        self,
+        workspace: str | Path,
+    ) -> None:
+        explicit_paths = {
+            task.task_id: self._task_repository_paths(task)
+            for task in self.tasks
+        }
+        if not any(explicit_paths.values()):
+            return
+
+        resolver = ContainedPathResolver(workspace)
+        issues: list[PlanContractIssue] = []
+        available_after_task: dict[str, set[str]] = {}
+        for task in self.topological_order():
+            available_from_dependencies: set[str] = set()
+            for dependency_id in task.dependency_ids:
+                available_from_dependencies.update(
+                    available_after_task.get(dependency_id, set())
+                )
+
+            capabilities = {
+                ToolCapabilityName(value)
+                for value in task.metadata.get("required_capabilities", [])
+            }
+            can_create = ToolCapabilityName.FILESYSTEM_CREATE in capabilities
+            materialized_by_task: set[str] = set()
+            evaluated_paths: set[str] = set()
+            for field_name, raw_path in explicit_paths[task.task_id]:
+                try:
+                    resolved = resolver.resolve(raw_path, reject_any_link=True)
+                except FileSystemSecurityError:
+                    issues.append(
+                        PlanContractIssue(
+                            "unsafe_repository_path",
+                            task.task_id,
+                            f"{field_name} contains an unsafe repository-relative path",
+                        )
+                    )
+                    continue
+
+                if resolved.relative_path in evaluated_paths:
+                    continue
+                evaluated_paths.add(resolved.relative_path)
+                if (
+                    resolved.exists
+                    or resolved.relative_path in available_from_dependencies
+                ):
+                    continue
+                if can_create:
+                    materialized_by_task.add(resolved.relative_path)
+                    continue
+                issues.append(
+                    PlanContractIssue(
+                        "missing_create_capability",
+                        task.task_id,
+                        (
+                            f"structured {field_name} path "
+                            f"'{resolved.relative_path}' does not exist in the target "
+                            "repository; the corrected planner response must explicitly "
+                            "declare filesystem.create for this task or target an "
+                            "existing file"
+                        ),
+                    )
+                )
+
+            available_after_task[task.task_id] = {
+                *available_from_dependencies,
+                *materialized_by_task,
+            }
+
+        if issues:
+            raise PlanContractValidationError(issues)
+
+    @staticmethod
+    def _task_repository_paths(task: TaskSpec) -> list[tuple[str, str]]:
+        values = {
+            "expected_outputs": task.expected_outputs,
+            "targeted_files": task.metadata.get("targeted_files", []),
+            "proposed_tests": task.metadata.get("proposed_tests", []),
+        }
+        paths: list[tuple[str, str]] = []
+        for field_name in _PLANNED_REPOSITORY_PATH_FIELDS:
+            raw_values = values[field_name]
+            if not isinstance(raw_values, list):
+                continue
+            paths.extend(
+                (field_name, raw_path)
+                for raw_path in raw_values
+                if isinstance(raw_path, str)
+            )
+        return paths
 
     def _validate_acyclic(self) -> None:
         visiting: set[str] = set()

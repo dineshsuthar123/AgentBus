@@ -434,8 +434,9 @@ Return the next JSON action.
     def _tool_catalog_json(self) -> str:
         if self.tool_runtime is None:
             return "[]"
-        catalog = [
-            {
+        catalog = []
+        for descriptor in self.tool_runtime.registry.descriptors():
+            entry = {
                 "name": descriptor.name,
                 "version": str(descriptor.version),
                 "description": descriptor.description,
@@ -444,8 +445,15 @@ Return the next JSON action.
                 ],
                 "argument_schema": descriptor.argument_schema,
             }
-            for descriptor in self.tool_runtime.registry.descriptors()
-        ]
+            if descriptor.name == "filesystem.write":
+                entry["capability_rules"] = {
+                    "existing_path": ["filesystem.write"],
+                    "missing_path": [
+                        "filesystem.write",
+                        "filesystem.create",
+                    ],
+                }
+            catalog.append(entry)
         return json.dumps(catalog, ensure_ascii=False, sort_keys=True)
 
     def _invocation_id(self, idempotency_key: str, revision: int) -> str:

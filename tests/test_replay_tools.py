@@ -238,13 +238,19 @@ def test_replay_preserves_existing_write_capability_identity(tmp_path: Path) -> 
             )
         }
     )
-    from agentbus.replay.tools import CapturedToolEnvelope
-
-    envelope = CapturedToolEnvelope(
+    object_store = ContentAddressedStore(
+        tmp_path / "objects",
+        private_roots=[str(tmp_path.resolve())],
+    )
+    reference = capture_tool_envelope(
+        object_store,
         descriptor=descriptor,
         invocation=invocation,
         policy_decision=_decision(invocation),
+        producing_span_id="tool-existing-write-span",
+        reference_id="tool-existing-write-envelope",
     )
+    envelope = load_tool_envelope(object_store, reference.sha256)
 
     assessment = ToolReplayPlanner().assess(
         envelope,

@@ -37,7 +37,7 @@ def derive_required_capabilities(
     executable = invocation.arguments.get("executable")
     working_directory = _working_directory(invocation)
     required: list[ToolCapability] = []
-    for declared in descriptor.capabilities:
+    for declared in _applicable_capabilities(invocation, descriptor):
         updates: dict[str, object] = {}
         if affected_paths:
             updates["affected_paths"] = affected_paths
@@ -58,6 +58,39 @@ def derive_required_capabilities(
             "Derived tool capabilities exceed the descriptor declaration."
         )
     return result
+
+
+def _applicable_capabilities(
+    invocation: ToolInvocation,
+    descriptor: ToolDescriptor,
+) -> tuple[ToolCapability, ...]:
+    if invocation.tool_name != "filesystem.write":
+        return descriptor.capabilities
+    if not any(
+        capability.name == ToolCapabilityName.FILESYSTEM_CREATE
+        for capability in descriptor.capabilities
+    ):
+        return descriptor.capabilities
+
+    from agentbus.tools.filesystem_security import (
+        ContainedPathResolver,
+        FileSystemSecurityError,
+    )
+
+    path = invocation.arguments["path"]
+    try:
+        resolver = ContainedPathResolver(invocation.context.worktree_identity)
+        target = resolver.resolve(path, reject_any_link=True)
+    except FileSystemSecurityError:
+        # Preserve the dispatcher/policy denial path for unsafe model arguments.
+        return descriptor.capabilities
+    if not target.exists:
+        return descriptor.capabilities
+    return tuple(
+        capability
+        for capability in descriptor.capabilities
+        if capability.name != ToolCapabilityName.FILESYSTEM_CREATE
+    )
 
 
 def require_expected_capabilities(

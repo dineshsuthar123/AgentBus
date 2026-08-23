@@ -2307,9 +2307,18 @@ class MultiAgentOrchestrator:
                 mode="json",
                 exclude_none=True,
             )
-            plan = self._validate_planner_scope(plan, intelligence)
             try:
-                graph = TaskGraph.from_planner_output(plan)
+                # Validate model-authored structured paths before optional
+                # intelligence fields are filtered or normalized.
+                TaskGraph.from_planner_output(
+                    plan,
+                    workspace=self.workspace,
+                )
+                plan = self._validate_planner_scope(plan, intelligence)
+                graph = TaskGraph.from_planner_output(
+                    plan,
+                    workspace=self.workspace,
+                )
                 if self.config.parallel_execution:
                     analysis_tasks = [
                         task

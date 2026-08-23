@@ -93,7 +93,9 @@ class PlannerAgent(BaseAgent):
                 "validation:\n- "
                 + "\n- ".join(bounded_feedback)
                 + "\nReturn a corrected plan. Do not add capabilities unless the "
-                "implementation slice legitimately requires them.\n"
+                "implementation slice legitimately requires them. When feedback "
+                "identifies a missing capability, the corrected response must explicitly "
+                "declare it; AgentBus will not add it automatically.\n"
             )
         prompt = f"""
 You are the AgentBus Planner Agent.
@@ -149,6 +151,16 @@ Durable step contract:
 - Declare all capabilities the slice legitimately requires, but never declare a
   capability merely because it is convenient. Runtime policy remains
   authoritative.
+- Use expected_outputs, targeted_files, and proposed_tests for concrete
+  repository-relative paths. For every new repository-relative path that the
+  task will materialize, explicitly declare filesystem.create.
+- Mutating existing files requires filesystem.write but does not require
+  filesystem.create. Do not add filesystem.create when all planned paths already
+  exist in the supplied repository context.
+- A new regression test, migration, implementation class, module, configuration
+  file, repository interface, or helper may legitimately require
+  filesystem.create. Modifying an existing service, entity, repository,
+  configuration, or test does not.
 - Dependencies are only for independently useful implementation slices.
 - Use execution_kind="analysis" only for a terminal, read-only result that does
   not modify repository files and is not authorization for a downstream task.

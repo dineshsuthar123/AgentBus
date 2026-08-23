@@ -700,6 +700,15 @@ def test_durable_mode_persists_validated_repository_intelligence(tmp_path):
         reviewer=reviewer,
         intelligence_source=StaticPlannerIntelligenceSource(intelligence),
     )
+    (runner.workspace / "calculator.py").write_text(
+        "def add(a, b): return a + b\n",
+        encoding="utf-8",
+    )
+    (runner.workspace / "tests").mkdir()
+    (runner.workspace / "tests" / "test_calculator.py").write_text(
+        "def test_add(): pass\n",
+        encoding="utf-8",
+    )
 
     run_id = runner.create_durable_run("Create calculator")
     snapshot = store.load_snapshot(run_id)
