@@ -229,6 +229,228 @@ def build_runner(tmp_path, scripts, *, fallback=False):
     return runner, store, router, providers, verifier
 
 
+PAYMENT_SERVICE = "src/main/java/com/example/payment/PaymentService.java"
+PAYMENT_ENTITY = "src/main/java/com/example/payment/Payment.java"
+PAYMENT_REPOSITORY = "src/main/java/com/example/payment/PaymentRepository.java"
+PAYMENT_TEST = "src/test/java/com/example/payment/PaymentServiceTest.java"
+NEW_IDEMPOTENCY_RECORD = (
+    "src/main/java/com/example/payment/NewIdempotencyRecord.java"
+)
+
+
+def seed_payment_trial(runner):
+    workspace = runner.config.workspace_path
+    contents = {
+        PAYMENT_SERVICE: "class PaymentService { void process() {} }\n",
+        PAYMENT_ENTITY: "class Payment {}\n",
+        PAYMENT_REPOSITORY: "interface PaymentRepository {}\n",
+        PAYMENT_TEST: "class PaymentServiceTest {}\n",
+    }
+    for relative_path, content in contents.items():
+        target = workspace / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    subprocess.run(
+        ["git", "config", "user.name", "AgentBus Tests"],
+        cwd=workspace,
+        check=True,
+        capture_output=True,
+        text=True,
+        shell=False,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "tests@agentbus.invalid"],
+        cwd=workspace,
+        check=True,
+        capture_output=True,
+        text=True,
+        shell=False,
+    )
+    subprocess.run(
+        ["git", "add", *contents],
+        cwd=workspace,
+        check=True,
+        capture_output=True,
+        text=True,
+        shell=False,
+    )
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "payment fixture"],
+        cwd=workspace,
+        check=True,
+        capture_output=True,
+        text=True,
+        shell=False,
+    )
+
+
+def payment_plan(*, outputs, targets, capabilities, tests=None):
+    return {
+        "goal": "Make duplicate successful payment delivery idempotent",
+        "steps": [
+            {
+                "id": "step-1",
+                "title": "Make payment processing idempotent",
+                "description": (
+                    "Keep sequential and concurrent duplicate deliveries safe "
+                    "without blocking distinct payments."
+                ),
+                "risk": "medium",
+                "execution_kind": "implementation",
+                "dependencies": [],
+                "assigned_role": "coder",
+                "maximum_attempts": 1,
+                "expected_outputs": outputs,
+                "done_criteria": [
+                    "Sequential duplicates produce one stored payment",
+                    "Concurrent duplicates cannot duplicate side effects",
+                    "Distinct payments still succeed",
+                ],
+                "required_capabilities": capabilities,
+                "targeted_files": targets,
+                "proposed_tests": tests or [PAYMENT_TEST],
+            }
+        ],
+        "test_strategy": "Run the payment service regression tests",
+        "done_criteria": ["Payment delivery is idempotent and verified"],
+        "targeted_files": targets,
+        "proposed_tests": tests or [PAYMENT_TEST],
+    }
+
+
+def test_payment_plan_is_corrected_for_explicit_new_file_before_persistence(
+    tmp_path,
+):
+    capabilities = [
+        "filesystem.read",
+        "filesystem.write",
+        "process.execute",
+        "test.execute",
+        "git.read",
+    ]
+    incoherent = payment_plan(
+        outputs=[NEW_IDEMPOTENCY_RECORD],
+        targets=[PAYMENT_SERVICE, NEW_IDEMPOTENCY_RECORD],
+        capabilities=capabilities,
+    )
+    corrected = payment_plan(
+        outputs=[NEW_IDEMPOTENCY_RECORD],
+        targets=[PAYMENT_SERVICE, NEW_IDEMPOTENCY_RECORD],
+        capabilities=[*capabilities, "filesystem.create"],
+    )
+    scripts = {
+        ("azure", "planner"): [incoherent, corrected],
+        ("azure", "coder"): [
+            {
+                "action": "tool_call",
+                "tool_call": {
+                    "tool_name": "filesystem.create",
+                    "arguments": {
+                        "path": NEW_IDEMPOTENCY_RECORD,
+                        "content": "class NewIdempotencyRecord {}\n",
+                    },
+                    "expected_capabilities": ["filesystem.create"],
+                    "idempotency_key": "payment-idempotency-record",
+                },
+            },
+            {"action": "finish", "summary": "Added idempotency storage"},
+        ],
+        ("azure", "reviewer"): [
+            approved_review("Payment task approved"),
+            approved_review("Payment run approved"),
+        ],
+    }
+    runner, store, _, providers, _ = build_runner(tmp_path, scripts)
+    seed_payment_trial(runner)
+
+    run_id = runner.create_durable_run(
+        "Fix duplicate sequential and concurrent payment webhook delivery"
+    )
+    persisted = store.get_run(run_id)
+
+    assert len(providers[("azure", "planner")].calls) == 2
+    correction_prompt = providers[("azure", "planner")].calls[1]["prompt"]
+    assert "missing_create_capability" in correction_prompt
+    assert NEW_IDEMPOTENCY_RECORD in correction_prompt
+    assert "filesystem.create" in correction_prompt
+    assert persisted.planner_output == corrected
+    assert store.get_task(run_id, "step-1").spec.metadata[
+        "required_capabilities"
+    ] == corrected["steps"][0]["required_capabilities"]
+
+    report = runner.run_durable(run_id)
+
+    assert report.status == RunStatus.SUCCEEDED
+    assert (runner.config.workspace_path / NEW_IDEMPOTENCY_RECORD).exists()
+    assert len(providers[("azure", "coder")].calls) == 2
+
+
+def test_payment_plan_existing_files_needs_no_create_capability(tmp_path):
+    capabilities = [
+        "filesystem.read",
+        "filesystem.write",
+        "process.execute",
+        "test.execute",
+        "git.read",
+    ]
+    plan = payment_plan(
+        outputs=[
+            PAYMENT_ENTITY,
+            PAYMENT_SERVICE,
+            PAYMENT_REPOSITORY,
+            PAYMENT_TEST,
+        ],
+        targets=[PAYMENT_ENTITY, PAYMENT_SERVICE, PAYMENT_REPOSITORY],
+        capabilities=capabilities,
+    )
+    updated_service = (
+        "class PaymentService { synchronized void processIdempotently() {} }\n"
+    )
+    scripts = {
+        ("azure", "planner"): [plan],
+        ("azure", "coder"): [
+            {
+                "action": "tool_call",
+                "tool_call": {
+                    "tool_name": "filesystem.write",
+                    "arguments": {
+                        "path": PAYMENT_SERVICE,
+                        "content": updated_service,
+                    },
+                    "expected_capabilities": ["filesystem.write"],
+                    "idempotency_key": "payment-existing-service-write",
+                },
+            },
+            {"action": "finish", "summary": "Updated existing payment service"},
+        ],
+        ("azure", "reviewer"): [
+            approved_review("Existing-file payment task approved"),
+            approved_review("Existing-file payment run approved"),
+        ],
+    }
+    runner, store, _, providers, _ = build_runner(tmp_path, scripts)
+    seed_payment_trial(runner)
+
+    run_id = runner.create_durable_run(
+        "Fix duplicate payments by editing the existing service"
+    )
+    persisted = store.get_run(run_id)
+    report = runner.run_durable(run_id)
+
+    assert report.status == RunStatus.SUCCEEDED
+    assert len(providers[("azure", "planner")].calls) == 1
+    assert "filesystem.create" not in persisted.planner_output["steps"][0][
+        "required_capabilities"
+    ]
+    assert (runner.config.workspace_path / PAYMENT_SERVICE).read_text(
+        encoding="utf-8"
+    ) == updated_service
+    invocation = store.list_tool_invocations(run_id)[0]
+    assert [
+        capability.name.value for capability in invocation.requested_capabilities
+    ] == ["filesystem.write"]
+
+
 def test_strict_azure_schema_exercises_real_coder_loop_and_managed_write(tmp_path):
     settings = config(tmp_path).with_overrides(max_steps=2)
     client = StrictAzureClient(
@@ -971,29 +1193,14 @@ def test_offline_azure_durable_smoke_routes_roles_retries_and_persists_usage(
     assert "integration-super-secret" not in combined_state + combined_logs
 
 
-def test_offline_azure_capability_mismatch_stops_before_dispatch_and_verifier(
+def test_unplanned_payment_file_creation_stops_before_dispatch_and_verifier(
     tmp_path,
 ):
-    plan = {
-        "goal": "Create a result module",
-        "steps": [
-            {
-                "id": "step-1",
-                "title": "Create result module",
-                "description": "Create result.py and verify the implementation.",
-                "risk": "low",
-                "execution_kind": "implementation",
-                "dependencies": [],
-                "assigned_role": "coder",
-                "maximum_attempts": 2,
-                "expected_outputs": ["result.py"],
-                "done_criteria": ["The result module is complete"],
-                "required_capabilities": ["filesystem.write"],
-            }
-        ],
-        "test_strategy": "Use the fake verifier",
-        "done_criteria": ["The result module is complete"],
-    }
+    plan = payment_plan(
+        outputs=[PAYMENT_SERVICE],
+        targets=[PAYMENT_SERVICE],
+        capabilities=["filesystem.read", "filesystem.write"],
+    )
     raw_secret = "raw-tool-argument-must-not-be-logged"
     scripts = {
         ("azure", "planner"): [plan],
@@ -1001,15 +1208,12 @@ def test_offline_azure_capability_mismatch_stops_before_dispatch_and_verifier(
             {
                 "action": "tool_call",
                 "tool_call": {
-                    "tool_name": "filesystem.write",
+                    "tool_name": "filesystem.create",
                     "arguments": {
-                        "path": "result.py",
+                        "path": "SomeNewFile.java",
                         "content": f"VALUE = '{raw_secret}'\n",
                     },
-                    "expected_capabilities": [
-                        "filesystem.write",
-                        "filesystem.create",
-                    ],
+                    "expected_capabilities": ["filesystem.create"],
                     "idempotency_key": "planner-contract-mismatch",
                 },
             }
@@ -1017,8 +1221,11 @@ def test_offline_azure_capability_mismatch_stops_before_dispatch_and_verifier(
         ("azure", "reviewer"): [],
     }
     runner, store, _, providers, verifier = build_runner(tmp_path, scripts)
+    seed_payment_trial(runner)
 
-    run_id = runner.create_durable_run("Create a result module")
+    run_id = runner.create_durable_run(
+        "Fix duplicate payments by editing the existing service"
+    )
     report = runner.run_durable(run_id)
     attempt = store.list_attempts(run_id, "step-1")[0]
 
@@ -1030,12 +1237,9 @@ def test_offline_azure_capability_mismatch_stops_before_dispatch_and_verifier(
     assert attempt.error_category == FailureCategory.PLAN_CAPABILITY_MISMATCH
     assert attempt.metadata["plan_capability_mismatch"] == {
         "task_id": "step-1",
-        "tool_name": "filesystem.write",
-        "requested_capabilities": [
-            "filesystem.create",
-            "filesystem.write",
-        ],
-        "declared_capabilities": ["filesystem.write"],
+        "tool_name": "filesystem.create",
+        "requested_capabilities": ["filesystem.create"],
+        "declared_capabilities": ["filesystem.read", "filesystem.write"],
         "undeclared_capabilities": ["filesystem.create"],
     }
     assert attempt.metadata["_agentbus"]["retryable_override"] is False
@@ -1043,7 +1247,7 @@ def test_offline_azure_capability_mismatch_stops_before_dispatch_and_verifier(
     assert len(providers[("azure", "coder")].calls) == 1
     assert ("azure", "reviewer") not in providers
     assert store.list_tool_invocations(run_id) == []
-    assert not (runner.config.workspace_path / "result.py").exists()
+    assert not (runner.config.workspace_path / "SomeNewFile.java").exists()
 
     logs = "".join(
         path.read_text(encoding="utf-8")
@@ -1055,10 +1259,16 @@ def test_offline_azure_capability_mismatch_stops_before_dispatch_and_verifier(
     assert raw_secret not in logs + persisted
 
     calls_before_resume = len(providers[("azure", "coder")].calls)
+    declared_before_resume = store.get_task(run_id, "step-1").spec.metadata[
+        "required_capabilities"
+    ]
     resumed = runner.resume_durable(run_id)
     assert resumed.status == RunStatus.FAILED
     assert len(providers[("azure", "coder")].calls) == calls_before_resume
     assert len(store.list_attempts(run_id, "step-1")) == 1
+    assert store.get_task(run_id, "step-1").spec.metadata[
+        "required_capabilities"
+    ] == declared_before_resume == ["filesystem.read", "filesystem.write"]
 
 
 def test_reviewer_feedback_cannot_expand_retry_capabilities(tmp_path):

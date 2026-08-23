@@ -222,6 +222,71 @@ def test_genuine_multi_step_implementation_slices_remain_supported():
     assert graph.get("webhook").dependency_ids == ["storage"]
 
 
+def test_repository_contract_requires_create_for_missing_output(tmp_path):
+    planned = step("new-record", dependencies=[])
+    planned.update(
+        {
+            "expected_outputs": [
+                "src/main/java/com/example/payment/NewIdempotencyRecord.java"
+            ],
+            "targeted_files": [
+                "src/main/java/com/example/payment/NewIdempotencyRecord.java"
+            ],
+            "done_criteria": ["The idempotency record is implemented"],
+        }
+    )
+
+    with pytest.raises(PlanContractValidationError) as captured:
+        TaskGraph.from_planner_output(
+            planner_output([planned]),
+            workspace=tmp_path,
+        )
+
+    assert {
+        (issue.task_id, issue.code) for issue in captured.value.issues
+    } == {("new-record", "missing_create_capability")}
+
+
+def test_repository_contract_does_not_require_create_for_existing_files(tmp_path):
+    service = tmp_path / "src/main/java/com/example/payment/PaymentService.java"
+    test = tmp_path / "src/test/java/com/example/payment/PaymentServiceTest.java"
+    service.parent.mkdir(parents=True)
+    test.parent.mkdir(parents=True)
+    service.write_text("class PaymentService {}\n", encoding="utf-8")
+    test.write_text("class PaymentServiceTest {}\n", encoding="utf-8")
+    planned = step("existing-payment-fix", dependencies=[])
+    planned.update(
+        {
+            "expected_outputs": [
+                "src/main/java/com/example/payment/PaymentService.java",
+            ],
+            "targeted_files": [
+                "src/main/java/com/example/payment/PaymentService.java",
+            ],
+            "proposed_tests": [
+                "src/test/java/com/example/payment/PaymentServiceTest.java",
+            ],
+            "done_criteria": ["Duplicate payment delivery is idempotent"],
+            "required_capabilities": [
+                "filesystem.read",
+                "filesystem.write",
+                "process.execute",
+                "test.execute",
+                "git.read",
+            ],
+        }
+    )
+
+    graph = TaskGraph.from_planner_output(
+        planner_output([planned]),
+        workspace=tmp_path,
+    )
+
+    assert "filesystem.create" not in graph.tasks[0].metadata[
+        "required_capabilities"
+    ]
+
+
 def test_repository_intelligence_claims_persist_in_task_metadata():
     planned = step("write", dependencies=[])
     planned.update(

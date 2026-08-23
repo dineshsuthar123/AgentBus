@@ -54,6 +54,9 @@ def test_planner_agent_parses_valid_model_output():
     assert "A durable step is an independently executable" in model.prompts[0]
     assert "BAD durable decomposition" in model.prompts[0]
     assert "GOOD atomic durable task" in model.prompts[0]
+    assert "new repository-relative path" in model.prompts[0]
+    assert "filesystem.create" in model.prompts[0]
+    assert "existing files" in model.prompts[0]
 
 
 def test_planner_agent_supports_repository_intelligence_claims():
@@ -130,6 +133,7 @@ def test_planner_contract_feedback_is_bounded_and_does_not_grant_capabilities():
     assert "previous durable plan was rejected" in prompt
     assert "Do not add capabilities unless" in prompt
     assert "implementation_without_mutation" in prompt
+    assert "corrected response must explicitly declare" in prompt
 
 
 def test_atomic_calculator_fix_is_one_verifiable_implementation_task():
@@ -321,6 +325,9 @@ def test_coder_scopes_overall_request_to_current_durable_task():
     assert "required_capabilities are an upper bound" in prompt
     assert "Do not request capabilities beyond" in prompt
     assert "plan contract is insufficient" in prompt
+    assert "Creating a previously nonexistent file requires filesystem.create" in prompt
+    assert "Existing-file mutation requires filesystem.write" in prompt
+    assert "PLAN_CAPABILITY_MISMATCH" in prompt
 
 
 def test_coder_propagates_managed_runtime_identity_to_modern_loop():

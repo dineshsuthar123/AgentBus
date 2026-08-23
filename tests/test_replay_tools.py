@@ -9,6 +9,7 @@ from agentbus.replay import (
     load_tool_envelope,
 )
 from agentbus.tools.capabilities import derive_required_capabilities
+from agentbus.tools.descriptors import descriptor_map
 from agentbus.tools.protocol import (
     CapabilityScope,
     ToolCapability,
@@ -202,6 +203,60 @@ def test_providerless_offline_replay_simulates_stable_mutation() -> None:
         mode=ReplayMode.OFFLINE,
     )
 
+    assert assessment.strategy == ToolReplayStrategy.SIMULATE_MUTATION
+
+
+def test_replay_preserves_existing_write_capability_identity(tmp_path: Path) -> None:
+    target = tmp_path / "PaymentService.java"
+    target.write_text("class PaymentService {}\n", encoding="utf-8")
+    descriptor = descriptor_map(workspace=tmp_path)["filesystem.write"]
+    provisional = ToolInvocation(
+        invocation_id="tool-existing-write",
+        run_id="run-payment",
+        task_id="step-1",
+        tool_name=descriptor.name,
+        tool_version=descriptor.version,
+        arguments={
+            "path": "PaymentService.java",
+            "content": "class PaymentService { void process() {} }\n",
+        },
+        requested_capabilities=descriptor.capabilities,
+        context=ToolInvocationContext(
+            workspace_identity=str(tmp_path.resolve()),
+            worktree_identity=str(tmp_path.resolve()),
+            caller_role="coder",
+            workspace_trusted=True,
+            provider_consented=True,
+        ),
+        requested_at=NOW,
+    )
+    invocation = provisional.model_copy(
+        update={
+            "requested_capabilities": derive_required_capabilities(
+                provisional,
+                descriptor,
+            )
+        }
+    )
+    from agentbus.replay.tools import CapturedToolEnvelope
+
+    envelope = CapturedToolEnvelope(
+        descriptor=descriptor,
+        invocation=invocation,
+        policy_decision=_decision(invocation),
+    )
+
+    assessment = ToolReplayPlanner().assess(
+        envelope,
+        descriptor,
+        mode=ReplayMode.OFFLINE,
+    )
+
+    assert [
+        capability.name for capability in invocation.requested_capabilities
+    ] == [ToolCapabilityName.FILESYSTEM_WRITE]
+    assert assessment.capability_drift is False
+    assert assessment.fresh_authorization_required is False
     assert assessment.strategy == ToolReplayStrategy.SIMULATE_MUTATION
 
 

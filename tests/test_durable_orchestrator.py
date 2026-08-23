@@ -353,6 +353,50 @@ def test_durable_planner_replans_once_after_contract_rejection(tmp_path):
     assert "implementation_without_mutation" in planner.feedback[1][0]
 
 
+def test_missing_create_capability_correction_is_bounded_before_persistence(
+    tmp_path,
+):
+    incoherent = {
+        "goal": "Make duplicate payment delivery idempotent",
+        "steps": [
+            {
+                "id": "step-1",
+                "title": "Add an idempotency record",
+                "description": "Create the new payment idempotency record.",
+                "risk": "medium",
+                "execution_kind": "implementation",
+                "dependencies": [],
+                "required_capabilities": [
+                    "filesystem.read",
+                    "filesystem.write",
+                ],
+                "expected_outputs": [
+                    "src/main/java/com/example/payment/NewIdempotencyRecord.java"
+                ],
+                "targeted_files": [
+                    "src/main/java/com/example/payment/NewIdempotencyRecord.java"
+                ],
+                "done_criteria": ["Duplicate deliveries share one record"],
+            }
+        ],
+        "test_strategy": "Run the payment service tests",
+        "done_criteria": ["Sequential and concurrent duplicates are safe"],
+    }
+    planner = ReplanningPlanner([incoherent, incoherent])
+    runner, store = orchestrator(tmp_path, planner=planner)
+
+    with pytest.raises(PlanContractValidationError) as captured:
+        runner.create_durable_run("Make payment webhook delivery idempotent")
+
+    assert {issue.code for issue in captured.value.issues} == {
+        "missing_create_capability"
+    }
+    assert len(planner.feedback) == 2
+    assert planner.feedback[0] is None
+    assert "missing_create_capability" in planner.feedback[1][0]
+    assert store.list_runs() == []
+
+
 def test_capability_contract_failure_stops_before_verifier_and_reviewer(tmp_path):
     coder = CapabilityMismatchCoder()
     verifier = FakeVerifier()

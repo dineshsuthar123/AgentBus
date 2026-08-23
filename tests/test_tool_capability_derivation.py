@@ -12,6 +12,7 @@ from agentbus.tools.capabilities import (
 )
 from agentbus.tools.descriptors import descriptor_map
 from agentbus.tools.protocol import (
+    ToolCapabilityName,
     ToolCapabilityEscalationError,
     ToolInvocation,
     ToolInvocationContext,
@@ -37,6 +38,40 @@ def test_filesystem_capabilities_are_derived_from_concrete_paths(
     require_expected_capabilities(required, required)
     with pytest.raises(ToolCapabilityEscalationError, match="exactly match"):
         require_expected_capabilities(descriptor.capabilities, required)
+
+
+def test_existing_write_requires_write_without_create(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "module.py").write_text(
+        "value = 0\n",
+        encoding="utf-8",
+    )
+    invocation, descriptor = _invocation(
+        tmp_path,
+        "filesystem.write",
+        {"path": "src/module.py", "content": "value = 1\n"},
+    )
+
+    required = derive_required_capabilities(invocation, descriptor)
+
+    assert [capability.name for capability in required] == [
+        ToolCapabilityName.FILESYSTEM_WRITE
+    ]
+
+
+def test_new_path_write_requires_explicit_create(tmp_path: Path) -> None:
+    invocation, descriptor = _invocation(
+        tmp_path,
+        "filesystem.write",
+        {"path": "src/new_module.py", "content": "value = 1\n"},
+    )
+
+    required = derive_required_capabilities(invocation, descriptor)
+
+    assert {capability.name for capability in required} == {
+        ToolCapabilityName.FILESYSTEM_WRITE,
+        ToolCapabilityName.FILESYSTEM_CREATE,
+    }
 
 
 def test_process_derivation_narrows_executable_and_working_directory(
