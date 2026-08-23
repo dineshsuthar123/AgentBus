@@ -157,7 +157,7 @@ class AgentBusRunBackend:
         MultiAgentOrchestrator(
             config=config,
             state_store=self.store,
-            logger=RunLogger(log_dir=config.runs_dir, run_id=run_id),
+            logger=RunLogger(log_dir=config.runs_path, run_id=run_id),
             cancellation_registry=self.cancellations,
             intelligence_source=self._intelligence_source(config),
         ).resume_durable(run_id)
@@ -226,7 +226,7 @@ class AgentBusRunBackend:
             return DurableExecutionEngine(
                 self.store,
                 logger=RunLogger(
-                    log_dir=self.base_config.runs_dir,
+                    log_dir=self.base_config.runs_path,
                     run_id=run_id,
                 ),
                 cancellation_registry=self.cancellations,
@@ -240,7 +240,7 @@ class AgentBusRunBackend:
     def finalize_cancellation(self, run_id: str) -> RunStatus:
         return DurableExecutionEngine(
             self.store,
-            logger=RunLogger(log_dir=self.base_config.runs_dir, run_id=run_id),
+            logger=RunLogger(log_dir=self.base_config.runs_path, run_id=run_id),
             cancellation_registry=self.cancellations,
         ).finalize_cancellation(run_id).status
 
@@ -295,7 +295,7 @@ class AgentBusRunBackend:
         return MultiAgentOrchestrator(
             config=config,
             state_store=self.store,
-            logger=RunLogger(log_dir=config.runs_dir, run_id=run_id),
+            logger=RunLogger(log_dir=config.runs_path, run_id=run_id),
             commit_changes=request.commit_changes,
             open_pr=request.create_pr,
             cancellation=self.cancellations.get(run_id),

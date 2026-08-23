@@ -353,7 +353,7 @@ def _product_checks(
             )
         )
     runtime_directories = (
-        Path(config.runs_dir).expanduser().resolve(),
+        config.runs_path,
         config.state_database_path.expanduser().resolve().parent,
         config.trace_store_path.expanduser().resolve(),
     )
@@ -546,7 +546,7 @@ def _runtime_checks(
     state_path = config.state_database_path.expanduser().resolve()
     checks.extend(_state_checks(state_path))
     for name, path in (
-        ("runs-directory", Path(config.runs_dir).expanduser().resolve()),
+        ("runs-directory", config.runs_path),
         ("state-directory", state_path.parent),
     ):
         target = path if path.exists() else _nearest_existing_parent(path)

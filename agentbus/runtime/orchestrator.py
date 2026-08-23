@@ -141,7 +141,7 @@ class MultiAgentOrchestrator:
     ):
         self.config = config or AgentBusConfig.from_env()
         self.workspace = self.config.workspace_path
-        self.logger = logger or RunLogger(log_dir=self.config.runs_dir)
+        self.logger = logger or RunLogger(log_dir=self.config.runs_path)
         self.model_router = model_router or ModelRouter(
             self.config,
             logger=self.logger,
@@ -372,7 +372,7 @@ class MultiAgentOrchestrator:
         run_id = run_id or uuid.uuid4().hex
         cancellation = self._cancellation_for(run_id, prepare=True)
         self._bind_component_cancellation(cancellation)
-        self.logger = RunLogger(log_dir=self.config.runs_dir, run_id=run_id)
+        self.logger = RunLogger(log_dir=self.config.runs_path, run_id=run_id)
         self.model_router.set_logger(self.logger)
         self.logger.log(
             "run_started",
@@ -529,7 +529,7 @@ class MultiAgentOrchestrator:
 
     def run_durable(self, run_id: str, *, resume: bool = False) -> ExecutionReport:
         """Execute or resume a persisted multi-agent run and finalize Git safely."""
-        self.logger = RunLogger(log_dir=self.config.runs_dir, run_id=run_id)
+        self.logger = RunLogger(log_dir=self.config.runs_path, run_id=run_id)
         self.model_router.set_logger(self.logger)
         if resume and self._explicit_cancellation is None:
             cancellation = self._cancellation_registry_for_use().recover(run_id)
@@ -610,7 +610,7 @@ class MultiAgentOrchestrator:
         executor: bool = True,
         attach_trace: bool = True,
     ) -> DurableExecutionEngine:
-        logger = RunLogger(log_dir=self.config.runs_dir, run_id=run_id)
+        logger = RunLogger(log_dir=self.config.runs_path, run_id=run_id)
         task_executor = None
         if executor:
             cancellation = self._cancellation_for(run_id)
@@ -719,7 +719,7 @@ class MultiAgentOrchestrator:
         config = self.config.with_overrides(
             workspace_dir=str(workspace), parallel_execution=False
         )
-        logger = RunLogger(log_dir=config.runs_dir, run_id=run_id)
+        logger = RunLogger(log_dir=self.config.runs_path, run_id=run_id)
         factory = ModelProviderFactory(
             config,
             builders=dict(self.model_router.provider_factory.builders),
@@ -1376,7 +1376,7 @@ class MultiAgentOrchestrator:
         router = ModelRouter(
             config,
             provider_factory=factory,
-            logger=RunLogger(log_dir=config.runs_dir, run_id=run_id),
+            logger=RunLogger(log_dir=self.config.runs_path, run_id=run_id),
             usage_ledger=self.model_router.usage_ledger,
             sleeper=self.model_router.sleeper,
             jitter=self.model_router.jitter,

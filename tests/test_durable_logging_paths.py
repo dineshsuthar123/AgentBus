@@ -5,6 +5,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from agentbus import cli
 from agentbus import main as main_module
 from agentbus.config import AgentBusConfig
@@ -13,6 +15,7 @@ from agentbus.execution.models import FailureCategory, RunStatus
 from agentbus.execution.state_store import StateStore
 from agentbus.git.repository import GitRepository
 from agentbus.product.logging import read_product_logs
+from agentbus.runtime.loop import AgentLoop
 from agentbus.runtime.loop import PlannedCapabilityMismatchError
 from agentbus.runtime.orchestrator import MultiAgentOrchestrator
 
@@ -235,7 +238,7 @@ def test_failed_durable_cli_keeps_logs_out_of_repository_changes(
     assert _git(repository, "status", "--short", "--untracked-files=all") == ""
     assert "runs/" not in output.replace(".agentbus/runs/", "")
 
-    assert cli.main(["logs", "--run", run.run_id, "--config", str(config_file)]) == 0
+    assert cli.main(["logs", "--run", run.run_id]) == 0
     log_output = capsys.readouterr().out
     assert "No matching AgentBus logs found." not in log_output
     resolved = resolve_configuration(config_file=config_file, environ={}).config
@@ -303,6 +306,45 @@ def test_relative_runtime_paths_are_scoped_to_workspace_state(tmp_path):
     assert config.state_directory_path == workspace / ".agentbus"
     assert config.state_database_path == workspace / ".agentbus" / "state.db"
     assert config.runs_path == workspace / ".agentbus" / "runs"
+
+
+def test_run_logs_allow_only_managed_workspace_or_explicit_external_paths(tmp_path):
+    workspace = (tmp_path / "repository").resolve()
+    workspace.mkdir()
+    external = (tmp_path / "external-runtime" / "runs").resolve()
+
+    assert AgentBusConfig(
+        workspace_dir=str(workspace),
+        runs_dir=str(external),
+    ).runs_path == external
+    with pytest.raises(ValueError, match="inside the target repository"):
+        AgentBusConfig(
+            workspace_dir=str(workspace),
+            runs_dir=str(workspace / "runs"),
+        ).runs_path
+
+
+def test_agent_loop_uses_managed_run_log_path(tmp_path):
+    workspace = (tmp_path / "repository").resolve()
+    workspace.mkdir()
+    config = AgentBusConfig(
+        workspace_dir=str(workspace),
+        state_dir=".agentbus",
+        runs_dir="runs",
+    )
+
+    class FinishModel:
+        def generate_json(self, *_args, **_kwargs):
+            return {"action": "finish", "summary": "finished offline"}
+
+    loop = AgentLoop(config=config, model=FinishModel())
+
+    assert loop.run("Finish without tools") == "finished offline"
+    assert loop.logger.log_dir == config.runs_path
+    assert not (workspace / "runs").exists()
+    records = _run_log_records(config.runs_path, loop.logger.run_id)
+    assert records
+    assert {record["run_id"] for record in records} == {loop.logger.run_id}
 
 
 def test_parallel_worker_logger_uses_source_runtime_directory(

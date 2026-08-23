@@ -114,7 +114,7 @@ class AgentLoop:
         else:
             self.model_router = model_router or ModelRouter(config)
             self.model = self.model_router.for_role(ModelRole.CODER)
-        self.logger = RunLogger(log_dir=config.runs_dir, run_id=run_id)
+        self.logger = RunLogger(log_dir=config.runs_path, run_id=run_id)
         self.max_history_chars = max_history_chars or config.max_history_chars
         self.cancellation = cancellation
         self.tool_runtime = tool_runtime

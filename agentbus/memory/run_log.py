@@ -12,8 +12,14 @@ _LOG_WRITE_LOCK = threading.Lock()
 
 
 class RunLogger:
-    def __init__(self, log_dir: str = "runs", run_id: str | None = None):
-        self.log_dir = Path(log_dir)
+    def __init__(self, log_dir: str | Path, run_id: str | None = None):
+        configured_dir = Path(log_dir).expanduser()
+        if not configured_dir.is_absolute():
+            raise ValueError(
+                "RunLogger requires an absolute directory resolved from AgentBus "
+                "runtime configuration."
+            )
+        self.log_dir = configured_dir.resolve()
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self.run_id = run_id or uuid.uuid4().hex
 

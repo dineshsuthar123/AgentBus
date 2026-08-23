@@ -1,4 +1,5 @@
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,6 +17,14 @@ def azure_config():
         azure_openai_planner_deployment="planner-deployment",
         azure_openai_coder_deployment="coder-deployment",
         azure_openai_reviewer_deployment="reviewer-deployment",
+    )
+
+
+def patch_config(monkeypatch, settings):
+    monkeypatch.setattr(
+        main_module,
+        "resolve_configuration",
+        lambda **_kwargs: SimpleNamespace(config=settings),
     )
 
 
@@ -72,7 +81,7 @@ def test_list_providers_never_prompts_or_constructs_router(monkeypatch, capsys):
 
 def test_show_model_config_redacts_key(monkeypatch, capsys):
     settings = azure_config()
-    monkeypatch.setattr(main_module.AgentBusConfig, "from_env", lambda: settings)
+    patch_config(monkeypatch, settings)
     monkeypatch.setattr(sys, "argv", ["agentbus.main", "--show-model-config"])
 
     assert main_module.main() == 0
@@ -84,7 +93,7 @@ def test_show_model_config_redacts_key(monkeypatch, capsys):
 
 def test_check_azure_without_live_is_local_only(monkeypatch, capsys):
     settings = azure_config()
-    monkeypatch.setattr(main_module.AgentBusConfig, "from_env", lambda: settings)
+    patch_config(monkeypatch, settings)
     monkeypatch.setattr(sys, "argv", ["agentbus.main", "--check-provider", "azure"])
     monkeypatch.setattr(
         main_module,
@@ -99,11 +108,7 @@ def test_check_azure_without_live_is_local_only(monkeypatch, capsys):
 
 
 def test_check_azure_reports_all_missing_configuration(monkeypatch, capsys):
-    monkeypatch.setattr(
-        main_module.AgentBusConfig,
-        "from_env",
-        lambda: AgentBusConfig(),
-    )
+    patch_config(monkeypatch, AgentBusConfig())
     monkeypatch.setattr(sys, "argv", ["agentbus.main", "--check-provider", "azure"])
 
     assert main_module.main() == 1
@@ -144,7 +149,7 @@ def test_explicit_live_check_uses_injected_fake_router(monkeypatch, capsys):
                 usage=ModelUsage(input_tokens=2, output_tokens=1, total_tokens=3),
             )
 
-    monkeypatch.setattr(main_module.AgentBusConfig, "from_env", lambda: settings)
+    patch_config(monkeypatch, settings)
     monkeypatch.setattr(main_module, "build_model_router", lambda config: FakeRouter())
     monkeypatch.setattr(
         sys,

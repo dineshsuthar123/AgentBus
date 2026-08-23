@@ -1,15 +1,18 @@
 # Configuration
 
-AgentBus resolves configuration in this order, from highest to lowest:
+AgentBus resolves configuration in this order, from lowest to highest:
 
-1. CLI overrides.
-2. Process environment.
-3. An explicitly named TOML or JSON config file.
-4. Safe built-in defaults.
+1. safe built-in defaults;
+2. user configuration;
+3. workspace `.agentbus/config.toml`;
+4. an explicitly named TOML or JSON config file;
+5. CLI overrides;
+6. process environment.
 
-AgentBus does not search parent directories for `.env` files and does not load
-dotenv files automatically. Use `--config PATH` explicitly. Real `.env` files
-must remain ignored; `.env.example` contains placeholders only.
+AgentBus does not search parent directories for configuration or `.env` files
+and does not load dotenv files automatically. An explicit `--workspace` selects
+that exact workspace's `.agentbus/config.toml`. Real `.env` files must remain
+ignored; `.env.example` contains placeholders only.
 
 ## Config files
 
@@ -24,8 +27,10 @@ tool_resource_budget = { wall_clock_seconds = 60, invocations_per_task = 32, inv
 ```
 
 JSON may contain the same keys either at the root or below `agentbus`. Unknown
-keys are rejected. Relative paths resolve from the current process directory;
-use absolute paths for automation.
+keys are rejected. Relative `state_dir` values resolve from the canonical
+workspace, and relative `runs_dir` values resolve inside that state directory.
+The default is `<workspace>/.agentbus/runs`. Use an absolute path for external
+runtime storage; AgentBus refuses repository-local run logs outside `.agentbus`.
 
 ```powershell
 agentbus config show --config .agentbus\config.toml

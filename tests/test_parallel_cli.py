@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -87,7 +88,11 @@ def create_run(config, base):
 
 
 def patch_config(monkeypatch, config):
-    monkeypatch.setattr(main_module.AgentBusConfig, "from_env", lambda: config)
+    monkeypatch.setattr(
+        main_module,
+        "resolve_configuration",
+        lambda **_kwargs: SimpleNamespace(config=config),
+    )
 
 
 def test_parallel_flags_parse_and_require_durable_multi(monkeypatch):

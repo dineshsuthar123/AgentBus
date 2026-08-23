@@ -239,7 +239,7 @@ def configuration_paths(resolved: ResolvedConfiguration) -> dict[str, str | None
         "explicit_config": _optional_path(layers.get("explicit")),
         "workspace": str(config.workspace_path),
         "state_database": str(config.state_database_path.expanduser().resolve()),
-        "runs_directory": str(Path(config.runs_dir).expanduser().resolve()),
+        "runs_directory": str(config.runs_path),
         "worktree_root": str(config.worktree_root_path),
         "dotenv_search": "disabled",
     }

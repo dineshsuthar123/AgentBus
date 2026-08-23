@@ -52,8 +52,9 @@ def test_default_config(monkeypatch):
     assert config.ollama_url == "http://localhost:11434/api/generate"
     assert config.workspace_dir == "workspace"
     assert config.runs_dir == "runs"
-    assert config.state_database_path.as_posix() == ".agentbus/state.db"
-    assert config.trace_store_path.as_posix() == ".agentbus/trace-objects"
+    assert config.state_database_path == config.workspace_path / ".agentbus" / "state.db"
+    assert config.trace_store_path == config.workspace_path / ".agentbus" / "trace-objects"
+    assert config.runs_path == config.workspace_path / ".agentbus" / "runs"
     assert config.max_steps == 12
     assert config.command_timeout_seconds == 90
     assert config.max_history_chars == 25_000
@@ -100,8 +101,10 @@ def test_env_overrides(monkeypatch):
     assert config.ollama_url == "http://localhost:1234/api/generate"
     assert config.workspace_dir == "custom-workspace"
     assert config.runs_dir == "custom-runs"
-    assert config.state_database_path.as_posix() == "custom-state/durable.sqlite3"
-    assert config.trace_store_path.as_posix() == "custom-state/trace-objects"
+    assert config.state_database_path == (
+        config.workspace_path / "custom-state" / "durable.sqlite3"
+    )
+    assert config.trace_store_path == config.workspace_path / "custom-state" / "trace-objects"
     assert config.max_steps == 3
     assert config.command_timeout_seconds == 4
     assert config.max_history_chars == 500

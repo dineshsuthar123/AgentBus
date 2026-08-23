@@ -181,7 +181,7 @@ def _selected_log_files(
             path = logs_root / name
             if path.is_file() and not path.is_symlink():
                 files.append((source, path))
-    runs_root = Path(config.runs_dir).expanduser().resolve()
+    runs_root = config.runs_path
     if include_run_logs and runs_root.is_dir():
         pattern = f"*_{run_id}.jsonl" if run_id is not None else "*.jsonl"
         candidates = [

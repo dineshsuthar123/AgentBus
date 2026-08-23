@@ -519,6 +519,7 @@ def _doctor_command(arguments: list[str]) -> int:
         resolved = resolve_configuration(
             config_file=args.config,
             cli_overrides={"workspace_dir": args.workspace},
+            workspace=args.workspace,
         )
         report = run_doctor(
             resolved.config,
@@ -1095,6 +1096,7 @@ def _logs_command(arguments: list[str]) -> int:
 
     parser = argparse.ArgumentParser(prog="agentbus logs")
     parser.add_argument("--config")
+    parser.add_argument("--workspace")
     parser.add_argument(
         "--tail",
         nargs="?",
@@ -1107,7 +1109,11 @@ def _logs_command(arguments: list[str]) -> int:
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(arguments)
     try:
-        config = resolve_configuration(config_file=args.config).config
+        config = resolve_configuration(
+            config_file=args.config,
+            cli_overrides={"workspace_dir": args.workspace},
+            workspace=args.workspace,
+        ).config
         entries = read_product_logs(config, tail=args.tail, run_id=args.run)
     except (OSError, ValueError) as exc:
         payload = {"ok": False, "error": str(exc), "network_used": False}

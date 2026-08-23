@@ -109,7 +109,7 @@ class RuntimeCleanup:
             raise ValueError("Cleanup clock must include a timezone.")
         self.state_database = config.state_database_path.resolve()
         self.state_root = self.state_database.parent
-        self.runs_root = Path(config.runs_dir).expanduser().resolve()
+        self.runs_root = config.runs_path
         self.index_database = self.state_root / "repository-index.sqlite3"
 
     def run(

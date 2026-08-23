@@ -247,11 +247,10 @@ def main(argv: list[str] | None = None) -> int:
     print("---------------------")
 
     try:
-        base_config = (
-            AgentBusConfig.from_env()
-            if args.config is None
-            else resolve_configuration(config_file=args.config).config
-        )
+        base_config = resolve_configuration(
+            config_file=args.config,
+            workspace=args.workspace,
+        ).config
         config = base_config.with_overrides(
             model_name=args.model,
             workspace_dir=args.workspace,
@@ -481,7 +480,7 @@ def _handle_durable_operation(
         run_id, task_id = _parse_run_task(args.approve)
         engine = DurableExecutionEngine(
             store,
-            logger=RunLogger(log_dir=config.runs_dir, run_id=run_id),
+            logger=RunLogger(log_dir=config.runs_path, run_id=run_id),
         )
         report = engine.approve_task(run_id, task_id, args.reason)
         print(render_execution_report(report))
@@ -491,7 +490,7 @@ def _handle_durable_operation(
         run_id, task_id = _parse_run_task(args.reject)
         engine = DurableExecutionEngine(
             store,
-            logger=RunLogger(log_dir=config.runs_dir, run_id=run_id),
+            logger=RunLogger(log_dir=config.runs_path, run_id=run_id),
         )
         report = engine.reject_task(run_id, task_id, args.reason)
         print(render_execution_report(report))
@@ -500,7 +499,7 @@ def _handle_durable_operation(
     if args.cancel_run:
         engine = DurableExecutionEngine(
             store,
-            logger=RunLogger(log_dir=config.runs_dir, run_id=args.cancel_run),
+            logger=RunLogger(log_dir=config.runs_path, run_id=args.cancel_run),
         )
         report = engine.cancel_run(args.cancel_run, args.reason)
         print(render_execution_report(report))

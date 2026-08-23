@@ -1,4 +1,5 @@
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -51,7 +52,11 @@ def create_run(settings, *, run_id="run-1", risk="low"):
 
 
 def patch_config(monkeypatch, settings):
-    monkeypatch.setattr(main_module.AgentBusConfig, "from_env", lambda: settings)
+    monkeypatch.setattr(
+        main_module,
+        "resolve_configuration",
+        lambda **_kwargs: SimpleNamespace(config=settings),
+    )
 
 
 def test_cli_accepts_durable_new_run_and_prints_id_first(monkeypatch, capsys, tmp_path):
