@@ -182,7 +182,8 @@ def test_current_policy_is_evaluated_and_safe_read_can_rerun() -> None:
 
 def test_providerless_offline_replay_simulates_stable_mutation() -> None:
     descriptor = _descriptor(
-        _capability(ToolCapabilityName.FILESYSTEM_WRITE)
+        _capability(ToolCapabilityName.FILESYSTEM_WRITE),
+        _capability(ToolCapabilityName.FILESYSTEM_CREATE),
     ).model_copy(
         update={
             "name": "filesystem.write",

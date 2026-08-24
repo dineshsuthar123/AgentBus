@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import threading
 from collections.abc import Mapping
 from pathlib import Path
@@ -11,6 +12,7 @@ from agentbus.execution.state_store import StateStore
 from agentbus.mcp import McpImportSession, McpServerConfig
 from agentbus.mcp import import_mcp_server as import_configured_mcp_server
 from agentbus.policy import ToolApprovalGrant, ToolPolicyEngine
+from agentbus.repo.test_detection import TestCommandDetector
 from agentbus.sandbox.platform import ExecutableCatalog
 from agentbus.trace import RuntimeTrace
 from agentbus.tools.adapters import builtin_tool_registry
@@ -305,6 +307,11 @@ def build_managed_tool_runtime(
     if catalog is None:
         aliases = ["python", "pytest", "git"]
         aliases.extend(
+            _detected_test_executable_aliases(
+                workspace if worktree is None else worktree
+            )
+        )
+        aliases.extend(
             server.executable_alias
             for server in mcp_server_configs
             if server.executable_alias is not None
@@ -331,6 +338,38 @@ def build_managed_tool_runtime(
         runtime.close()
         raise
     return runtime
+
+
+_TEST_EXECUTABLE_DEPENDENCIES = {
+    "mvn": ("java",),
+    "gradle": ("java",),
+    "npm": ("node",),
+    "cargo": ("rustc",),
+}
+
+
+def _detected_test_executable_aliases(
+    worktree: str | Path,
+) -> tuple[str, ...]:
+    detection = TestCommandDetector(str(worktree)).detect()
+    command = detection.get("command")
+    if (
+        not isinstance(command, list)
+        or not command
+        or not isinstance(command[0], str)
+    ):
+        return ()
+    executable = command[0]
+    candidate = Path(executable)
+    if candidate.is_absolute() or candidate.name != executable:
+        return ()
+    aliases = (
+        executable,
+        *_TEST_EXECUTABLE_DEPENDENCIES.get(executable.lower(), ()),
+    )
+    return tuple(
+        alias for alias in aliases if shutil.which(alias) is not None
+    )
 
 
 def _canonical_directory(value: str | Path, label: str) -> Path:

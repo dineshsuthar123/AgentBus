@@ -222,6 +222,20 @@ def test_default_runtime_descriptor_contains_detected_maven_executable(
         capability.scope.executables == ("mvn",)
         for capability in call.expected_capabilities
     )
+    pending = runtime.invoke(
+        call,
+        run_id="run-1",
+        task_id="task-1",
+        caller_role="verifier",
+        workspace_trusted=True,
+        provider_consented=True,
+        invocation_id="inv-maven-verification",
+    )
+    assert pending.awaiting_approval is True
+    assert (
+        pending.approval_request.policy_rule
+        == "approval.nonstandard_executable"
+    )
     runtime.close()
 
 

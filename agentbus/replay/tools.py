@@ -331,6 +331,18 @@ class ToolReplayPlanner:
             or envelope.descriptor.output_schema
             != current_descriptor.output_schema
         )
+        historical_descriptor_names = {
+            capability.name for capability in envelope.descriptor.capabilities
+        }
+        current_descriptor_names = {
+            capability.name for capability in current_descriptor.capabilities
+        }
+        descriptor_capability_expansion = bool(
+            current_descriptor_names - historical_descriptor_names
+        )
+        descriptor_drift = descriptor_drift or (
+            historical_descriptor_names != current_descriptor_names
+        )
         private_roots = _descriptor_private_roots(current_descriptor)
         policy_workspace = _policy_workspace_identity(
             current_descriptor,
@@ -356,8 +368,8 @@ class ToolReplayPlanner:
             item.model_dump_json()
             for item in envelope.invocation.requested_capabilities
         }
-        capability_drift = False
-        expanded_capabilities = False
+        capability_drift = descriptor_capability_expansion
+        expanded_capabilities = descriptor_capability_expansion
         try:
             current_required = derive_replay_required_capabilities(
                 replay_invocation,
@@ -374,8 +386,10 @@ class ToolReplayPlanner:
             current_capabilities = {
                 item.model_dump_json() for item in safe_current_required
             }
-            capability_drift = historical_capabilities != current_capabilities
-            expanded_capabilities = bool(
+            capability_drift = capability_drift or (
+                historical_capabilities != current_capabilities
+            )
+            expanded_capabilities = expanded_capabilities or bool(
                 current_capabilities - historical_capabilities
             )
             replay_invocation = replay_invocation.model_copy(

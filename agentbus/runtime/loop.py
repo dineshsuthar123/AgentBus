@@ -445,6 +445,15 @@ Return the next JSON action.
                 ],
                 "argument_schema": descriptor.argument_schema,
             }
+            executable_aliases = sorted(
+                {
+                    alias
+                    for capability in descriptor.capabilities
+                    for alias in capability.scope.executables
+                }
+            )
+            if executable_aliases:
+                entry["executable_aliases"] = executable_aliases
             if descriptor.name == "filesystem.write":
                 entry["capability_rules"] = {
                     "existing_path": ["filesystem.write"],

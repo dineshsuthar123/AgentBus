@@ -366,6 +366,65 @@ def test_loop_rejects_capability_outside_planner_requirements(tmp_path):
     assert store.get_run(loop.run_id).status.value == "failed"
 
 
+def test_planner_authorized_missing_write_derives_create_and_proceeds(tmp_path):
+    class AuthorizedCreateModel:
+        def __init__(self):
+            self.calls = 0
+
+        def generate_json(self, prompt, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "action": "tool_call",
+                    "tool_call": {
+                        "tool_name": "filesystem.write",
+                        "arguments": {
+                            "path": "result.py",
+                            "content": "VALUE = 1\n",
+                        },
+                        "expected_capabilities": [
+                            "filesystem.write",
+                            "filesystem.create",
+                        ],
+                        "idempotency_key": "authorized-create",
+                    },
+                }
+            assert '"status": "succeeded"' in prompt
+            return {"action": "finish", "summary": "created authorized file"}
+
+    workspace = tmp_path / "workspace"
+    config = AgentBusConfig(
+        workspace_dir=str(workspace),
+        runs_dir=str(tmp_path / "runs"),
+        state_dir=str(tmp_path / "state"),
+        max_steps=2,
+    )
+    model = AuthorizedCreateModel()
+    loop = AgentLoop(
+        config=config,
+        model=model,
+        policy_context={
+            "planned_capabilities": [
+                "filesystem.write",
+                "filesystem.create",
+            ]
+        },
+    )
+
+    result = loop.run("create the explicitly authorized result")
+
+    assert result == "created authorized file"
+    assert (workspace / "result.py").read_text(encoding="utf-8") == "VALUE = 1\n"
+    invocations = StateStore(config.state_database_path).list_tool_invocations(
+        loop.run_id
+    )
+    assert len(invocations) == 1
+    assert {
+        capability.name.value
+        for capability in invocations[0].capabilities
+    } == {"filesystem.create", "filesystem.write"}
+
+
 def test_explicit_empty_planner_capability_set_denies_tool_calls(tmp_path):
     class ReadModel:
         def generate_json(self, prompt, **kwargs):
