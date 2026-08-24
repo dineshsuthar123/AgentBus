@@ -31,13 +31,50 @@ def derive_required_capabilities(
 ) -> tuple[ToolCapability, ...]:
     """Derive least-scope capabilities from arguments, never model claims."""
     validate_tool_arguments(invocation.arguments, descriptor)
+    return _derive_scoped_capabilities(
+        invocation,
+        descriptor,
+        _applicable_capabilities(invocation, descriptor),
+    )
+
+
+def derive_replay_required_capabilities(
+    invocation: ToolInvocation,
+    descriptor: ToolDescriptor,
+    *,
+    captured_descriptor: ToolDescriptor,
+    captured_capabilities: tuple[ToolCapability, ...],
+) -> tuple[ToolCapability, ...]:
+    """Re-derive scopes while preserving captured pre-execution applicability."""
+    validate_tool_arguments(invocation.arguments, descriptor)
+    if (
+        invocation.tool_name != descriptor.name
+        or invocation.tool_name != captured_descriptor.name
+    ):
+        raise ToolCapabilityEscalationError(
+            "Replay capability derivation requires matching tool descriptors."
+        )
+    applicable = _replay_applicable_capabilities(
+        invocation,
+        descriptor,
+        captured_descriptor=captured_descriptor,
+        captured_capabilities=captured_capabilities,
+    )
+    return _derive_scoped_capabilities(invocation, descriptor, applicable)
+
+
+def _derive_scoped_capabilities(
+    invocation: ToolInvocation,
+    descriptor: ToolDescriptor,
+    applicable: tuple[ToolCapability, ...],
+) -> tuple[ToolCapability, ...]:
     if invocation.tool_name.startswith("mcp."):
         return descriptor.capabilities
     affected_paths = _affected_paths(invocation.arguments)
     executable = invocation.arguments.get("executable")
     working_directory = _working_directory(invocation)
     required: list[ToolCapability] = []
-    for declared in _applicable_capabilities(invocation, descriptor):
+    for declared in applicable:
         updates: dict[str, object] = {}
         if affected_paths:
             updates["affected_paths"] = affected_paths
@@ -58,6 +95,36 @@ def derive_required_capabilities(
             "Derived tool capabilities exceed the descriptor declaration."
         )
     return result
+
+
+def _replay_applicable_capabilities(
+    invocation: ToolInvocation,
+    descriptor: ToolDescriptor,
+    *,
+    captured_descriptor: ToolDescriptor,
+    captured_capabilities: tuple[ToolCapability, ...],
+) -> tuple[ToolCapability, ...]:
+    if invocation.tool_name != "filesystem.write":
+        return descriptor.capabilities
+    current_names = {capability.name for capability in descriptor.capabilities}
+    if ToolCapabilityName.FILESYSTEM_CREATE not in current_names:
+        return descriptor.capabilities
+
+    captured_descriptor_names = {
+        capability.name for capability in captured_descriptor.capabilities
+    }
+    captured_names = {capability.name for capability in captured_capabilities}
+    target_existed = (
+        ToolCapabilityName.FILESYSTEM_CREATE in captured_descriptor_names
+        and ToolCapabilityName.FILESYSTEM_CREATE not in captured_names
+    )
+    if not target_existed:
+        return descriptor.capabilities
+    return tuple(
+        capability
+        for capability in descriptor.capabilities
+        if capability.name != ToolCapabilityName.FILESYSTEM_CREATE
+    )
 
 
 def _applicable_capabilities(

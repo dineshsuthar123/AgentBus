@@ -212,6 +212,8 @@ def _captured_write_assessment(
     *,
     target_exists: bool,
 ) -> tuple[ToolInvocation, ToolReplayAssessment]:
+    from agentbus.policy import ToolPolicyEngine
+
     target = tmp_path / "PaymentService.java"
     if target_exists:
         target.write_text("class PaymentService {}\n", encoding="utf-8")
@@ -257,7 +259,7 @@ def _captured_write_assessment(
         object_store,
         descriptor=descriptor,
         invocation=invocation,
-        policy_decision=_decision(invocation),
+        policy_decision=ToolPolicyEngine().evaluate(invocation, descriptor),
         producing_span_id="tool-existing-write-span",
         reference_id="tool-existing-write-envelope",
     )
@@ -303,6 +305,59 @@ def test_replay_preserves_new_path_capabilities_after_file_is_created(
     assert assessment.policy_drift is False
     assert assessment.fresh_authorization_required is False
     assert assessment.strategy == ToolReplayStrategy.SIMULATE_MUTATION
+
+
+def test_replay_keeps_new_create_in_legacy_write_descriptor_fail_closed(
+    tmp_path: Path,
+) -> None:
+    from agentbus.policy import ToolPolicyEngine
+
+    target = tmp_path / "PaymentService.java"
+    target.write_text("class PaymentService {}\n", encoding="utf-8")
+    current = descriptor_map(workspace=tmp_path)["filesystem.write"]
+    historical = current.model_copy(
+        update={
+            "capabilities": tuple(
+                capability
+                for capability in current.capabilities
+                if capability.name == ToolCapabilityName.FILESYSTEM_WRITE
+            )
+        }
+    )
+    invocation = ToolInvocation(
+        invocation_id="tool-legacy-write",
+        run_id="run-payment",
+        task_id="step-1",
+        tool_name=historical.name,
+        tool_version=historical.version,
+        arguments={"path": "PaymentService.java", "content": "updated\n"},
+        requested_capabilities=historical.capabilities,
+        context=ToolInvocationContext(
+            workspace_identity=str(tmp_path.resolve()),
+            worktree_identity=str(tmp_path.resolve()),
+            caller_role="coder",
+            workspace_trusted=True,
+            provider_consented=True,
+        ),
+        requested_at=NOW,
+    )
+    from agentbus.replay.tools import CapturedToolEnvelope
+
+    envelope = CapturedToolEnvelope(
+        descriptor=historical,
+        invocation=invocation,
+        policy_decision=ToolPolicyEngine().evaluate(invocation, historical),
+    )
+
+    assessment = ToolReplayPlanner().assess(
+        envelope,
+        current,
+        mode=ReplayMode.OFFLINE,
+    )
+
+    assert assessment.capability_drift is True
+    assert assessment.fresh_authorization_required is True
+    assert assessment.strategy == ToolReplayStrategy.REJECT
 
 
 def test_expanded_capabilities_require_fresh_authorization() -> None:

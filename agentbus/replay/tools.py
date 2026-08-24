@@ -16,7 +16,7 @@ from agentbus.replay.session import ToolReplayStrategy
 from agentbus.trace.models import ReplayMode, TraceModel, TraceOutput
 from agentbus.trace.redaction import sanitize_document
 from agentbus.trace.storage import ContentAddressedStore
-from agentbus.tools.capabilities import derive_required_capabilities
+from agentbus.tools.capabilities import derive_replay_required_capabilities
 from agentbus.tools.protocol import (
     ToolCapability,
     ToolCapabilityName,
@@ -359,9 +359,13 @@ class ToolReplayPlanner:
         capability_drift = False
         expanded_capabilities = False
         try:
-            current_required = derive_required_capabilities(
+            current_required = derive_replay_required_capabilities(
                 replay_invocation,
                 current_descriptor,
+                captured_descriptor=envelope.descriptor,
+                captured_capabilities=(
+                    envelope.invocation.requested_capabilities
+                ),
             )
             safe_current_required = _sanitize_capabilities(
                 current_required,
