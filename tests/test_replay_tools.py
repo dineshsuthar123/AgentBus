@@ -3,6 +3,7 @@ from pathlib import Path
 
 from agentbus.replay import (
     ReplayMode,
+    ToolReplayAssessment,
     ToolReplayPlanner,
     ToolReplayStrategy,
     capture_tool_envelope,
@@ -206,9 +207,14 @@ def test_providerless_offline_replay_simulates_stable_mutation() -> None:
     assert assessment.strategy == ToolReplayStrategy.SIMULATE_MUTATION
 
 
-def test_replay_preserves_existing_write_capability_identity(tmp_path: Path) -> None:
+def _captured_write_assessment(
+    tmp_path: Path,
+    *,
+    target_exists: bool,
+) -> tuple[ToolInvocation, ToolReplayAssessment]:
     target = tmp_path / "PaymentService.java"
-    target.write_text("class PaymentService {}\n", encoding="utf-8")
+    if target_exists:
+        target.write_text("class PaymentService {}\n", encoding="utf-8")
     descriptor = descriptor_map(workspace=tmp_path)["filesystem.write"]
     provisional = ToolInvocation(
         invocation_id="tool-existing-write",
@@ -238,6 +244,11 @@ def test_replay_preserves_existing_write_capability_identity(tmp_path: Path) -> 
             )
         }
     )
+    if not target_exists:
+        target.write_text(
+            "class PaymentService { void process() {} }\n",
+            encoding="utf-8",
+        )
     object_store = ContentAddressedStore(
         tmp_path / "objects",
         private_roots=[str(tmp_path.resolve())],
@@ -257,11 +268,39 @@ def test_replay_preserves_existing_write_capability_identity(tmp_path: Path) -> 
         descriptor,
         mode=ReplayMode.OFFLINE,
     )
+    return invocation, assessment
+
+
+def test_replay_preserves_existing_write_capability_identity(tmp_path: Path) -> None:
+    invocation, assessment = _captured_write_assessment(
+        tmp_path,
+        target_exists=True,
+    )
 
     assert [
         capability.name for capability in invocation.requested_capabilities
     ] == [ToolCapabilityName.FILESYSTEM_WRITE]
     assert assessment.capability_drift is False
+    assert assessment.fresh_authorization_required is False
+    assert assessment.strategy == ToolReplayStrategy.SIMULATE_MUTATION
+
+
+def test_replay_preserves_new_path_capabilities_after_file_is_created(
+    tmp_path: Path,
+) -> None:
+    invocation, assessment = _captured_write_assessment(
+        tmp_path,
+        target_exists=False,
+    )
+
+    assert [
+        capability.name for capability in invocation.requested_capabilities
+    ] == [
+        ToolCapabilityName.FILESYSTEM_WRITE,
+        ToolCapabilityName.FILESYSTEM_CREATE,
+    ]
+    assert assessment.capability_drift is False
+    assert assessment.policy_drift is False
     assert assessment.fresh_authorization_required is False
     assert assessment.strategy == ToolReplayStrategy.SIMULATE_MUTATION
 
