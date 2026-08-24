@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from agentbus.config import AgentBusConfig
 from agentbus.product.acceptance import (
     AcceptanceKind,
     AcceptanceStep,
@@ -66,6 +67,13 @@ def test_clean_install_environment_is_offline_and_credential_bounded(
     assert "PYTHONPATH" not in environment
     assert not any(key.startswith("GIT_CONFIG_") for key in environment)
     assert Path(environment["HOME"]).is_relative_to(tmp_path)
+    config = AgentBusConfig(
+        workspace_dir=str(tmp_path),
+        state_dir=environment["AGENTBUS_STATE_DIR"],
+        runs_dir=environment["AGENTBUS_RUNS_DIR"],
+    )
+    assert config.state_directory_path == tmp_path / ".agentbus"
+    assert config.runs_path == tmp_path / ".agentbus" / "runs"
 
 
 def test_wheel_install_is_never_editable_or_network_resolved(tmp_path: Path) -> None:
