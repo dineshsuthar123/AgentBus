@@ -890,12 +890,20 @@ def test_durable_run_persists_custom_tool_budget_for_resume(tmp_path):
 
 
 def test_durable_verifier_failure_prevents_commit(tmp_path):
+    class MustNotReview:
+        def review(self, **kwargs):
+            raise AssertionError("final reviewer must not run after verifier failure")
+
+        def review_task(self, **kwargs):
+            raise AssertionError("task reviewer must not run after verifier failure")
+
     git_repository = FakeGitRepository()
     one_step = {**PLAN, "steps": [PLAN["steps"][0]]}
-    runner, _ = orchestrator(
+    runner, store = orchestrator(
         tmp_path,
         planner=FakePlanner(one_step),
         verifier=FakeVerifier(passed=False),
+        reviewer=MustNotReview(),
         git_repository=git_repository,
         commit_changes=True,
     )
@@ -908,6 +916,8 @@ def test_durable_verifier_failure_prevents_commit(tmp_path):
     assert report.status == RunStatus.FAILED
     assert runner.model_router.logger.run_id == run_id
     assert report.verifier_status == "failed"
+    assert report.reviewer_status == "not_run"
+    assert len(store.list_attempts(run_id, "step-1")) == 2
     assert git_repository.commits == []
 
 

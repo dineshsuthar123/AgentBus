@@ -462,8 +462,15 @@ class GitRepository:
         )
 
     def worktree_snapshot(self) -> dict[str, str]:
+        return self._snapshot_paths(self.all_changed_files())
+
+    def review_source_snapshot(self) -> dict[str, str]:
+        """Hash review-eligible mutations, excluding ignored generated outputs."""
+        return self._snapshot_paths(self.change_set().review_files)
+
+    def _snapshot_paths(self, paths: Iterable[str]) -> dict[str, str]:
         snapshot: dict[str, str] = {}
-        for relative in self.all_changed_files():
+        for relative in paths:
             path = self.workspace / relative
             if path.is_file():
                 snapshot[relative] = hashlib.sha256(path.read_bytes()).hexdigest()

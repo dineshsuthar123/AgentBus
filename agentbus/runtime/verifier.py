@@ -5,14 +5,32 @@ from typing import Any
 
 from agentbus.config import AgentBusConfig
 from agentbus.execution.cancellation import CancellationToken
+from agentbus.execution.models import FailureCategory
+from agentbus.execution.retry import TaskExecutionError
 from agentbus.repo.test_detection import TestCommandDetector
 from agentbus.tools.command import CommandTools
 from agentbus.tools.protocol import (
     ToolCapabilityName,
     ToolInvocationStatus,
     ToolResourceBudget,
+    sha256_json,
+)
+from agentbus.tools.records import (
+    approval_request_scope_sha256,
+    policy_decision_sha256,
 )
 from agentbus.tools.runtime import ManagedToolRuntime
+
+
+class VerifierContinuationError(TaskExecutionError):
+    """Signals that resumed verifier identity no longer matches safely."""
+
+    def __init__(self, message: str):
+        super().__init__(
+            message,
+            category=FailureCategory.RESUMABILITY_FAILURE,
+            retryable=False,
+        )
 
 
 class Verifier:
@@ -47,6 +65,7 @@ class Verifier:
         workspace_trusted: bool = True,
         provider_consented: bool = True,
         resource_budget: ToolResourceBudget | None = None,
+        expected_command_sha256: str | None = None,
     ) -> dict[str, Any]:
         self._checkpoint("before-detection")
         detection = None
@@ -88,6 +107,14 @@ class Verifier:
                 "no:cacheprovider",
             ]
             pytest_cache_disabled = True
+        command_sha256 = sha256_json(execution_command)
+        if (
+            expected_command_sha256 is not None
+            and command_sha256 != expected_command_sha256
+        ):
+            raise VerifierContinuationError(
+                "Verifier command changed while exact tool approval was suspended."
+            )
         executable = Path(execution_command[0]).name.lower().replace(".exe", "")
         python_verification = executable in {"python", "python3", "pytest"}
         environment_overrides = (
@@ -192,14 +219,36 @@ class Verifier:
             invocation_id=f"tool-{digest}",
         )
         result = response.result
+        tool_approval: dict[str, Any] | None = None
         if response.awaiting_approval:
+            request = response.approval_request
+            policy = response.record.policy_decision
+            if request is None or policy is None or response.record.approval_id is None:
+                raise RuntimeError(
+                    "Managed verifier approval omitted its persisted exact identity."
+                )
+            tool_approval = {
+                "approval_id": response.record.approval_id,
+                "approval_request_sha256": approval_request_scope_sha256(request),
+                "invocation_id": response.record.invocation_id,
+                "invocation_revision": response.record.invocation_revision,
+                "invocation_sha256": response.record.invocation_sha256,
+                "operation_sha256": response.record.operation_sha256,
+                "arguments_sha256": response.record.arguments_sha256,
+                "capability_fingerprint": response.record.capability_fingerprint,
+                "policy_identity_sha256": policy_decision_sha256(policy),
+                "tool_name": response.record.tool_name,
+                "tool_version": response.record.tool_version.model_dump(mode="json"),
+            }
             output = "Verification is awaiting exact tool approval."
             exit_code = None
             passed = False
+            status = "awaiting_tool_approval"
         elif result is None:
             output = "Verification tool has not reached a terminal state."
             exit_code = None
             passed = False
+            status = "in_progress"
         else:
             output = result.stdout
             if result.stderr:
@@ -210,11 +259,13 @@ class Verifier:
                 and result.exit_code in {None, 0}
                 and bool(result.structured_output.get("passed", True))
             )
+            status = "passed" if passed else "failed"
         self._checkpoint("after-command")
         return {
             "command": command,
             "exit_code": exit_code,
             "passed": passed,
+            "status": status,
             "output": output,
             "reason": (
                 detection.get("reason", "Explicit verifier command")
@@ -224,6 +275,10 @@ class Verifier:
             "artifact_suppression_active": python_verification,
             "pytest_cache_disabled": pytest_cache_disabled,
             "tool_invocation_id": response.invocation.invocation_id,
+            "tool_invocation_revision": response.invocation.invocation_revision,
+            "tool_invocation_replayed": response.replayed,
+            "command_sha256": sha256_json(command),
+            "tool_approval": tool_approval,
         }
 
     def _checkpoint(self, stage: str) -> None:

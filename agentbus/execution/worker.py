@@ -580,10 +580,16 @@ class LocalTaskWorker:
         assert pending is not None
         internal = result.metadata.get("_agentbus", {})
         continuation = (
-            internal.get("loop_continuation")
+            internal.get("task_continuation")
             if isinstance(internal, dict)
             else None
         )
+        if not isinstance(continuation, dict) or not continuation:
+            continuation = (
+                internal.get("loop_continuation")
+                if isinstance(internal, dict)
+                else None
+            )
         changed_files, artifact_hygiene = self._worktree_observations(worktree)
         metadata = {
             **result.metadata,
@@ -839,5 +845,7 @@ def _attempt_continuation(attempt) -> dict[str, Any] | None:
     internal = attempt.metadata.get("_agentbus", {})
     if not isinstance(internal, dict):
         return None
-    continuation = internal.get("loop_continuation")
+    continuation = internal.get("task_continuation")
+    if not isinstance(continuation, dict) or not continuation:
+        continuation = internal.get("loop_continuation")
     return continuation if isinstance(continuation, dict) and continuation else None

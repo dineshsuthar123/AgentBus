@@ -290,6 +290,7 @@ class ExecutionReport(DomainModel):
     resume_command: str | None = None
     workspace: str | None = None
     git_top_level: str | None = None
+    reviewer_stage: str | None = None
     reviewer_summary: str | None = None
     reviewer_issues: list[dict[str, Any]] = Field(default_factory=list)
     required_fixes: list[str] = Field(default_factory=list)

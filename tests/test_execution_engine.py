@@ -1,5 +1,6 @@
 import hashlib
 import json
+import threading
 
 import pytest
 
@@ -156,6 +157,22 @@ class ApprovalContinuationExecutor:
                 },
             )
         return success()
+
+
+class BlockingResumeExecutor:
+    def __init__(self):
+        self.calls = 0
+        self.entered = threading.Event()
+        self.release = threading.Event()
+        self._lock = threading.Lock()
+
+    def execute(self, context):
+        assert context.continuation is not None
+        with self._lock:
+            self.calls += 1
+        self.entered.set()
+        assert self.release.wait(timeout=10)
+        return success("continued once")
 
 
 def create(engine, planner_output=None):
@@ -451,6 +468,47 @@ def test_two_tool_approvals_share_one_attempt_and_do_not_consume_retry_budget(
     assert len(store.list_attempts("run-1", "step-1")) == 1
 
 
+def test_concurrent_resumes_are_fenced_to_one_continuation_executor(tmp_path):
+    path = tmp_path / "state.db"
+    mutation_log = tmp_path / "mutation.log"
+    initial_store = StateStore(path)
+    initial = DurableExecutionEngine(
+        initial_store,
+        ApprovalContinuationExecutor(mutation_log, initial_store),
+    )
+    create(initial, plan(count=1))
+    waiting = initial.run_until_blocked("run-1")
+    assert waiting.status == RunStatus.WAITING_FOR_APPROVAL
+    initial.approve_task("run-1", "step-1", "Approve exact invocation")
+
+    executor = BlockingResumeExecutor()
+    first = DurableExecutionEngine(StateStore(path), executor)
+    second = DurableExecutionEngine(StateStore(path), executor)
+    first_result = {}
+
+    def resume_first() -> None:
+        first_result["report"] = first.resume("run-1")
+
+    thread = threading.Thread(target=resume_first)
+    thread.start()
+    assert executor.entered.wait(timeout=10)
+
+    fenced = second.resume("run-1")
+    assert fenced.status == RunStatus.RUNNING
+    assert executor.calls == 1
+
+    executor.release.set()
+    thread.join(timeout=10)
+    assert not thread.is_alive()
+    assert first_result["report"].status == RunStatus.SUCCEEDED
+    assert executor.calls == 1
+    assert len(initial_store.list_attempts("run-1", "step-1")) == 1
+    assert any(
+        event["event_type"] == "task_continuation_resume_fenced"
+        for event in initial_store.list_events("run-1")
+    )
+
+
 def test_approving_one_task_keeps_run_paused_for_another_pending_approval(
     tmp_path,
 ):
@@ -556,7 +614,62 @@ def test_missing_tool_continuation_fails_truthfully_without_retry(tmp_path):
     assert attempt.status == AttemptStatus.FAILED
     assert attempt.error_category == FailureCategory.RESUMABILITY_FAILURE
     assert store.get_task("run-1", "step-1").status == TaskStatus.FAILED
-    assert "durable loop continuation" in (report.failure_reason or "")
+    assert "durable task continuation" in (report.failure_reason or "")
+
+
+def test_waiting_attempt_does_not_report_stale_review_from_previous_attempt(tmp_path):
+    store = StateStore(tmp_path / "state.db")
+    engine = DurableExecutionEngine(store)
+    create(engine, plan(count=1))
+    store.update_run_status("run-1", RunStatus.RUNNING)
+    store.update_task_status("run-1", "step-1", TaskStatus.READY)
+    first = store.start_attempt("run-1", "step-1")
+    store.complete_attempt(
+        first.attempt_id,
+        AttemptStatus.FAILED,
+        error_category=FailureCategory.VERIFIER_FAILURE,
+        error_message="First verifier failed.",
+        metadata={
+            "task_review": {
+                "summary": "stale reviewer summary",
+                "issues": [{"message": "stale issue"}],
+                "required_fixes": ["stale fix"],
+            }
+        },
+    )
+    store.update_task_status("run-1", "step-1", TaskStatus.RETRYABLE)
+    store.update_task_status("run-1", "step-1", TaskStatus.READY)
+    second = store.start_attempt("run-1", "step-1")
+    store.suspend_attempt_for_tool_approval(
+        second.attempt_id,
+        metadata={
+            "_agentbus": {
+                "tool_approval_pending": {
+                    "approval_id": "approval-2",
+                    "invocation_id": "invocation-2",
+                    "tool_name": "test.execute",
+                },
+                "task_continuation": {
+                    "attempt_id": second.attempt_id,
+                    "attempt_number": 2,
+                    "approval_id": "approval-2",
+                    "invocation_id": "invocation-2",
+                },
+            }
+        },
+        approval_id="approval-2",
+        invocation_id="invocation-2",
+        tool_name="test.execute",
+        observation_summary="Verifier is awaiting approval.",
+    )
+
+    report = engine.get_report("run-1")
+
+    assert report.status == RunStatus.WAITING_FOR_APPROVAL
+    assert report.reviewer_stage is None
+    assert report.reviewer_summary is None
+    assert report.reviewer_issues == []
+    assert report.required_fixes == []
 
 
 def test_legacy_interrupted_approval_fails_without_rewriting_attempt(tmp_path):

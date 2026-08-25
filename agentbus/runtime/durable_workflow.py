@@ -6,6 +6,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
+
 from agentbus.execution.cancellation import CancellationRequested, CancellationToken
 from agentbus.execution.models import (
     FailureCategory,
@@ -24,8 +26,12 @@ from agentbus.runtime.intelligence_guidance import (
 )
 from agentbus.runtime.loop import (
     ManagedToolApprovalRequired,
+    ManagedToolContinuationError,
     PlannedCapabilityMismatchError,
+    validate_exact_tool_approval,
 )
+from agentbus.runtime.schemas import VerifierContinuation
+from agentbus.security.redaction import sanitize_json
 from agentbus.trace import (
     RuntimeTrace,
     TraceArtifactReference,
@@ -34,6 +40,7 @@ from agentbus.trace import (
     TraceStatus,
 )
 from agentbus.tools.runtime import ManagedToolRuntime
+from agentbus.tools.protocol import sha256_json
 
 
 _ANALYSIS_SUMMARY_MAX_CHARS = 16_000
@@ -180,6 +187,7 @@ class MultiAgentTaskExecutor:
     def _execute(self, context: TaskExecutionContext) -> TaskExecutionResult:
         _drain_model_results(self.coder)
         _drain_model_results(self.reviewer)
+        verifier_continuation = self._verifier_continuation(context)
         plan = self._task_plan(context)
         coder_intelligence = None
         if self.intelligence_context is not None:
@@ -190,7 +198,11 @@ class MultiAgentTaskExecutor:
             ).render()
         reviewer_feedback = self._previous_reviewer_feedback(context)
         before = self._snapshot()
-        coder_summary = ""
+        coder_summary = (
+            verifier_continuation.coder_summary
+            if verifier_continuation is not None
+            else ""
+        )
         verifier_result: dict[str, Any] | None = None
         reviewer_result: dict[str, Any] | None = None
         artifacts: list[ExecutionArtifact] = []
@@ -202,45 +214,51 @@ class MultiAgentTaskExecutor:
                 task_id=context.task.task_id,
                 cancellation=self.cancellation,
             ):
-                self._checkpoint("before-coder")
-                coder_arguments = {
-                    "user_task": context.run.original_task,
-                    "plan": plan,
-                    "reviewer_feedback": reviewer_feedback,
-                    "cancellation": self.cancellation,
-                    "tool_runtime": self.tool_runtime,
-                    "run_id": context.run.run_id,
-                    "task_id": context.task.task_id,
-                    "workspace_trusted": True,
-                    "provider_consented": True,
-                    "policy_context": {
-                        # Retry ordinals must not change an approved invocation's
-                        # authorization identity during durable resume.
-                        "assigned_role": context.task.assigned_role,
-                        "planned_capabilities": list(
-                            context.task.metadata.get(
-                                "required_capabilities",
-                                [],
+                if verifier_continuation is None:
+                    self._checkpoint("before-coder")
+                    coder_arguments = {
+                        "user_task": context.run.original_task,
+                        "plan": plan,
+                        "reviewer_feedback": reviewer_feedback,
+                        "cancellation": self.cancellation,
+                        "tool_runtime": self.tool_runtime,
+                        "run_id": context.run.run_id,
+                        "task_id": context.task.task_id,
+                        "workspace_trusted": True,
+                        "provider_consented": True,
+                        "policy_context": {
+                            # Retry ordinals must not change an approved invocation's
+                            # authorization identity during durable resume.
+                            "assigned_role": context.task.assigned_role,
+                            "planned_capabilities": list(
+                                context.task.metadata.get(
+                                    "required_capabilities",
+                                    [],
+                                )
+                            ),
+                        },
+                        "repository_intelligence": coder_intelligence,
+                        "attempt_id": context.attempt_id,
+                        "attempt_number": context.attempt_number,
+                        "loop_continuation": context.continuation,
+                    }
+                    coder_summary = self._trace_call(
+                        TraceSpanType.CUSTOM,
+                        "coder",
+                        lambda: self.coder.execute(
+                            **_supported_arguments(
+                                self.coder.execute,
+                                coder_arguments,
                             )
                         ),
-                    },
-                    "repository_intelligence": coder_intelligence,
-                    "attempt_id": context.attempt_id,
-                    "attempt_number": context.attempt_number,
-                    "loop_continuation": context.continuation,
-                }
-                coder_summary = self._trace_call(
-                    TraceSpanType.CUSTOM,
-                    "coder",
-                    lambda: self.coder.execute(
-                        **_supported_arguments(
-                            self.coder.execute,
-                            coder_arguments,
-                        )
-                    ),
-                    capture="text",
-                )
-                self._checkpoint("after-coder")
+                        capture="text",
+                    )
+                    self._checkpoint("after-coder")
+                else:
+                    self._validate_verifier_continuation(
+                        context,
+                        verifier_continuation,
+                    )
                 if context.task.execution_kind == TaskExecutionKind.ANALYSIS:
                     verifier_result = self._analysis_verifier_result()
                 else:
@@ -255,16 +273,39 @@ class MultiAgentTaskExecutor:
                                     "run_id": context.run.run_id,
                                     "task_id": context.task.task_id,
                                     "invocation_key": (
-                                        f"attempt-{context.attempt_number}"
+                                        verifier_continuation.verifier_invocation_key
+                                        if verifier_continuation is not None
+                                        else f"attempt-{context.attempt_number}"
                                     ),
                                     "workspace_trusted": True,
                                     "provider_consented": True,
+                                    "expected_command_sha256": (
+                                        verifier_continuation.command_sha256
+                                        if verifier_continuation is not None
+                                        else None
+                                    ),
                                 },
                             )
                         ),
                         capture="json",
                     )
                 self._checkpoint("after-verifier")
+                verifier_status = str(
+                    verifier_result.get("status")
+                    or ("passed" if verifier_result.get("passed") else "failed")
+                )
+                if verifier_status == "awaiting_tool_approval":
+                    return self._verifier_approval_pending_result(
+                        context,
+                        before,
+                        coder_summary=coder_summary,
+                        verifier_result=verifier_result,
+                    )
+                if verifier_status == "in_progress":
+                    raise ManagedToolContinuationError(
+                        "Verifier invocation is already in progress and cannot be "
+                        "continued without an execution fence."
+                    )
                 changed_files, changes, artifacts = self._execution_artifacts(
                     context,
                     before,
@@ -284,6 +325,16 @@ class MultiAgentTaskExecutor:
                     )
                     artifacts.append(analysis_artifact)
                     coder_summary = str(analysis_artifact.metadata["summary"])
+                if not verifier_result.get("passed"):
+                    return self._verifier_failure_result(
+                        context,
+                        coder_summary=coder_summary,
+                        verifier_result=verifier_result,
+                        verifier_status=verifier_status,
+                        changed_files=changed_files,
+                        changes=changes,
+                        artifacts=artifacts,
+                    )
                 task_diff = self._task_diff(changes)
                 reviewer_intelligence = None
                 if self.intelligence_context is not None:
@@ -337,10 +388,6 @@ class MultiAgentTaskExecutor:
             )
         assert verifier_result is not None
         assert reviewer_result is not None
-        verifier_status = str(
-            verifier_result.get("status")
-            or ("passed" if verifier_result.get("passed") else "failed")
-        )
         metadata = {
             "task_review": {
                 "approved": bool(reviewer_result.get("approved")),
@@ -376,6 +423,10 @@ class MultiAgentTaskExecutor:
                 ),
             },
             "artifact_hygiene": changes.to_metadata(),
+            "verification_evidence": self._verification_evidence(
+                context,
+                verifier_result,
+            ),
             "task_contract": {
                 "execution_kind": context.task.execution_kind.value,
                 "required_capabilities": _bounded_capability_names(
@@ -426,19 +477,6 @@ class MultiAgentTaskExecutor:
                 *(_drain_model_results(self.reviewer)),
             ],
         }
-        if not verifier_result.get("passed"):
-            return TaskExecutionResult(
-                succeeded=False,
-                summary=f"Verification failed after coder output: {coder_summary}",
-                failure_category=FailureCategory.VERIFIER_FAILURE,
-                error_message="The verifier command did not pass.",
-                retryable=True,
-                artifacts=artifacts,
-                verifier_status=verifier_status,
-                changed_files=changed_files,
-                metadata=metadata,
-            )
-
         if not reviewer_result.get("approved"):
             return TaskExecutionResult(
                 succeeded=False,
@@ -611,6 +649,209 @@ class MultiAgentTaskExecutor:
             for path in changed_files
         ]
         return changed_files, changes, artifacts
+
+    @staticmethod
+    def _verifier_continuation(
+        context: TaskExecutionContext,
+    ) -> VerifierContinuation | None:
+        raw = context.continuation
+        if raw is None:
+            return None
+        if not isinstance(raw, dict):
+            raise ManagedToolContinuationError(
+                "Persisted task continuation is not an object."
+            )
+        stage = raw.get("stage")
+        if stage is None:
+            return None
+        if stage != "verifier":
+            raise ManagedToolContinuationError(
+                "Persisted task continuation has an unsupported stage."
+            )
+        try:
+            return VerifierContinuation.model_validate(raw)
+        except ValidationError as exc:
+            raise ManagedToolContinuationError(
+                "Persisted verifier continuation is malformed or incompatible."
+            ) from exc
+
+    def _validate_verifier_continuation(
+        self,
+        context: TaskExecutionContext,
+        continuation: VerifierContinuation,
+    ) -> None:
+        if (
+            continuation.run_id != context.run.run_id
+            or continuation.task_id != context.task.task_id
+            or continuation.attempt_id != context.attempt_id
+            or continuation.attempt_number != context.attempt_number
+        ):
+            raise ManagedToolContinuationError(
+                "Verifier continuation run, task, or attempt identity does not match."
+            )
+        task_sha256 = hashlib.sha256(
+            context.run.original_task.encode("utf-8")
+        ).hexdigest()
+        if task_sha256 != continuation.user_task_sha256:
+            raise ManagedToolContinuationError(
+                "Verifier continuation task content does not match."
+            )
+        expected_key = f"attempt-{context.attempt_number}"
+        if continuation.verifier_invocation_key != expected_key:
+            raise ManagedToolContinuationError(
+                "Verifier continuation invocation key does not match its attempt."
+            )
+        if self._review_source_snapshot() != continuation.source_snapshot:
+            raise ManagedToolContinuationError(
+                "Review-eligible source changed while verifier approval was suspended."
+            )
+        validate_exact_tool_approval(
+            self.tool_runtime,
+            continuation,
+            idempotency_key=f"verifier:{continuation.verifier_invocation_key}",
+            caller_role="verifier",
+        )
+
+    def _verifier_approval_pending_result(
+        self,
+        context: TaskExecutionContext,
+        before: dict[str, str],
+        *,
+        coder_summary: str,
+        verifier_result: dict[str, Any],
+    ) -> TaskExecutionResult:
+        raw_approval = verifier_result.get("tool_approval")
+        if not isinstance(raw_approval, dict):
+            raise ManagedToolContinuationError(
+                "Verifier approval suspension omitted its exact approval identity."
+            )
+        safe_summary = sanitize_json(coder_summary, max_chars=20_000)
+        if not isinstance(safe_summary, str):
+            raise ManagedToolContinuationError(
+                "Coder summary could not be persisted safely for verifier continuation."
+            )
+        attempt_snapshot = self._attempt_snapshot(context, before)
+        changed_files, changes, artifacts = self._execution_artifacts(context, before)
+        payload = {
+            "run_id": context.run.run_id,
+            "task_id": context.task.task_id,
+            "attempt_id": context.attempt_id,
+            "attempt_number": context.attempt_number,
+            "user_task_sha256": hashlib.sha256(
+                context.run.original_task.encode("utf-8")
+            ).hexdigest(),
+            "verifier_invocation_key": f"attempt-{context.attempt_number}",
+            "coder_summary": safe_summary[:20_000],
+            "worktree_snapshot": attempt_snapshot,
+            "source_snapshot": self._review_source_snapshot(),
+            "command_sha256": verifier_result.get("command_sha256"),
+            **raw_approval,
+        }
+        try:
+            continuation = VerifierContinuation.model_validate(payload)
+        except ValidationError as exc:
+            raise ManagedToolContinuationError(
+                "Verifier approval state could not be persisted as a bounded continuation."
+            ) from exc
+        pending = {
+            "approval_id": continuation.approval_id,
+            "invocation_id": continuation.invocation_id,
+            "tool_name": continuation.tool_name,
+        }
+        return TaskExecutionResult(
+            succeeded=False,
+            summary="Verification is awaiting exact tool approval.",
+            artifacts=artifacts,
+            failure_category=None,
+            error_message=None,
+            retryable=False,
+            verifier_status="awaiting_tool_approval",
+            reviewer_status="not_run",
+            changed_files=changed_files,
+            metadata={
+                "artifact_hygiene": changes.to_metadata(),
+                "coder_summary": safe_summary[:20_000],
+                "tool_approval": pending,
+                "verifier": {
+                    "passed": False,
+                    "status": "awaiting_tool_approval",
+                    "command_sha256": continuation.command_sha256,
+                },
+                "_agentbus": {
+                    "tool_approval_pending": pending,
+                    "task_continuation": continuation.model_dump(mode="json"),
+                },
+                "model_requests": _drain_model_results(self.coder),
+            },
+        )
+
+    def _verifier_failure_result(
+        self,
+        context: TaskExecutionContext,
+        *,
+        coder_summary: str,
+        verifier_result: dict[str, Any],
+        verifier_status: str,
+        changed_files: list[str],
+        changes: RepositoryChangeSet,
+        artifacts: list[ExecutionArtifact],
+    ) -> TaskExecutionResult:
+        return TaskExecutionResult(
+            succeeded=False,
+            summary=f"Verification failed after coder output: {coder_summary}",
+            failure_category=FailureCategory.VERIFIER_FAILURE,
+            error_message="The verifier command did not pass.",
+            retryable=True,
+            artifacts=artifacts,
+            verifier_status=verifier_status,
+            reviewer_status="not_run",
+            changed_files=changed_files,
+            metadata={
+                "artifact_hygiene": changes.to_metadata(),
+                "coder_summary": coder_summary[:20_000],
+                "verifier": {
+                    "passed": False,
+                    "command": verifier_result.get("command", []),
+                    "exit_code": verifier_result.get("exit_code"),
+                    "reason": verifier_result.get("reason"),
+                    "status": verifier_status,
+                    "artifact_suppression_active": bool(
+                        verifier_result.get("artifact_suppression_active")
+                    ),
+                    "pytest_cache_disabled": bool(
+                        verifier_result.get("pytest_cache_disabled")
+                    ),
+                },
+                "model_requests": _drain_model_results(self.coder),
+            },
+        )
+
+    def _verification_evidence(
+        self,
+        context: TaskExecutionContext,
+        verifier_result: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        invocation_id = verifier_result.get("tool_invocation_id")
+        command_sha256 = verifier_result.get("command_sha256")
+        if (
+            not verifier_result.get("passed")
+            or not isinstance(invocation_id, str)
+            or not invocation_id
+            or not isinstance(command_sha256, str)
+            or len(command_sha256) != 64
+        ):
+            return None
+        return {
+            "status": "passed",
+            "task_id": context.task.task_id,
+            "attempt_id": context.attempt_id,
+            "attempt_number": context.attempt_number,
+            "invocation_key": f"attempt-{context.attempt_number}",
+            "invocation_id": invocation_id,
+            "invocation_revision": verifier_result.get("tool_invocation_revision", 1),
+            "command_sha256": command_sha256,
+            "source_snapshot": self._review_source_snapshot(),
+        }
 
     def _approval_pending_result(
         self,
@@ -843,6 +1084,18 @@ class MultiAgentTaskExecutor:
         if snapshot is None:
             return {}
         return snapshot()
+
+    def _review_source_snapshot(self) -> dict[str, str]:
+        snapshot = getattr(self.git_repository, "review_source_snapshot", None)
+        if snapshot is not None:
+            return snapshot()
+        current = self._snapshot()
+        review_files = set(self._change_set(self._changed_files()).review_files)
+        return {
+            path: identity
+            for path, identity in current.items()
+            if path in review_files
+        }
 
     def _changed_since(self, before: dict[str, str]) -> list[str]:
         changed_since = getattr(self.git_repository, "changed_since", None)

@@ -142,6 +142,26 @@ class AttemptLimitExceededError(StateStoreError):
         )
 
 
+class NonterminalAttemptExistsError(StateStoreError):
+    """Raised when creating N+1 would overlap a resumable attempt N."""
+
+    def __init__(
+        self,
+        task_id: str,
+        attempt_id: str,
+        attempt_number: int,
+        status: AttemptStatus,
+    ):
+        self.task_id = task_id
+        self.attempt_id = attempt_id
+        self.attempt_number = attempt_number
+        self.status = status
+        super().__init__(
+            f"Task '{task_id}' already has nonterminal attempt "
+            f"{attempt_number} ({status.value}); refusing to create another."
+        )
+
+
 class ToolInvocationNotFoundError(StateStoreError):
     pass
 
@@ -874,6 +894,26 @@ class StateStore:
                 raise TaskNotFoundError(
                     f"Task '{task_id}' was not found in run '{run_id}'."
                 )
+            nonterminal = connection.execute(
+                """
+                SELECT attempt_id, attempt_number, status FROM attempts
+                WHERE run_id = ? AND task_id = ? AND status IN (?, ?)
+                ORDER BY attempt_number DESC LIMIT 1
+                """,
+                (
+                    run_id,
+                    task_id,
+                    AttemptStatus.RUNNING.value,
+                    AttemptStatus.WAITING_FOR_APPROVAL.value,
+                ),
+            ).fetchone()
+            if nonterminal is not None:
+                raise NonterminalAttemptExistsError(
+                    task_id,
+                    nonterminal["attempt_id"],
+                    int(nonterminal["attempt_number"]),
+                    AttemptStatus(nonterminal["status"]),
+                )
             current = TaskStatus(task_row["status"])
             if current != TaskStatus.READY:
                 raise StateStoreError(
@@ -971,6 +1011,26 @@ class StateStore:
             if task_row is None:
                 raise TaskNotFoundError(
                     f"Task '{task_id}' was not found in run '{run_id}'."
+                )
+            nonterminal = connection.execute(
+                """
+                SELECT attempt_id, attempt_number, status FROM attempts
+                WHERE run_id = ? AND task_id = ? AND status IN (?, ?)
+                ORDER BY attempt_number DESC LIMIT 1
+                """,
+                (
+                    run_id,
+                    task_id,
+                    AttemptStatus.RUNNING.value,
+                    AttemptStatus.WAITING_FOR_APPROVAL.value,
+                ),
+            ).fetchone()
+            if nonterminal is not None:
+                raise NonterminalAttemptExistsError(
+                    task_id,
+                    nonterminal["attempt_id"],
+                    int(nonterminal["attempt_number"]),
+                    AttemptStatus(nonterminal["status"]),
                 )
             if TaskStatus(task_row["status"]) != TaskStatus.RUNNING:
                 raise StateStoreError(
@@ -1204,10 +1264,16 @@ class StateStore:
                 else None
             )
             continuation = (
-                internal.get("loop_continuation")
+                internal.get("task_continuation")
                 if isinstance(internal, dict)
                 else None
             )
+            if not isinstance(continuation, dict) or not continuation:
+                continuation = (
+                    internal.get("loop_continuation")
+                    if isinstance(internal, dict)
+                    else None
+                )
             if (
                 not isinstance(pending, dict)
                 or pending.get("approval_id") != approval_id

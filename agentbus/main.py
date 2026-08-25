@@ -810,13 +810,21 @@ def render_execution_report(report: ExecutionReport) -> str:
     lines.append(
         f"Detected Git top-level: {report.git_top_level or '[not recorded]'}"
     )
+    reviewer_label = (
+        "Final reviewer"
+        if report.reviewer_stage == "final"
+        else "Task reviewer"
+        if report.reviewer_stage == "task"
+        else "Reviewer"
+    )
     if report.reviewer_summary:
-        lines.append(f"Reviewer summary: {report.reviewer_summary}")
+        lines.append(f"{reviewer_label} summary: {report.reviewer_summary}")
     for issue in report.reviewer_issues:
         severity = issue.get("severity", "unknown")
         location = f" ({issue['file']})" if issue.get("file") else ""
         lines.append(
-            f"Reviewer issue [{severity}]{location}: {issue.get('message', '')}"
+            f"{reviewer_label} issue [{severity}]{location}: "
+            f"{issue.get('message', '')}"
         )
     for required_fix in report.required_fixes:
         lines.append(f"Required fix: {required_fix}")

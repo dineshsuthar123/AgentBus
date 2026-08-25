@@ -101,27 +101,7 @@ class AgentLoopContinuation(BaseModel):
         cls,
         value: dict[str, str],
     ) -> dict[str, str]:
-        if len(value) > 512:
-            raise ValueError("worktree snapshot must contain at most 512 paths")
-        normalized: dict[str, str] = {}
-        for raw_path, raw_identity in value.items():
-            path = str(raw_path).replace("\\", "/")
-            if (
-                not path
-                or len(path) > 512
-                or PurePosixPath(path).is_absolute()
-                or PureWindowsPath(path).is_absolute()
-                or ".." in PurePosixPath(path).parts
-            ):
-                raise ValueError("worktree snapshot paths must be bounded and relative")
-            identity = str(raw_identity)
-            if identity not in {"deleted", "directory"} and not (
-                len(identity) == 64
-                and all(character in "0123456789abcdef" for character in identity)
-            ):
-                raise ValueError("worktree snapshot identities must be SHA-256 values")
-            normalized[path] = identity
-        return dict(sorted(normalized.items()))
+        return _bounded_worktree_snapshot(value)
 
     @model_validator(mode="after")
     def continuation_is_bounded(self) -> "AgentLoopContinuation":
@@ -145,3 +125,77 @@ class AgentLoopContinuation(BaseModel):
         if len(encoded) > 1_250_000:
             raise ValueError("loop continuation must be at most 1250000 bytes")
         return self
+
+
+class VerifierContinuation(BaseModel):
+    """Bounded task-stage state for an exact managed verifier approval."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1] = 1
+    stage: Literal["verifier"] = "verifier"
+    run_id: str = Field(min_length=1, max_length=128)
+    task_id: str = Field(min_length=1, max_length=128)
+    attempt_id: str = Field(min_length=1, max_length=128)
+    attempt_number: int = Field(ge=1)
+    user_task_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    verifier_invocation_key: str = Field(min_length=1, max_length=256)
+    coder_summary: str = Field(default="", max_length=20_000)
+    worktree_snapshot: dict[str, str] = Field(default_factory=dict)
+    source_snapshot: dict[str, str] = Field(default_factory=dict)
+    command_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    approval_id: str = Field(min_length=1, max_length=128)
+    approval_request_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    invocation_id: str = Field(min_length=1, max_length=128)
+    invocation_revision: int = Field(ge=1)
+    invocation_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    operation_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    arguments_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    capability_fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
+    policy_identity_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    tool_name: Literal["test.execute"]
+    tool_version: ToolVersion
+
+    @field_validator("worktree_snapshot", "source_snapshot")
+    @classmethod
+    def snapshots_are_bounded(
+        cls,
+        value: dict[str, str],
+    ) -> dict[str, str]:
+        return _bounded_worktree_snapshot(value)
+
+    @model_validator(mode="after")
+    def continuation_is_bounded(self) -> "VerifierContinuation":
+        encoded = json.dumps(
+            self.model_dump(mode="json"),
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        if len(encoded) > 750_000:
+            raise ValueError("verifier continuation must be at most 750000 bytes")
+        return self
+
+
+def _bounded_worktree_snapshot(value: dict[str, str]) -> dict[str, str]:
+    if len(value) > 512:
+        raise ValueError("worktree snapshot must contain at most 512 paths")
+    normalized: dict[str, str] = {}
+    for raw_path, raw_identity in value.items():
+        path = str(raw_path).replace("\\", "/")
+        if (
+            not path
+            or len(path) > 512
+            or PurePosixPath(path).is_absolute()
+            or PureWindowsPath(path).is_absolute()
+            or ".." in PurePosixPath(path).parts
+        ):
+            raise ValueError("worktree snapshot paths must be bounded and relative")
+        identity = str(raw_identity)
+        if identity not in {"deleted", "directory"} and not (
+            len(identity) == 64
+            and all(character in "0123456789abcdef" for character in identity)
+        ):
+            raise ValueError("worktree snapshot identities must be SHA-256 values")
+        normalized[path] = identity
+    return dict(sorted(normalized.items()))

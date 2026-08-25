@@ -1,4 +1,6 @@
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -14,6 +16,7 @@ from agentbus.execution.models import (
 )
 from agentbus.execution.schema import SCHEMA_VERSION
 from agentbus.execution.state_store import (
+    NonterminalAttemptExistsError,
     RunNotFoundError,
     StateStore,
     StateStoreError,
@@ -85,6 +88,46 @@ def test_attempts_are_independent_and_numbering_survives_reload(tmp_path):
     assert first.attempt_number == 1
     assert second.attempt_number == 2
     assert len(second_store.list_attempts("run-1", "step-1")) == 2
+
+
+def test_nonterminal_attempt_blocks_attempt_n_plus_one(tmp_path):
+    store = StateStore(tmp_path / "state.db")
+    store.create_run_with_tasks(make_run(), [make_task(maximum_attempts=3)])
+    store.update_task_status("run-1", "step-1", TaskStatus.READY)
+    first = store.start_attempt("run-1", "step-1")
+
+    with pytest.raises(NonterminalAttemptExistsError) as start_error:
+        store.start_attempt("run-1", "step-1")
+    with pytest.raises(NonterminalAttemptExistsError) as create_error:
+        store.create_attempt("run-1", "step-1")
+
+    assert start_error.value.attempt_id == first.attempt_id
+    assert create_error.value.attempt_id == first.attempt_id
+    assert len(store.list_attempts("run-1", "step-1")) == 1
+
+
+def test_concurrent_attempt_creation_is_atomically_fenced(tmp_path):
+    path = tmp_path / "state.db"
+    store = StateStore(path)
+    store.create_run_with_tasks(make_run(), [make_task(maximum_attempts=3)])
+    store.update_task_status("run-1", "step-1", TaskStatus.READY)
+    barrier = threading.Barrier(2)
+
+    def start() -> tuple[str, str]:
+        contender = StateStore(path)
+        barrier.wait(timeout=5)
+        try:
+            attempt = contender.start_attempt("run-1", "step-1")
+            return "started", attempt.attempt_id
+        except NonterminalAttemptExistsError as exc:
+            return "fenced", exc.attempt_id
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(lambda _: start(), range(2)))
+
+    assert sorted(outcome for outcome, _ in outcomes) == ["fenced", "started"]
+    assert len({attempt_id for _, attempt_id in outcomes}) == 1
+    assert len(store.list_attempts("run-1", "step-1")) == 1
 
 
 def test_events_are_json_and_sensitive_values_are_redacted(tmp_path):

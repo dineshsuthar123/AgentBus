@@ -1598,6 +1598,32 @@ class MultiAgentOrchestrator:
 
     def _verify_final(self, run_id: str) -> dict[str, Any]:
         verify = self.verifier.verify
+        task_id = self._final_tool_task_id(run_id)
+        invocation_key = "final-run"
+        expected_command_sha256 = None
+        evidence = self._latest_managed_verification_evidence(run_id)
+        if evidence is not None:
+            source_snapshot = getattr(
+                self.git_repository,
+                "review_source_snapshot",
+                None,
+            )
+            current_source = source_snapshot() if source_snapshot is not None else None
+            if current_source != evidence["source_snapshot"]:
+                return {
+                    "command": [],
+                    "exit_code": None,
+                    "passed": False,
+                    "output": "",
+                    "reason": (
+                        "Review-eligible source changed after the last successful "
+                        "managed verification."
+                    ),
+                    "status": "source_changed_after_verification",
+                }
+            task_id = evidence["task_id"]
+            invocation_key = evidence["invocation_key"]
+            expected_command_sha256 = evidence["command_sha256"]
         with build_managed_tool_runtime(
             workspace=self.workspace,
             state_store=self.state_store,
@@ -1613,12 +1639,52 @@ class MultiAgentOrchestrator:
                     "require_command": True,
                     "tool_runtime": tool_runtime,
                     "run_id": run_id,
-                    "task_id": self._final_tool_task_id(run_id),
-                    "invocation_key": "final-run",
+                    "task_id": task_id,
+                    "invocation_key": invocation_key,
                     "workspace_trusted": True,
                     "provider_consented": True,
+                    "expected_command_sha256": expected_command_sha256,
                 },
             )
+
+    def _latest_managed_verification_evidence(
+        self,
+        run_id: str,
+    ) -> dict[str, Any] | None:
+        for task in reversed(self.state_store.list_tasks(run_id)):
+            if (
+                task.status != TaskStatus.SUCCEEDED
+                or task.spec.execution_kind != TaskExecutionKind.IMPLEMENTATION
+            ):
+                continue
+            for attempt in reversed(
+                self.state_store.list_attempts(run_id, task.task_id)
+            ):
+                evidence = attempt.metadata.get("verification_evidence")
+                if not isinstance(evidence, dict) or evidence.get("status") != "passed":
+                    continue
+                task_id = evidence.get("task_id")
+                invocation_key = evidence.get("invocation_key")
+                command_sha256 = evidence.get("command_sha256")
+                source_snapshot = evidence.get("source_snapshot")
+                if (
+                    task_id == task.task_id
+                    and isinstance(invocation_key, str)
+                    and invocation_key
+                    and isinstance(command_sha256, str)
+                    and len(command_sha256) == 64
+                    and isinstance(source_snapshot, dict)
+                ):
+                    return {
+                        "task_id": task_id,
+                        "invocation_key": invocation_key,
+                        "command_sha256": command_sha256,
+                        "source_snapshot": {
+                            str(path): str(identity)
+                            for path, identity in source_snapshot.items()
+                        },
+                    }
+        return None
 
     def _requires_final_verification(self, run_id: str) -> bool:
         return any(

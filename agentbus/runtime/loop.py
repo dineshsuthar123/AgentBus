@@ -501,82 +501,12 @@ class AgentLoop:
             raise ManagedToolContinuationError(
                 "Loop continuation invocation identity is corrupt."
             )
-        if self.tool_runtime is None:
-            raise ManagedToolContinuationError(
-                "Managed tool runtime is unavailable for continuation."
-            )
-        store = self.tool_runtime.state_store
-        try:
-            record = store.get_tool_invocation(
-                continuation.run_id,
-                continuation.invocation_id,
-            )
-            approval = store.get_tool_approval(
-                continuation.run_id,
-                continuation.approval_id,
-            )
-            descriptor = self.tool_runtime.registry.descriptor(
-                continuation.tool_name,
-                version=continuation.tool_version,
-            )
-        except (StateStoreError, ToolRegistryError, LookupError, ValueError) as exc:
-            raise ManagedToolContinuationError(
-                "Persisted tool continuation dependencies are unavailable."
-            ) from exc
-        policy = record.policy_decision
-        request = approval.request
-        runtime_workspace = str(self.tool_runtime.workspace)
-        runtime_worktree = str(self.tool_runtime.worktree)
-        tool_version = continuation.tool_version.model_dump(mode="json")
-        matches = (
-            record.run_id == continuation.run_id
-            and record.task_id == continuation.task_id
-            and record.tool_name == continuation.tool_name
-            and record.tool_version.model_dump(mode="json")
-            == tool_version
-            and descriptor.version.model_dump(mode="json")
-            == tool_version
-            and record.invocation_revision == continuation.invocation_revision
-            and record.invocation_sha256 == continuation.invocation_sha256
-            and record.operation_sha256 == continuation.operation_sha256
-            and record.arguments_sha256 == continuation.arguments_sha256
-            and record.idempotency_key_sha256
-            == idempotency_key_sha256(call.idempotency_key)
-            and record.capability_fingerprint
-            == continuation.capability_fingerprint
-            and record.workspace_identity == runtime_workspace
-            and record.worktree_identity == runtime_worktree
-            and record.approval_id == continuation.approval_id
-            and record.status
-            in {
-                ToolInvocationStatus.AWAITING_APPROVAL,
-                *TERMINAL_TOOL_STATUSES,
-            }
-            and policy is not None
-            and policy_decision_sha256(policy)
-            == continuation.policy_identity_sha256
-            and request.run_id == continuation.run_id
-            and request.task_id == continuation.task_id
-            and request.invocation_id == continuation.invocation_id
-            and request.invocation_revision == continuation.invocation_revision
-            and request.tool_name == continuation.tool_name
-            and request.tool_version.model_dump(mode="json")
-            == tool_version
-            and request.arguments_sha256 == continuation.arguments_sha256
-            and request.capability_fingerprint
-            == continuation.capability_fingerprint
-            and request.workspace_identity == runtime_workspace
-            and request.worktree_identity == runtime_worktree
-            and request.idempotency_key_sha256
-            == record.idempotency_key_sha256
-            and approval_request_scope_sha256(request)
-            == continuation.approval_request_sha256
-            and approval.disposition == "approved"
+        validate_exact_tool_approval(
+            self.tool_runtime,
+            continuation,
+            idempotency_key=call.idempotency_key,
+            caller_role="coder",
         )
-        if not matches:
-            raise ManagedToolContinuationError(
-                "Persisted tool continuation no longer matches its exact approval."
-            )
 
     def _build_prompt(self, user_task: str, history: str) -> str:
         return f"""
@@ -862,6 +792,89 @@ Return the next JSON action.
             return history
 
         return history[-self.max_history_chars:]
+
+
+def validate_exact_tool_approval(
+    tool_runtime: ManagedToolRuntime | None,
+    continuation: Any,
+    *,
+    idempotency_key: str,
+    caller_role: str,
+) -> None:
+    """Fail closed unless a continuation matches one exact approved invocation."""
+    if tool_runtime is None:
+        raise ManagedToolContinuationError(
+            "Managed tool runtime is unavailable for continuation."
+        )
+    store = tool_runtime.state_store
+    try:
+        record = store.get_tool_invocation(
+            continuation.run_id,
+            continuation.invocation_id,
+        )
+        approval = store.get_tool_approval(
+            continuation.run_id,
+            continuation.approval_id,
+        )
+        descriptor = tool_runtime.registry.descriptor(
+            continuation.tool_name,
+            version=continuation.tool_version,
+        )
+    except (StateStoreError, ToolRegistryError, LookupError, ValueError) as exc:
+        raise ManagedToolContinuationError(
+            "Persisted tool continuation dependencies are unavailable."
+        ) from exc
+
+    policy = record.policy_decision
+    request = approval.request
+    runtime_workspace = str(tool_runtime.workspace)
+    runtime_worktree = str(tool_runtime.worktree)
+    tool_version = continuation.tool_version.model_dump(mode="json")
+    matches = (
+        record.run_id == continuation.run_id
+        and record.task_id == continuation.task_id
+        and record.caller_role == caller_role
+        and record.tool_name == continuation.tool_name
+        and record.tool_version.model_dump(mode="json") == tool_version
+        and descriptor.version.model_dump(mode="json") == tool_version
+        and record.invocation_revision == continuation.invocation_revision
+        and record.invocation_sha256 == continuation.invocation_sha256
+        and record.operation_sha256 == continuation.operation_sha256
+        and record.arguments_sha256 == continuation.arguments_sha256
+        and record.idempotency_key_sha256
+        == idempotency_key_sha256(idempotency_key)
+        and record.capability_fingerprint == continuation.capability_fingerprint
+        and record.workspace_identity == runtime_workspace
+        and record.worktree_identity == runtime_worktree
+        and record.approval_id == continuation.approval_id
+        and record.status
+        in {
+            ToolInvocationStatus.AWAITING_APPROVAL,
+            *TERMINAL_TOOL_STATUSES,
+        }
+        and policy is not None
+        and policy_decision_sha256(policy) == continuation.policy_identity_sha256
+        and approval.approval_id == continuation.approval_id
+        and request.approval_id == continuation.approval_id
+        and request.run_id == continuation.run_id
+        and request.task_id == continuation.task_id
+        and request.invocation_id == continuation.invocation_id
+        and request.invocation_revision == continuation.invocation_revision
+        and request.tool_name == continuation.tool_name
+        and request.tool_version.model_dump(mode="json") == tool_version
+        and request.arguments_sha256 == continuation.arguments_sha256
+        and request.capability_fingerprint == continuation.capability_fingerprint
+        and request.workspace_identity == runtime_workspace
+        and request.worktree_identity == runtime_worktree
+        and request.idempotency_key_sha256 == record.idempotency_key_sha256
+        and approval_request_scope_sha256(request)
+        == continuation.approval_request_sha256
+        and approval.disposition == "approved"
+    )
+    if not matches:
+        raise ManagedToolContinuationError(
+            "Persisted tool continuation no longer matches its exact approval."
+        )
 
 
 def _accepts_schema(method) -> bool:

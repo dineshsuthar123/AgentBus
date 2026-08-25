@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import uuid
+import threading
 from collections.abc import Callable
 from typing import Any, Protocol
 
 from agentbus import __version__
 from agentbus.execution.cancellation import CancellationToken
 from agentbus.execution.cancellation_registry import CancellationRegistry
+from agentbus.execution.leases import (
+    LeaseError,
+    LeaseService,
+    LeaseUnavailableError,
+)
 from agentbus.execution.models import (
     ApprovalOutcome,
     AttemptStatus,
@@ -27,6 +33,7 @@ from agentbus.execution.models import (
 from agentbus.execution.retry import FailureClassifier, RetryController
 from agentbus.execution.state_store import (
     AttemptLimitExceededError,
+    NonterminalAttemptExistsError,
     RunNotFoundError,
     StateStore,
     StateStoreError,
@@ -76,6 +83,9 @@ class DurableExecutionEngine:
         self._explicit_cancellation = cancellation
         self._explicit_cancellation_run_id: str | None = None
         self.runtime_trace = runtime_trace
+        self._resume_leases = LeaseService(state_store)
+        self._resume_worker_id = f"durable-engine-{uuid.uuid4().hex}"
+        self._execution_fenced = False
 
     def close(self) -> None:
         close = getattr(self.task_executor, "close", None)
@@ -144,6 +154,7 @@ class DurableExecutionEngine:
         return self.store.get_run(record.run_id)
 
     def run_until_blocked(self, run_id: str) -> ExecutionReport:
+        self._execution_fenced = False
         if self._cancellation_token(run_id).is_requested:
             return self.finalize_cancellation(run_id)
         snapshot = self.store.load_snapshot(run_id)
@@ -172,6 +183,8 @@ class DurableExecutionEngine:
             if self._cancellation_token(run_id).is_requested:
                 return self.finalize_cancellation(run_id)
             report = self.execute_next(run_id)
+            if self._execution_fenced:
+                return report
             if report.status in {
                 RunStatus.SUCCEEDED,
                 RunStatus.FAILED,
@@ -247,6 +260,15 @@ class DurableExecutionEngine:
         else:
             try:
                 attempt = self.store.start_attempt(run_id, task_record.task_id)
+            except NonterminalAttemptExistsError as exc:
+                self._log(
+                    "task_attempt_creation_fenced",
+                    run_id,
+                    task_id=task_record.task_id,
+                    attempt_number=exc.attempt_number,
+                    metadata={"attempt_status": exc.status.value},
+                )
+                return self.get_report(run_id)
             except AttemptLimitExceededError as exc:
                 self.store.fail_attempt_exhaustion(run_id, task_record.task_id, str(exc))
                 self._log(
@@ -289,26 +311,93 @@ class DurableExecutionEngine:
             # process disappearing after durable attempt creation.
             self.crash_hook("after_attempt_started", context)
 
-        try:
-            result = self._execute(context)
-        except Exception as exc:
-            classification = self.failure_classifier.classify(exc)
-            result = TaskExecutionResult(
-                succeeded=False,
-                summary="Task executor raised an exception.",
-                failure_category=classification.category,
-                error_message=classification.message,
-                retryable=classification.retryable,
-                metadata=(
-                    {"provider_failure": classification.metadata}
-                    if classification.metadata
-                    else {}
-                ),
+        resume_lease = None
+        heartbeat_stop: threading.Event | None = None
+        heartbeat_thread: threading.Thread | None = None
+        if continuation is not None:
+            try:
+                resume_lease = self._resume_leases.acquire_lease(
+                    run_id,
+                    task_record.task_id,
+                    self._resume_worker_id,
+                    metadata={
+                        "purpose": "durable_continuation",
+                        "attempt_id": attempt.attempt_id,
+                        "attempt_number": attempt.attempt_number,
+                    },
+                )
+            except LeaseUnavailableError:
+                self._execution_fenced = True
+                self.store.record_event(
+                    run_id,
+                    "task_continuation_resume_fenced",
+                    {
+                        "task_id": task_record.task_id,
+                        "attempt_id": attempt.attempt_id,
+                        "attempt_number": attempt.attempt_number,
+                    },
+                    task_id=task_record.task_id,
+                )
+                return self.get_report(run_id)
+            heartbeat_stop, heartbeat_thread = self._start_resume_heartbeat(
+                resume_lease
             )
 
-        self._persist_execution_result(attempt, task_record, result)
-        if result.succeeded:
-            self._checkpoint_completed_task(attempt, task_record, result)
+        try:
+            try:
+                result = self._execute(context)
+            except Exception as exc:
+                classification = self.failure_classifier.classify(exc)
+                result = TaskExecutionResult(
+                    succeeded=False,
+                    summary="Task executor raised an exception.",
+                    failure_category=classification.category,
+                    error_message=classification.message,
+                    retryable=classification.retryable,
+                    metadata=(
+                        {"provider_failure": classification.metadata}
+                        if classification.metadata
+                        else {}
+                    ),
+                )
+
+            if resume_lease is not None:
+                self._resume_leases.validate_fencing_token(
+                    resume_lease.lease_id,
+                    self._resume_worker_id,
+                    resume_lease.fencing_token,
+                )
+            self._persist_execution_result(attempt, task_record, result)
+            if result.succeeded:
+                self._checkpoint_completed_task(attempt, task_record, result)
+        except LeaseError:
+            self._execution_fenced = True
+            self.store.record_event(
+                run_id,
+                "task_continuation_fence_lost",
+                {
+                    "task_id": task_record.task_id,
+                    "attempt_id": attempt.attempt_id,
+                    "attempt_number": attempt.attempt_number,
+                },
+                task_id=task_record.task_id,
+            )
+            return self.get_report(run_id)
+        finally:
+            if heartbeat_stop is not None:
+                heartbeat_stop.set()
+            if heartbeat_thread is not None:
+                heartbeat_thread.join(timeout=5)
+            if resume_lease is not None:
+                try:
+                    self._resume_leases.release_lease(
+                        resume_lease.lease_id,
+                        self._resume_worker_id,
+                        resume_lease.fencing_token,
+                    )
+                except LeaseError:
+                    pass
+
         if cancellation.is_requested:
             if result.succeeded:
                 cancellation.record_task_completed_after_request(
@@ -682,6 +771,29 @@ class DurableExecutionEngine:
     def get_report(self, run_id: str) -> ExecutionReport:
         return self._report(self.store.load_snapshot(run_id))
 
+    def _start_resume_heartbeat(self, lease):
+        stop = threading.Event()
+        interval = max(0.1, min(30.0, self._resume_leases.lease_seconds / 3.0))
+
+        def heartbeat() -> None:
+            while not stop.wait(interval):
+                try:
+                    self._resume_leases.renew_lease(
+                        lease.lease_id,
+                        self._resume_worker_id,
+                        lease.fencing_token,
+                    )
+                except LeaseError:
+                    return
+
+        thread = threading.Thread(
+            target=heartbeat,
+            name=f"agentbus-resume-{lease.lease_id[:8]}",
+            daemon=True,
+        )
+        thread.start()
+        return stop, thread
+
     def _execute(self, context: TaskExecutionContext) -> TaskExecutionResult:
         if self.task_executor is None:
             raise DurableExecutionError(
@@ -739,11 +851,13 @@ class DurableExecutionEngine:
                     metadata=attempt_metadata,
                 )
                 return
-            continuation = agentbus_metadata.get("loop_continuation")
+            continuation = agentbus_metadata.get("task_continuation")
+            if not isinstance(continuation, dict) or not continuation:
+                continuation = agentbus_metadata.get("loop_continuation")
             if not isinstance(continuation, dict) or not continuation:
                 self._fail_resumability(
                     attempt,
-                    "Tool approval suspension omitted its durable loop continuation.",
+                    "Tool approval suspension omitted its durable task continuation.",
                     metadata=attempt_metadata,
                 )
                 return
@@ -1051,6 +1165,18 @@ class DurableExecutionEngine:
                     run_id,
                     task_id=task.task_id,
                     attempt_number=latest.attempt_number,
+                )
+                continue
+
+            if (
+                latest is not None
+                and latest.status == AttemptStatus.RUNNING
+                and _pending_tool_approval(latest) is not None
+            ):
+                self._fail_resumability(
+                    latest,
+                    "Suspended tool approval has no valid durable continuation.",
+                    metadata=latest.metadata,
                 )
                 continue
 
@@ -1536,17 +1662,31 @@ class DurableExecutionEngine:
         reviewer_summary = final_review.get("summary")
         reviewer_issues = final_review.get("issues", [])
         required_fixes = final_review.get("required_fixes", [])
-        if not reviewer_summary:
-            latest_review = next(
-                (
-                    attempt.metadata.get("task_review")
-                    or attempt.metadata.get("reviewer_feedback")
-                    for attempt in reversed(snapshot.attempts)
-                    if attempt.metadata.get("task_review")
-                    or attempt.metadata.get("reviewer_feedback")
-                ),
-                {},
-            )
+        reviewer_stage = (
+            "final"
+            if final_review.get("status")
+            in {"approved", "rejected", "blocked_by_verification"}
+            else None
+        )
+        if (
+            not reviewer_summary
+            and reviewer_stage is None
+            and snapshot.run.status
+            not in {RunStatus.RUNNING, RunStatus.WAITING_FOR_APPROVAL}
+        ):
+            latest_review: dict[str, Any] = {}
+            for task in reversed(snapshot.tasks):
+                attempts = snapshot.attempts_for(task.task_id)
+                if not attempts:
+                    continue
+                latest_attempt = attempts[-1]
+                candidate = latest_attempt.metadata.get(
+                    "task_review"
+                ) or latest_attempt.metadata.get("reviewer_feedback")
+                if isinstance(candidate, dict):
+                    latest_review = candidate
+                    reviewer_stage = "task"
+                    break
             if isinstance(latest_review, dict):
                 reviewer_summary = latest_review.get("summary")
                 reviewer_issues = latest_review.get("issues", [])
@@ -1692,6 +1832,7 @@ class DurableExecutionEngine:
             failure_reason=snapshot.run.failure_reason,
             workspace=snapshot.run.workspace,
             git_top_level=workspace_repository.get("git_top_level"),
+            reviewer_stage=reviewer_stage,
             reviewer_summary=reviewer_summary,
             reviewer_issues=(reviewer_issues if isinstance(reviewer_issues, list) else []),
             required_fixes=(required_fixes if isinstance(required_fixes, list) else []),
@@ -1768,5 +1909,7 @@ def _attempt_continuation(attempt: TaskAttempt) -> dict[str, Any] | None:
     internal = attempt.metadata.get("_agentbus", {})
     if not isinstance(internal, dict):
         return None
-    continuation = internal.get("loop_continuation")
+    continuation = internal.get("task_continuation")
+    if not isinstance(continuation, dict) or not continuation:
+        continuation = internal.get("loop_continuation")
     return continuation if isinstance(continuation, dict) and continuation else None
