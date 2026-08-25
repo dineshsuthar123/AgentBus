@@ -74,6 +74,39 @@ class ScriptedExecutor:
         return success(context.task.task_id)
 
 
+class ApprovalContinuationExecutor:
+    def __init__(self, mutation_log, *, approval_count=1):
+        self.mutation_log = mutation_log
+        self.approval_count = approval_count
+        self.calls = []
+
+    def execute(self, context):
+        continuation = getattr(context, "continuation", None)
+        self.calls.append((context.attempt_number, continuation))
+        if continuation is None:
+            self.mutation_log.write_text("patched-once\n", encoding="utf-8")
+            sequence = 1
+        else:
+            sequence = int(continuation["sequence"]) + 1
+        if sequence <= self.approval_count:
+            return TaskExecutionResult(
+                succeeded=False,
+                summary=f"Tool approval {sequence} is pending",
+                verifier_status="awaiting_tool_approval",
+                metadata={
+                    "_agentbus": {
+                        "tool_approval_pending": {
+                            "approval_id": f"tool-approval-{sequence}",
+                            "invocation_id": f"tool-invocation-{sequence}",
+                            "tool_name": "test.execute",
+                        },
+                        "loop_continuation": {"sequence": sequence},
+                    }
+                },
+            )
+        return success()
+
+
 def create(engine, planner_output=None):
     return engine.create_run(
         "Build a durable feature",
@@ -300,23 +333,8 @@ def test_running_task_suspends_for_tool_approval_and_resumes_exact_attempt(
     tmp_path,
     monkeypatch,
 ):
-    pending = TaskExecutionResult(
-        succeeded=False,
-        summary="Tool requires approval",
-        failure_category=FailureCategory.POLICY_VIOLATION,
-        error_message="Tool requires approval",
-        retryable=False,
-        metadata={
-            "_agentbus": {
-                "tool_approval_pending": {
-                    "approval_id": "tool-approval-1",
-                    "invocation_id": "tool-invocation-1",
-                    "tool_name": "filesystem.delete",
-                }
-            }
-        },
-    )
-    executor = ScriptedExecutor([pending, success()])
+    mutation_log = tmp_path / "mutation.log"
+    executor = ApprovalContinuationExecutor(mutation_log)
     store = StateStore(tmp_path / "state.db")
     engine = DurableExecutionEngine(store, executor)
     create(engine, plan(count=1))
@@ -328,7 +346,7 @@ def test_running_task_suspends_for_tool_approval_and_resumes_exact_attempt(
         TaskStatus.WAITING_FOR_APPROVAL
     )
     assert store.list_attempts("run-1", "step-1")[0].status == (
-        AttemptStatus.INTERRUPTED
+        AttemptStatus.WAITING_FOR_APPROVAL
     )
     monkeypatch.setattr(
         store,
@@ -339,10 +357,74 @@ def test_running_task_suspends_for_tool_approval_and_resumes_exact_attempt(
     completed = engine.resume("run-1")
 
     assert completed.status == RunStatus.SUCCEEDED
-    assert executor.calls == [("step-1", 1), ("step-1", 2)]
+    assert [call[0] for call in executor.calls] == [1, 1]
+    assert executor.calls[0][1] is None
+    assert executor.calls[1][1] == {"sequence": 1}
+    assert mutation_log.read_text(encoding="utf-8") == "patched-once\n"
     assert [
         attempt.status for attempt in store.list_attempts("run-1", "step-1")
-    ] == [AttemptStatus.INTERRUPTED, AttemptStatus.SUCCEEDED]
+    ] == [AttemptStatus.SUCCEEDED]
+
+
+def test_two_tool_approvals_share_one_attempt_and_do_not_consume_retry_budget(
+    tmp_path,
+    monkeypatch,
+):
+    mutation_log = tmp_path / "mutation.log"
+    executor = ApprovalContinuationExecutor(mutation_log, approval_count=2)
+    store = StateStore(tmp_path / "state.db")
+    engine = DurableExecutionEngine(store, executor)
+    create(engine, plan(count=1))
+    monkeypatch.setattr(
+        store,
+        "get_tool_approval",
+        lambda run_id, approval_id: SimpleNamespace(disposition="approved"),
+    )
+
+    first_wait = engine.run_until_blocked("run-1")
+    second_wait = engine.resume("run-1")
+    completed = engine.resume("run-1")
+
+    assert first_wait.status == RunStatus.WAITING_FOR_APPROVAL
+    assert second_wait.status == RunStatus.WAITING_FOR_APPROVAL
+    assert completed.status == RunStatus.SUCCEEDED
+    assert [call[0] for call in executor.calls] == [1, 1, 1]
+    assert [call[1] for call in executor.calls] == [
+        None,
+        {"sequence": 1},
+        {"sequence": 2},
+    ]
+    assert mutation_log.read_text(encoding="utf-8") == "patched-once\n"
+    assert store.get_task("run-1", "step-1").current_attempt_count == 1
+    assert len(store.list_attempts("run-1", "step-1")) == 1
+
+
+def test_unrecoverable_attempt_exhaustion_persists_truthful_terminal_state(tmp_path):
+    store = StateStore(tmp_path / "state.db")
+    engine = DurableExecutionEngine(store, ScriptedExecutor())
+    limited = plan(count=1)
+    limited["steps"][0]["maximum_attempts"] = 1
+    create(engine, limited)
+    store.update_run_status("run-1", RunStatus.RUNNING)
+    store.update_task_status("run-1", "step-1", TaskStatus.READY)
+    store.update_task_status("run-1", "step-1", TaskStatus.RUNNING)
+    attempt = store.create_attempt("run-1", "step-1")
+    store.complete_attempt(
+        attempt.attempt_id,
+        AttemptStatus.INTERRUPTED,
+        error_category=FailureCategory.INTERRUPTED,
+        error_message="Simulated stale retry state.",
+    )
+    store.update_task_status("run-1", "step-1", TaskStatus.RETRYABLE)
+    store.update_task_status("run-1", "step-1", TaskStatus.READY)
+
+    report = engine.execute_next("run-1")
+
+    assert report.status == RunStatus.FAILED
+    assert store.get_task("run-1", "step-1").status == TaskStatus.FAILED
+    assert store.get_task("run-1", "step-1").current_attempt_count == 1
+    assert len(store.list_attempts("run-1", "step-1")) == 1
+    assert "exhausted its maximum attempts" in (report.failure_reason or "")
 
 
 def test_rejection_marks_task_and_blocks_dependents(tmp_path):
