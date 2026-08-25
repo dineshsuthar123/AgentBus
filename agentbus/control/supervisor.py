@@ -377,6 +377,8 @@ class AgentBusRunBackend:
                         cancellation_registry=self.cancellations,
                         run_id=run_id,
                         task_id=task.task_id,
+                        attempt_id=attempt.attempt_id,
+                        attempt_number=attempt.attempt_number,
                     ).run(request.task)
                 approved = True
                 verifier_status = None
@@ -420,38 +422,32 @@ class AgentBusRunBackend:
                 event_type="run_succeeded" if approved else "run_failed",
             )
         except ManagedToolApprovalRequired as exc:
-            self.store.complete_attempt(
-                attempt.attempt_id,
-                AttemptStatus.INTERRUPTED,
-                error_category=FailureCategory.POLICY_VIOLATION,
-                error_message=str(exc),
-                observation_summary=str(exc),
-                metadata={
-                    "_agentbus": {
-                        "tool_approval_pending": {
-                            "approval_id": exc.approval_id,
-                            "invocation_id": exc.invocation_id,
-                            "tool_name": exc.tool_name,
+            pending = {
+                "approval_id": exc.approval_id,
+                "invocation_id": exc.invocation_id,
+                "tool_name": exc.tool_name,
+            }
+            if exc.continuation is None:
+                self.store.fail_attempt_resumability(
+                    attempt.attempt_id,
+                    "Tool approval pause omitted its bounded loop continuation.",
+                )
+            else:
+                self.store.suspend_attempt_for_tool_approval(
+                    attempt.attempt_id,
+                    metadata={
+                        "_agentbus": {
+                            "tool_approval_pending": pending,
+                            "loop_continuation": exc.continuation.model_dump(
+                                mode="json"
+                            ),
                         }
-                    }
-                },
-                event_type="task_attempt_awaiting_tool_approval",
-            )
-            self.store.update_task_status(
-                run_id,
-                task.task_id,
-                TaskStatus.WAITING_FOR_APPROVAL,
-                event_type="task_awaiting_tool_approval",
-                event_payload={
-                    "approval_id": exc.approval_id,
-                    "invocation_id": exc.invocation_id,
-                },
-            )
-            self.store.update_run_status(
-                run_id,
-                RunStatus.WAITING_FOR_APPROVAL,
-                event_type="run_awaiting_tool_approval",
-            )
+                    },
+                    approval_id=exc.approval_id,
+                    invocation_id=exc.invocation_id,
+                    tool_name=exc.tool_name,
+                    observation_summary=str(exc),
+                )
         except (CancellationRequested, ModelCancellationError):
             changed_files = self._changed_files(config.workspace_path)
             if changed_files:

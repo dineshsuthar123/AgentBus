@@ -778,6 +778,26 @@ def render_execution_report(report: ExecutionReport) -> str:
     ]
     if report.pending_approvals:
         lines.append("Pending approval: " + ", ".join(report.pending_approvals))
+    for approval in report.pending_approval_details:
+        if approval.get("approval_kind") == "tool":
+            capabilities = ", ".join(approval.get("capabilities", [])) or "[none]"
+            lines.append(
+                "Tool invocation approval pending: "
+                f"task={approval.get('task_id')} "
+                f"attempt={approval.get('attempt_number')} "
+                f"tool={approval.get('tool_name')} "
+                f"approval={approval.get('approval_id')} "
+                f"capabilities={capabilities}"
+            )
+        else:
+            lines.append(
+                "Task approval pending: "
+                f"task={approval.get('task_id')} "
+                f"approval={approval.get('approval_id')} "
+                f"risk={approval.get('risk')}"
+            )
+        if approval.get("safe_reason"):
+            lines.append(f"Approval reason: {approval['safe_reason']}")
     if report.failed_tasks:
         lines.append("Failed tasks: " + ", ".join(report.failed_tasks))
     if report.blocked_tasks:

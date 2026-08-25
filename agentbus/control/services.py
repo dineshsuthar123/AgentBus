@@ -106,6 +106,7 @@ from agentbus.execution.state_store import (
     ReplaySessionNotFoundError,
     RunNotFoundError,
     StateStore,
+    StateStoreError,
     TaskNotFoundError,
     TraceRecordNotFoundError,
     ToolApprovalNotFoundError,
@@ -1877,11 +1878,25 @@ class ControlQueryService:
             raise ControlPlaneConflictError(
                 "The tool approval revision is stale; refresh before deciding."
             )
-        updated = self.store.decide_tool_approval(
+        engine = DurableExecutionEngine(self.store)
+        try:
+            if decision == ApprovalOutcome.APPROVED:
+                engine.approve_task(
+                    record.request.run_id,
+                    record.request.task_id,
+                    request.reason,
+                )
+            else:
+                engine.reject_task(
+                    record.request.run_id,
+                    record.request.task_id,
+                    request.reason,
+                )
+        except (DurableExecutionError, StateStoreError) as exc:
+            raise ControlPlaneConflictError(str(exc)) from exc
+        updated = self.store.get_tool_approval(
             record.request.run_id,
             record.approval_id,
-            disposition=desired,
-            reason=request.reason,
         )
         return ApprovalDecisionResponse(
             approval=self._tool_approval_summary(updated)

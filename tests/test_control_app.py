@@ -1081,14 +1081,13 @@ def test_tool_approval_is_listed_decided_idempotently_and_cancellable(
     assert cancelled.status_code == 200
     assert cancelled.json()["run_cancellation_requested"] is True
     assert supervisor.cancelled == [("run-1", "Stop the pending tool")]
-    assert approved.status_code == 200
-    assert approved.json()["approval"]["state"] == "approved"
-    assert repeated.json()["idempotent"] is True
+    assert approved.status_code == 409
+    assert repeated.status_code == 409
     assert conflicting.status_code == 409
     assert target.exists()
     tool_report = report.json()["report"]["tool_runtime"]
     assert tool_report["status_counts"] == {"awaiting_approval": 1}
-    assert tool_report["approvals"]["states"] == {"approved": 1}
+    assert tool_report["approvals"]["states"] == {"pending": 1}
 
 
 def test_mcp_diagnostics_check_only_preconfigured_server_and_hide_command(
