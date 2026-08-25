@@ -28,6 +28,7 @@ SUPPORTED_DETERMINISTIC_PROFILES = (
     "tool-safe-read",
     "tool-atomic-write",
     "tool-source-patch",
+    "tool-source-patch-review-retry",
     "tool-pytest",
     "tool-git-diff",
     "tool-git-commit",

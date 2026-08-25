@@ -41,6 +41,7 @@ _PROFILE_REQUIREMENTS: dict[str, list[str]] = {
     "tool-safe-read": ["filesystem.read"],
     "tool-atomic-write": ["filesystem.write", "filesystem.create"],
     "tool-source-patch": ["filesystem.write"],
+    "tool-source-patch-review-retry": ["filesystem.write"],
     "tool-pytest": ["test.execute", "process.execute"],
     "tool-git-diff": ["git.read"],
     "tool-git-commit": [
@@ -74,6 +75,7 @@ _ANALYSIS_READ_ONLY_CAPABILITIES = {
 _PROFILE_OUTPUTS: dict[str, list[str]] = {
     "tool-atomic-write": ["profile_result.txt"],
     "tool-source-patch": ["module.py"],
+    "tool-source-patch-review-retry": ["module.py"],
     "tool-git-commit": ["profile_commit.py"],
     "tool-control-acceptance": ["acceptance_tool.py"],
 }
@@ -314,6 +316,48 @@ class DeterministicProvider:
         if self.role == ModelRole.PLANNER:
             return self._plan()
         if self.role == ModelRole.REVIEWER:
+            if self.profile == "tool-source-patch-review-retry":
+                task_review = bool(metadata.get("task_id"))
+                if task_review and scope_call == 1:
+                    return {
+                        "approved": False,
+                        "issues": [
+                            {
+                                "severity": "medium",
+                                "message": "Exercise the durable review retry path.",
+                            }
+                        ],
+                        "summary": "Deterministic first task review rejection.",
+                        "required_fixes": ["Re-evaluate the retained candidate."],
+                    }
+                cumulative_diff_present = (
+                    "diff --git" in prompt
+                    and "-VALUE = 1" in prompt
+                    and "+VALUE = 2" in prompt
+                )
+                return {
+                    "approved": cumulative_diff_present or not task_review,
+                    "issues": (
+                        []
+                        if cumulative_diff_present or not task_review
+                        else [
+                            {
+                                "severity": "high",
+                                "message": "The cumulative task diff is missing.",
+                            }
+                        ]
+                    ),
+                    "summary": (
+                        "Deterministic cumulative retry review approved."
+                        if cumulative_diff_present or not task_review
+                        else "Deterministic cumulative retry review saw no task diff."
+                    ),
+                    "required_fixes": (
+                        []
+                        if cumulative_diff_present or not task_review
+                        else ["Review retained changes from the original task baseline."]
+                    ),
+                }
             return {
                 "approved": True,
                 "issues": [],
@@ -583,6 +627,19 @@ class DeterministicProvider:
                     },
                     ["filesystem.write"],
                     f"{task_id}:source-patch",
+                )
+            ],
+            "tool-source-patch-review-retry": [
+                _tool_action(
+                    "filesystem.patch",
+                    {
+                        "path": "module.py",
+                        "expected": "VALUE = 1",
+                        "replacement": "VALUE = 2",
+                        "expected_occurrences": 1,
+                    },
+                    ["filesystem.write"],
+                    f"{task_id}:source-patch-review-retry",
                 )
             ],
             "tool-pytest": [

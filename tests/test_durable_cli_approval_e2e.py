@@ -134,6 +134,48 @@ def test_cli_run_approve_resume_preserves_verifier_attempt(tmp_path: Path) -> No
     assert _git(workspace, "status", "--short") == " M module.py"
 
 
+def test_cli_retry_review_uses_original_task_baseline(tmp_path: Path) -> None:
+    workspace = _retry_repository(tmp_path / "workspace")
+    config = _config(workspace, profile="tool-source-patch-review-retry")
+    environment = {
+        **os.environ,
+        "AGENTBUS_PROVIDER": "deterministic",
+        "AGENTBUS_DETERMINISTIC_PROFILE": "tool-source-patch-review-retry",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+
+    completed = _cli(
+        workspace,
+        environment,
+        "run",
+        "--config",
+        str(config),
+        "--workflow",
+        "multi",
+        "--provider",
+        "deterministic",
+        "--durable",
+        "--max-steps",
+        "2",
+        "Patch module.py once, retain it across review retry, and verify it.",
+    )
+    run_id = _run_id(completed.stdout)
+    store = StateStore(workspace / ".agentbus" / "state.db")
+    attempts = store.list_attempts(run_id, "step-1")
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert store.get_run(run_id).status == RunStatus.SUCCEEDED
+    assert len(attempts) == 2
+    assert attempts[0].error_category is not None
+    assert attempts[0].error_category.value == "reviewer_rejection"
+    assert attempts[1].status == AttemptStatus.SUCCEEDED
+    assert attempts[1].metadata["artifact_hygiene"]["review_files"] == [
+        "module.py"
+    ]
+    assert (workspace / "module.py").read_text(encoding="utf-8") == "VALUE = 2\n"
+    assert _git(workspace, "status", "--short") == " M module.py"
+
+
 def test_cli_verifier_resume_fails_closed_after_tracked_source_divergence(
     tmp_path: Path,
 ) -> None:
@@ -303,7 +345,26 @@ def _repository(path: Path) -> Path:
     return path.resolve()
 
 
-def _config(workspace: Path) -> Path:
+def _retry_repository(path: Path) -> Path:
+    path.mkdir()
+    _git(path, "init", "-q")
+    _git(path, "config", "user.name", "AgentBus Tests")
+    _git(path, "config", "user.email", "agentbus@example.invalid")
+    (path / ".gitignore").write_text(
+        ".agentbus/\n.pytest_cache/\n__pycache__/\n",
+        encoding="utf-8",
+    )
+    (path / "module.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (path / "test_module.py").write_text(
+        "from module import VALUE\n\n\ndef test_value():\n    assert VALUE == 2\n",
+        encoding="utf-8",
+    )
+    _git(path, "add", ".gitignore", "module.py", "test_module.py")
+    _git(path, "commit", "-q", "-m", "test: initialize retry fixture")
+    return path.resolve()
+
+
+def _config(workspace: Path, *, profile: str = "tool-source-patch") -> Path:
     runtime = workspace / ".agentbus"
     runtime.mkdir()
     config = runtime / "config.toml"
@@ -312,7 +373,7 @@ def _config(workspace: Path) -> Path:
             (
                 "[agentbus]",
                 'provider_name = "deterministic"',
-                'deterministic_profile = "tool-source-patch"',
+                f"deterministic_profile = {json.dumps(profile)}",
                 f"workspace_dir = {json.dumps(str(workspace))}",
                 f"state_dir = {json.dumps(str(runtime))}",
                 'state_db = "state.db"',
