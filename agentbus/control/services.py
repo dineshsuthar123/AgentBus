@@ -96,6 +96,7 @@ from agentbus.execution.cancellation import (
 from agentbus.execution.engine import DurableExecutionEngine, DurableExecutionError
 from agentbus.execution.models import (
     ApprovalOutcome,
+    AttemptStatus,
     RunRecord,
     TaskRecord,
     TaskStatus,
@@ -1878,19 +1879,54 @@ class ControlQueryService:
             raise ControlPlaneConflictError(
                 "The tool approval revision is stale; refresh before deciding."
             )
-        engine = DurableExecutionEngine(self.store)
+        task = self.store.get_task(
+            record.request.run_id,
+            record.request.task_id,
+        )
+        attempts = self.store.list_attempts(
+            record.request.run_id,
+            record.request.task_id,
+        )
+        latest_attempt = attempts[-1] if attempts else None
+        internal = (
+            latest_attempt.metadata.get("_agentbus", {})
+            if latest_attempt is not None
+            else {}
+        )
+        pending = (
+            internal.get("tool_approval_pending")
+            if isinstance(internal, dict)
+            else None
+        )
+        suspended_attempt = (
+            task.status == TaskStatus.WAITING_FOR_APPROVAL
+            and latest_attempt is not None
+            and latest_attempt.status == AttemptStatus.WAITING_FOR_APPROVAL
+            and isinstance(pending, dict)
+            and pending.get("approval_id") == record.approval_id
+            and pending.get("invocation_id") == record.request.invocation_id
+        )
         try:
-            if decision == ApprovalOutcome.APPROVED:
-                engine.approve_task(
-                    record.request.run_id,
-                    record.request.task_id,
-                    request.reason,
-                )
+            if suspended_attempt:
+                engine = DurableExecutionEngine(self.store)
+                if decision == ApprovalOutcome.APPROVED:
+                    engine.approve_task(
+                        record.request.run_id,
+                        record.request.task_id,
+                        request.reason,
+                    )
+                else:
+                    engine.reject_task(
+                        record.request.run_id,
+                        record.request.task_id,
+                        request.reason,
+                    )
             else:
-                engine.reject_task(
+                self.store.decide_tool_approval(
                     record.request.run_id,
-                    record.request.task_id,
-                    request.reason,
+                    record.approval_id,
+                    disposition=desired,
+                    reason=request.reason,
                 )
         except (DurableExecutionError, StateStoreError) as exc:
             raise ControlPlaneConflictError(str(exc)) from exc

@@ -111,6 +111,7 @@ from agentbus.control.models import (
 from agentbus.control.replay_supervisor import BackgroundReplaySupervisor
 from agentbus.control.services import ControlQueryService
 from agentbus.control.supervisor import BackgroundRunSupervisor
+from agentbus.execution.engine import DurableExecutionEngine
 from agentbus.execution.models import ApprovalOutcome
 from agentbus.execution.state_store import StateStoreError
 from agentbus.git.repository import GitRepositoryError
@@ -833,9 +834,14 @@ def create_app(
             invocation_id,
         )
         reason = request.reason if request else None
+        cancellation_reason = reason or f"Cancel tool invocation {invocation_id}."
+        DurableExecutionEngine(query_service.store).request_cancellation(
+            run_id,
+            cancellation_reason,
+        )
         cancelled = supervisor.cancel(
             run_id,
-            reason or f"Cancel tool invocation {invocation_id}.",
+            cancellation_reason,
         )
         return ToolInvocationCancelResponse(
             run_id=run_id,

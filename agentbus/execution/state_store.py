@@ -3540,6 +3540,10 @@ class StateStore:
                     invocation_record,
                     grant.request,
                 )
+                if invocation_record.status != ToolInvocationStatus.AWAITING_APPROVAL:
+                    raise ToolInvocationConflictError(
+                        "Only an invocation awaiting approval can receive a decision."
+                    )
                 if (
                     grant.disposition == ToolApprovalDisposition.APPROVED
                     and grant.request.expires_at is not None
