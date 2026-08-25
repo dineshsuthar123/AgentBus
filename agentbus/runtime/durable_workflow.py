@@ -119,6 +119,7 @@ class MultiAgentTaskExecutor:
             )
             for artifact in result.artifacts
         ]
+        pending_approval = _pending_tool_approval(result)
         if result.succeeded:
             self.runtime_trace.finish_span(
                 span,
@@ -127,6 +128,21 @@ class MultiAgentTaskExecutor:
                 attributes={
                     "attempt_number": context.attempt_number,
                     "changed_file_count": len(result.changed_files),
+                },
+            )
+        elif pending_approval is not None:
+            self.runtime_trace.finish_span(
+                span,
+                output_references=[output] if output is not None else [],
+                artifact_references=artifacts,
+                attributes={
+                    "attempt_id": context.attempt_id,
+                    "attempt_number": context.attempt_number,
+                    "changed_file_count": len(result.changed_files),
+                    "suspended_for_tool_approval": True,
+                    "approval_id": pending_approval.get("approval_id"),
+                    "invocation_id": pending_approval.get("invocation_id"),
+                    "tool_name": pending_approval.get("tool_name"),
                 },
             )
         else:
@@ -209,6 +225,9 @@ class MultiAgentTaskExecutor:
                         ),
                     },
                     "repository_intelligence": coder_intelligence,
+                    "attempt_id": context.attempt_id,
+                    "attempt_number": context.attempt_number,
+                    "loop_continuation": context.continuation,
                 }
                 coder_summary = self._trace_call(
                     TraceSpanType.CUSTOM,
@@ -566,7 +585,7 @@ class MultiAgentTaskExecutor:
         context: TaskExecutionContext,
         before: dict[str, str],
     ) -> tuple[list[str], RepositoryChangeSet, list[ExecutionArtifact]]:
-        changed_files = self._changed_since(before)
+        changed_files = self._changed_since(self._attempt_snapshot(context, before))
         changes = self._change_set(changed_files)
         generated = set(changes.generated_files)
         ignored = set(changes.ignored_files)
@@ -601,7 +620,8 @@ class MultiAgentTaskExecutor:
         *,
         coder_summary: str,
     ) -> TaskExecutionResult:
-        changed_files = self._changed_since(before)
+        attempt_snapshot = self._attempt_snapshot(context, before)
+        changed_files = self._changed_since(attempt_snapshot)
         changes = self._change_set(changed_files)
         review_files = set(changes.review_files)
         commit_files = set(changes.commit_files)
@@ -631,12 +651,20 @@ class MultiAgentTaskExecutor:
             "invocation_id": approval.invocation_id,
             "tool_name": approval.tool_name,
         }
+        if approval.continuation is None:
+            raise RuntimeError(
+                "Tool approval pause omitted its bounded loop continuation."
+            )
+        continuation = approval.continuation.model_validate(
+            approval.continuation.model_dump(mode="json")
+            | {"worktree_snapshot": attempt_snapshot}
+        )
         return TaskExecutionResult(
             succeeded=False,
             summary=str(approval),
             artifacts=artifacts,
-            failure_category=FailureCategory.POLICY_VIOLATION,
-            error_message=str(approval),
+            failure_category=None,
+            error_message=None,
             retryable=False,
             verifier_status="awaiting_tool_approval",
             changed_files=changed_files,
@@ -644,7 +672,10 @@ class MultiAgentTaskExecutor:
                 "artifact_hygiene": changes.to_metadata(),
                 "coder_summary": coder_summary,
                 "tool_approval": pending,
-                "_agentbus": {"tool_approval_pending": pending},
+                "_agentbus": {
+                    "tool_approval_pending": pending,
+                    "loop_continuation": continuation.model_dump(mode="json"),
+                },
                 "model_requests": _drain_model_results(self.coder),
             },
         )
@@ -819,6 +850,22 @@ class MultiAgentTaskExecutor:
             return self._changed_files()
         return changed_since(before)
 
+    @staticmethod
+    def _attempt_snapshot(
+        context: TaskExecutionContext,
+        current_snapshot: dict[str, str],
+    ) -> dict[str, str]:
+        continuation = context.continuation
+        if not isinstance(continuation, dict):
+            return current_snapshot
+        persisted = continuation.get("worktree_snapshot")
+        if not isinstance(persisted, dict):
+            return current_snapshot
+        return {
+            str(path): str(identity)
+            for path, identity in persisted.items()
+        }
+
     def _change_set(self, changed_files: list[str]) -> RepositoryChangeSet:
         change_set = getattr(self.git_repository, "change_set", None)
         if change_set is not None:
@@ -904,6 +951,14 @@ def _supported_arguments(callable_object, arguments: dict[str, Any]) -> dict[str
         return arguments
     supported = {parameter.name for parameter in parameters}
     return {name: value for name, value in arguments.items() if name in supported}
+
+
+def _pending_tool_approval(result: TaskExecutionResult) -> dict[str, Any] | None:
+    internal = result.metadata.get("_agentbus", {})
+    if not isinstance(internal, dict):
+        return None
+    pending = internal.get("tool_approval_pending")
+    return pending if isinstance(pending, dict) else None
 
 
 def _bounded_capability_names(values) -> list[str]:

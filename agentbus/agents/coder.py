@@ -47,6 +47,9 @@ class CoderAgent(BaseAgent):
         resource_budget: ToolResourceBudget | None = None,
         policy_context: dict | None = None,
         repository_intelligence: str | None = None,
+        attempt_id: str | None = None,
+        attempt_number: int | None = None,
+        loop_continuation: dict | None = None,
     ) -> str:
         task = self._build_task(
             user_task,
@@ -69,12 +72,17 @@ class CoderAgent(BaseAgent):
             "provider_consented": provider_consented,
             "resource_budget": resource_budget or self.config.tool_resource_budget,
             "policy_context": policy_context,
+            "attempt_id": attempt_id,
+            "attempt_number": attempt_number,
         }
         for name, value in optional_arguments.items():
             if _accepts_keyword(self.loop_factory, name):
                 loop_arguments[name] = value
         loop = self.loop_factory(**loop_arguments)
-        return loop.run(task)
+        run_arguments = {}
+        if _accepts_keyword(loop.run, "continuation"):
+            run_arguments["continuation"] = loop_continuation
+        return loop.run(task, **run_arguments)
 
     def _build_task(
         self,

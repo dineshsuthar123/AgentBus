@@ -33,6 +33,7 @@ class CheckpointKind(str, Enum):
     PLAN_CREATED = "plan_created"
     GRAPH_PERSISTED = "graph_persisted"
     TASK_COMPLETED = "task_completed"
+    APPROVAL_REQUESTED = "approval_requested"
     APPROVAL_DECIDED = "approval_decided"
     TOOL_COMPLETED = "tool_completed"
     VERIFIER_COMPLETED = "verifier_completed"

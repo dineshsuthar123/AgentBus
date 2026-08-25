@@ -10,6 +10,7 @@ from agentbus.product.logging import read_product_logs
 from agentbus.runtime.loop import (
     AgentLoop,
     ManagedToolApprovalRequired,
+    ManagedToolContinuationError,
     PlannedCapabilityMismatchError,
 )
 from agentbus.tools.protocol import ToolInvocationStatus
@@ -287,6 +288,83 @@ def test_loop_suspends_for_exact_managed_tool_approval(tmp_path):
     assert approval.request.invocation_id == captured.value.invocation_id
     assert store.get_run(loop.run_id).status.value == "waiting_for_approval"
     assert not (workspace / ".github/workflows/ci.yml").exists()
+
+
+def test_loop_refuses_to_persist_sensitive_approval_continuation(tmp_path):
+    secret = "approval-continuation-secret-value"
+
+    class SensitiveActionModel:
+        def generate_json(self, prompt, **kwargs):
+            return {
+                "action": "tool_call",
+                "tool_call": {
+                    "tool_name": "filesystem.write",
+                    "arguments": {
+                        "path": ".github/workflows/ci.yml",
+                        "content": f"api_key={secret}\n",
+                    },
+                    "expected_capabilities": [
+                        "filesystem.write",
+                        "filesystem.create",
+                    ],
+                    "idempotency_key": "sensitive-ci-write",
+                },
+            }
+
+    workspace = tmp_path / "workspace"
+    config = AgentBusConfig(
+        workspace_dir=str(workspace),
+        runs_dir=str(tmp_path / "runs"),
+        state_dir=str(tmp_path / "state"),
+        max_steps=1,
+    )
+    loop = AgentLoop(config=config, model=SensitiveActionModel())
+
+    with pytest.raises(
+        ManagedToolContinuationError,
+        match="cannot be persisted safely",
+    ):
+        loop.run("change CI without persisting secrets")
+
+    store = StateStore(config.state_database_path)
+    assert store.get_run(loop.run_id).status.value == "failed"
+    assert not (workspace / ".github/workflows/ci.yml").exists()
+    persisted = b"".join(
+        path.read_bytes()
+        for root in (tmp_path / "state", tmp_path / "runs")
+        if root.exists()
+        for path in root.rglob("*")
+        if path.is_file()
+    )
+    assert secret.encode("utf-8") not in persisted
+
+
+def test_loop_classifies_malformed_persisted_continuation_as_resumability_failure(
+    tmp_path,
+):
+    class UnexpectedModel:
+        def generate_json(self, prompt, **kwargs):
+            pytest.fail("a malformed continuation must fail before calling the model")
+
+    config = AgentBusConfig(
+        workspace_dir=str(tmp_path / "workspace"),
+        runs_dir=str(tmp_path / "runs"),
+        state_dir=str(tmp_path / "state"),
+        max_steps=1,
+    )
+    loop = AgentLoop(config=config, model=UnexpectedModel())
+
+    with pytest.raises(
+        ManagedToolContinuationError,
+        match="invalid or incomplete",
+    ) as raised:
+        loop.run("refuse malformed state", continuation={"schema_version": 1})
+
+    assert raised.value.category.value == "resumability_failure"
+    assert raised.value.retryable is False
+    assert StateStore(config.state_database_path).get_run(loop.run_id).status.value == (
+        "failed"
+    )
 
 
 def test_loop_rejects_capability_outside_planner_requirements(tmp_path):

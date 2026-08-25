@@ -44,6 +44,7 @@ class TaskStatus(str, Enum):
 
 class AttemptStatus(str, Enum):
     RUNNING = "running"
+    WAITING_FOR_APPROVAL = "waiting_for_approval"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     INTERRUPTED = "interrupted"
@@ -71,6 +72,7 @@ class FailureCategory(str, Enum):
     VERIFIER_FAILURE = "verifier_failure"
     REVIEWER_REJECTION = "reviewer_rejection"
     POLICY_VIOLATION = "policy_violation"
+    RESUMABILITY_FAILURE = "resumability_failure"
     INTERRUPTED = "interrupted"
     UNKNOWN = "unknown"
 
@@ -233,7 +235,9 @@ class TaskExecutionContext(DomainModel):
     run: RunRecord
     task: TaskSpec
     attempt_number: int
+    attempt_id: str | None = None
     previous_attempts: list[TaskAttempt] = Field(default_factory=list)
+    continuation: dict[str, Any] | None = None
 
 
 class TaskExecutionResult(DomainModel):
@@ -267,6 +271,7 @@ class ExecutionReport(DomainModel):
     failed_tasks: list[str] = Field(default_factory=list)
     blocked_tasks: list[str] = Field(default_factory=list)
     pending_approvals: list[str] = Field(default_factory=list)
+    pending_approval_details: list[dict[str, Any]] = Field(default_factory=list)
     attempts_per_task: dict[str, int] = Field(default_factory=dict)
     verifier_status: str | None = None
     reviewer_status: str | None = None

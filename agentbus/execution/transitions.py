@@ -43,6 +43,7 @@ TASK_TRANSITIONS: dict[TaskStatus, set[TaskStatus]] = {
     TaskStatus.READY: {
         TaskStatus.RUNNING,
         TaskStatus.WAITING_FOR_APPROVAL,
+        TaskStatus.FAILED,
         TaskStatus.BLOCKED,
         TaskStatus.CANCELLED,
     },
@@ -56,6 +57,8 @@ TASK_TRANSITIONS: dict[TaskStatus, set[TaskStatus]] = {
     },
     TaskStatus.WAITING_FOR_APPROVAL: {
         TaskStatus.READY,
+        TaskStatus.RUNNING,
+        TaskStatus.FAILED,
         TaskStatus.REJECTED,
         TaskStatus.BLOCKED,
         TaskStatus.CANCELLED,
@@ -89,7 +92,13 @@ TASK_TRANSITIONS: dict[TaskStatus, set[TaskStatus]] = {
 
 ATTEMPT_TRANSITIONS: dict[AttemptStatus, set[AttemptStatus]] = {
     AttemptStatus.RUNNING: {
+        AttemptStatus.WAITING_FOR_APPROVAL,
         AttemptStatus.SUCCEEDED,
+        AttemptStatus.FAILED,
+        AttemptStatus.INTERRUPTED,
+    },
+    AttemptStatus.WAITING_FOR_APPROVAL: {
+        AttemptStatus.RUNNING,
         AttemptStatus.FAILED,
         AttemptStatus.INTERRUPTED,
     },
