@@ -21,6 +21,7 @@ from agentbus.execution.models import (
     TaskRecord,
     TaskStatus,
 )
+from agentbus.execution.retry import TaskExecutionError
 from agentbus.execution.state_store import StateStore, StateStoreError
 from agentbus.git.repository import GitRepository, GitRepositoryError
 from agentbus.models.errors import ModelCancellationError
@@ -32,6 +33,7 @@ from agentbus.worktrees.models import TaskCommitRecord, WorktreeRecord, Worktree
 class WorkerStatus(str, Enum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+    WAITING_FOR_APPROVAL = "waiting_for_approval"
     CANCELLED = "cancelled"
     LEASE_LOST = "lease_lost"
 
@@ -124,7 +126,19 @@ class LocalTaskWorker:
                 worktree=locals().get("worktree"),
             )
         self._crash("after_worktree_created", run.run_id, task.task_id)
-        attempt = self.store.create_attempt(run.run_id, task.task_id)
+        attempts = self.store.list_attempts(run.run_id, task.task_id)
+        latest_attempt = attempts[-1] if attempts else None
+        continuation = (
+            _attempt_continuation(latest_attempt)
+            if latest_attempt is not None
+            and latest_attempt.status == AttemptStatus.RUNNING
+            else None
+        )
+        attempt = (
+            latest_attempt
+            if latest_attempt is not None and continuation is not None
+            else self.store.create_attempt(run.run_id, task.task_id)
+        )
         stop_heartbeat = threading.Event()
         lease_lost = threading.Event()
         heartbeat = threading.Thread(
@@ -146,11 +160,13 @@ class LocalTaskWorker:
                 run=run,
                 task=task.spec,
                 attempt_number=attempt.attempt_number,
+                attempt_id=attempt.attempt_id,
                 previous_attempts=[
                     item
                     for item in snapshot.attempts_for(task.task_id)
                     if item.attempt_id != attempt.attempt_id
                 ],
+                continuation=continuation,
             )
             self._checkpoint("before-task-executor")
             try:
@@ -172,6 +188,14 @@ class LocalTaskWorker:
                     task,
                     lease,
                     attempt.attempt_id,
+                    worktree,
+                )
+            if _pending_tool_approval(result) is not None:
+                return self._persist_approval_pause(
+                    task,
+                    lease,
+                    attempt.attempt_id,
+                    result,
                     worktree,
                 )
             if not result.succeeded:
@@ -298,6 +322,20 @@ class LocalTaskWorker:
                 task,
                 lease,
                 attempt.attempt_id,
+                worktree,
+            )
+        except TaskExecutionError as exc:
+            return self._persist_failure(
+                task,
+                lease,
+                attempt.attempt_id,
+                TaskExecutionResult(
+                    succeeded=False,
+                    summary="Task execution stopped safely.",
+                    failure_category=exc.category,
+                    error_message=str(exc),
+                    retryable=exc.retryable,
+                ),
                 worktree,
             )
         except Exception as exc:
@@ -530,6 +568,97 @@ class LocalTaskWorker:
             error=result.error_message,
         )
 
+    def _persist_approval_pause(
+        self,
+        task: TaskRecord,
+        lease: WorkerLease,
+        attempt_id: str,
+        result: TaskExecutionResult,
+        worktree: WorktreeRecord,
+    ) -> WorkerResult:
+        pending = _pending_tool_approval(result)
+        assert pending is not None
+        internal = result.metadata.get("_agentbus", {})
+        continuation = (
+            internal.get("loop_continuation")
+            if isinstance(internal, dict)
+            else None
+        )
+        changed_files, artifact_hygiene = self._worktree_observations(worktree)
+        metadata = {
+            **result.metadata,
+            "worker_id": self.worker_id,
+            "lease_id": lease.lease_id,
+            "fencing_token": lease.fencing_token,
+            "worktree_id": worktree.worktree_id,
+            "changed_files": sorted(
+                set(changed_files) | set(result.changed_files)
+            ),
+            "artifact_hygiene": artifact_hygiene,
+        }
+        if not isinstance(continuation, dict) or not continuation:
+            self.store.fail_attempt_resumability(
+                attempt_id,
+                "Parallel tool approval pause omitted its durable continuation.",
+                metadata=metadata,
+            )
+            return self._result(
+                task,
+                lease,
+                WorkerStatus.FAILED,
+                "Parallel task continuation could not be persisted safely.",
+                worktree,
+                changed_files=changed_files,
+            )
+        approval_id = str(pending.get("approval_id") or "")
+        invocation_id = str(pending.get("invocation_id") or "")
+        if not approval_id or not invocation_id:
+            self.store.fail_attempt_resumability(
+                attempt_id,
+                "Parallel tool approval suspension metadata is incomplete.",
+                metadata=metadata,
+            )
+            return self._result(
+                task,
+                lease,
+                WorkerStatus.FAILED,
+                "Parallel task continuation could not be persisted safely.",
+                worktree,
+                changed_files=changed_files,
+            )
+        self.store.suspend_attempt_for_tool_approval(
+            attempt_id,
+            metadata=metadata,
+            approval_id=approval_id,
+            invocation_id=invocation_id,
+            tool_name=str(pending.get("tool_name") or "unknown"),
+            observation_summary=result.summary,
+        )
+        if self.runtime_trace is not None:
+            attempt = self.store.get_attempt(attempt_id)
+            self.runtime_trace.replay_checkpoint(
+                "approval_requested",
+                f"tool-approval-requested-{task.task_id}",
+                task_id=task.task_id,
+                durable_state={
+                    "approval_kind": "tool",
+                    "approval_id": approval_id,
+                    "attempt_id": attempt_id,
+                    "attempt_number": attempt.attempt_number,
+                    "invocation_id": invocation_id,
+                    "tool_name": pending.get("tool_name"),
+                    "worker_id": self.worker_id,
+                },
+            )
+        return self._result(
+            task,
+            lease,
+            WorkerStatus.WAITING_FOR_APPROVAL,
+            result.summary,
+            worktree,
+            changed_files=changed_files,
+        )
+
     def _persist_interruption(self, task, lease, attempt_id, worktree, message):
         changed_files, artifact_hygiene = self._worktree_observations(worktree)
         try:
@@ -696,3 +825,19 @@ class LocalTaskWorker:
             summary=summary,
             error_message=error,
         )
+
+
+def _pending_tool_approval(result: TaskExecutionResult) -> dict[str, Any] | None:
+    internal = result.metadata.get("_agentbus", {})
+    if not isinstance(internal, dict):
+        return None
+    pending = internal.get("tool_approval_pending")
+    return pending if isinstance(pending, dict) else None
+
+
+def _attempt_continuation(attempt) -> dict[str, Any] | None:
+    internal = attempt.metadata.get("_agentbus", {})
+    if not isinstance(internal, dict):
+        return None
+    continuation = internal.get("loop_continuation")
+    return continuation if isinstance(continuation, dict) and continuation else None

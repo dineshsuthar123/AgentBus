@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import subprocess
 import threading
@@ -8,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from agentbus.config import AgentBusConfig
+from agentbus.execution.cancellation_registry import CancellationRegistry
 from agentbus.execution.engine import DurableExecutionEngine
 from agentbus.execution.integration import IntegrationCoordinator
 from agentbus.execution.leases import LeaseService
@@ -17,6 +19,8 @@ from agentbus.execution.state_store import StateStore
 from agentbus.execution.worker import LocalTaskWorker
 from agentbus.git.repository import GitRepository
 from agentbus.runtime.orchestrator import MultiAgentOrchestrator
+from agentbus.tools.protocol import ToolCapabilityName, ToolInvocationStatus
+from agentbus.tools.runtime import build_managed_tool_runtime
 from agentbus.worktrees.manager import GitWorktreeManager
 
 
@@ -101,6 +105,203 @@ def create_parallel_run(store, workspace, base):
             },
         },
     )
+
+
+def test_parallel_worker_resumes_tool_approval_in_same_attempt_and_worktree(
+    tmp_path,
+):
+    source, base = setup_repository(tmp_path / "repo")
+    store = StateStore(tmp_path / "state.db")
+    plan = {
+        "goal": "Create one parallel result",
+        "steps": [
+            {
+                "id": "task-A",
+                "title": "Parallel approval task",
+                "description": "Create result.py after an exact approval pause.",
+                "dependencies": [],
+                "risk": "low",
+                "maximum_attempts": 2,
+            }
+        ],
+        "test_strategy": "offline fake",
+        "done_criteria": ["result.py is integrated"],
+    }
+    DurableExecutionEngine(store).create_run(
+        "Parallel approval continuation",
+        plan,
+        model="fake",
+        workspace=str(source),
+        run_id="parallel-approval-run",
+        metadata={
+            "final_review": {"required": True, "status": "pending"},
+            "parallel_execution": {
+                "enabled": True,
+                "max_workers": 1,
+                "lease_seconds": 60,
+                "heartbeat_seconds": 5,
+                "base_commit": base,
+                "workers_used": [],
+                "integration_order": [],
+            },
+        },
+    )
+    manager = GitWorktreeManager(source, tmp_path / "worktrees", store)
+    leases = LeaseService(store, lease_seconds=60)
+    integration = IntegrationCoordinator(store, manager)
+    cancellations = CancellationRegistry(store)
+    calls = []
+
+    class Executor:
+        def __init__(self, workspace):
+            self.workspace = workspace
+
+        def execute(self, context):
+            calls.append((context.attempt_number, context.continuation))
+            target = self.workspace / "approval-target.txt"
+            content = b"delete after exact parallel approval\n"
+            if context.continuation is None:
+                (self.workspace / "result.py").write_text(
+                    "VALUE = 1\n",
+                    encoding="utf-8",
+                )
+                target.write_bytes(content)
+            runtime = build_managed_tool_runtime(
+                workspace=source,
+                worktree=self.workspace,
+                state_store=store,
+                cancellation_registry=cancellations,
+                owned_worktree=True,
+            )
+            try:
+                call = runtime.prepare_model_call(
+                    tool_name="filesystem.delete",
+                    arguments={
+                        "path": target.name,
+                        "expected_sha256": hashlib.sha256(content).hexdigest(),
+                    },
+                    expected_capabilities=(
+                        ToolCapabilityName.FILESYSTEM_DELETE,
+                    ),
+                    run_id=context.run.run_id,
+                    task_id=context.task.task_id,
+                    caller_role="coder",
+                    workspace_trusted=True,
+                    provider_consented=True,
+                    idempotency_key="parallel-exact-delete",
+                )
+                response = runtime.invoke(
+                    call,
+                    run_id=context.run.run_id,
+                    task_id=context.task.task_id,
+                    caller_role="coder",
+                    workspace_trusted=True,
+                    provider_consented=True,
+                    invocation_id="parallel-exact-delete",
+                )
+            finally:
+                runtime.close()
+            if response.awaiting_approval:
+                request = response.approval_request
+                assert request is not None
+                pending = {
+                    "approval_id": request.approval_id,
+                    "invocation_id": request.invocation_id,
+                    "tool_name": request.tool_name,
+                }
+                return TaskExecutionResult(
+                    succeeded=False,
+                    summary="Parallel exact tool approval is pending.",
+                    changed_files=["result.py"],
+                    metadata={
+                        "_agentbus": {
+                            "tool_approval_pending": pending,
+                            "loop_continuation": {
+                                **pending,
+                                "attempt_id": context.attempt_id,
+                                "attempt_number": context.attempt_number,
+                            },
+                        }
+                    },
+                )
+            assert response.result is not None
+            assert response.result.status == ToolInvocationStatus.SUCCEEDED
+            assert target.exists() is False
+            return TaskExecutionResult(
+                succeeded=True,
+                summary="Parallel continuation completed.",
+                changed_files=["result.py"],
+                verifier_status="passed",
+            )
+
+        def close(self):
+            pass
+
+    def worker_factory(worker_id):
+        return LocalTaskWorker(
+            worker_id=worker_id,
+            store=store,
+            lease_service=leases,
+            worktree_manager=manager,
+            executor_factory=lambda path: Executor(path),
+            heartbeat_seconds=5,
+        )
+
+    scheduler = ParallelExecutionScheduler(
+        store=store,
+        worktree_manager=manager,
+        lease_service=leases,
+        integration=integration,
+        worker_factory=worker_factory,
+        max_workers=1,
+        cancellation_registry=cancellations,
+    )
+
+    waiting = scheduler.run("parallel-approval-run")
+    attempt_before = store.list_attempts(
+        "parallel-approval-run",
+        "task-A",
+    )[0]
+    approval = store.list_tool_approvals("parallel-approval-run")[0]
+
+    assert waiting.status == RunStatus.WAITING_FOR_APPROVAL
+    assert attempt_before.status.value == "waiting_for_approval"
+    assert len(store.list_worktrees("parallel-approval-run", task_id="task-A")) == 1
+
+    DurableExecutionEngine(store).approve_task(
+        "parallel-approval-run",
+        "task-A",
+        "Approve exact parallel delete.",
+    )
+    completed = scheduler.run("parallel-approval-run", resume=True)
+    attempt_after = store.list_attempts(
+        "parallel-approval-run",
+        "task-A",
+    )[0]
+
+    assert completed.status == RunStatus.WAITING_FOR_REVIEW
+    assert attempt_after.attempt_id == attempt_before.attempt_id
+    assert attempt_after.attempt_number == 1
+    assert attempt_after.status.value == "succeeded"
+    assert store.get_task("parallel-approval-run", "task-A").current_attempt_count == 1
+    assert store.get_tool_approval(
+        "parallel-approval-run",
+        approval.approval_id,
+    ).disposition == "approved"
+    assert store.get_tool_invocation(
+        "parallel-approval-run",
+        "parallel-exact-delete",
+    ).status == ToolInvocationStatus.SUCCEEDED
+    assert [call[0] for call in calls] == [1, 1]
+    assert calls[0][1] is None
+    assert calls[1][1]["attempt_id"] == attempt_before.attempt_id
+    assert len(store.list_worktrees("parallel-approval-run", task_id="task-A")) == 1
+    integration_worktree = next(
+        item
+        for item in store.list_worktrees("parallel-approval-run")
+        if item.task_id is None
+    )
+    assert (Path(integration_worktree.path) / "result.py").is_file()
 
 
 def test_independent_tasks_overlap_and_dependency_waits_for_integration(tmp_path):
