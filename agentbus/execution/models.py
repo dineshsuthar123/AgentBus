@@ -238,6 +238,7 @@ class TaskExecutionContext(DomainModel):
     attempt_id: str | None = None
     previous_attempts: list[TaskAttempt] = Field(default_factory=list)
     continuation: dict[str, Any] | None = None
+    attempt_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class TaskExecutionResult(DomainModel):

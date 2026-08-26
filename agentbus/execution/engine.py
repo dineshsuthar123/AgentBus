@@ -304,12 +304,8 @@ class DurableExecutionEngine:
             attempt_id=attempt.attempt_id,
             previous_attempts=previous_attempts,
             continuation=continuation,
+            attempt_metadata=attempt.metadata,
         )
-
-        if self.crash_hook is not None:
-            # The hook runs outside the executor exception boundary to emulate a
-            # process disappearing after durable attempt creation.
-            self.crash_hook("after_attempt_started", context)
 
         resume_lease = None
         heartbeat_stop: threading.Event | None = None
@@ -344,6 +340,29 @@ class DurableExecutionEngine:
             )
 
         try:
+            try:
+                context = self._prepare_attempt_context(context)
+            except Exception as exc:
+                classification = self.failure_classifier.classify(exc)
+                result = TaskExecutionResult(
+                    succeeded=False,
+                    summary="Task baseline preparation failed safely.",
+                    failure_category=FailureCategory.RESUMABILITY_FAILURE,
+                    error_message=classification.message,
+                    retryable=False,
+                    metadata=(
+                        {"baseline_failure": classification.metadata}
+                        if classification.metadata
+                        else {}
+                    ),
+                )
+                self._persist_execution_result(attempt, task_record, result)
+                self._synchronize_graph(run_id)
+                return self.get_report(run_id)
+
+            if self.crash_hook is not None:
+                # Baselines are durable before emulating a process disappearance.
+                self.crash_hook("after_attempt_started", context)
             try:
                 result = self._execute(context)
             except Exception as exc:
@@ -808,6 +827,31 @@ class DurableExecutionEngine:
             return raw_result
         return TaskExecutionResult.model_validate(raw_result)
 
+    def _prepare_attempt_context(
+        self,
+        context: TaskExecutionContext,
+    ) -> TaskExecutionContext:
+        if self.task_executor is None:
+            return context
+        prepare = getattr(self.task_executor, "prepare_attempt", None)
+        if prepare is None:
+            return context
+        updates = prepare(context)
+        if not isinstance(updates, dict) or not updates:
+            raise DurableExecutionError(
+                "Task executor baseline preparation returned no durable metadata."
+            )
+        if context.attempt_id is None:
+            raise DurableExecutionError(
+                "Task baseline preparation requires an active attempt identity."
+            )
+        attempt = self.store.checkpoint_attempt_metadata(
+            context.attempt_id,
+            metadata_updates=updates,
+            event_type="task_repository_baselines_checkpointed",
+        )
+        return context.model_copy(update={"attempt_metadata": attempt.metadata})
+
     def _persist_execution_result(
         self,
         attempt: TaskAttempt,
@@ -834,6 +878,11 @@ class DurableExecutionEngine:
         )
 
         attempt_metadata = dict(result.metadata)
+        checkpointed = self.store.get_attempt(attempt.attempt_id).metadata.get(
+            "repository_baselines"
+        )
+        if isinstance(checkpointed, dict):
+            attempt_metadata["repository_baselines"] = checkpointed
         agentbus_metadata = dict(attempt_metadata.get("_agentbus", {}))
         agentbus_metadata["retryable_override"] = result.retryable
         attempt_metadata["_agentbus"] = agentbus_metadata
@@ -1020,6 +1069,7 @@ class DurableExecutionEngine:
                     task_record.task_id,
                 ).status.value,
                 "changed_files": result.changed_files,
+                **_repository_baseline_trace_metadata(result.metadata),
             },
         )
 
@@ -1903,6 +1953,30 @@ def _pending_tool_approval(attempt: TaskAttempt) -> dict[str, Any] | None:
         return None
     pending = internal.get("tool_approval_pending")
     return pending if isinstance(pending, dict) else None
+
+
+def _repository_baseline_trace_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    baselines = metadata.get("repository_baselines", {})
+    if not isinstance(baselines, dict):
+        return {}
+    task = baselines.get("task", {})
+    attempt = baselines.get("attempt", {})
+    return {
+        "task_baseline_identity_sha256": (
+            task.get("identity_sha256") if isinstance(task, dict) else None
+        ),
+        "attempt_baseline_identity_sha256": (
+            attempt.get("identity_sha256") if isinstance(attempt, dict) else None
+        ),
+        "candidate_source_identity_sha256": (
+            metadata.get("verification_evidence", {}).get(
+                "candidate_identity_sha256"
+            )
+            if isinstance(metadata.get("verification_evidence"), dict)
+            else None
+        ),
+        "retry_workspace": baselines.get("retry_workspace"),
+    }
 
 
 def _attempt_continuation(attempt: TaskAttempt) -> dict[str, Any] | None:

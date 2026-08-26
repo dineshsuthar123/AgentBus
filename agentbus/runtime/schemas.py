@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any, Literal
@@ -5,6 +6,71 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from agentbus.tools.protocol import ToolCapabilityName, ToolVersion
+
+
+class RepositoryBaseline(BaseModel):
+    """Bounded identity for an immutable repository source state."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1] = 1
+    head_commit: str | None = Field(
+        default=None,
+        pattern=r"^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+    )
+    tree_id: str | None = Field(
+        default=None,
+        pattern=r"^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+    )
+    worktree_snapshot: dict[str, str] = Field(default_factory=dict)
+    review_source_snapshot: dict[str, str] = Field(default_factory=dict)
+    review_files: list[str] = Field(default_factory=list, max_length=512)
+    state_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    identity_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+    @field_validator("worktree_snapshot", "review_source_snapshot")
+    @classmethod
+    def snapshots_are_bounded(
+        cls,
+        value: dict[str, str],
+    ) -> dict[str, str]:
+        return _bounded_worktree_snapshot(value)
+
+    @field_validator("review_files")
+    @classmethod
+    def review_paths_are_bounded(cls, value: list[str]) -> list[str]:
+        normalized = _bounded_worktree_snapshot(
+            {str(path): "deleted" for path in value}
+        )
+        return list(normalized)
+
+    @model_validator(mode="after")
+    def identity_matches_content(self) -> "RepositoryBaseline":
+        if self.review_files != sorted(self.review_source_snapshot):
+            raise ValueError("repository baseline review paths are inconsistent")
+        payload = self.model_dump(mode="json", exclude={"identity_sha256"})
+        if self.identity_sha256 != _json_sha256(payload):
+            raise ValueError("repository baseline identity does not match its content")
+        return self
+
+
+class TaskRepositoryBaselines(BaseModel):
+    """Distinct durable task and attempt baselines used across retries."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1] = 1
+    task: RepositoryBaseline
+    attempt: RepositoryBaseline
+    task_started_attempt_id: str = Field(min_length=1, max_length=128)
+    task_started_attempt_number: int = Field(ge=1)
+    attempt_id: str = Field(min_length=1, max_length=128)
+    attempt_number: int = Field(ge=1)
+    retry_workspace: Literal[
+        "initial_attempt",
+        "retained_cumulative_workspace",
+        "restored_to_task_baseline",
+    ]
 
 
 class ModelToolCall(BaseModel):
@@ -81,6 +147,7 @@ class AgentLoopContinuation(BaseModel):
     maximum_steps: int = Field(ge=1, le=10_000)
     history: str = Field(default="", max_length=20_000)
     worktree_snapshot: dict[str, str] = Field(default_factory=dict)
+    repository_baselines: TaskRepositoryBaselines | None = None
     pending_action: AgentAction
     pending_action_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     approval_id: str = Field(min_length=1, max_length=128)
@@ -143,6 +210,7 @@ class VerifierContinuation(BaseModel):
     coder_summary: str = Field(default="", max_length=20_000)
     worktree_snapshot: dict[str, str] = Field(default_factory=dict)
     source_snapshot: dict[str, str] = Field(default_factory=dict)
+    repository_baselines: TaskRepositoryBaselines | None = None
     command_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     approval_id: str = Field(min_length=1, max_length=128)
     approval_request_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
@@ -199,3 +267,14 @@ def _bounded_worktree_snapshot(value: dict[str, str]) -> dict[str, str]:
             raise ValueError("worktree snapshot identities must be SHA-256 values")
         normalized[path] = identity
     return dict(sorted(normalized.items()))
+
+
+def _json_sha256(value: object) -> str:
+    encoded = json.dumps(
+        value,
+        allow_nan=False,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()

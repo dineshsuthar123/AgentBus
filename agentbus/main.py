@@ -805,7 +805,13 @@ def render_execution_report(report: ExecutionReport) -> str:
     if report.verifier_status:
         lines.append(f"Verifier: {report.verifier_status}")
     if report.reviewer_status:
-        lines.append(f"Reviewer: {report.reviewer_status}")
+        if report.reviewer_stage == "final":
+            lines.append(f"Final reviewer: {report.reviewer_status}")
+        elif report.reviewer_stage == "task":
+            lines.append(f"Task reviewer: {report.reviewer_status}")
+            lines.append("Final reviewer: not_run")
+        else:
+            lines.append(f"Reviewer: {report.reviewer_status}")
     lines.append(f"Workspace: {report.workspace or '[not recorded]'}")
     lines.append(
         f"Detected Git top-level: {report.git_top_level or '[not recorded]'}"

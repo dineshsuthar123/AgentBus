@@ -69,6 +69,19 @@ Already succeeded terminal tasks are never selected again. Attempt numbering is 
 
 This policy does not claim exactly-once execution for arbitrary side effects. If a command or file write succeeds but the process stops before success is persisted, the attempt is considered interrupted and may run again. Future workspace isolation can make this safer; current task executors should be restart-tolerant.
 
+## Retry Workspace And Review Baselines
+
+Durable retries use retained cumulative workspace semantics. AgentBus does not automatically reset, clean, delete, or otherwise roll back files written by a rejected or failed attempt. A retry therefore starts from the candidate state left in its task workspace unless a separate explicit supported restore has already returned that workspace to the original task state.
+
+Each attempt checkpoints two distinct bounded source identities before model or tool execution:
+
+- The immutable task baseline is the repository candidate from which the durable task first started. Cumulative task review, task changed-file reporting, commit eligibility, final review, and completed-task provenance use this baseline.
+- The immutable attempt baseline is the repository candidate present when that specific attempt started. It is used only for attempt-local diagnostics and provenance.
+
+For a retained retry, the task reviewer receives the exact cumulative diff from the task baseline to the current candidate, even when the retry made no additional edit. The verifier result and reviewer packet identify the same candidate tree; source drift between verification, review, and Git finalization fails closed. Attempt records preserve both baseline identities across approval continuation, process reconstruction, lease changes, and task-worktree recovery.
+
+If an explicit restore makes the retry candidate equal to the task baseline before the next attempt starts, an empty cumulative diff is legitimate and is recorded as `restored_to_task_baseline`. AgentBus never infers that a rollback occurred merely because a retry was created.
+
 ## Approval Policy
 
 Low-risk tasks proceed normally. Medium-risk tasks are identified in structured ready events. High-risk tasks move to `waiting_for_approval`, and the run pauses before executor invocation.

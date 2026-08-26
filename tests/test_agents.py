@@ -261,6 +261,39 @@ def test_reviewer_receives_analysis_artifacts_and_not_applicable_verification():
     assert '"status": "not_applicable"' in model.prompts[1]
 
 
+def test_task_reviewer_prompt_identifies_cumulative_retry_diff_scope():
+    model = FakeModel(
+        {
+            "approved": True,
+            "issues": [],
+            "summary": "Cumulative candidate approved",
+            "required_fixes": [],
+        }
+    )
+    reviewer = ReviewerAgent(model=model)
+
+    reviewer.review_task(
+        original_task="Update foo",
+        task_spec={"id": "step-1", "done_criteria": ["foo is new"]},
+        expected_outputs=["foo.txt"],
+        artifacts=["foo.txt"],
+        changed_files=["foo.txt"],
+        task_diff="-old\n+new",
+        coder_summary="Retry retained the prior edit.",
+        verifier_result={"passed": True, "status": "passed"},
+        review_evidence={
+            "diff_scope": "cumulative_task",
+            "attempt_number": 2,
+            "retry_workspace": "retained_cumulative_workspace",
+        },
+    )
+
+    prompt = model.prompts[0]
+    assert "cumulative from the immutable task baseline" in prompt
+    assert "retained_cumulative_workspace" in prompt
+    assert '"foo.txt"' in prompt
+
+
 def test_coder_preserves_legacy_loop_factory_that_only_accepts_config():
     seen = {}
 

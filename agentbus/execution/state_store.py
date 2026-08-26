@@ -1093,6 +1093,52 @@ class StateStore:
             )
         return attempt
 
+    def checkpoint_attempt_metadata(
+        self,
+        attempt_id: str,
+        *,
+        metadata_updates: dict[str, Any],
+        event_type: str = "task_attempt_metadata_checkpointed",
+    ) -> TaskAttempt:
+        """Merge safe metadata while an attempt is nonterminal."""
+        _require_id(attempt_id, "attempt")
+        if not isinstance(metadata_updates, dict) or not metadata_updates:
+            raise StateStoreError("Attempt metadata checkpoint must not be empty.")
+        with self._write_transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM attempts WHERE attempt_id = ?",
+                (attempt_id,),
+            ).fetchone()
+            if row is None:
+                raise AttemptNotFoundError(f"Attempt '{attempt_id}' was not found.")
+            status = AttemptStatus(row["status"])
+            if status not in {
+                AttemptStatus.RUNNING,
+                AttemptStatus.WAITING_FOR_APPROVAL,
+            }:
+                raise StateStoreError(
+                    "Terminal attempt metadata is immutable and cannot be checkpointed."
+                )
+            metadata = _load_json(row["metadata_json"], "attempt metadata")
+            safe_updates = _sanitize(metadata_updates)
+            metadata.update(safe_updates)
+            connection.execute(
+                "UPDATE attempts SET metadata_json = ? WHERE attempt_id = ?",
+                (_dump_json(metadata), attempt_id),
+            )
+            self._insert_event(
+                connection,
+                row["run_id"],
+                row["task_id"],
+                event_type,
+                {
+                    "attempt_id": attempt_id,
+                    "attempt_number": int(row["attempt_number"]),
+                    "metadata_keys": sorted(safe_updates),
+                },
+            )
+        return self.get_attempt(attempt_id)
+
     def suspend_attempt_for_tool_approval(
         self,
         attempt_id: str,
@@ -1609,6 +1655,18 @@ class StateStore:
             current = AttemptStatus(row["status"])
             validate_attempt_transition(current, status)
             completed_at = utc_now()
+            terminal_metadata = _sanitize(metadata or {})
+            checkpointed_metadata = _load_json(
+                row["metadata_json"],
+                "attempt metadata",
+            )
+            if (
+                "repository_baselines" not in terminal_metadata
+                and isinstance(checkpointed_metadata.get("repository_baselines"), dict)
+            ):
+                terminal_metadata["repository_baselines"] = checkpointed_metadata[
+                    "repository_baselines"
+                ]
             connection.execute(
                 """
                 UPDATE attempts SET
@@ -1622,7 +1680,7 @@ class StateStore:
                     error_category.value if error_category else None,
                     _safe_text(error_message),
                     _safe_text(observation_summary),
-                    _dump_json(metadata or {}),
+                    _dump_json(terminal_metadata),
                     attempt_id,
                 ),
             )

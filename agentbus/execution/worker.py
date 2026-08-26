@@ -167,7 +167,9 @@ class LocalTaskWorker:
                     if item.attempt_id != attempt.attempt_id
                 ],
                 continuation=continuation,
+                attempt_metadata=attempt.metadata,
             )
+            context = self._prepare_attempt_context(executor, context)
             self._checkpoint("before-task-executor")
             try:
                 result = (
@@ -181,6 +183,14 @@ class LocalTaskWorker:
                     close()
             if not isinstance(result, TaskExecutionResult):
                 result = TaskExecutionResult.model_validate(result)
+            result = result.model_copy(
+                update={
+                    "metadata": self._with_repository_baselines(
+                        attempt.attempt_id,
+                        result.metadata,
+                    )
+                }
+            )
             for artifact in result.artifacts:
                 self.store.record_artifact(artifact)
             if result.failure_category == FailureCategory.CANCELLED:
@@ -486,6 +496,7 @@ class LocalTaskWorker:
                 error_category=FailureCategory.CANCELLED,
                 error_message="Worker stopped after cancellation was requested.",
                 metadata={
+                    **self._repository_baseline_metadata(attempt_id),
                     "changed_files": changed_files,
                     "artifact_hygiene": artifact_hygiene,
                 },
@@ -674,6 +685,7 @@ class LocalTaskWorker:
                 error_category=FailureCategory.INTERRUPTED,
                 error_message=message,
                 metadata={
+                    **self._repository_baseline_metadata(attempt_id),
                     "changed_files": changed_files,
                     "artifact_hygiene": artifact_hygiene,
                 },
@@ -712,6 +724,50 @@ class LocalTaskWorker:
             return changed_files, repository.change_set(changed_files).to_metadata()
         except GitRepositoryError:
             return [], {}
+
+    def _prepare_attempt_context(
+        self,
+        executor,
+        context: TaskExecutionContext,
+    ) -> TaskExecutionContext:
+        prepare = getattr(executor, "prepare_attempt", None)
+        if prepare is None:
+            return context
+        updates = prepare(context)
+        if not isinstance(updates, dict) or not updates:
+            raise StateStoreError(
+                "Task executor baseline preparation returned no durable metadata."
+            )
+        if context.attempt_id is None:
+            raise StateStoreError(
+                "Task baseline preparation requires an active attempt identity."
+            )
+        attempt = self.store.checkpoint_attempt_metadata(
+            context.attempt_id,
+            metadata_updates=updates,
+            event_type="task_repository_baselines_checkpointed",
+        )
+        return context.model_copy(update={"attempt_metadata": attempt.metadata})
+
+    def _repository_baseline_metadata(self, attempt_id: str) -> dict[str, Any]:
+        baselines = self.store.get_attempt(attempt_id).metadata.get(
+            "repository_baselines"
+        )
+        return (
+            {"repository_baselines": baselines}
+            if isinstance(baselines, dict)
+            else {}
+        )
+
+    def _with_repository_baselines(
+        self,
+        attempt_id: str,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            **metadata,
+            **self._repository_baseline_metadata(attempt_id),
+        }
 
     def _heartbeat(self, lease, stop, lost):
         while not stop.wait(self.heartbeat_seconds):
@@ -785,6 +841,7 @@ class LocalTaskWorker:
                 "worker_id": self.worker_id,
                 "task_commit": commit_sha,
                 "changed_files": result.changed_files,
+                **_repository_baseline_trace_metadata(result.metadata),
                 "task_status": self.store.get_task(
                     run.run_id,
                     task.task_id,
@@ -839,6 +896,30 @@ def _pending_tool_approval(result: TaskExecutionResult) -> dict[str, Any] | None
         return None
     pending = internal.get("tool_approval_pending")
     return pending if isinstance(pending, dict) else None
+
+
+def _repository_baseline_trace_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    baselines = metadata.get("repository_baselines", {})
+    if not isinstance(baselines, dict):
+        return {}
+    task = baselines.get("task", {})
+    attempt = baselines.get("attempt", {})
+    return {
+        "task_baseline_identity_sha256": (
+            task.get("identity_sha256") if isinstance(task, dict) else None
+        ),
+        "attempt_baseline_identity_sha256": (
+            attempt.get("identity_sha256") if isinstance(attempt, dict) else None
+        ),
+        "candidate_source_identity_sha256": (
+            metadata.get("verification_evidence", {}).get(
+                "candidate_identity_sha256"
+            )
+            if isinstance(metadata.get("verification_evidence"), dict)
+            else None
+        ),
+        "retry_workspace": baselines.get("retry_workspace"),
+    }
 
 
 def _attempt_continuation(attempt) -> dict[str, Any] | None:

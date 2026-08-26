@@ -106,6 +106,31 @@ def test_nonterminal_attempt_blocks_attempt_n_plus_one(tmp_path):
     assert len(store.list_attempts("run-1", "step-1")) == 1
 
 
+def test_attempt_metadata_checkpoint_persists_before_terminal_immutability(tmp_path):
+    store = StateStore(tmp_path / "state.db")
+    store.create_run_with_tasks(make_run(), [make_task()])
+    store.update_task_status("run-1", "step-1", TaskStatus.READY)
+    attempt = store.start_attempt("run-1", "step-1")
+
+    checkpointed = store.checkpoint_attempt_metadata(
+        attempt.attempt_id,
+        metadata_updates={"repository_baselines": {"identity": "bounded"}},
+    )
+    assert checkpointed.metadata["repository_baselines"] == {
+        "identity": "bounded"
+    }
+
+    store.complete_attempt(attempt.attempt_id, AttemptStatus.SUCCEEDED)
+    with pytest.raises(StateStoreError, match="Terminal attempt metadata is immutable"):
+        store.checkpoint_attempt_metadata(
+            attempt.attempt_id,
+            metadata_updates={"repository_baselines": {"identity": "changed"}},
+        )
+    assert store.get_attempt(attempt.attempt_id).metadata["repository_baselines"] == {
+        "identity": "bounded"
+    }
+
+
 def test_concurrent_attempt_creation_is_atomically_fenced(tmp_path):
     path = tmp_path / "state.db"
     store = StateStore(path)

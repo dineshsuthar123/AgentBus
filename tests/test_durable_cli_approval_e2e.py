@@ -162,9 +162,10 @@ def test_cli_retry_review_uses_original_task_baseline(tmp_path: Path) -> None:
     run_id = _run_id(completed.stdout)
     store = StateStore(workspace / ".agentbus" / "state.db")
     attempts = store.list_attempts(run_id, "step-1")
+    persisted_run = store.get_run(run_id)
 
     assert completed.returncode == 0, completed.stdout + completed.stderr
-    assert store.get_run(run_id).status == RunStatus.SUCCEEDED
+    assert persisted_run.status == RunStatus.SUCCEEDED
     assert len(attempts) == 2
     assert attempts[0].error_category is not None
     assert attempts[0].error_category.value == "reviewer_rejection"
@@ -172,6 +173,27 @@ def test_cli_retry_review_uses_original_task_baseline(tmp_path: Path) -> None:
     assert attempts[1].metadata["artifact_hygiene"]["review_files"] == [
         "module.py"
     ]
+    assert attempts[1].metadata["attempt_artifact_hygiene"]["changed_files"] == []
+    first_baselines = attempts[0].metadata["repository_baselines"]
+    retry_baselines = attempts[1].metadata["repository_baselines"]
+    assert first_baselines["task"] == retry_baselines["task"]
+    assert first_baselines["attempt"] != retry_baselines["attempt"]
+    assert retry_baselines["retry_workspace"] == "retained_cumulative_workspace"
+    review_evidence = attempts[1].metadata["review_evidence"]
+    verification_evidence = attempts[1].metadata["verification_evidence"]
+    assert review_evidence["diff_scope"] == "cumulative_task"
+    assert review_evidence["changed_files"] == ["module.py"]
+    assert review_evidence["commit_eligible_files"] == ["module.py"]
+    assert (
+        review_evidence["candidate"]["identity_sha256"]
+        == verification_evidence["candidate_identity_sha256"]
+    )
+    assert persisted_run.metadata["final_review"]["review_evidence"][
+        "diff_scope"
+    ] == "cumulative_run"
+    assert persisted_run.metadata["final_review"]["review_evidence"][
+        "commit_eligible_files"
+    ] == ["module.py"]
     assert (workspace / "module.py").read_text(encoding="utf-8") == "VALUE = 2\n"
     assert _git(workspace, "status", "--short") == " M module.py"
 

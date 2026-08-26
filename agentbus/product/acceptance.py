@@ -691,7 +691,7 @@ class _CleanInstallRunner:
         )
         required = (
             "Status: succeeded",
-            "Reviewer: approved",
+            "Final reviewer: approved",
             "agentbus_result.py",
             "test_agentbus_result.py",
         )
