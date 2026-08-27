@@ -133,6 +133,87 @@ def test_loop_stops_at_max_steps(tmp_path):
     assert "max_steps was reached" in result
 
 
+def test_final_action_observation_gets_one_terminal_consumption_turn(tmp_path):
+    class FinishAfterObservation:
+        def __init__(self):
+            self.calls = 0
+
+        def generate_json(self, prompt, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "action": "tool_call",
+                    "tool_call": {
+                        "tool_name": "filesystem.write",
+                        "arguments": {
+                            "path": "result.py",
+                            "content": "VALUE = 1\n",
+                        },
+                        "expected_capabilities": [
+                            "filesystem.write",
+                            "filesystem.create",
+                        ],
+                        "idempotency_key": "final-step-write",
+                    },
+                }
+            assert '"status": "succeeded"' in prompt
+            assert "terminal decision" in prompt.lower()
+            return {"action": "finish", "summary": "consumed final observation"}
+
+    workspace = tmp_path / "workspace"
+    config = AgentBusConfig(
+        workspace_dir=str(workspace),
+        runs_dir=str(tmp_path / "runs"),
+        state_dir=str(tmp_path / "state"),
+        max_steps=1,
+    )
+    model = FinishAfterObservation()
+    loop = AgentLoop(config=config, model=model)
+
+    assert loop.run("write once and finish") == "consumed final observation"
+    assert model.calls == 2
+    assert (workspace / "result.py").read_text(encoding="utf-8") == "VALUE = 1\n"
+
+
+def test_terminal_consumption_turn_cannot_dispatch_another_tool(tmp_path):
+    class RequestsBeyondBudget:
+        def __init__(self):
+            self.calls = 0
+
+        def generate_json(self, prompt, **kwargs):
+            self.calls += 1
+            target = "first.py" if self.calls == 1 else "must-not-exist.py"
+            return {
+                "action": "tool_call",
+                "tool_call": {
+                    "tool_name": "filesystem.write",
+                    "arguments": {"path": target, "content": "VALUE = 1\n"},
+                    "expected_capabilities": [
+                        "filesystem.write",
+                        "filesystem.create",
+                    ],
+                    "idempotency_key": f"write-{self.calls}",
+                },
+            }
+
+    workspace = tmp_path / "workspace"
+    config = AgentBusConfig(
+        workspace_dir=str(workspace),
+        runs_dir=str(tmp_path / "runs"),
+        state_dir=str(tmp_path / "state"),
+        max_steps=1,
+    )
+    model = RequestsBeyondBudget()
+    loop = AgentLoop(config=config, model=model)
+
+    with pytest.raises(Exception, match="step_budget_exhausted"):
+        loop.run("do not exceed the action budget")
+
+    assert model.calls == 2
+    assert (workspace / "first.py").exists()
+    assert not (workspace / "must-not-exist.py").exists()
+
+
 def test_loop_recovers_from_normalized_model_output_error(tmp_path):
     class NormalizedRecoveringModel:
         def __init__(self):
