@@ -38,6 +38,7 @@ from agentbus.execution.state_store import StateStore
 
 
 _DAEMON_ID = re.compile(r"^[a-f0-9]{32}$")
+_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS = 10
 
 
 def serve(
@@ -126,6 +127,7 @@ def serve(
             access_log=False,
             server_header=False,
             date_header=False,
+            timeout_graceful_shutdown=_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS,
         )
     )
     idle = IdleShutdownMonitor(
