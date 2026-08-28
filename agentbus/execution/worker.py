@@ -21,7 +21,7 @@ from agentbus.execution.models import (
     TaskRecord,
     TaskStatus,
 )
-from agentbus.execution.retry import TaskExecutionError
+from agentbus.execution.retry import FailureClassifier, TaskExecutionError
 from agentbus.execution.state_store import StateStore, StateStoreError
 from agentbus.git.repository import GitRepository, GitRepositoryError
 from agentbus.models.errors import ModelCancellationError
@@ -148,6 +148,8 @@ class LocalTaskWorker:
             daemon=True,
         )
         heartbeat.start()
+        executor = None
+        context = None
         try:
             recovered = self._recover_unpersisted_commit(
                 run, task, lease, attempt.attempt_id, worktree
@@ -172,17 +174,21 @@ class LocalTaskWorker:
             context = self._prepare_attempt_context(executor, context)
             self._checkpoint("before-task-executor")
             try:
-                result = (
+                raw_result = (
                     executor.execute(context)
                     if hasattr(executor, "execute")
                     else executor(context)
                 )
+                result = (
+                    raw_result
+                    if isinstance(raw_result, TaskExecutionResult)
+                    else TaskExecutionResult.model_validate(raw_result)
+                )
+                result = self._prepare_retry_result(executor, context, result)
             finally:
                 close = getattr(executor, "close", None)
                 if close is not None:
                     close()
-            if not isinstance(result, TaskExecutionResult):
-                result = TaskExecutionResult.model_validate(result)
             result = result.model_copy(
                 update={
                     "metadata": self._with_repository_baselines(
@@ -335,22 +341,62 @@ class LocalTaskWorker:
                 worktree,
             )
         except TaskExecutionError as exc:
+            result = TaskExecutionResult(
+                succeeded=False,
+                summary="Task execution stopped safely.",
+                failure_category=exc.category,
+                error_message=str(exc),
+                retryable=exc.retryable,
+            )
+            if executor is not None and context is not None:
+                result = self._prepare_retry_result(executor, context, result)
             return self._persist_failure(
                 task,
                 lease,
                 attempt.attempt_id,
-                TaskExecutionResult(
-                    succeeded=False,
-                    summary="Task execution stopped safely.",
-                    failure_category=exc.category,
-                    error_message=str(exc),
-                    retryable=exc.retryable,
-                ),
+                result,
                 worktree,
             )
         except Exception as exc:
-            return self._persist_interruption(
-                task, lease, attempt.attempt_id, worktree, str(exc)
+            classification = FailureClassifier().classify(exc)
+            interrupted = classification.category == FailureCategory.UNKNOWN
+            result = TaskExecutionResult(
+                succeeded=False,
+                summary=(
+                    "Worker interrupted."
+                    if interrupted
+                    else "Task executor raised an exception."
+                ),
+                failure_category=(
+                    FailureCategory.INTERRUPTED
+                    if interrupted
+                    else classification.category
+                ),
+                error_message=classification.message,
+                retryable=True if interrupted else classification.retryable,
+                metadata=(
+                    {"provider_failure": classification.metadata}
+                    if classification.metadata
+                    else {}
+                ),
+            )
+            if executor is not None and context is not None:
+                result = self._prepare_retry_result(executor, context, result)
+            if interrupted:
+                return self._persist_interruption(
+                    task,
+                    lease,
+                    attempt.attempt_id,
+                    worktree,
+                    classification.message,
+                    result=result,
+                )
+            return self._persist_failure(
+                task,
+                lease,
+                attempt.attempt_id,
+                result,
+                worktree,
             )
         finally:
             stop_heartbeat.set()
@@ -676,7 +722,16 @@ class LocalTaskWorker:
             changed_files=changed_files,
         )
 
-    def _persist_interruption(self, task, lease, attempt_id, worktree, message):
+    def _persist_interruption(
+        self,
+        task,
+        lease,
+        attempt_id,
+        worktree,
+        message,
+        *,
+        result: TaskExecutionResult | None = None,
+    ):
         changed_files, artifact_hygiene = self._worktree_observations(worktree)
         try:
             self.store.complete_attempt(
@@ -686,6 +741,7 @@ class LocalTaskWorker:
                 error_message=message,
                 metadata={
                     **self._repository_baseline_metadata(attempt_id),
+                    **(result.metadata if result is not None else {}),
                     "changed_files": changed_files,
                     "artifact_hygiene": artifact_hygiene,
                 },
@@ -748,6 +804,38 @@ class LocalTaskWorker:
             event_type="task_repository_baselines_checkpointed",
         )
         return context.model_copy(update={"attempt_metadata": attempt.metadata})
+
+    @staticmethod
+    def _prepare_retry_result(
+        executor,
+        context: TaskExecutionContext,
+        result: TaskExecutionResult,
+    ) -> TaskExecutionResult:
+        prepare = getattr(executor, "prepare_retry_result", None)
+        if prepare is None:
+            return result
+        try:
+            prepared = prepare(context, result)
+            if not isinstance(prepared, TaskExecutionResult):
+                prepared = TaskExecutionResult.model_validate(prepared)
+            return prepared
+        except Exception as exc:
+            classification = FailureClassifier().classify(exc)
+            metadata = dict(result.metadata)
+            if classification.metadata:
+                metadata["retry_evidence_failure"] = classification.metadata
+            return TaskExecutionResult(
+                succeeded=False,
+                summary="Corrective retry evidence could not be persisted safely.",
+                artifacts=result.artifacts,
+                failure_category=FailureCategory.RESUMABILITY_FAILURE,
+                error_message=classification.message,
+                retryable=False,
+                verifier_status=result.verifier_status,
+                reviewer_status=result.reviewer_status,
+                changed_files=result.changed_files,
+                metadata=metadata,
+            )
 
     def _repository_baseline_metadata(self, attempt_id: str) -> dict[str, Any]:
         baselines = self.store.get_attempt(attempt_id).metadata.get(

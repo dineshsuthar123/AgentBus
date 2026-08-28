@@ -379,6 +379,7 @@ class DurableExecutionEngine:
                         else {}
                     ),
                 )
+            result = self._prepare_retry_result(context, result)
 
             if resume_lease is not None:
                 self._resume_leases.validate_fencing_token(
@@ -826,6 +827,39 @@ class DurableExecutionEngine:
         if isinstance(raw_result, TaskExecutionResult):
             return raw_result
         return TaskExecutionResult.model_validate(raw_result)
+
+    def _prepare_retry_result(
+        self,
+        context: TaskExecutionContext,
+        result: TaskExecutionResult,
+    ) -> TaskExecutionResult:
+        if self.task_executor is None:
+            return result
+        prepare = getattr(self.task_executor, "prepare_retry_result", None)
+        if prepare is None:
+            return result
+        try:
+            prepared = prepare(context, result)
+            if not isinstance(prepared, TaskExecutionResult):
+                prepared = TaskExecutionResult.model_validate(prepared)
+            return prepared
+        except Exception as exc:
+            classification = self.failure_classifier.classify(exc)
+            metadata = dict(result.metadata)
+            if classification.metadata:
+                metadata["retry_evidence_failure"] = classification.metadata
+            return TaskExecutionResult(
+                succeeded=False,
+                summary="Corrective retry evidence could not be persisted safely.",
+                artifacts=result.artifacts,
+                failure_category=FailureCategory.RESUMABILITY_FAILURE,
+                error_message=classification.message,
+                retryable=False,
+                verifier_status=result.verifier_status,
+                reviewer_status=result.reviewer_status,
+                changed_files=result.changed_files,
+                metadata=metadata,
+            )
 
     def _prepare_attempt_context(
         self,

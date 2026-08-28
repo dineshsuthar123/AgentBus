@@ -93,6 +93,32 @@ class ManagedToolContinuationError(TaskExecutionError):
         )
 
 
+class StepBudgetExhaustedError(TaskExecutionError):
+    """Signals that a terminal observation turn requested another action."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        maximum_action_steps: int,
+        requested_tool_name: str | None = None,
+    ):
+        super().__init__(
+            f"step_budget_exhausted: {message}",
+            category=FailureCategory.STEP_BUDGET_EXHAUSTED,
+            retryable=False,
+        )
+        self.maximum_action_steps = maximum_action_steps
+        self.requested_tool_name = requested_tool_name
+
+    def safe_metadata(self) -> dict[str, Any]:
+        return {
+            "maximum_action_steps": self.maximum_action_steps,
+            "requested_tool_name": self.requested_tool_name,
+            "terminal_observation_consumed": True,
+        }
+
+
 class PlannedCapabilityMismatchError(ToolCapabilityEscalationError):
     """Signals that a model tool call exceeded its durable task contract."""
 
@@ -224,6 +250,7 @@ class AgentLoop:
             ) from exc
         history = ""
         start_step = 1
+        last_tool_observation_step: int | None = None
         if state is not None:
             self._validate_continuation(state, user_task)
             selected_max_steps = min(selected_max_steps, state.maximum_steps)
@@ -287,9 +314,11 @@ class AgentLoop:
             )
             history += self._format_history(step, raw_action, observation)
             history = self._trim_history(history)
+            last_tool_observation_step = step
             start_step = step + 1
 
         for step in range(start_step, selected_max_steps + 1):
+            last_tool_observation_step = None
             self._checkpoint(f"before-step-{step}")
             self.logger.log("step_started", {
                 "step": step,
@@ -397,6 +426,16 @@ class AgentLoop:
                 })
                 self._finish_standalone(succeeded=True)
                 return action.summary
+            if action and action.action == "tool_call":
+                last_tool_observation_step = step
+
+        if last_tool_observation_step == selected_max_steps:
+            return self._consume_terminal_observation(
+                user_task,
+                history,
+                action_step=selected_max_steps,
+                maximum_action_steps=selected_max_steps,
+            )
 
         final = "Stopped because max_steps was reached. Check run logs for details."
 
@@ -523,6 +562,133 @@ Managed tool catalog:
 
 Return the next JSON action.
 """
+
+    def _consume_terminal_observation(
+        self,
+        user_task: str,
+        history: str,
+        *,
+        action_step: int,
+        maximum_action_steps: int,
+    ) -> str:
+        """Allow one decision-only turn after the final action observation."""
+        self._checkpoint("before-terminal-observation-consumption")
+        self.logger.log(
+            "terminal_observation_consumption_started",
+            {
+                "action_step": action_step,
+                "maximum_action_steps": maximum_action_steps,
+                "decision_turn": 1,
+            },
+        )
+        prompt = self._build_prompt(user_task, history) + """
+
+Terminal decision turn:
+- The final permitted action already executed and its observation is above.
+- No action budget remains. Consume that evidence and return action=finish.
+- Do not request another tool. A tool request cannot execute and will stop the
+  run with step_budget_exhausted.
+"""
+        try:
+            method = self.model.generate_json
+            with model_request_context(cancellation=self.cancellation):
+                if _accepts_schema(method):
+                    raw_action = method(prompt, schema=AgentAction)
+                else:
+                    raw_action = method(prompt)
+            self._checkpoint("after-terminal-observation-consumption")
+            action = AgentAction(**raw_action)
+        except (CancellationRequested, ModelCancellationError):
+            raise
+        except ModelProviderError as error:
+            self.logger.log(
+                "model_error",
+                {
+                    "terminal_observation_consumption": True,
+                    **error.safe_metadata(),
+                },
+            )
+            raise
+        except ModelOutputError as error:
+            self.logger.log(
+                "model_error",
+                {
+                    "terminal_observation_consumption": True,
+                    **error.safe_metadata(),
+                },
+            )
+            self._stop_for_step_budget(
+                "terminal decision output was invalid",
+                history=history,
+                maximum_action_steps=maximum_action_steps,
+            )
+        except Exception as error:
+            self.logger.log(
+                "model_error",
+                {
+                    "terminal_observation_consumption": True,
+                    "error_type": type(error).__name__,
+                    "error_chars": len(str(error)),
+                },
+            )
+            self._stop_for_step_budget(
+                "terminal decision output was invalid",
+                history=history,
+                maximum_action_steps=maximum_action_steps,
+            )
+
+        self.logger.log(
+            "model_action",
+            {
+                "step": action_step,
+                "terminal_observation_consumption": True,
+                **_action_log_metadata(action),
+            },
+        )
+        if action.action == "finish":
+            self.logger.log(
+                "run_finished",
+                {
+                    "summary_chars": len(action.summary or ""),
+                    "terminal_observation_consumption": True,
+                },
+            )
+            self._finish_standalone(succeeded=True)
+            return action.summary
+
+        call = action.tool_call
+        self._stop_for_step_budget(
+            "terminal decision requested another tool action",
+            history=history,
+            maximum_action_steps=maximum_action_steps,
+            requested_tool_name=call.tool_name if call is not None else None,
+        )
+
+    def _stop_for_step_budget(
+        self,
+        message: str,
+        *,
+        history: str,
+        maximum_action_steps: int,
+        requested_tool_name: str | None = None,
+    ) -> None:
+        self.logger.log(
+            "run_stopped",
+            {
+                "reason": FailureCategory.STEP_BUDGET_EXHAUSTED.value,
+                "history_chars": len(history),
+                "maximum_action_steps": maximum_action_steps,
+                "requested_tool_name": requested_tool_name,
+                "terminal_observation_consumed": True,
+            },
+        )
+        error = StepBudgetExhaustedError(
+            message,
+            maximum_action_steps=maximum_action_steps,
+            requested_tool_name=requested_tool_name,
+        )
+        self._finish_standalone(succeeded=False, reason=str(error))
+        raise error
 
     def _execute(self, action: AgentAction, *, step: int) -> str:
         if action.action == "finish":

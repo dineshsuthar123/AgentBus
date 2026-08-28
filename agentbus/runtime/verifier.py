@@ -82,6 +82,8 @@ class Verifier:
                 "command": [],
                 "exit_code": 1 if require_command else 0,
                 "passed": not require_command,
+                "stdout": "No tests detected.",
+                "stderr": "",
                 "output": "No tests detected.",
                 "reason": (
                     (
@@ -159,6 +161,8 @@ class Verifier:
             "command": result["command"],
             "exit_code": result["exit_code"],
             "passed": result["passed"],
+            "stdout": result["stdout"],
+            "stderr": result["stderr"],
             "output": result["output"],
             "reason": (
                 detection.get("reason", "Explicit verifier command")
@@ -241,18 +245,24 @@ class Verifier:
                 "tool_version": response.record.tool_version.model_dump(mode="json"),
             }
             output = "Verification is awaiting exact tool approval."
+            stdout = ""
+            stderr = ""
             exit_code = None
             passed = False
             status = "awaiting_tool_approval"
         elif result is None:
             output = "Verification tool has not reached a terminal state."
+            stdout = ""
+            stderr = ""
             exit_code = None
             passed = False
             status = "in_progress"
         else:
-            output = result.stdout
-            if result.stderr:
-                output = f"{output}\n{result.stderr}" if output else result.stderr
+            stdout = result.stdout
+            stderr = result.stderr
+            output = stdout
+            if stderr:
+                output = f"{output}\n{stderr}" if output else stderr
             exit_code = result.exit_code
             passed = (
                 result.status == ToolInvocationStatus.SUCCEEDED
@@ -266,6 +276,8 @@ class Verifier:
             "exit_code": exit_code,
             "passed": passed,
             "status": status,
+            "stdout": stdout,
+            "stderr": stderr,
             "output": output,
             "reason": (
                 detection.get("reason", "Explicit verifier command")

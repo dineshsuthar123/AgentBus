@@ -47,6 +47,7 @@ PLAN = {
 
 class ContinuationModel:
     actions: list[str] = []
+    terminal_decisions = 0
 
     def generate_json(self, prompt: str, **kwargs):
         history = prompt.split("Previous observations:", 1)[1].split(
@@ -99,6 +100,8 @@ class ContinuationModel:
                 },
             }
         else:
+            if "Terminal decision turn:" in prompt:
+                type(self).terminal_decisions += 1
             action = {
                 "action": "finish",
                 "summary": "Patch and both approved repository checks completed.",
@@ -162,9 +165,10 @@ def test_exact_tool_approvals_resume_one_attempt_across_process_restarts(
         workspace_dir=str(workspace),
         runs_dir=str(tmp_path / "runs"),
         state_dir=str(tmp_path / "state"),
-        max_steps=6,
+        max_steps=3,
     )
     ContinuationModel.actions = []
+    ContinuationModel.terminal_decisions = 0
     verifier_calls: list[PassingVerifier] = []
     reviewer_calls: list[PassingReviewer] = []
     traces: list[RuntimeTrace] = []
@@ -313,6 +317,7 @@ def test_exact_tool_approvals_resume_one_attempt_across_process_restarts(
         "repository-hook",
         "finish",
     ]
+    assert ContinuationModel.terminal_decisions == 1
     assert sum(verifier.calls for verifier in verifier_calls) == 1
     assert sum(reviewer.calls for reviewer in reviewer_calls) == 1
     final_reviewer = next(reviewer for reviewer in reviewer_calls if reviewer.calls)

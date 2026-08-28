@@ -8,6 +8,7 @@ from agentbus.execution.engine import DurableExecutionEngine
 from agentbus.execution.models import FailureCategory, RunStatus
 from agentbus.execution.state_store import StateStore
 from agentbus.git.repository import GitRepository
+from agentbus.models.errors import ModelServiceUnavailableError
 from agentbus.runtime.durable_workflow import MultiAgentTaskExecutor
 from agentbus.tools.git_tools import GitTools
 
@@ -39,11 +40,18 @@ def test_verifier_failure_feedback_survives_restart_and_repairs_retained_candida
     state_path = tmp_path / "state.db"
     calls: list[dict] = []
     secret = "retry-feedback-secret-must-not-persist"
+    diagnostic_padding = "bounded-diagnostic-" * 2_000
     _create_run(state_path, workspace, "verifier-retry")
 
     first = DurableExecutionEngine(
         StateStore(state_path),
-        _executor(workspace, calls, failure="verifier", secret=secret),
+        _executor(
+            workspace,
+            calls,
+            failure="verifier",
+            secret=secret,
+            diagnostic_padding=diagnostic_padding,
+        ),
     )
     first_report = first.execute_next("verifier-retry")
     first.close()
@@ -53,7 +61,13 @@ def test_verifier_failure_feedback_survives_restart_and_repairs_retained_candida
 
     second = DurableExecutionEngine(
         StateStore(state_path),
-        _executor(workspace, calls, failure="verifier", secret=secret),
+        _executor(
+            workspace,
+            calls,
+            failure="verifier",
+            secret=secret,
+            diagnostic_padding=diagnostic_padding,
+        ),
     )
     completed = second.execute_next("verifier-retry")
     second.close()
@@ -82,6 +96,45 @@ def test_verifier_failure_feedback_survives_restart_and_repairs_retained_candida
     )
     assert secret not in json.dumps(feedback)
     assert secret.encode() not in state_path.read_bytes()
+    diagnostics = feedback["source_evidence"]["diagnostics"]
+    assert diagnostics["stdout_truncated"] is True
+    assert diagnostics["stderr_truncated"] is True
+    assert len(diagnostics["stdout"]) <= 8_192
+    assert len(diagnostics["stderr"]) <= 8_192
+    assert "diagnostic middle truncated" in diagnostics["stdout"]
+
+
+def test_retryable_provider_failure_is_persisted_before_retry_construction(
+    tmp_path: Path,
+) -> None:
+    workspace = _repository(tmp_path / "repo")
+    state_path = tmp_path / "state.db"
+    calls: list[dict] = []
+    _create_run(state_path, workspace, "provider-retry")
+
+    first = DurableExecutionEngine(
+        StateStore(state_path),
+        _executor(workspace, calls, failure="provider"),
+    )
+    first.execute_next("provider-retry")
+    first.close()
+
+    second = DurableExecutionEngine(
+        StateStore(state_path),
+        _executor(workspace, calls, failure="provider"),
+    )
+    completed = second.execute_next("provider-retry")
+    second.close()
+
+    attempts = StateStore(state_path).list_attempts("provider-retry", "step-1")
+    feedback = calls[1]["retry_feedback"]
+    assert completed.status == RunStatus.WAITING_FOR_REVIEW
+    assert attempts[0].error_category == FailureCategory.MODEL_TRANSPORT_ERROR
+    assert feedback["source_evidence"]["failure_category"] == (
+        "model_transport_error"
+    )
+    assert feedback["source_evidence"]["diagnostics"]["kind"] == "model_provider"
+    assert "service unavailable" in json.dumps(feedback).lower()
 
 
 def test_reviewer_rejection_feedback_reaches_retry_and_keeps_cumulative_scope(
@@ -162,6 +215,13 @@ class _Coder:
         self.calls.append(kwargs)
         attempt = int(kwargs["attempt_number"])
         feedback = kwargs.get("retry_feedback")
+        if self.failure == "provider" and attempt == 1:
+            raise ModelServiceUnavailableError(
+                "Offline provider service unavailable.",
+                provider="deterministic",
+                model="fake-coder",
+                request_id="safe-request-id",
+            )
         if attempt == 1:
             value = "actual Y\n" if self.failure == "verifier" else "draft\n"
             (self.workspace / "value.txt").write_text(value, encoding="utf-8")
@@ -179,10 +239,17 @@ class _Coder:
 
 
 class _Verifier:
-    def __init__(self, workspace: Path, failure: str, secret: str) -> None:
+    def __init__(
+        self,
+        workspace: Path,
+        failure: str,
+        secret: str,
+        diagnostic_padding: str,
+    ) -> None:
         self.workspace = workspace
         self.failure = failure
         self.secret = secret
+        self.diagnostic_padding = diagnostic_padding
 
     def verify(self, **kwargs) -> dict:
         value = (self.workspace / "value.txt").read_text(encoding="utf-8")
@@ -190,9 +257,19 @@ class _Verifier:
         stdout = (
             "verification passed"
             if passed
-            else f"test_value FAILED: expected X but got Y\napi_key={self.secret}"
+            else (
+                f"test_value FAILED: expected X but got Y\n"
+                f"api_key={self.secret}\n{self.diagnostic_padding}"
+            )
         )
-        stderr = "" if passed else "AssertionError: expected X but got Y"
+        stderr = (
+            ""
+            if passed
+            else (
+                "AssertionError: expected X but got Y\n"
+                f"{self.diagnostic_padding}"
+            )
+        )
         return {
             "passed": passed,
             "status": "passed" if passed else "failed",
@@ -229,10 +306,11 @@ def _executor(
     *,
     failure: str,
     secret: str = "",
+    diagnostic_padding: str = "",
 ) -> MultiAgentTaskExecutor:
     return MultiAgentTaskExecutor(
         coder=_Coder(workspace, calls, failure),
-        verifier=_Verifier(workspace, failure, secret),
+        verifier=_Verifier(workspace, failure, secret, diagnostic_padding),
         reviewer=_Reviewer(workspace, failure),
         git_tools=GitTools(str(workspace)),
         git_repository=GitRepository(str(workspace)),

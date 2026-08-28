@@ -26,7 +26,11 @@ from agentbus.mcp import McpServerConfig, mcp_server_capabilities
 from agentbus.models.router import ModelRouter
 from agentbus.models.types import ModelRole
 from agentbus.policy import ToolApprovalDisposition
-from agentbus.runtime.loop import AgentLoop, ManagedToolApprovalRequired
+from agentbus.runtime.loop import (
+    AgentLoop,
+    ManagedToolApprovalRequired,
+    StepBudgetExhaustedError,
+)
 from agentbus.sandbox.platform import ExecutableCatalog
 from agentbus.tools.protocol import ToolInvocationStatus, ToolResourceBudget
 from agentbus.tools.runtime import ManagedToolRuntime, build_managed_tool_runtime
@@ -309,15 +313,20 @@ def test_deterministic_loop_profile_stops_at_the_configured_bound(
     harness = _harness(tmp_path, "tool-loop-limit")
     runtime = harness.runtime()
     try:
-        result = harness.loop(runtime).run(
-            "Bound the repeated tool loop.",
-            max_steps=3,
-        )
+        with pytest.raises(
+            StepBudgetExhaustedError,
+            match="step_budget_exhausted",
+        ) as captured:
+            harness.loop(runtime).run(
+                "Bound the repeated tool loop.",
+                max_steps=3,
+            )
     finally:
         runtime.close()
 
     records = harness.store.list_tool_invocations("run-1")
-    assert "max_steps was reached" in result
+    assert captured.value.maximum_action_steps == 3
+    assert captured.value.requested_tool_name == "repository.scan"
     assert len(records) == 3
     assert all(
         record.status == ToolInvocationStatus.SUCCEEDED for record in records

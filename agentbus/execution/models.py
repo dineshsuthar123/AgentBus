@@ -73,6 +73,7 @@ class FailureCategory(str, Enum):
     REVIEWER_REJECTION = "reviewer_rejection"
     POLICY_VIOLATION = "policy_violation"
     RESUMABILITY_FAILURE = "resumability_failure"
+    STEP_BUDGET_EXHAUSTED = "step_budget_exhausted"
     INTERRUPTED = "interrupted"
     UNKNOWN = "unknown"
 

@@ -12,6 +12,7 @@ from agentbus.runtime.loop import (
     ManagedToolApprovalRequired,
     ManagedToolContinuationError,
     PlannedCapabilityMismatchError,
+    StepBudgetExhaustedError,
 )
 from agentbus.tools.protocol import ToolInvocationStatus
 
@@ -128,9 +129,8 @@ def test_loop_stops_at_max_steps(tmp_path):
     loop = AgentLoop(config=config)
     loop.model = NeverFinishes()
 
-    result = loop.run("list files forever")
-
-    assert "max_steps was reached" in result
+    with pytest.raises(StepBudgetExhaustedError, match="step_budget_exhausted"):
+        loop.run("list files forever")
 
 
 def test_final_action_observation_gets_one_terminal_consumption_turn(tmp_path):
@@ -212,6 +212,50 @@ def test_terminal_consumption_turn_cannot_dispatch_another_tool(tmp_path):
     assert model.calls == 2
     assert (workspace / "first.py").exists()
     assert not (workspace / "must-not-exist.py").exists()
+
+
+def test_invalid_timeout_returns_explicit_diagnostic_without_approval_loop(
+    tmp_path,
+):
+    class CorrectsInvalidTimeout:
+        def __init__(self):
+            self.calls = 0
+
+        def generate_json(self, prompt, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "action": "tool_call",
+                    "tool_call": {
+                        "tool_name": "test.execute",
+                        "arguments": {
+                            "executable": "python",
+                            "arguments": ["-c", "print('not executed')"],
+                        },
+                        "expected_capabilities": [
+                            "test.execute",
+                            "process.execute",
+                        ],
+                        "timeout_seconds": 120,
+                        "idempotency_key": "invalid-timeout",
+                    },
+                }
+            assert "Invocation timeout exceeds the tool descriptor maximum" in prompt
+            return {"action": "finish", "summary": "invalid request explained"}
+
+    config = AgentBusConfig(
+        workspace_dir=str(tmp_path / "workspace"),
+        runs_dir=str(tmp_path / "runs"),
+        state_dir=str(tmp_path / "state"),
+        max_steps=2,
+    )
+    model = CorrectsInvalidTimeout()
+    loop = AgentLoop(config=config, model=model)
+
+    assert loop.run("explain invalid timeout") == "invalid request explained"
+    assert model.calls == 2
+    store = StateStore(config.state_database_path)
+    assert store.list_tool_approvals(loop.run_id) == []
 
 
 def test_loop_recovers_from_normalized_model_output_error(tmp_path):

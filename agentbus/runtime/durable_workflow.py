@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import json
+import re
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -28,14 +31,22 @@ from agentbus.runtime.loop import (
     ManagedToolApprovalRequired,
     ManagedToolContinuationError,
     PlannedCapabilityMismatchError,
+    StepBudgetExhaustedError,
     validate_exact_tool_approval,
 )
 from agentbus.runtime.schemas import (
     RepositoryBaseline,
+    RetryDiagnostics,
+    RetryEvidence,
+    RetryFeedback,
     TaskRepositoryBaselines,
     VerifierContinuation,
 )
-from agentbus.security.redaction import sanitize_json
+from agentbus.security.redaction import (
+    redact_diagnostic_text,
+    sanitize_diagnostic_json,
+    sanitize_json,
+)
 from agentbus.trace import (
     RuntimeTrace,
     TraceArtifactReference,
@@ -48,6 +59,26 @@ from agentbus.tools.protocol import sha256_json
 
 
 _ANALYSIS_SUMMARY_MAX_CHARS = 16_000
+_RETRY_DIAGNOSTIC_MAX_CHARS = 6_000
+_RETRYABLE_FEEDBACK_CATEGORIES = {
+    FailureCategory.COMMAND_FAILURE,
+    FailureCategory.INTERRUPTED,
+    FailureCategory.MODEL_OUTPUT_ERROR,
+    FailureCategory.MODEL_PROVIDER_ERROR,
+    FailureCategory.MODEL_TRANSPORT_ERROR,
+    FailureCategory.REVIEWER_REJECTION,
+    FailureCategory.TOOL_VALIDATION_ERROR,
+    FailureCategory.UNKNOWN,
+    FailureCategory.VERIFIER_FAILURE,
+}
+_FAILURE_LINE_PATTERN = re.compile(
+    r"(?:FAILED|ERROR|AssertionError|Exception|Traceback|expected\b.*\bgot|Tests run:)",
+    re.IGNORECASE,
+)
+
+
+class RetryEvidenceSourceMismatch(ManagedToolContinuationError):
+    """Signals that persisted retry evidence no longer matches its source."""
 
 
 class MultiAgentTaskExecutor:
@@ -94,7 +125,16 @@ class MultiAgentTaskExecutor:
         existing = context.attempt_metadata.get("repository_baselines")
         if isinstance(existing, dict):
             baselines = self._validate_repository_baselines(context, existing)
-            return {"repository_baselines": baselines.model_dump(mode="json")}
+            updates = {"repository_baselines": baselines.model_dump(mode="json")}
+            raw_feedback = context.attempt_metadata.get("retry_feedback")
+            if isinstance(raw_feedback, dict):
+                feedback = self._validate_retry_feedback(context, raw_feedback)
+                updates["retry_feedback"] = feedback.model_dump(mode="json")
+            elif context.previous_attempts and context.continuation is None:
+                raise RetryEvidenceSourceMismatch(
+                    "Retry evidence is missing from an already checkpointed retry attempt."
+                )
+            return updates
 
         previous_baselines: list[TaskRepositoryBaselines] = []
         for previous in sorted(
@@ -159,12 +199,18 @@ class MultiAgentTaskExecutor:
             attempt_number=context.attempt_number,
             retry_workspace=retry_workspace,
         )
-        return {"repository_baselines": baselines.model_dump(mode="json")}
+        updates: dict[str, Any] = {
+            "repository_baselines": baselines.model_dump(mode="json")
+        }
+        if context.previous_attempts:
+            feedback = self._build_retry_feedback(context, baselines)
+            updates["retry_feedback"] = feedback.model_dump(mode="json")
+        return updates
 
     def execute(self, context: TaskExecutionContext) -> TaskExecutionResult:
         context = self._context_with_repository_baselines(context)
         if self.runtime_trace is None:
-            return self._execute(context)
+            return self.prepare_retry_result(context, self._execute(context))
         span = self.runtime_trace.start_span(
             TraceSpanType.TASK,
             context.task.title,
@@ -180,7 +226,7 @@ class MultiAgentTaskExecutor:
         )
         try:
             with self.runtime_trace.scope(span):
-                result = self._execute(context)
+                result = self.prepare_retry_result(context, self._execute(context))
         except BaseException as exc:
             self.runtime_trace.fail_span(
                 span,
@@ -261,6 +307,35 @@ class MultiAgentTaskExecutor:
             )
         return result
 
+    def prepare_retry_result(
+        self,
+        context: TaskExecutionContext,
+        result: TaskExecutionResult,
+    ) -> TaskExecutionResult:
+        """Attach immutable candidate-bound evidence before a retry is scheduled."""
+        category = result.failure_category
+        if (
+            result.succeeded
+            or category not in _RETRYABLE_FEEDBACK_CATEGORIES
+            or result.retryable is False
+            or _pending_tool_approval(result) is not None
+        ):
+            return result
+        existing = result.metadata.get("retry_evidence")
+        if isinstance(existing, dict):
+            evidence = RetryEvidence.model_validate(existing)
+            self._validate_retry_evidence_source(context, result, evidence)
+            return result
+        evidence = self._build_retry_evidence(context, result)
+        return result.model_copy(
+            update={
+                "metadata": {
+                    **result.metadata,
+                    "retry_evidence": evidence.model_dump(mode="json"),
+                }
+            }
+        )
+
     def _execute(self, context: TaskExecutionContext) -> TaskExecutionResult:
         _drain_model_results(self.coder)
         _drain_model_results(self.reviewer)
@@ -273,7 +348,12 @@ class MultiAgentTaskExecutor:
                 plan,
                 task_id=context.task.task_id,
             ).render()
-        reviewer_feedback = self._previous_reviewer_feedback(context)
+        retry_feedback = self._retry_feedback(context)
+        reviewer_feedback = (
+            None
+            if retry_feedback is not None
+            else self._previous_reviewer_feedback(context)
+        )
         before = self._snapshot()
         coder_summary = (
             verifier_continuation.coder_summary
@@ -299,6 +379,7 @@ class MultiAgentTaskExecutor:
                         "user_task": context.run.original_task,
                         "plan": plan,
                         "reviewer_feedback": reviewer_feedback,
+                        "retry_feedback": retry_feedback,
                         "cancellation": self.cancellation,
                         "tool_runtime": self.tool_runtime,
                         "run_id": context.run.run_id,
@@ -481,6 +562,13 @@ class MultiAgentTaskExecutor:
                     )
         except PlannedCapabilityMismatchError as exc:
             return self._plan_capability_mismatch_result(
+                context,
+                before,
+                exc,
+                coder_summary=coder_summary,
+            )
+        except StepBudgetExhaustedError as exc:
+            return self._step_budget_exhausted_result(
                 context,
                 before,
                 exc,
@@ -732,6 +820,39 @@ class MultiAgentTaskExecutor:
             },
         )
 
+    def _step_budget_exhausted_result(
+        self,
+        context: TaskExecutionContext,
+        before: dict[str, str],
+        error: StepBudgetExhaustedError,
+        *,
+        coder_summary: str,
+    ) -> TaskExecutionResult:
+        changed_files, changes, artifacts = self._execution_artifacts(
+            context,
+            before,
+        )
+        return TaskExecutionResult(
+            succeeded=False,
+            summary="Coder action budget was exhausted after consuming a final observation.",
+            artifacts=artifacts,
+            failure_category=FailureCategory.STEP_BUDGET_EXHAUSTED,
+            error_message=str(error),
+            retryable=False,
+            verifier_status="not_run",
+            reviewer_status="not_run",
+            changed_files=changed_files,
+            metadata={
+                **self._execution_metadata(context, changes),
+                "coder_summary": coder_summary,
+                "step_budget": error.safe_metadata(),
+                "model_requests": [
+                    *(_drain_model_results(self.coder)),
+                    *(_drain_model_results(self.reviewer)),
+                ],
+            },
+        )
+
     def _execution_artifacts(
         self,
         context: TaskExecutionContext,
@@ -913,6 +1034,10 @@ class MultiAgentTaskExecutor:
         changes: RepositoryChangeSet,
         artifacts: list[ExecutionArtifact],
     ) -> TaskExecutionResult:
+        verifier_failure = _bounded_verifier_failure(
+            verifier_result,
+            verifier_status,
+        )
         return TaskExecutionResult(
             succeeded=False,
             summary=f"Verification failed after coder output: {coder_summary}",
@@ -926,19 +1051,7 @@ class MultiAgentTaskExecutor:
             metadata={
                 **self._execution_metadata(context, changes),
                 "coder_summary": coder_summary[:20_000],
-                "verifier": {
-                    "passed": False,
-                    "command": verifier_result.get("command", []),
-                    "exit_code": verifier_result.get("exit_code"),
-                    "reason": verifier_result.get("reason"),
-                    "status": verifier_status,
-                    "artifact_suppression_active": bool(
-                        verifier_result.get("artifact_suppression_active")
-                    ),
-                    "pytest_cache_disabled": bool(
-                        verifier_result.get("pytest_cache_disabled")
-                    ),
-                },
+                "verifier": verifier_failure,
                 "model_requests": _drain_model_results(self.coder),
             },
         )
@@ -1148,6 +1261,342 @@ class MultiAgentTaskExecutor:
         feedback = context.previous_attempts[-1].metadata.get("reviewer_feedback")
         return feedback if isinstance(feedback, dict) else None
 
+    def _build_retry_evidence(
+        self,
+        context: TaskExecutionContext,
+        result: TaskExecutionResult,
+    ) -> RetryEvidence:
+        category = result.failure_category
+        if category not in _RETRYABLE_FEEDBACK_CATEGORIES:
+            raise RetryEvidenceSourceMismatch(
+                "Failure category does not support corrective retry evidence."
+            )
+        candidate, changes = self._candidate_for_task_baseline(
+            self._repository_baselines(context).task
+        )
+        diagnostics = self._retry_diagnostics(result)
+        payload = {
+            "schema_version": 1,
+            "source_attempt_id": context.attempt_id
+            or f"direct-attempt-{context.attempt_number}",
+            "source_attempt_number": context.attempt_number,
+            "failure_category": category.value,
+            "candidate_identity_sha256": str(candidate["identity_sha256"]),
+            "candidate_tree_id": candidate.get("tree_id"),
+            "candidate_source_sha256": sha256_json(
+                candidate.get("source_snapshot", {})
+            ),
+            "retained_changed_files": changes.changed_files,
+            "diagnostics": diagnostics.model_dump(mode="json"),
+            "diagnostics_sha256": sha256_json(
+                diagnostics.model_dump(mode="json")
+            ),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        return RetryEvidence(
+            **payload,
+            evidence_sha256=sha256_json(payload),
+        )
+
+    def _validate_retry_evidence_source(
+        self,
+        context: TaskExecutionContext,
+        result: TaskExecutionResult,
+        evidence: RetryEvidence,
+    ) -> None:
+        if (
+            evidence.source_attempt_id
+            != (context.attempt_id or f"direct-attempt-{context.attempt_number}")
+            or evidence.source_attempt_number != context.attempt_number
+            or result.failure_category is None
+            or evidence.failure_category != result.failure_category.value
+        ):
+            raise RetryEvidenceSourceMismatch(
+                "Persisted retry evidence does not match its source attempt."
+            )
+        candidate, changes = self._candidate_for_task_baseline(
+            self._repository_baselines(context).task
+        )
+        current = (
+            candidate.get("identity_sha256"),
+            candidate.get("tree_id"),
+            sha256_json(candidate.get("source_snapshot", {})),
+            changes.changed_files,
+        )
+        expected = (
+            evidence.candidate_identity_sha256,
+            evidence.candidate_tree_id,
+            evidence.candidate_source_sha256,
+            evidence.retained_changed_files,
+        )
+        if current != expected:
+            raise RetryEvidenceSourceMismatch(
+                "Persisted retry evidence no longer matches its failed candidate."
+            )
+
+    def _build_retry_feedback(
+        self,
+        context: TaskExecutionContext,
+        baselines: TaskRepositoryBaselines,
+    ) -> RetryFeedback:
+        previous = sorted(
+            context.previous_attempts,
+            key=lambda item: item.attempt_number,
+        )[-1]
+        raw_evidence = previous.metadata.get("retry_evidence")
+        if not isinstance(raw_evidence, dict):
+            raise RetryEvidenceSourceMismatch(
+                "The previous attempt omitted persisted corrective retry evidence."
+            )
+        try:
+            evidence = RetryEvidence.model_validate(raw_evidence)
+        except ValidationError as exc:
+            raise RetryEvidenceSourceMismatch(
+                "The previous attempt contains malformed corrective retry evidence."
+            ) from exc
+        if (
+            evidence.source_attempt_id != previous.attempt_id
+            or evidence.source_attempt_number != previous.attempt_number
+            or previous.error_category is None
+            or evidence.failure_category != previous.error_category.value
+        ):
+            raise RetryEvidenceSourceMismatch(
+                "Corrective retry evidence does not match the previous attempt."
+            )
+
+        candidate, changes = self._candidate_for_task_baseline(baselines.task)
+        active_identity = str(candidate["identity_sha256"])
+        active_tree = candidate.get("tree_id")
+        active_source = sha256_json(candidate.get("source_snapshot", {}))
+        retained = (
+            active_identity == evidence.candidate_identity_sha256
+            and active_tree == evidence.candidate_tree_id
+            and active_source == evidence.candidate_source_sha256
+            and changes.changed_files == evidence.retained_changed_files
+        )
+        if retained:
+            disposition = "retained_candidate"
+        elif baselines.retry_workspace == "restored_to_task_baseline":
+            disposition = "restored_to_task_baseline"
+        else:
+            raise RetryEvidenceSourceMismatch(
+                "Retry evidence source drifted before the destination attempt started."
+            )
+        payload = {
+            "schema_version": 1,
+            "source_evidence": evidence.model_dump(mode="json"),
+            "destination_attempt_id": context.attempt_id
+            or f"direct-attempt-{context.attempt_number}",
+            "destination_attempt_number": context.attempt_number,
+            "source_disposition": disposition,
+            "active_candidate_identity_sha256": active_identity,
+            "active_candidate_tree_id": active_tree,
+            "active_candidate_source_sha256": active_source,
+            "active_changed_files": changes.changed_files,
+            "mutations_retained": retained,
+        }
+        return RetryFeedback(
+            **payload,
+            context_sha256=sha256_json(payload),
+        )
+
+    def _validate_retry_feedback(
+        self,
+        context: TaskExecutionContext,
+        raw: dict[str, Any],
+    ) -> RetryFeedback:
+        try:
+            feedback = RetryFeedback.model_validate(raw)
+        except ValidationError as exc:
+            raise RetryEvidenceSourceMismatch(
+                "Persisted destination retry feedback is malformed."
+            ) from exc
+        destination_id = context.attempt_id or (
+            f"direct-attempt-{context.attempt_number}"
+        )
+        if (
+            feedback.destination_attempt_id != destination_id
+            or feedback.destination_attempt_number != context.attempt_number
+        ):
+            raise RetryEvidenceSourceMismatch(
+                "Persisted retry feedback does not match its destination attempt."
+            )
+        if context.previous_attempts:
+            previous = sorted(
+                context.previous_attempts,
+                key=lambda item: item.attempt_number,
+            )[-1]
+            raw_source = previous.metadata.get("retry_evidence")
+            if (
+                not isinstance(raw_source, dict)
+                or feedback.source_evidence.model_dump(mode="json") != raw_source
+            ):
+                raise RetryEvidenceSourceMismatch(
+                    "Persisted retry feedback no longer matches its source record."
+                )
+        return feedback
+
+    def _retry_feedback(
+        self,
+        context: TaskExecutionContext,
+    ) -> dict[str, Any] | None:
+        if not context.previous_attempts:
+            return None
+        raw = context.attempt_metadata.get("retry_feedback")
+        if not isinstance(raw, dict):
+            if context.continuation is not None:
+                # Preserve exact pre-upgrade approval continuations without changing
+                # the task text whose hash was already checkpointed.
+                return None
+            raise RetryEvidenceSourceMismatch(
+                "The retry attempt omitted its checkpointed corrective feedback."
+            )
+        feedback = self._validate_retry_feedback(context, raw)
+        if context.continuation is None:
+            baselines = self._repository_baselines(context)
+            candidate, changes = self._candidate_for_task_baseline(baselines.task)
+            current = (
+                candidate.get("identity_sha256"),
+                candidate.get("tree_id"),
+                sha256_json(candidate.get("source_snapshot", {})),
+                changes.changed_files,
+            )
+            expected = (
+                feedback.active_candidate_identity_sha256,
+                feedback.active_candidate_tree_id,
+                feedback.active_candidate_source_sha256,
+                feedback.active_changed_files,
+            )
+            if current != expected:
+                raise RetryEvidenceSourceMismatch(
+                    "Retry evidence source changed after feedback was checkpointed."
+                )
+        return feedback.model_dump(mode="json")
+
+    def _candidate_for_task_baseline(
+        self,
+        baseline: RepositoryBaseline,
+    ) -> tuple[dict[str, Any], RepositoryChangeSet]:
+        changed_files = self._changed_since(baseline.worktree_snapshot)
+        changes = self._change_set(changed_files)
+        capture = getattr(self.git_repository, "review_candidate", None)
+        if capture is not None and baseline.tree_id is not None:
+            candidate = capture(baseline.model_dump(mode="json"))
+            if not isinstance(candidate, dict):
+                raise RetryEvidenceSourceMismatch(
+                    "Git repository returned invalid retry candidate evidence."
+                )
+        else:
+            current_source = self._review_source_snapshot()
+            source_snapshot = {
+                path: current_source[path]
+                for path in changes.review_files
+                if path in current_source
+            }
+            payload = {
+                "schema_version": 1,
+                "head_commit": baseline.head_commit,
+                "tree_id": None,
+                "source_snapshot": source_snapshot,
+                "changed_files": changes.review_files,
+            }
+            candidate = {**payload, "identity_sha256": sha256_json(payload)}
+        if (
+            sorted(candidate.get("changed_files", [])) != changes.review_files
+            or not isinstance(candidate.get("identity_sha256"), str)
+        ):
+            raise RetryEvidenceSourceMismatch(
+                "Retry candidate files disagree with the task baseline."
+            )
+        return candidate, changes
+
+    @staticmethod
+    def _retry_diagnostics(result: TaskExecutionResult) -> RetryDiagnostics:
+        category = result.failure_category or FailureCategory.UNKNOWN
+        if category == FailureCategory.VERIFIER_FAILURE:
+            verifier = result.metadata.get("verifier", {})
+            verifier = verifier if isinstance(verifier, dict) else {}
+            return RetryDiagnostics(
+                kind="verifier",
+                summary=_bounded_diagnostic(
+                    verifier.get("diagnostic_summary")
+                    or result.error_message
+                    or result.summary,
+                    4_000,
+                ),
+                command=_bounded_command(verifier.get("command")),
+                exit_status=_safe_exit_status(verifier.get("exit_code")),
+                stdout=_bounded_diagnostic(verifier.get("stdout")),
+                stderr=_bounded_diagnostic(verifier.get("stderr")),
+                stdout_truncated=bool(verifier.get("stdout_truncated")),
+                stderr_truncated=bool(verifier.get("stderr_truncated")),
+                failing_tests=_bounded_diagnostic_items(
+                    verifier.get("failing_tests", []),
+                    max_items=12,
+                    max_chars=512,
+                ),
+                exception_details=_bounded_diagnostic_items(
+                    verifier.get("exception_details", []),
+                    max_items=8,
+                    max_chars=512,
+                ),
+            )
+        if category == FailureCategory.REVIEWER_REJECTION:
+            review = result.metadata.get("task_review")
+            if not isinstance(review, dict):
+                review = result.metadata.get("reviewer_feedback", {})
+            review = review if isinstance(review, dict) else {}
+            return RetryDiagnostics(
+                kind="reviewer",
+                summary=_bounded_diagnostic(
+                    review.get("summary") or result.error_message or result.summary,
+                    4_000,
+                ),
+                reviewer_issues=_bounded_diagnostic_items(
+                    review.get("issues", []),
+                    max_items=16,
+                    max_chars=768,
+                ),
+                required_fixes=_bounded_diagnostic_items(
+                    review.get("required_fixes", []),
+                    max_items=16,
+                    max_chars=768,
+                ),
+            )
+        if category in {
+            FailureCategory.MODEL_OUTPUT_ERROR,
+            FailureCategory.MODEL_PROVIDER_ERROR,
+            FailureCategory.MODEL_TRANSPORT_ERROR,
+        }:
+            provider = result.metadata.get("provider_failure", {})
+            return RetryDiagnostics(
+                kind="model_provider",
+                summary=_bounded_diagnostic(
+                    result.error_message or result.summary,
+                    4_000,
+                ),
+                exception_details=_bounded_diagnostic_items(
+                    [provider] if provider else []
+                ),
+            )
+        kind = {
+            FailureCategory.COMMAND_FAILURE: "command",
+            FailureCategory.TOOL_VALIDATION_ERROR: "tool",
+            FailureCategory.INTERRUPTED: "interrupted",
+        }.get(category, "other")
+        return RetryDiagnostics(
+            kind=kind,
+            summary=_bounded_diagnostic(
+                result.error_message or result.summary,
+                4_000,
+            ),
+            exception_details=_bounded_diagnostic_items(
+                result.metadata.get("diagnostics", [])
+                if isinstance(result.metadata, dict)
+                else []
+            ),
+        )
+
     def _context_with_repository_baselines(
         self,
         context: TaskExecutionContext,
@@ -1160,7 +1609,7 @@ class MultiAgentTaskExecutor:
                 update={
                     "attempt_metadata": {
                         **context.attempt_metadata,
-                        "repository_baselines": raw,
+                        **updates,
                     }
                 }
             )
@@ -1569,6 +2018,122 @@ def _drain_model_results(agent) -> list[dict[str, Any]]:
     if drain is None:
         return []
     return [result.event_metadata() for result in drain()]
+
+
+def _bounded_diagnostic(value: Any, max_chars: int = _RETRY_DIAGNOSTIC_MAX_CHARS) -> str:
+    if value is None:
+        return ""
+    redacted = redact_diagnostic_text(str(value), max_chars=max_chars * 2) or ""
+    if len(redacted) <= max_chars:
+        return redacted
+    half = max(1, (max_chars - 48) // 2)
+    return (
+        redacted[:half]
+        + "\n[diagnostic middle truncated]\n"
+        + redacted[-half:]
+    )[:max_chars]
+
+
+def _bounded_diagnostic_items(
+    values: Any,
+    *,
+    max_items: int = 16,
+    max_chars: int = 1_000,
+) -> list[str]:
+    if not isinstance(values, (list, tuple)):
+        values = [values]
+    bounded: list[str] = []
+    for value in values[:max_items]:
+        safe = sanitize_diagnostic_json(value, max_chars=max_chars)
+        if isinstance(safe, str):
+            text = safe
+        else:
+            text = json.dumps(
+                safe,
+                allow_nan=False,
+                ensure_ascii=True,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+        text = _bounded_diagnostic(text, max_chars).strip()
+        if text:
+            bounded.append(text)
+    return bounded
+
+
+def _bounded_command(value: Any) -> list[str]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    bounded = []
+    for item in value[:16]:
+        text = _bounded_diagnostic(item, 256).strip()
+        if text:
+            bounded.append(text)
+    return bounded
+
+
+def _safe_exit_status(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _bounded_verifier_failure(
+    verifier_result: dict[str, Any],
+    verifier_status: str,
+) -> dict[str, Any]:
+    stdout = verifier_result.get("stdout")
+    stderr = verifier_result.get("stderr")
+    if stdout is None and stderr is None:
+        stdout = verifier_result.get("output")
+    safe_stdout = _bounded_diagnostic(stdout)
+    safe_stderr = _bounded_diagnostic(stderr)
+    lines = [
+        line.strip()
+        for line in f"{safe_stdout}\n{safe_stderr}".splitlines()
+        if line.strip() and _FAILURE_LINE_PATTERN.search(line)
+    ]
+    failing_tests = _bounded_diagnostic_items(
+        lines,
+        max_items=12,
+        max_chars=512,
+    )
+    exception_details = _bounded_diagnostic_items(
+        [
+            line
+            for line in lines
+            if re.search(r"(?:error|exception|traceback|assert)", line, re.IGNORECASE)
+        ],
+        max_items=8,
+        max_chars=512,
+    )
+    command = _bounded_command(verifier_result.get("command", []))
+    exit_code = _safe_exit_status(verifier_result.get("exit_code"))
+    summary = _bounded_diagnostic(
+        f"Verifier status={verifier_status}; command={command}; exit_status={exit_code}",
+        4_000,
+    )
+    return {
+        "passed": False,
+        "command": command,
+        "exit_code": exit_code,
+        "reason": _bounded_diagnostic(verifier_result.get("reason"), 2_000),
+        "status": verifier_status,
+        "stdout": safe_stdout,
+        "stderr": safe_stderr,
+        "diagnostic_summary": summary,
+        "failing_tests": failing_tests,
+        "exception_details": exception_details,
+        "stdout_truncated": len(str(stdout or "")) > len(safe_stdout),
+        "stderr_truncated": len(str(stderr or "")) > len(safe_stderr),
+        "artifact_suppression_active": bool(
+            verifier_result.get("artifact_suppression_active")
+        ),
+        "pytest_cache_disabled": bool(verifier_result.get("pytest_cache_disabled")),
+    }
 
 
 def _supported_arguments(callable_object, arguments: dict[str, Any]) -> dict[str, Any]:

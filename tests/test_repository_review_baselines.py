@@ -25,6 +25,7 @@ def _repository(path: Path) -> Path:
     _git(path, "init", "-q")
     _git(path, "config", "user.name", "AgentBus Tests")
     _git(path, "config", "user.email", "agentbus@example.invalid")
+    _git(path, "config", "core.autocrlf", "false")
     (path / "foo.txt").write_text("old\n", encoding="utf-8")
     (path / "bar.txt").write_text("old bar\n", encoding="utf-8")
     _git(path, "add", "foo.txt", "bar.txt")

@@ -1,5 +1,6 @@
 import hashlib
 import json
+from datetime import datetime
 from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any, Literal
 
@@ -71,6 +72,184 @@ class TaskRepositoryBaselines(BaseModel):
         "retained_cumulative_workspace",
         "restored_to_task_baseline",
     ]
+
+
+class RetryDiagnostics(BaseModel):
+    """Bounded untrusted diagnostics from one retryable task failure."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal[
+        "verifier",
+        "reviewer",
+        "model_provider",
+        "tool",
+        "command",
+        "interrupted",
+        "other",
+    ]
+    summary: str = Field(default="", max_length=4_096)
+    command: list[str] = Field(default_factory=list, max_length=32)
+    exit_status: int | None = None
+    stdout: str = Field(default="", max_length=8_192)
+    stderr: str = Field(default="", max_length=8_192)
+    stdout_truncated: bool = False
+    stderr_truncated: bool = False
+    failing_tests: list[str] = Field(default_factory=list, max_length=32)
+    exception_details: list[str] = Field(default_factory=list, max_length=32)
+    reviewer_issues: list[str] = Field(default_factory=list, max_length=32)
+    required_fixes: list[str] = Field(default_factory=list, max_length=32)
+
+    @field_validator(
+        "command",
+        "failing_tests",
+        "exception_details",
+        "reviewer_issues",
+        "required_fixes",
+    )
+    @classmethod
+    def diagnostic_items_are_bounded(cls, value: list[str]) -> list[str]:
+        if any(not item or len(item) > 1_024 for item in value):
+            raise ValueError("retry diagnostic entries must be nonempty and bounded")
+        return value
+
+    @model_validator(mode="after")
+    def diagnostics_are_bounded(self) -> "RetryDiagnostics":
+        encoded = _encoded_json(self.model_dump(mode="json"))
+        if len(encoded) > 32_768:
+            raise ValueError("retry diagnostics must be at most 32768 bytes")
+        return self
+
+
+class RetryEvidence(BaseModel):
+    """Immutable source-attempt evidence bound to the failed candidate."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1] = 1
+    source_attempt_id: str = Field(min_length=1, max_length=128)
+    source_attempt_number: int = Field(ge=1)
+    failure_category: str = Field(min_length=1, max_length=64)
+    candidate_identity_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    candidate_tree_id: str | None = Field(
+        default=None,
+        pattern=r"^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+    )
+    candidate_source_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    retained_changed_files: list[str] = Field(default_factory=list, max_length=512)
+    diagnostics: RetryDiagnostics
+    diagnostics_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    created_at: str = Field(min_length=1, max_length=64)
+    evidence_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+    @field_validator("failure_category")
+    @classmethod
+    def failure_category_is_known(cls, value: str) -> str:
+        allowed = {
+            "command_failure",
+            "interrupted",
+            "model_output_error",
+            "model_provider_error",
+            "model_transport_error",
+            "reviewer_rejection",
+            "tool_validation_error",
+            "unknown",
+            "verifier_failure",
+        }
+        if value not in allowed:
+            raise ValueError("failure category does not support corrective retry evidence")
+        return value
+
+    @field_validator("retained_changed_files")
+    @classmethod
+    def changed_paths_are_bounded(cls, value: list[str]) -> list[str]:
+        normalized = _bounded_worktree_snapshot(
+            {str(path): "deleted" for path in value}
+        )
+        return list(normalized)
+
+    @field_validator("created_at")
+    @classmethod
+    def created_at_is_timezone_aware(cls, value: str) -> str:
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("retry evidence timestamp must be ISO-8601") from exc
+        if parsed.tzinfo is None:
+            raise ValueError("retry evidence timestamp must include a timezone")
+        return value
+
+    @model_validator(mode="after")
+    def evidence_identity_matches_content(self) -> "RetryEvidence":
+        diagnostics = self.diagnostics.model_dump(mode="json")
+        if self.diagnostics_sha256 != _json_sha256(diagnostics):
+            raise ValueError("retry diagnostic identity does not match its content")
+        payload = self.model_dump(mode="json", exclude={"evidence_sha256"})
+        if self.evidence_sha256 != _json_sha256(payload):
+            raise ValueError("retry evidence identity does not match its content")
+        if len(_encoded_json(self.model_dump(mode="json"))) > 48_000:
+            raise ValueError("retry evidence must be at most 48000 bytes")
+        return self
+
+
+class RetryFeedback(BaseModel):
+    """Destination-attempt binding for validated corrective evidence."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1] = 1
+    source_evidence: RetryEvidence
+    destination_attempt_id: str = Field(min_length=1, max_length=128)
+    destination_attempt_number: int = Field(ge=2)
+    source_disposition: Literal[
+        "retained_candidate",
+        "restored_to_task_baseline",
+    ]
+    active_candidate_identity_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    active_candidate_tree_id: str | None = Field(
+        default=None,
+        pattern=r"^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+    )
+    active_candidate_source_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    active_changed_files: list[str] = Field(default_factory=list, max_length=512)
+    mutations_retained: bool
+    context_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+    @field_validator("active_changed_files")
+    @classmethod
+    def active_paths_are_bounded(cls, value: list[str]) -> list[str]:
+        normalized = _bounded_worktree_snapshot(
+            {str(path): "deleted" for path in value}
+        )
+        return list(normalized)
+
+    @model_validator(mode="after")
+    def feedback_identity_matches_content(self) -> "RetryFeedback":
+        if self.destination_attempt_number <= self.source_evidence.source_attempt_number:
+            raise ValueError("retry destination must follow its source attempt")
+        if self.source_disposition == "retained_candidate":
+            expected = (
+                self.source_evidence.candidate_identity_sha256,
+                self.source_evidence.candidate_tree_id,
+                self.source_evidence.candidate_source_sha256,
+                self.source_evidence.retained_changed_files,
+            )
+            current = (
+                self.active_candidate_identity_sha256,
+                self.active_candidate_tree_id,
+                self.active_candidate_source_sha256,
+                self.active_changed_files,
+            )
+            if current != expected or not self.mutations_retained:
+                raise ValueError("retained retry feedback does not match its source")
+        elif self.mutations_retained:
+            raise ValueError("restored retry feedback cannot claim retained mutations")
+        payload = self.model_dump(mode="json", exclude={"context_sha256"})
+        if self.context_sha256 != _json_sha256(payload):
+            raise ValueError("retry feedback identity does not match its content")
+        if len(_encoded_json(self.model_dump(mode="json"))) > 56_000:
+            raise ValueError("retry feedback must be at most 56000 bytes")
+        return self
 
 
 class ModelToolCall(BaseModel):
@@ -270,11 +449,15 @@ def _bounded_worktree_snapshot(value: dict[str, str]) -> dict[str, str]:
 
 
 def _json_sha256(value: object) -> str:
-    encoded = json.dumps(
+    encoded = _encoded_json(value)
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _encoded_json(value: object) -> bytes:
+    return json.dumps(
         value,
         allow_nan=False,
         ensure_ascii=True,
         separators=(",", ":"),
         sort_keys=True,
     ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()

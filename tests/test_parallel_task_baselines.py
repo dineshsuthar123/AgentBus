@@ -78,12 +78,14 @@ def test_parallel_retry_reuses_task_baseline_across_worktree_recovery(
     manager = GitWorktreeManager(source, tmp_path / "worktrees", store)
     leases = LeaseService(store, lease_seconds=60)
     reviewer_calls: list[dict] = []
+    coder_calls: list[dict] = []
 
     class Coder:
         def __init__(self, workspace: Path) -> None:
             self.workspace = workspace
 
         def execute(self, **kwargs) -> str:
+            coder_calls.append(kwargs)
             if int(kwargs["attempt_number"]) == 1:
                 (self.workspace / "foo.txt").write_text("new\n", encoding="utf-8")
             return "parallel coder complete"
@@ -141,6 +143,7 @@ def test_parallel_retry_reuses_task_baseline_across_worktree_recovery(
 
     assert report.status == RunStatus.WAITING_FOR_REVIEW
     assert len(attempts) == 2
+    assert len(coder_calls) == 2
     assert len(reviewer_calls) == 2
     assert "-old" in reviewer_calls[1]["task_diff"]
     assert "+new" in reviewer_calls[1]["task_diff"]
@@ -151,6 +154,16 @@ def test_parallel_retry_reuses_task_baseline_across_worktree_recovery(
         "retained_cumulative_workspace"
     )
     assert attempts[1].metadata["attempt_artifact_hygiene"]["changed_files"] == []
+    feedback = coder_calls[1]["retry_feedback"]
+    assert feedback == attempts[1].metadata["retry_feedback"]
+    assert feedback["source_evidence"]["source_attempt_id"] == attempts[0].attempt_id
+    assert feedback["destination_attempt_id"] == attempts[1].attempt_id
+    assert feedback["source_disposition"] == "retained_candidate"
+    assert feedback["mutations_retained"] is True
+    assert (
+        feedback["source_evidence"]["candidate_identity_sha256"]
+        == feedback["active_candidate_identity_sha256"]
+    )
     worktrees = store.list_worktrees("parallel-baseline-run", task_id="step-1")
     assert len(worktrees) == 1
     assert store.list_task_commits("parallel-baseline-run")[0].changed_files == [

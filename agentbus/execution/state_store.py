@@ -1667,6 +1667,13 @@ class StateStore:
                 terminal_metadata["repository_baselines"] = checkpointed_metadata[
                     "repository_baselines"
                 ]
+            if (
+                "retry_feedback" not in terminal_metadata
+                and isinstance(checkpointed_metadata.get("retry_feedback"), dict)
+            ):
+                terminal_metadata["retry_feedback"] = checkpointed_metadata[
+                    "retry_feedback"
+                ]
             connection.execute(
                 """
                 UPDATE attempts SET
@@ -1753,6 +1760,17 @@ class StateStore:
             validate_task_transition(
                 TaskStatus(task["status"]), TaskStatus.INTEGRATION_PENDING
             )
+            terminal_metadata = _sanitize(metadata or {})
+            checkpointed_metadata = _load_json(
+                attempt["metadata_json"],
+                "attempt metadata",
+            )
+            for key in ("repository_baselines", "retry_feedback"):
+                if (
+                    key not in terminal_metadata
+                    and isinstance(checkpointed_metadata.get(key), dict)
+                ):
+                    terminal_metadata[key] = checkpointed_metadata[key]
             connection.execute(
                 """UPDATE attempts SET status = ?, completed_at = ?,
                    observation_summary = ?, metadata_json = ? WHERE attempt_id = ?""",
@@ -1760,7 +1778,7 @@ class StateStore:
                     AttemptStatus.SUCCEEDED.value,
                     _timestamp(completed_at),
                     _safe_text(summary),
-                    _dump_json(metadata or {}),
+                    _dump_json(terminal_metadata),
                     attempt_id,
                 ),
             )
