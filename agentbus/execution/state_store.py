@@ -1186,6 +1186,17 @@ class StateStore:
             if run_status == RunStatus.RUNNING:
                 validate_run_transition(run_status, RunStatus.WAITING_FOR_APPROVAL)
             now = utc_now()
+            suspension_metadata = _sanitize(metadata)
+            checkpointed_metadata = _load_json(
+                row["metadata_json"],
+                "attempt metadata",
+            )
+            for key in ("repository_baselines", "retry_feedback"):
+                if (
+                    key not in suspension_metadata
+                    and isinstance(checkpointed_metadata.get(key), dict)
+                ):
+                    suspension_metadata[key] = checkpointed_metadata[key]
             connection.execute(
                 """
                 UPDATE attempts SET status = ?, completed_at = NULL,
@@ -1196,7 +1207,7 @@ class StateStore:
                 (
                     AttemptStatus.WAITING_FOR_APPROVAL.value,
                     _safe_text(observation_summary),
-                    _dump_json(metadata),
+                    _dump_json(suspension_metadata),
                     attempt_id,
                 ),
             )
