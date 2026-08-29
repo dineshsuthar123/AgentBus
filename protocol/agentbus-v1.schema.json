@@ -3679,6 +3679,12 @@
     "ReplayAcceptedResponse": {
       "additionalProperties": false,
       "properties": {
+        "captured_tool_results_reused": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Captured Tool Results Reused",
+          "type": "integer"
+        },
         "changed_input_names": {
           "items": {
             "type": "string"
@@ -3780,6 +3786,12 @@
           "default": null,
           "title": "From Span Id"
         },
+        "historical_authorizations_validated": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Historical Authorizations Validated",
+          "type": "integer"
+        },
         "intelligence_drift": {
           "items": {
             "type": "string"
@@ -3833,6 +3845,12 @@
           "maxItems": 1024,
           "title": "Policy Drift",
           "type": "array"
+        },
+        "process_dispatches": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Process Dispatches",
+          "type": "integer"
         },
         "provider_calls": {
           "default": 0,
@@ -4057,6 +4075,12 @@
     "ReplaySessionResponse": {
       "additionalProperties": false,
       "properties": {
+        "captured_tool_results_reused": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Captured Tool Results Reused",
+          "type": "integer"
+        },
         "changed_input_names": {
           "items": {
             "type": "string"
@@ -4158,6 +4182,12 @@
           "default": null,
           "title": "From Span Id"
         },
+        "historical_authorizations_validated": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Historical Authorizations Validated",
+          "type": "integer"
+        },
         "intelligence_drift": {
           "items": {
             "type": "string"
@@ -4211,6 +4241,12 @@
           "maxItems": 1024,
           "title": "Policy Drift",
           "type": "array"
+        },
+        "process_dispatches": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Process Dispatches",
+          "type": "integer"
         },
         "provider_calls": {
           "default": 0,
@@ -4310,6 +4346,11 @@
           "title": "Action",
           "type": "string"
         },
+        "captured_result_reused": {
+          "default": false,
+          "title": "Captured Result Reused",
+          "type": "boolean"
+        },
         "drift": {
           "items": {
             "type": "string"
@@ -4317,6 +4358,24 @@
           "maxItems": 256,
           "title": "Drift",
           "type": "array"
+        },
+        "historical_authorization_validated": {
+          "default": false,
+          "title": "Historical Authorization Validated",
+          "type": "boolean"
+        },
+        "historical_executable": {
+          "anyOf": [
+            {
+              "maxLength": 1024,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Historical Executable"
         },
         "output_sha256": {
           "anyOf": [
@@ -4330,6 +4389,11 @@
           ],
           "default": null,
           "title": "Output Sha256"
+        },
+        "process_dispatched": {
+          "default": false,
+          "title": "Process Dispatched",
+          "type": "boolean"
         },
         "span_id": {
           "maxLength": 128,

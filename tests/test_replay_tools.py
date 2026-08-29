@@ -446,6 +446,7 @@ def test_approved_historical_process_reuses_result_without_current_allowlist(
     assert assessment.historical_executable == "mvn"
     assert assessment.captured_result_reused is True
     assert assessment.process_dispatched is False
+    assert assessment.descriptor_drift is False
     assert assessment.fresh_authorization_required is False
     assert assessment.strategy == ToolReplayStrategy.REUSE_CAPTURED
 

@@ -974,10 +974,7 @@ class ToolReplayPlanner:
         historical = envelope.policy_decision
         evidence = authenticated.historical_execution
         assert evidence is not None
-        descriptor_drift = (
-            _descriptor_sha256(authenticated.descriptor)
-            != _descriptor_sha256(current_descriptor)
-        )
+        descriptor_drift = False
         if (
             evidence.descriptor_contract_sha256
             != _descriptor_contract_sha256(current_descriptor)

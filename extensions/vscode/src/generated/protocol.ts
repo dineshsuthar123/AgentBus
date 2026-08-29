@@ -621,6 +621,9 @@ export interface ReplayAcceptedResponse {
   "failure_message"?: string | null;
   "provider_calls"?: number;
   "network_calls"?: number;
+  "historical_authorizations_validated"?: number;
+  "captured_tool_results_reused"?: number;
+  "process_dispatches"?: number;
 }
 
 export interface ReplayCancelResponse {
@@ -673,6 +676,9 @@ export interface ReplaySessionResponse {
   "failure_message"?: string | null;
   "provider_calls"?: number;
   "network_calls"?: number;
+  "historical_authorizations_validated"?: number;
+  "captured_tool_results_reused"?: number;
+  "process_dispatches"?: number;
 }
 
 export interface ReplaySpanResultResponse {
@@ -682,6 +688,10 @@ export interface ReplaySpanResultResponse {
   "summary": string;
   "output_sha256"?: string | null;
   "drift"?: Array<string>;
+  "historical_authorization_validated"?: boolean;
+  "historical_executable"?: string | null;
+  "captured_result_reused"?: boolean;
+  "process_dispatched"?: boolean;
 }
 
 export interface RepositoryOverview {
