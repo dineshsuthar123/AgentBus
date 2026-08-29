@@ -51,6 +51,7 @@ from agentbus.replay.tools import (
     CapturedToolEnvelope,
     ToolReplayAssessment,
     ToolReplayPlanner,
+    historical_execution_catalog,
     load_tool_envelope,
 )
 from agentbus.trace.archive import (
@@ -257,6 +258,7 @@ class TraceReplayService:
         request: ReplayRequest,
     ) -> ReplayResult:
         trace = self.resolve_trace(identifier)
+        self.verify(trace.trace_id)
         prepared = self._prepared_request(trace, request)
         engine = self._engine(trace, prepared)
         pending = self._pending_session(prepared)
@@ -860,6 +862,7 @@ class _CachedToolReplayPlanner:
         *,
         mode: ReplayMode,
         isolated_workspace: str | Path = "[ISOLATED_REPLAY_WORKSPACE]",
+        historical_authorization: CapturedToolEnvelope | None = None,
     ) -> ToolReplayAssessment:
         descriptor_sha256 = hashlib.sha256(
             canonical_json_bytes(
@@ -869,13 +872,22 @@ class _CachedToolReplayPlanner:
         envelope_sha256 = hashlib.sha256(
             canonical_json_bytes(envelope.model_dump(mode="json"))
         ).hexdigest()
+        authorization_sha256 = (
+            hashlib.sha256(
+                canonical_json_bytes(
+                    historical_authorization.model_dump(mode="json")
+                )
+            ).hexdigest()
+            if historical_authorization is not None
+            else ""
+        )
         key = (
             envelope.invocation.invocation_id,
             envelope.invocation.invocation_revision,
             mode.value,
             str(isolated_workspace),
             descriptor_sha256,
-            envelope_sha256,
+            f"{envelope_sha256}:{authorization_sha256}",
         )
         assessment = self._assessments.get(key)
         if assessment is None:
@@ -884,6 +896,7 @@ class _CachedToolReplayPlanner:
                 current_descriptor,
                 mode=mode,
                 isolated_workspace=isolated_workspace,
+                historical_authorization=historical_authorization,
             )
             self._assessments[key] = assessment
         return assessment
@@ -903,6 +916,10 @@ class _ReplayToolPolicyContext:
         self.planner = planner
         self.descriptors = descriptors
         self.request = request
+        self.historical_authorizations = historical_execution_catalog(
+            trace,
+            object_store,
+        )
         self._by_parent_span: dict[str, tuple[TraceOutput, ...]] = {}
         self._by_invocation: dict[str, list[TraceOutput]] = {}
         for span in trace.spans:
@@ -959,6 +976,11 @@ class _ReplayToolPolicyContext:
             isolated_workspace=(
                 self.request.isolated_workspace
                 or "[ISOLATED_REPLAY_WORKSPACE]"
+            ),
+            historical_authorization=(
+                self.historical_authorizations.get(
+                    envelope.invocation.invocation_id
+                )
             ),
         )
         if assessment.current_decision is None:

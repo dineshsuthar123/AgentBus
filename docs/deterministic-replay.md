@@ -123,6 +123,38 @@ Historical approvals are evidence, not reusable blanket authority. Forks that
 change policy, resource budgets, tool responses, or approval decisions
 invalidate affected historical approval assumptions.
 
+### Authenticated historical process results
+
+Tool-envelope version 2 may include a versioned historical execution envelope
+for a process that completed through the managed runtime. This is replay
+evidence, not execution truth and not authority to launch the command again.
+The envelope canonically binds the exact invocation and arguments, historical
+descriptor and normalized contract, derived capabilities, policy decision,
+resource budget, positive dispatch evidence, executable provenance, optional
+dependency and source/candidate identities, exact approval when required, and
+the bounded captured result. The envelope and referenced object remain covered
+by trace provenance verification.
+
+Offline replay validates that evidence and the current tool contract, reruns
+capability derivation and current policy against an isolated replay identity,
+and validates the historical approval at its recorded decision time. It then
+reuses the captured result. It does not execute the historical process and does
+not resolve the executable from the current `PATH` as authorization. This
+applies to repository-detected executables generally; there is no special
+allowance for Maven, Gradle, npm, Go, Cargo, or another command.
+
+Replay results expose `historical_authorization_validated`,
+`historical_executable`, `captured_result_reused`, and `process_dispatched` per
+span, plus bounded aggregate counters. A reused historical process result must
+report `process_dispatched: false`. Provider and network counters remain zero.
+
+Older tool envelopes remain readable for behavior their existing evidence can
+prove. A historical process that lacks the new authenticated envelope, exact
+required approval, positive dispatch proof, or a compatible schema fails
+closed as `incompatible`; replay never fabricates or silently migrates that
+authorization. The overall run can remain `partially_replayable` even when the
+captured process result is safely reused.
+
 ## Checkpoint replay
 
 List checkpoints with trace inspection, then select one by ID:

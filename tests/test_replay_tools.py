@@ -1,7 +1,11 @@
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 from agentbus.replay import (
+    ReplayIncompatibleError,
     ReplayMode,
     ToolReplayAssessment,
     ToolReplayPlanner,
@@ -418,7 +422,40 @@ def test_policy_drift_is_reported_and_new_denial_blocks_replay() -> None:
 
 def test_approved_historical_process_reuses_result_without_current_allowlist(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
+    def fail_on_discovery(*_args, **_kwargs):
+        raise AssertionError("offline replay must not discover executables")
+
+    monkeypatch.setattr("agentbus.tools.runtime.shutil.which", fail_on_discovery)
+    store, reference, current = _historical_process_capture(tmp_path)
+    envelope = load_tool_envelope(store, reference.sha256)
+    assessment = ToolReplayPlanner().assess(
+        envelope,
+        current,
+        mode=ReplayMode.OFFLINE,
+    )
+
+    assert envelope.result is not None
+    assert envelope.result.stdout == "BUILD SUCCESS"
+    assert envelope.historical_execution is not None
+    assert envelope.historical_execution.executable == "mvn"
+    assert envelope.historical_execution.working_directory == "."
+    assert assessment.approval_compatible_for_substitution is True
+    assert assessment.historical_authorization_validated is True
+    assert assessment.historical_executable == "mvn"
+    assert assessment.captured_result_reused is True
+    assert assessment.process_dispatched is False
+    assert assessment.fresh_authorization_required is False
+    assert assessment.strategy == ToolReplayStrategy.REUSE_CAPTURED
+
+
+def _historical_process_capture(
+    tmp_path: Path,
+    *,
+    include_approval: bool = True,
+    include_dispatch_evidence: bool = True,
+):
     from agentbus.policy import (
         ToolApprovalDisposition,
         ToolPolicyEngine,
@@ -452,7 +489,10 @@ def test_approved_historical_process_reuses_result_without_current_allowlist(
             caller_role="verifier",
             workspace_trusted=True,
             provider_consented=True,
-            policy_context={"source_identity_sha256": "a" * 64},
+            policy_context={
+                "source_identity_sha256": "a" * 64,
+                "candidate_identity_sha256": "c" * 64,
+            },
         ),
         requested_at=NOW,
     )
@@ -489,6 +529,7 @@ def test_approved_historical_process_reuses_result_without_current_allowlist(
         structured_output={
             "executable": "mvn",
             "working_directory": str(tmp_path.resolve()),
+            "pid": 4242 if include_dispatch_evidence else None,
             "passed": True,
         },
         stdout="BUILD SUCCESS\n",
@@ -503,6 +544,7 @@ def test_approved_historical_process_reuses_result_without_current_allowlist(
                 "size_bytes": 123,
             },
             "working_directory": str(tmp_path.resolve()),
+            "pid": 4242 if include_dispatch_evidence else None,
             "shell": False,
         },
     )
@@ -518,9 +560,30 @@ def test_approved_historical_process_reuses_result_without_current_allowlist(
         producing_span_id="tool-historical-process-span",
         reference_id="tool-historical-process-envelope",
         result=result,
-        approval=approval,
+        approval=approval if include_approval else None,
+    )
+    return store, reference, current
+
+
+def test_historical_process_requires_positive_dispatch_evidence(
+    tmp_path: Path,
+) -> None:
+    store, reference, _ = _historical_process_capture(
+        tmp_path,
+        include_dispatch_evidence=False,
     )
 
+    envelope = load_tool_envelope(store, reference.sha256)
+
+    assert envelope.result is not None
+    assert envelope.historical_execution is None
+
+
+def test_historical_process_missing_approval_fails_closed(tmp_path: Path) -> None:
+    store, reference, current = _historical_process_capture(
+        tmp_path,
+        include_approval=False,
+    )
     envelope = load_tool_envelope(store, reference.sha256)
     assessment = ToolReplayPlanner().assess(
         envelope,
@@ -528,8 +591,98 @@ def test_approved_historical_process_reuses_result_without_current_allowlist(
         mode=ReplayMode.OFFLINE,
     )
 
-    assert envelope.result is not None
-    assert envelope.result.stdout == "BUILD SUCCESS"
-    assert assessment.approval_compatible_for_substitution is True
-    assert assessment.fresh_authorization_required is False
-    assert assessment.strategy == ToolReplayStrategy.REUSE_CAPTURED
+    assert envelope.historical_execution is None
+    assert assessment.historical_authorization_validated is False
+    assert assessment.strategy == ToolReplayStrategy.REJECT
+    assert "evidence is missing" in assessment.reasons[0]
+
+
+def test_legacy_process_envelope_remains_conservatively_incompatible(
+    tmp_path: Path,
+) -> None:
+    store, reference, current = _historical_process_capture(tmp_path)
+    payload = store.get_json(reference.sha256)
+    payload["envelope_version"] = 1
+    payload["historical_execution"] = None
+    metadata = store.put_json(
+        payload,
+        producing_span_id="legacy-process-span",
+        media_type=reference.media_type,
+    )
+
+    envelope = load_tool_envelope(store, metadata.sha256)
+    assessment = ToolReplayPlanner().assess(
+        envelope,
+        current,
+        mode=ReplayMode.OFFLINE,
+    )
+
+    assert envelope.envelope_version == 1
+    assert assessment.historical_authorization_validated is False
+    assert assessment.strategy == ToolReplayStrategy.REJECT
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "executable",
+        "arguments",
+        "working_directory",
+        "capability",
+        "approval_id",
+        "approval_digest",
+        "descriptor_fingerprint",
+        "tool_version",
+        "source_identity",
+        "candidate_identity",
+        "result",
+        "result_hash",
+    ],
+)
+def test_historical_execution_envelope_tampering_fails_closed(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    store, reference, _ = _historical_process_capture(tmp_path)
+    payload = deepcopy(store.get_json(reference.sha256))
+    if mutation == "executable":
+        payload["invocation"]["arguments"]["executable"] = "powershell"
+    elif mutation == "arguments":
+        payload["invocation"]["arguments"]["arguments"] = ["deploy"]
+    elif mutation == "working_directory":
+        payload["invocation"]["arguments"]["working_directory"] = "../outside"
+    elif mutation == "capability":
+        payload["invocation"]["requested_capabilities"][0]["scope"][
+            "executables"
+        ] = ["powershell"]
+    elif mutation == "approval_id":
+        payload["approval"]["approval_id"] = "approval-replaced"
+    elif mutation == "approval_digest":
+        payload["approval"]["binding_sha256"] = "d" * 64
+    elif mutation == "descriptor_fingerprint":
+        payload["historical_execution"]["descriptor_sha256"] = "d" * 64
+    elif mutation == "tool_version":
+        payload["descriptor"]["version"]["major"] = 2
+    elif mutation == "source_identity":
+        payload["invocation"]["context"]["policy_context"][
+            "source_identity_sha256"
+        ] = "d" * 64
+    elif mutation == "candidate_identity":
+        payload["invocation"]["context"]["policy_context"][
+            "candidate_identity_sha256"
+        ] = "d" * 64
+    elif mutation == "result":
+        payload["result"]["stdout"] = "TAMPERED"
+    elif mutation == "result_hash":
+        payload["historical_execution"]["result_sha256"] = "d" * 64
+    metadata = store.put_json(
+        payload,
+        producing_span_id=f"tampered-{mutation}",
+        media_type=reference.media_type,
+    )
+
+    with pytest.raises(
+        ReplayIncompatibleError,
+        match="invalid or incompatible",
+    ):
+        load_tool_envelope(store, metadata.sha256)

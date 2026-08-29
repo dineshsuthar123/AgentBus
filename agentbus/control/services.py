@@ -1108,6 +1108,16 @@ class ControlQueryService:
                         str(self._safe_trace_value(value))
                         for value in item.drift
                     ],
+                    historical_authorization_validated=(
+                        item.historical_authorization_validated
+                    ),
+                    historical_executable=(
+                        str(self._safe_trace_value(item.historical_executable))
+                        if item.historical_executable is not None
+                        else None
+                    ),
+                    captured_result_reused=item.captured_result_reused,
+                    process_dispatched=item.process_dispatched,
                 )
                 for item in span_results[:500]
             ],
@@ -1139,6 +1149,13 @@ class ControlQueryService:
             ),
             provider_calls=session.provider_calls,
             network_calls=session.network_calls,
+            historical_authorizations_validated=(
+                session.historical_authorizations_validated
+            ),
+            captured_tool_results_reused=(
+                session.captured_tool_results_reused
+            ),
+            process_dispatches=session.process_dispatches,
         )
 
     def compare(

@@ -5719,9 +5719,16 @@ def _validate_replay_session_update(
             raise ReplaySessionConflictError(
                 f"Recorded replay {field.replace('_', ' ')} cannot be rewritten."
             )
-    if (
-        current.provider_calls < previous.provider_calls
-        or current.network_calls < previous.network_calls
+    counter_fields = (
+        "provider_calls",
+        "network_calls",
+        "historical_authorizations_validated",
+        "captured_tool_results_reused",
+        "process_dispatches",
+    )
+    if any(
+        getattr(current, field) < getattr(previous, field)
+        for field in counter_fields
     ):
         raise ReplaySessionConflictError(
             "Replay side-effect counters cannot decrease."

@@ -649,3 +649,41 @@ def test_replay_preflights_all_references_before_callbacks(
     assert result.session.network_calls == 0
     assert calls == {"policy": 0, "verifier": 0}
     assert marker.read_text(encoding="utf-8") == "original\n"
+
+
+def test_explicit_strategy_cannot_rerun_legacy_historical_process(
+    tmp_path: Path,
+) -> None:
+    store, trace = _fixture(tmp_path)
+    trace = Trace.model_validate(
+        trace.model_copy(
+            update={
+                "spans": [
+                    span.model_copy(
+                        update={
+                            "attributes": {
+                                "tool_effect": "process",
+                                "replay_strategy": "rerun_sandbox",
+                            }
+                        }
+                    )
+                    if span.span_id == "tool"
+                    else span
+                    for span in trace.spans
+                ]
+            }
+        ).model_dump()
+    )
+    request = _request()
+    request.tool_strategies["tool"] = ToolReplayStrategy.RERUN_SANDBOX
+    dispatches = []
+
+    result = ReplayEngine(
+        store,
+        tool_executor=lambda *_args: dispatches.append(True) or {},
+    ).replay(trace, request)
+
+    assert result.session.status == ReplaySessionStatus.INCOMPATIBLE
+    assert result.session.process_dispatches == 0
+    assert dispatches == []
+    assert "never dispatches" in result.session.failure_message

@@ -21,7 +21,12 @@ from agentbus.control.services import ControlQueryService
 from agentbus.execution.models import RunRecord, TaskSpec
 from agentbus.execution.state_store import StateStore
 from agentbus.mcp import McpServerConfig, mcp_server_capabilities
-from agentbus.replay import ReplayMode, ReplaySession
+from agentbus.replay import (
+    ReplayMode,
+    ReplaySession,
+    ReplaySpanAction,
+    ReplaySpanResult,
+)
 from agentbus.sandbox.platform import ExecutableCatalog
 from agentbus.tools.protocol import ToolCapabilityName
 from agentbus.tools.runtime import build_managed_tool_runtime
@@ -608,12 +613,34 @@ def test_replay_response_exposes_isolation_scope_without_private_path(
             mode=ReplayMode.OFFLINE,
             isolated_workspace=str(tmp_path / "private-replay-worktree"),
             intelligence_drift=[IntelligenceDriftCategory.INDEX_SNAPSHOT],
+            span_results=[
+                ReplaySpanResult(
+                    span_id="tool-historical-process",
+                    action=ReplaySpanAction.REUSED,
+                    succeeded=True,
+                    summary="Historical executable result reused.",
+                    historical_authorization_validated=True,
+                    historical_executable="mvn",
+                    captured_result_reused=True,
+                    process_dispatched=False,
+                )
+            ],
+            historical_authorizations_validated=1,
+            captured_tool_results_reused=1,
+            process_dispatches=0,
         )
     )
 
     assert response.isolated is True
     assert response.isolation_scope == "daemon_managed_temporary_workspace"
     assert response.intelligence_drift == ["index_snapshot_drift"]
+    assert response.historical_authorizations_validated == 1
+    assert response.captured_tool_results_reused == 1
+    assert response.process_dispatches == 0
+    assert response.span_results[0].historical_executable == "mvn"
+    assert response.span_results[0].historical_authorization_validated is True
+    assert response.span_results[0].captured_result_reused is True
+    assert response.span_results[0].process_dispatched is False
     assert "isolated_workspace" not in response.model_dump(mode="json")
     assert str(tmp_path) not in response.model_dump_json()
 

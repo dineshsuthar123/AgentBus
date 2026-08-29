@@ -787,6 +787,10 @@ class ReplaySpanResultResponse(ProtocolModel):
     summary: str = Field(min_length=1, max_length=4000)
     output_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     drift: list[str] = Field(default_factory=list, max_length=256)
+    historical_authorization_validated: bool = False
+    historical_executable: str | None = Field(default=None, max_length=1_024)
+    captured_result_reused: bool = False
+    process_dispatched: bool = False
 
 
 class ReplaySessionResponse(ProtocolModel):
@@ -820,6 +824,9 @@ class ReplaySessionResponse(ProtocolModel):
     failure_message: str | None = Field(default=None, max_length=4000)
     provider_calls: int = Field(default=0, ge=0)
     network_calls: int = Field(default=0, ge=0)
+    historical_authorizations_validated: int = Field(default=0, ge=0)
+    captured_tool_results_reused: int = Field(default=0, ge=0)
+    process_dispatches: int = Field(default=0, ge=0)
 
 
 class ReplayAcceptedResponse(ReplaySessionResponse):
