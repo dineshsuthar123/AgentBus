@@ -18,8 +18,10 @@ from agentbus.tools.protocol import (
     ToolDescriptor,
     ToolInvocation,
     ToolInvocationContext,
+    ToolInvocationStatus,
     ToolPolicyDecision,
     ToolPolicyOutcome,
+    ToolResult,
     ToolSafetyClassification,
     ToolVersion,
     capability_fingerprint,
@@ -412,3 +414,122 @@ def test_policy_drift_is_reported_and_new_denial_blocks_replay() -> None:
     assert assessment.policy_drift is True
     assert assessment.current_outcome == ToolPolicyOutcome.DENY
     assert assessment.strategy == ToolReplayStrategy.REJECT
+
+
+def test_approved_historical_process_reuses_result_without_current_allowlist(
+    tmp_path: Path,
+) -> None:
+    from agentbus.policy import (
+        ToolApprovalDisposition,
+        ToolPolicyEngine,
+        build_tool_approval_request,
+        decide_tool_approval,
+    )
+
+    historical = descriptor_map(
+        workspace=tmp_path,
+        process_executables=("mvn",),
+    )["test.execute"]
+    current = descriptor_map(
+        workspace=tmp_path,
+        process_executables=("git", "pytest", "python"),
+    )["test.execute"]
+    provisional = ToolInvocation(
+        invocation_id="tool-historical-process",
+        run_id="run-historical-process",
+        task_id="step-1",
+        tool_name=historical.name,
+        tool_version=historical.version,
+        arguments={
+            "executable": "mvn",
+            "arguments": ["test"],
+            "working_directory": ".",
+        },
+        requested_capabilities=historical.capabilities,
+        context=ToolInvocationContext(
+            workspace_identity=str(tmp_path.resolve()),
+            worktree_identity=str(tmp_path.resolve()),
+            caller_role="verifier",
+            workspace_trusted=True,
+            provider_consented=True,
+            policy_context={"source_identity_sha256": "a" * 64},
+        ),
+        requested_at=NOW,
+    )
+    invocation = provisional.model_copy(
+        update={
+            "requested_capabilities": derive_required_capabilities(
+                provisional,
+                historical,
+            )
+        }
+    )
+    policy = ToolPolicyEngine()
+    approval_required = policy.evaluate(invocation, historical)
+    request = build_tool_approval_request(
+        invocation,
+        historical,
+        approval_required,
+        approval_id="approval-historical-process",
+    )
+    approval = decide_tool_approval(
+        request,
+        invocation,
+        disposition=ToolApprovalDisposition.APPROVED,
+    )
+    approved = policy.evaluate(
+        invocation,
+        historical,
+        approval=approval,
+    )
+    result = ToolResult(
+        invocation_id=invocation.invocation_id,
+        invocation_revision=invocation.invocation_revision,
+        status=ToolInvocationStatus.SUCCEEDED,
+        structured_output={
+            "executable": "mvn",
+            "working_directory": str(tmp_path.resolve()),
+            "passed": True,
+        },
+        stdout="BUILD SUCCESS\n",
+        exit_code=0,
+        policy_decision=approved,
+        approval_id=approval.approval_id,
+        safe_diagnostic_metadata={
+            "executable": {
+                "alias": "mvn",
+                "path": "C:/tools/mvn.cmd",
+                "sha256": "b" * 64,
+                "size_bytes": 123,
+            },
+            "working_directory": str(tmp_path.resolve()),
+            "shell": False,
+        },
+    )
+    store = ContentAddressedStore(
+        tmp_path / "objects",
+        private_roots=[tmp_path],
+    )
+    reference = capture_tool_envelope(
+        store,
+        descriptor=historical,
+        invocation=invocation,
+        policy_decision=approved,
+        producing_span_id="tool-historical-process-span",
+        reference_id="tool-historical-process-envelope",
+        result=result,
+        approval=approval,
+    )
+
+    envelope = load_tool_envelope(store, reference.sha256)
+    assessment = ToolReplayPlanner().assess(
+        envelope,
+        current,
+        mode=ReplayMode.OFFLINE,
+    )
+
+    assert envelope.result is not None
+    assert envelope.result.stdout == "BUILD SUCCESS"
+    assert assessment.approval_compatible_for_substitution is True
+    assert assessment.fresh_authorization_required is False
+    assert assessment.strategy == ToolReplayStrategy.REUSE_CAPTURED
