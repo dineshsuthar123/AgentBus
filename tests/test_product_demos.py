@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 
 import pytest
@@ -77,6 +78,30 @@ def test_demo_git_initialization_refuses_nonempty_destination(tmp_path):
         create_demo("payment", destination, initialize_git=True)
 
     assert unrelated.read_text(encoding="utf-8") == "preserve"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows command shim regression")
+def test_demo_run_executes_windows_command_shim_with_shell_disabled(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = tmp_path / "payment"
+    create_demo("payment", workspace)
+    executable_dir = tmp_path / "bin"
+    executable_dir.mkdir()
+    (executable_dir / "mvn.cmd").write_text(
+        "@echo PAYMENT_DEMO_SHIM\r\n@exit /b 7\r\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(
+        "PATH",
+        os.pathsep.join((str(executable_dir), os.environ.get("PATH", ""))),
+    )
+
+    result = run_demo("payment", workspace=workspace)
+
+    assert result.test_executed is True
+    assert result.test_exit_code == 7
 
 
 def test_demo_refuses_unmanaged_nonempty_destination(tmp_path):

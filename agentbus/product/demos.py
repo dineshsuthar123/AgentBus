@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -12,6 +13,7 @@ from typing import Any
 
 DEMO_LANGUAGES = ("python", "java", "typescript", "go", "payment")
 _MARKER = ".agentbus-demo.json"
+_WINDOWS_BATCH_UNSAFE = re.compile(r'[\x00-\x1f"%!&|<>^()]')
 
 
 @dataclass(frozen=True)
@@ -322,18 +324,19 @@ def run_demo(
                 test_command=definition.test_command,
                 git_initialized=(root / ".git").is_dir(),
             )
-    executable = definition.required_executable
-    available = Path(executable).is_file() if Path(executable).is_absolute() else shutil.which(executable)
-    if not available:
+    launch = _demo_process_command(definition)
+    if launch is None:
         return created
+    command, executable_override = launch
     result = subprocess.run(
-        list(definition.test_command),
+        command,
         cwd=created.workspace,
         capture_output=True,
         text=True,
         timeout=timeout_seconds,
         shell=False,
         check=False,
+        executable=executable_override,
     )
     return DemoResult(
         language=created.language,
@@ -387,3 +390,32 @@ def _initialize_git_repository(root: Path, managed_files: tuple[str, ...]) -> No
         if result.returncode != 0:
             detail = (result.stderr or result.stdout).strip()
             raise ValueError(f"Git demo initialization failed: {detail[:500]}")
+
+
+def _demo_process_command(
+    definition: DemoDefinition,
+) -> tuple[list[str] | str, str | None] | None:
+    executable = definition.required_executable
+    if Path(executable).is_absolute():
+        resolved = str(Path(executable)) if Path(executable).is_file() else None
+    else:
+        resolved = shutil.which(executable)
+    if resolved is None:
+        return None
+    arguments = list(definition.test_command[1:])
+    if sys.platform == "win32" and Path(resolved).suffix.lower() in {
+        ".bat",
+        ".cmd",
+    }:
+        command_interpreter = shutil.which("cmd.exe")
+        if command_interpreter is None:
+            return None
+        tokens = (resolved, *arguments)
+        if any(_WINDOWS_BATCH_UNSAFE.search(token) for token in tokens):
+            raise ValueError("Demo command contains unsafe Windows batch syntax")
+        batch_command = " ".join(f'"{token}"' for token in tokens)
+        command_line = (
+            f'"{command_interpreter}" /d /v:off /s /c "{batch_command}"'
+        )
+        return command_line, command_interpreter
+    return [resolved, *arguments], None
