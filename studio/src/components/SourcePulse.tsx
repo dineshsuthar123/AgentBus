@@ -12,7 +12,7 @@ export function SourcePulse({ changes }: { changes: ChangeSummary[] }) {
             <span className={`source-icon state-${change.generated ? "generated" : change.status.toLowerCase()}`}><Icon size={15} /></span>
             <code title={change.path}>{change.path}</code>
             <span className="source-state">{change.generated ? "generated" : change.classification}</span>
-            <span className="source-delta">{change.binary ? "binary" : `+${change.additions ?? 0} −${change.deletions ?? 0}`}</span>
+            <span className="source-delta">{change.binary ? "binary" : `+${change.additions ?? 0} -${change.deletions ?? 0}`}</span>
           </div>
         );
       })}

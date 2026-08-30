@@ -26,7 +26,15 @@ export default defineConfig({
       "/api": { target: controlTarget, changeOrigin: true }
     }
   },
-  preview: { host: "127.0.0.1", port: 4173, strictPort: true },
+  preview: {
+    host: "127.0.0.1",
+    port: 4173,
+    strictPort: true,
+    proxy: {
+      "/health": { target: controlTarget, changeOrigin: true },
+      "/api": { target: controlTarget, changeOrigin: true }
+    }
+  },
   test: {
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],

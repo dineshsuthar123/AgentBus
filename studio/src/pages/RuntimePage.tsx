@@ -15,7 +15,7 @@ export function RuntimePage() {
       <section className="runtime-hero">
         <div className={`runtime-orbit ${doctor?.status === "ok" || doctor?.status === "healthy" ? "is-healthy" : ""}`}><span><Cpu size={30} /></span><i /><i /><i /></div>
         <div><p className="section-label">Daemon state</p><h2>{humanize(doctor?.status ?? connection)}</h2><p>The Studio session is process-local and bearer authenticated. No token is written to local storage.</p></div>
-        <dl><div><dt>Protocol</dt><dd><code>{String(info?.protocol_version ?? "—")}</code></dd></div><div><dt>Version</dt><dd>{String(info?.agentbus_version ?? "—")}</dd></div><div><dt>SSE</dt><dd><StatusSignal status={streamConnected ? "connected" : "snapshot"} /></dd></div></dl>
+        <dl><div><dt>Protocol</dt><dd><code>{String(info?.protocol_version ?? "--")}</code></dd></div><div><dt>Version</dt><dd>{String(info?.agentbus_version ?? "--")}</dd></div><div><dt>SSE</dt><dd><StatusSignal status={streamConnected ? "connected" : "snapshot"} /></dd></div></dl>
       </section>
       <div className="runtime-grid">
         <section className="content-section">

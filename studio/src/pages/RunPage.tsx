@@ -182,7 +182,7 @@ function RunHero({ run, tasks }: { run: RunSummary; tasks: TaskSummary[] }) {
         <div className="run-identities"><TraceIdentity label="Run" value={run.run_id} /><TraceIdentity label="Workspace" value={run.workspace} /></div>
       </div>
       <div className="progress-dial" style={{ "--progress": `${progress * 3.6}deg` } as React.CSSProperties}>
-        <div><strong>{completed}<small>/{tasks.length || "—"}</small></strong><span>tasks sealed</span></div>
+        <div><strong>{completed}<small>/{tasks.length || "--"}</small></strong><span>tasks sealed</span></div>
       </div>
       <dl className="run-hero-stats">
         <div><dt>Started</dt><dd>{formatDate(run.created_at)}</dd></div>
@@ -270,7 +270,7 @@ function ReviewList({ title, items }: { title: string; items: string[] }) {
 }
 
 function Manifest({ label, value }: { label: string; value: unknown }) {
-  return <div><dt>{label}</dt><dd>{typeof value === "string" ? <code>{shortId(value)}</code> : String(value ?? "—")}</dd></div>;
+  return <div><dt>{label}</dt><dd>{typeof value === "string" ? <code>{shortId(value)}</code> : String(value ?? "--")}</dd></div>;
 }
 
 function tabCount(tab: RunTab, bundle: RunBundle, approvals: ApprovalSummary[]) {

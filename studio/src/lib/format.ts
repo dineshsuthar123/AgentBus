@@ -1,6 +1,6 @@
 export function shortId(value?: string | null, size = 9): string {
   if (!value) return "not available";
-  return value.length <= size * 2 + 1 ? value : `${value.slice(0, size)}…${value.slice(-size)}`;
+  return value.length <= size * 2 + 3 ? value : `${value.slice(0, size)}...${value.slice(-size)}`;
 }
 
 export function formatTime(value?: string | null): string {
