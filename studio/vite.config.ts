@@ -3,7 +3,27 @@ import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "..");
-const controlTarget = process.env.AGENTBUS_STUDIO_TARGET ?? "http://127.0.0.1:8765";
+const controlTarget = validateControlTarget(
+  process.env.AGENTBUS_STUDIO_TARGET ?? "http://127.0.0.1:8765"
+);
+
+export function validateControlTarget(value: string): string {
+  const target = new URL(value);
+  const host = target.hostname.replace(/^\[|\]$/g, "");
+  const rootOnly = target.pathname === "/" && !target.search && !target.hash;
+  if (
+    target.protocol !== "http:" ||
+    !["127.0.0.1", "::1"].includes(host) ||
+    target.username ||
+    target.password ||
+    !rootOnly
+  ) {
+    throw new Error(
+      "AGENTBUS_STUDIO_TARGET must be a credential-free numeric loopback HTTP origin."
+    );
+  }
+  return target.origin;
+}
 
 export default defineConfig({
   plugins: [react()],
