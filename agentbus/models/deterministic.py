@@ -38,6 +38,10 @@ _DELETE_PROFILE_SHA256 = hashlib.sha256(
 ).hexdigest()
 _RUNTIME_STEP_PATTERN = re.compile(r"--- Step (\d+) ---")
 _PROFILE_REQUIREMENTS: dict[str, list[str]] = {
+    "payment-safety": [
+        "filesystem.write",
+        "git.read",
+    ],
     "tool-safe-read": ["filesystem.read"],
     "tool-atomic-write": ["filesystem.write", "filesystem.create"],
     "tool-source-patch": ["filesystem.write"],
@@ -73,6 +77,7 @@ _ANALYSIS_READ_ONLY_CAPABILITIES = {
     "environment.read_safe",
 }
 _PROFILE_OUTPUTS: dict[str, list[str]] = {
+    "payment-safety": ["src/main/java/com/agentbus/demo/PaymentService.java"],
     "tool-atomic-write": ["profile_result.txt"],
     "tool-source-patch": ["module.py"],
     "tool-source-patch-review-retry": ["module.py"],
@@ -373,6 +378,39 @@ class DeterministicProvider:
         )
 
     def _plan(self) -> dict[str, Any]:
+        if self.profile == "payment-safety":
+            return {
+                "goal": "Make payment confirmation idempotent under concurrent retries.",
+                "steps": [
+                    {
+                        "id": "step-1",
+                        "title": "Make confirmation retry-safe",
+                        "description": (
+                            "Replace the non-atomic payment confirmation result with "
+                            "one atomic set insertion and prove sequential and concurrent "
+                            "retry behavior with the repository Maven tests."
+                        ),
+                        "risk": "medium",
+                        "execution_kind": "implementation",
+                        "dependencies": [],
+                        "assigned_role": "coder",
+                        "maximum_attempts": 2,
+                        "expected_outputs": _PROFILE_OUTPUTS[self.profile],
+                        "done_criteria": [
+                            "Exactly one concurrent confirmation returns success.",
+                            "Repeated confirmation preserves the public API and returns zero.",
+                            "The repository Maven tests pass.",
+                        ],
+                        "required_capabilities": _PROFILE_REQUIREMENTS[self.profile],
+                    }
+                ],
+                "test_strategy": (
+                    "Run mvn -q -o test through the approval-gated managed test tool."
+                ),
+                "done_criteria": [
+                    "The scoped Java patch is verified and approved by final review."
+                ],
+            }
         if self.profile in _PROFILE_REQUIREMENTS:
             outputs = _PROFILE_OUTPUTS.get(self.profile, [])
             return {
@@ -597,6 +635,30 @@ class DeterministicProvider:
             "summary": f"Completed deterministic profile {self.profile}.",
         }
         calls: dict[str, list[dict[str, Any]]] = {
+            "payment-safety": [
+                _tool_action(
+                    "filesystem.patch",
+                    {
+                        "path": "src/main/java/com/agentbus/demo/PaymentService.java",
+                        "expected": (
+                            "confirmedPaymentIds.add(paymentId);\n"
+                            "        return 1;"
+                        ),
+                        "replacement": (
+                            "return confirmedPaymentIds.add(paymentId) ? 1 : 0;"
+                        ),
+                        "expected_occurrences": 1,
+                    },
+                    ["filesystem.write"],
+                    f"{task_id}:payment-idempotency-patch",
+                ),
+                _tool_action(
+                    "git.diff",
+                    {},
+                    ["git.read"],
+                    f"{task_id}:payment-git-diff",
+                ),
+            ],
             "tool-safe-read": [
                 _tool_action(
                     "filesystem.read",

@@ -941,6 +941,11 @@ def _demo_command(arguments: list[str]) -> int:
     creating.add_argument("language", choices=DEMO_LANGUAGES)
     creating.add_argument("--output")
     creating.add_argument("--force", action="store_true")
+    creating.add_argument(
+        "--git",
+        action="store_true",
+        help="Initialize and commit a new isolated Git repository for AgentBus runs.",
+    )
     creating.add_argument("--json", action="store_true")
     running = commands.add_parser("run")
     running.add_argument("language", choices=DEMO_LANGUAGES)
@@ -964,7 +969,12 @@ def _demo_command(arguments: list[str]) -> int:
         try:
             if args.demo_command == "create":
                 output = args.output or f"agentbus-{args.language}-demo"
-                result = create_demo(args.language, output, force=args.force)
+                result = create_demo(
+                    args.language,
+                    output,
+                    force=args.force,
+                    initialize_git=args.git,
+                )
             else:
                 result = run_demo(
                     args.language,

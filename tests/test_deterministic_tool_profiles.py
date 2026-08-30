@@ -201,6 +201,30 @@ def test_control_acceptance_profile_executes_real_multi_tool_lifecycle(
     assert records[-1].safe_result.exit_code == 0
 
 
+def test_payment_safety_profile_patches_through_managed_tools(
+    tmp_path: Path,
+) -> None:
+    harness = _harness(tmp_path, "payment-safety")
+    runtime = harness.runtime()
+    try:
+        summary = harness.loop(runtime).run("Repair concurrent payment retries.")
+    finally:
+        runtime.close()
+
+    source = (
+        harness.workspace
+        / "src/main/java/com/agentbus/demo/PaymentService.java"
+    ).read_text(encoding="utf-8")
+    records = harness.store.list_tool_invocations("run-1")
+    assert summary == "Completed deterministic profile payment-safety."
+    assert [record.tool_name for record in records] == [
+        "filesystem.patch",
+        "git.diff",
+    ]
+    assert all(record.status == ToolInvocationStatus.SUCCEEDED for record in records)
+    assert "return confirmedPaymentIds.add(paymentId) ? 1 : 0;" in source
+
+
 @pytest.mark.parametrize(
     ("profile", "target", "rule_id"),
     [
@@ -471,6 +495,29 @@ def _harness(
             "def test_add():\n"
             "    assert add(2, 3) == 5\n",
             encoding="utf-8",
+        )
+    if profile == "payment-safety":
+        payment_source = workspace / "src/main/java/com/agentbus/demo/PaymentService.java"
+        payment_source.parent.mkdir(parents=True)
+        payment_source.write_text(
+            "package com.agentbus.demo;\n\n"
+            "import java.util.Set;\n"
+            "import java.util.concurrent.ConcurrentHashMap;\n\n"
+            "public final class PaymentService {\n"
+            "    private final Set<String> confirmedPaymentIds = "
+            "ConcurrentHashMap.newKeySet();\n\n"
+            "    public int confirm(String paymentId) {\n"
+            "        confirmedPaymentIds.add(paymentId);\n"
+            "        return 1;\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        (workspace / "pom.xml").write_text(
+            "<project><modelVersion>4.0.0</modelVersion></project>\n",
+            encoding="utf-8",
+            newline="\n",
         )
     (workspace / "delete_me.txt").write_bytes(DELETE_TARGET.encode("utf-8"))
     _initialize_repository(workspace)

@@ -9,6 +9,7 @@ from pathlib import Path
 
 from agentbus.execution.models import AttemptStatus, RunStatus, TaskStatus
 from agentbus.execution.state_store import StateStore
+from agentbus.product.demos import create_demo
 from agentbus.tools.protocol import ToolInvocationStatus
 
 
@@ -132,6 +133,107 @@ def test_cli_run_approve_resume_preserves_verifier_attempt(tmp_path: Path) -> No
     assert not (workspace / "runs").exists()
     assert list((workspace / ".agentbus" / "runs").glob(f"*{run_id}.jsonl"))
     assert _git(workspace, "status", "--short") == " M module.py"
+
+
+def test_payment_demo_runs_one_verifier_gate_then_review_and_trace(
+    tmp_path: Path,
+) -> None:
+    workspace = create_demo(
+        "payment",
+        tmp_path / "payment-demo",
+        initialize_git=True,
+    ).workspace
+    marker = tmp_path / "maven-invocations.txt"
+    executable_dir = _fake_maven(tmp_path / "bin", marker)
+    config = _config(workspace, profile="payment-safety")
+    environment = {
+        **os.environ,
+        "AGENTBUS_PROVIDER": "deterministic",
+        "AGENTBUS_DETERMINISTIC_PROFILE": "payment-safety",
+        "PATH": os.pathsep.join((str(executable_dir), os.environ.get("PATH", ""))),
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+
+    started = _cli(
+        workspace,
+        environment,
+        "run",
+        "--config",
+        str(config),
+        "--workflow",
+        "multi",
+        "--provider",
+        "deterministic",
+        "--durable",
+        "--max-steps",
+        "3",
+        "Make payment confirmation idempotent under concurrent retries.",
+    )
+    run_id = _run_id(started.stdout)
+    store = StateStore(workspace / ".agentbus" / "state.db")
+    pending = store.list_tool_approvals(run_id)
+    source_path = (
+        workspace / "src/main/java/com/agentbus/demo/PaymentService.java"
+    )
+
+    assert started.returncode == 0, started.stdout + started.stderr
+    assert store.get_run(run_id).status == RunStatus.WAITING_FOR_APPROVAL
+    assert marker.exists() is False
+    assert len(pending) == 1
+    assert pending[0].request.tool_name == "test.execute"
+    assert pending[0].request.executable == "mvn"
+    assert pending[0].request.arguments_summary == ("-q", "-o", "test")
+    assert "return confirmedPaymentIds.add(paymentId) ? 1 : 0;" in (
+        source_path.read_text(encoding="utf-8")
+    )
+
+    approved = _cli(
+        workspace,
+        environment,
+        "approve",
+        f"{run_id}:step-1",
+        "--config",
+        str(config),
+        "--reason",
+        "Approve the exact offline payment verifier invocation.",
+    )
+    resumed = _cli(
+        workspace,
+        environment,
+        "resume",
+        run_id,
+        "--config",
+        str(config),
+    )
+    final_store = StateStore(workspace / ".agentbus" / "state.db")
+    persisted = final_store.get_run(run_id)
+    invocations = final_store.list_tool_invocations(run_id)
+    events = final_store.list_events(run_id)
+    verifier_calls = [
+        invocation
+        for invocation in invocations
+        if invocation.tool_name == "test.execute"
+        and invocation.caller_role == "verifier"
+    ]
+
+    assert approved.returncode == 0, approved.stdout + approved.stderr
+    assert resumed.returncode == 0, resumed.stdout + resumed.stderr
+    assert persisted.status == RunStatus.SUCCEEDED
+    assert persisted.verifier_status == "passed"
+    assert persisted.reviewer_status == "approved"
+    assert marker.read_text(encoding="utf-8") == "1\n"
+    assert len(verifier_calls) == 1
+    assert verifier_calls[0].status == ToolInvocationStatus.SUCCEEDED
+    assert not any(
+        event["event_type"] == "task_review_completed" for event in events
+    )
+    assert sum(event["event_type"] == "final_review_completed" for event in events) == 1
+    assert sum(event["event_type"] == "execution_trace_sealed" for event in events) == 1
+    assert persisted.metadata["execution_trace"]["status"] == "sealed"
+    assert not (workspace / "runs").exists()
+    assert _git(workspace, "status", "--short") == (
+        " M src/main/java/com/agentbus/demo/PaymentService.java"
+    )
 
 
 def test_cli_retry_review_uses_original_task_baseline(tmp_path: Path) -> None:

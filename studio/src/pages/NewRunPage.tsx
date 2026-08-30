@@ -66,7 +66,7 @@ export function NewRunPage({ demo }: { demo: string | null }) {
       create_pr: createPr,
       tags: paymentPreset ? ["studio", "payment-safety", "razorpay-demo"] : ["studio"],
       metadata: { entrypoint: "agentbus-studio", demo: paymentPreset ? "payment-safety" : undefined },
-      ...(provider === "deterministic" && paymentPreset ? { deterministic: { profile: "payment-safety" as never } } : {})
+      ...(provider === "deterministic" && paymentPreset ? { deterministic: { profile: "payment-safety" } } : {})
     };
     try {
       const accepted = await client.createRun(body);

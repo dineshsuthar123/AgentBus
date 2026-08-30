@@ -24,6 +24,7 @@ SUPPORTED_PROVIDERS = ("ollama", "azure", "deterministic")
 SUPPORTED_AZURE_API_MODES = ("responses", "chat_completions")
 SUPPORTED_DETERMINISTIC_PROFILES = (
     "python-calculator",
+    "payment-safety",
     "cancellation-two-task",
     "tool-safe-read",
     "tool-atomic-write",

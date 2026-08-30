@@ -245,6 +245,7 @@ class RoleModelOverrides(ProtocolModel):
 class DeterministicProviderOptions(ProtocolModel):
     profile: Literal[
         "python-calculator",
+        "payment-safety",
         "cancellation-two-task",
         "tool-safe-read",
         "tool-atomic-write",

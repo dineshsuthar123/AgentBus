@@ -12,6 +12,10 @@ export function DemoPage() {
         <div className="demo-story"><p className="eyebrow">The defect</p><h2>Two retries. One payment.<br /><span>Exactly one confirmation.</span></h2><p>The fixture begins with a Java payment service that returns success for every confirmation attempt. AgentBus must make confirmation idempotent under concurrent retries while preserving the public API.</p><a className="button button-primary" href="#/new?demo=payment"><Play size={15} /> Configure the live run</a></div>
         <div className="payment-signal" aria-label="Payment retry model"><span className="retry-packet"><RotateCcw size={15} /> Retry A</span><span className="retry-packet second"><RotateCcw size={15} /> Retry B</span><i /><div><ShieldCheck size={26} /><strong>1</strong><small>confirmation</small></div></div>
       </section>
+      <section className="demo-setup">
+        <div><p className="section-label">One-time fixture</p><h2>Create a clean repository baseline</h2><p>The command writes only marker-owned demo files, initializes an isolated Git repository, and creates the baseline commit that AgentBus uses for scoped diffs.</p></div>
+        <pre><code>agentbus demo create payment --output agentbus-payment-demo --git --json</code></pre>
+      </section>
       <section className="demo-sequence">
         <DemoStep number="01" icon={<GitBranch size={18} />} title="Plan the graph">The planner persists a scoped task and explicit done criteria against an isolated Git repository.</DemoStep>
         <DemoStep number="02" icon={<LockKeyhole size={18} />} title="Hold Maven at the gate">The test command requires an exact, revision-bound operator approval before process execution.</DemoStep>

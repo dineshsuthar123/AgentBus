@@ -26,7 +26,7 @@ class TestCommandDetector:
 
         if (self.workspace / "pom.xml").is_file():
             return {
-                "command": ["mvn", "test"],
+                "command": self._maven_test_command(),
                 "reason": "Detected Maven pom.xml.",
                 "confidence": "high",
             }
@@ -87,3 +87,18 @@ class TestCommandDetector:
 
         scripts = data.get("scripts", {})
         return isinstance(scripts, dict) and bool(scripts.get("test"))
+
+    def _maven_test_command(self) -> list[str]:
+        command = ["mvn"]
+        config = self.workspace / ".mvn" / "maven.config"
+        try:
+            if config.stat().st_size > 16_384:
+                return [*command, "test"]
+            configured = config.read_text(encoding="utf-8").split()
+        except OSError:
+            configured = []
+        if "-q" in configured or "--quiet" in configured:
+            command.append("-q")
+        if "-o" in configured or "--offline" in configured:
+            command.append("-o")
+        return [*command, "test"]
