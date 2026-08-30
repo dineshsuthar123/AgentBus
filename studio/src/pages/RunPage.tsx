@@ -17,7 +17,7 @@ import {
   Wrench
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { ApprovalSummary, ReplaySessionResponse, RunSummary, TaskSummary } from "../api/types";
+import type { ApprovalSummary, ReplaySessionResponse, RunSummary, TaskSummary, TraceVerificationResponse } from "../api/types";
 import { loadRunBundle, type RunBundle } from "../api/runBundle";
 import { ApprovalGate } from "../components/ApprovalGate";
 import { AttemptStack } from "../components/AttemptStack";
@@ -48,6 +48,7 @@ export function RunPage({ runId }: { runId: string }) {
   const [tab, setTab] = useState<RunTab>("overview");
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState<string>();
+  const [traceVerification, setTraceVerification] = useState<TraceVerificationResponse>();
 
   async function refresh() {
     if (!client) return;
@@ -128,6 +129,19 @@ export function RunPage({ runId }: { runId: string }) {
     }
   }
 
+  async function verifyEvidence() {
+    if (!client) return;
+    setBusy("verify-trace");
+    try {
+      setTraceVerification(await client.verifyTrace(runId));
+      setTab("evidence");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Trace integrity verification failed.");
+    } finally {
+      setBusy(undefined);
+    }
+  }
+
   return (
     <div className="run-workspace">
       <EvidenceRibbon trace={bundle.trace} provenance={bundle.provenance} replayability={bundle.replayability} replay={latestReplay} streamConnected={streamConnected} />
@@ -150,7 +164,7 @@ export function RunPage({ runId }: { runId: string }) {
           {tab === "attempts" && <Attempts bundle={bundle} />}
           {tab === "source" && <Source bundle={bundle} />}
           {tab === "review" && <Review bundle={bundle} />}
-          {tab === "evidence" && <Evidence bundle={bundle} latestReplay={latestReplay} busy={busy} onReplay={replay} />}
+          {tab === "evidence" && <Evidence bundle={bundle} latestReplay={latestReplay} verification={traceVerification} busy={busy} onReplay={replay} onVerify={verifyEvidence} />}
         </section>
       </div>
     </div>
@@ -210,7 +224,7 @@ function Tools({ bundle }: { bundle: RunBundle }) {
 }
 
 function Attempts({ bundle }: { bundle: RunBundle }) {
-  return <section className="content-section"><div className="section-heading"><div><p className="section-label">Durable history</p><h2>Attempt stack</h2></div><span>Successful terminals never rerun on resume</span></div><AttemptStack tasks={bundle.tasks.tasks} report={bundle.report?.report} /></section>;
+  return <section className="content-section"><div className="section-heading"><div><p className="section-label">Durable history</p><h2>Attempt stack</h2></div><span>Successful terminals never rerun on resume</span></div><AttemptStack tasks={bundle.tasks.tasks} attempts={bundle.attempts?.attempts} report={bundle.report?.report} /></section>;
 }
 
 function Source({ bundle }: { bundle: RunBundle }) {
@@ -237,13 +251,13 @@ function Review({ bundle }: { bundle: RunBundle }) {
   );
 }
 
-function Evidence({ bundle, latestReplay, busy, onReplay }: { bundle: RunBundle; latestReplay?: ReplaySessionResponse; busy?: string; onReplay: () => Promise<void> }) {
+function Evidence({ bundle, latestReplay, verification, busy, onReplay, onVerify }: { bundle: RunBundle; latestReplay?: ReplaySessionResponse; verification?: TraceVerificationResponse; busy?: string; onReplay: () => Promise<void>; onVerify: () => Promise<void> }) {
   const trace = bundle.trace;
   const provenance = bundle.provenance;
   return (
     <div className="evidence-layout">
       <section className="content-section evidence-manifest"><div className="section-heading"><div><p className="section-label">Flight recorder</p><h2>Trace manifest</h2></div><StatusSignal status={trace?.status} /></div><dl className="manifest-grid"><Manifest label="Trace ID" value={trace?.trace_id} /><Manifest label="Root span" value={trace?.root_span_id} /><Manifest label="Spans" value={trace?.span_count} /><Manifest label="Events" value={trace?.event_count} /><Manifest label="Checkpoints" value={trace?.checkpoint_count} /><Manifest label="Schema" value={trace?.schema_version} /></dl></section>
-      <section className="content-section provenance-section"><div className="section-heading"><div><p className="section-label">Tamper evidence</p><h2>Provenance seal</h2></div><Fingerprint size={18} /></div>{provenance ? <><div className="integrity-root"><span>Integrity root</span><code>{provenance.integrity_root}</code></div><dl className="technical-grid"><div><dt>Algorithm</dt><dd>{provenance.integrity_algorithm}</dd></div><div><dt>Objects</dt><dd>{provenance.integrity_object_count}</dd></div><div><dt>Policy hash</dt><dd><code>{shortId(provenance.policy_sha256)}</code></dd></div><div><dt>Repository tree</dt><dd><code>{shortId(provenance.final_repository_tree_sha256)}</code></dd></div></dl></> : <p className="quiet-copy">Provenance is sealed when a trace reaches the required state.</p>}</section>
+      <section className="content-section provenance-section"><div className="section-heading"><div><p className="section-label">Tamper evidence</p><h2>Provenance seal</h2></div><Fingerprint size={18} /></div>{provenance ? <><div className="integrity-root"><span>Integrity root</span><code>{provenance.integrity_root}</code></div><dl className="technical-grid"><div><dt>Algorithm</dt><dd>{provenance.integrity_algorithm}</dd></div><div><dt>Objects</dt><dd>{provenance.integrity_object_count}</dd></div><div><dt>Policy hash</dt><dd><code>{shortId(provenance.policy_sha256)}</code></dd></div><div><dt>Repository tree</dt><dd><code>{shortId(provenance.final_repository_tree_sha256)}</code></dd></div></dl>{verification && <div className="integrity-verdict"><VerificationMark valid={verification.valid ?? false} /><span><strong>{verification.valid ? "Integrity verified" : "Integrity mismatch"}</strong><small>{verification.object_count} objects checked, {verification.provider_calls ?? 0} provider calls, {verification.network_calls ?? 0} network calls</small></span></div>}<button className="button button-secondary" type="button" disabled={busy !== undefined} onClick={() => void onVerify()}>{busy === "verify-trace" ? <LoaderCircle className="spin" size={14} /> : <ShieldCheck size={14} />} Verify sealed trace</button></> : <p className="quiet-copy">Provenance is sealed when a trace reaches the required state.</p>}</section>
       <section className="content-section replay-section"><div className="section-heading"><div><p className="section-label">Providerless proof</p><h2>Offline replay</h2></div><GitCompareArrows size={18} /></div><p className="section-copy">Re-execute captured deterministic spans inside a daemon-managed temporary workspace. Offline mode does not call a model provider or the network.</p>{bundle.replayability && <div className="replayability"><span><strong>{humanize(bundle.replayability.level)}</strong><small>Replayability classification</small></span><StatusSignal status={bundle.replayability.replayable_offline ? "ready" : "incompatible"} /></div>}{latestReplay && <div className="replay-result"><div><StatusSignal status={latestReplay.status} /><TraceIdentity label="Replay" value={latestReplay.replay_id} /></div><dl><div><dt>Provider calls</dt><dd>{latestReplay.provider_calls ?? 0}</dd></div><div><dt>Network calls</dt><dd>{latestReplay.network_calls ?? 0}</dd></div><div><dt>Process dispatches</dt><dd>{latestReplay.process_dispatches ?? 0}</dd></div><div><dt>Captured results</dt><dd>{latestReplay.captured_tool_results_reused ?? 0}</dd></div></dl></div>}<button className="button button-replay" type="button" disabled={!bundle.replayability?.replayable_offline || busy !== undefined} onClick={() => void onReplay()}>{busy === "replay" ? <LoaderCircle className="spin" size={15} /> : <Play size={15} />} Run offline replay</button></section>
       <section className="content-section span-section"><div className="section-heading"><div><p className="section-label">Trace topology</p><h2>Spans</h2></div><Boxes size={18} /></div><div className="span-list">{bundle.spans?.spans.map((span) => <div className="span-row" key={span.span_id}><span>{span.sequence}</span><Wrench size={14} /><strong>{span.name}</strong><code>{span.span_type}</code><StatusSignal status={span.status} /></div>)}{!bundle.spans?.spans.length && <p className="quiet-copy">No trace spans are available yet.</p>}</div></section>
     </div>

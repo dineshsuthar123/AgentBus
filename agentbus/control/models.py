@@ -437,6 +437,54 @@ class TaskListResponse(ProtocolModel):
     tasks: list[TaskSummary]
 
 
+class RetryDiagnosticsSummary(ProtocolModel):
+    kind: str = Field(min_length=1, max_length=64)
+    summary: str = Field(default="", max_length=4_096)
+    failing_tests: list[str] = Field(default_factory=list, max_length=32)
+    exception_details: list[str] = Field(default_factory=list, max_length=32)
+    reviewer_issues: list[str] = Field(default_factory=list, max_length=32)
+    required_fixes: list[str] = Field(default_factory=list, max_length=32)
+
+
+class RetryEvidenceSummary(ProtocolModel):
+    source_attempt_id: str = Field(min_length=1, max_length=128)
+    source_attempt_number: int = Field(ge=1)
+    failure_category: str = Field(min_length=1, max_length=64)
+    candidate_identity_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    candidate_tree_id: str | None = Field(
+        default=None,
+        pattern=r"^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+    )
+    retained_changed_files: list[str] = Field(default_factory=list, max_length=512)
+    diagnostics: RetryDiagnosticsSummary
+    created_at: datetime
+    evidence_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    source_disposition: str | None = Field(default=None, max_length=64)
+    mutations_retained: bool | None = None
+
+
+class AttemptSummary(ProtocolModel):
+    attempt_id: str = Field(min_length=1, max_length=128)
+    task_id: str = Field(min_length=1, max_length=128)
+    attempt_number: int = Field(ge=1)
+    status: str = Field(min_length=1, max_length=64)
+    started_at: datetime
+    completed_at: datetime | None = None
+    failure_category: str | None = Field(default=None, max_length=64)
+    failure_message: str | None = Field(default=None, max_length=4_000)
+    observation_summary: str | None = Field(default=None, max_length=4_000)
+    verifier_status: str | None = Field(default=None, max_length=64)
+    reviewer_status: str | None = Field(default=None, max_length=64)
+    retry_evidence: RetryEvidenceSummary | None = None
+
+
+class AttemptListResponse(ProtocolModel):
+    run_id: str
+    attempts: list[AttemptSummary] = Field(max_length=500)
+    total: int = Field(ge=0)
+    truncated: bool = False
+
+
 class SchedulerResponse(ProtocolModel):
     run_id: str
     configured_max_workers: int = Field(ge=1)
@@ -624,6 +672,17 @@ class TraceResponse(ProtocolModel):
     source_trace_id: str | None = Field(default=None, max_length=128)
     replay_mode: str | None = Field(default=None, max_length=64)
     providerless: bool | None = None
+
+
+class TraceVerificationResponse(ProtocolModel):
+    trace_id: str = Field(min_length=1, max_length=128)
+    run_id: str = Field(min_length=1, max_length=128)
+    provenance_root: str = Field(pattern=r"^[0-9a-f]{64}$")
+    object_count: int = Field(ge=0)
+    protocol_drift: list[str] = Field(default_factory=list, max_length=256)
+    valid: bool = True
+    provider_calls: Literal[0] = 0
+    network_calls: Literal[0] = 0
 
 
 class ProvenanceProviderRouteSummary(ProtocolModel):

@@ -348,6 +348,171 @@
       "title": "ArchitectureBoundarySummary",
       "type": "object"
     },
+    "AttemptListResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "attempts": {
+          "items": {
+            "$ref": "#/$defs/AttemptSummary"
+          },
+          "maxItems": 500,
+          "title": "Attempts",
+          "type": "array"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "total": {
+          "minimum": 0,
+          "title": "Total",
+          "type": "integer"
+        },
+        "truncated": {
+          "default": false,
+          "title": "Truncated",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "run_id",
+        "attempts",
+        "total"
+      ],
+      "title": "AttemptListResponse",
+      "type": "object"
+    },
+    "AttemptSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "attempt_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Attempt Id",
+          "type": "string"
+        },
+        "attempt_number": {
+          "minimum": 1,
+          "title": "Attempt Number",
+          "type": "integer"
+        },
+        "completed_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Completed At"
+        },
+        "failure_category": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Failure Category"
+        },
+        "failure_message": {
+          "anyOf": [
+            {
+              "maxLength": 4000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Failure Message"
+        },
+        "observation_summary": {
+          "anyOf": [
+            {
+              "maxLength": 4000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Observation Summary"
+        },
+        "retry_evidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RetryEvidenceSummary"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "reviewer_status": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reviewer Status"
+        },
+        "started_at": {
+          "format": "date-time",
+          "title": "Started At",
+          "type": "string"
+        },
+        "status": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Status",
+          "type": "string"
+        },
+        "task_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Task Id",
+          "type": "string"
+        },
+        "verifier_status": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Verifier Status"
+        }
+      },
+      "required": [
+        "attempt_id",
+        "task_id",
+        "attempt_number",
+        "status",
+        "started_at"
+      ],
+      "title": "AttemptSummary",
+      "type": "object"
+    },
     "CancelResponse": {
       "additionalProperties": false,
       "properties": {
@@ -4588,6 +4753,157 @@
       "title": "ResumeResponse",
       "type": "object"
     },
+    "RetryDiagnosticsSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "exception_details": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "title": "Exception Details",
+          "type": "array"
+        },
+        "failing_tests": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "title": "Failing Tests",
+          "type": "array"
+        },
+        "kind": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Kind",
+          "type": "string"
+        },
+        "required_fixes": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "title": "Required Fixes",
+          "type": "array"
+        },
+        "reviewer_issues": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "title": "Reviewer Issues",
+          "type": "array"
+        },
+        "summary": {
+          "default": "",
+          "maxLength": 4096,
+          "title": "Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "RetryDiagnosticsSummary",
+      "type": "object"
+    },
+    "RetryEvidenceSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate_identity_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Candidate Identity Sha256",
+          "type": "string"
+        },
+        "candidate_tree_id": {
+          "anyOf": [
+            {
+              "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Candidate Tree Id"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "diagnostics": {
+          "$ref": "#/$defs/RetryDiagnosticsSummary"
+        },
+        "evidence_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "failure_category": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Failure Category",
+          "type": "string"
+        },
+        "mutations_retained": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mutations Retained"
+        },
+        "retained_changed_files": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 512,
+          "title": "Retained Changed Files",
+          "type": "array"
+        },
+        "source_attempt_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Source Attempt Id",
+          "type": "string"
+        },
+        "source_attempt_number": {
+          "minimum": 1,
+          "title": "Source Attempt Number",
+          "type": "integer"
+        },
+        "source_disposition": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Disposition"
+        }
+      },
+      "required": [
+        "source_attempt_id",
+        "source_attempt_number",
+        "failure_category",
+        "candidate_identity_sha256",
+        "diagnostics",
+        "created_at",
+        "evidence_sha256"
+      ],
+      "title": "RetryEvidenceSummary",
+      "type": "object"
+    },
     "RoleModelOverrides": {
       "additionalProperties": false,
       "properties": {
@@ -8558,6 +8874,66 @@
         "byte_length"
       ],
       "title": "TraceValueReferenceSummary",
+      "type": "object"
+    },
+    "TraceVerificationResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "network_calls": {
+          "const": 0,
+          "default": 0,
+          "title": "Network Calls",
+          "type": "integer"
+        },
+        "object_count": {
+          "minimum": 0,
+          "title": "Object Count",
+          "type": "integer"
+        },
+        "protocol_drift": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Protocol Drift",
+          "type": "array"
+        },
+        "provenance_root": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Provenance Root",
+          "type": "string"
+        },
+        "provider_calls": {
+          "const": 0,
+          "default": 0,
+          "title": "Provider Calls",
+          "type": "integer"
+        },
+        "run_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
+        },
+        "trace_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Trace Id",
+          "type": "string"
+        },
+        "valid": {
+          "default": true,
+          "title": "Valid",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "trace_id",
+        "run_id",
+        "provenance_root",
+        "object_count"
+      ],
+      "title": "TraceVerificationResponse",
       "type": "object"
     },
     "UsageResponse": {

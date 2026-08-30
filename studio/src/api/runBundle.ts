@@ -1,5 +1,6 @@
 import type {
   ApprovalListResponse,
+  AttemptListResponse,
   ChangeListResponse,
   DiffResponse,
   ProvenanceResponse,
@@ -22,6 +23,7 @@ export interface RunBundle {
   run: RunSummary;
   tasks: TaskListResponse;
   approvals: ApprovalListResponse;
+  attempts?: AttemptListResponse;
   report?: RunReportResponse;
   changes?: ChangeListResponse;
   diff?: DiffResponse;
@@ -43,8 +45,9 @@ export async function loadRunBundle(client: StudioClient, runId: string): Promis
     client.tasks(runId),
     client.approvals(runId)
   ]);
-  const [report, changes, diff, invocations, audit, trace, spans, scheduler, usage, worktrees] =
+  const [attempts, report, changes, diff, invocations, audit, trace, spans, scheduler, usage, worktrees] =
     await Promise.all([
+      optional(client.attempts(runId)),
       optional(client.report(runId)),
       optional(client.changes(runId)),
       optional(client.diff(runId)),
@@ -67,6 +70,7 @@ export async function loadRunBundle(client: StudioClient, runId: string): Promis
     run,
     tasks,
     approvals,
+    attempts,
     report,
     changes,
     diff,

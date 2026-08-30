@@ -53,6 +53,28 @@ export interface ArchitectureBoundarySummary {
   "forbidden_targets"?: Array<string>;
 }
 
+export interface AttemptListResponse {
+  "run_id": string;
+  "attempts": Array<AttemptSummary>;
+  "total": number;
+  "truncated"?: boolean;
+}
+
+export interface AttemptSummary {
+  "attempt_id": string;
+  "task_id": string;
+  "attempt_number": number;
+  "status": string;
+  "started_at": string;
+  "completed_at"?: string | null;
+  "failure_category"?: string | null;
+  "failure_message"?: string | null;
+  "observation_summary"?: string | null;
+  "verifier_status"?: string | null;
+  "reviewer_status"?: string | null;
+  "retry_evidence"?: RetryEvidenceSummary | null;
+}
+
 export interface CancelResponse {
   "run_id": string;
   "status": string;
@@ -724,6 +746,29 @@ export interface ResumeResponse {
   "resumed": boolean;
 }
 
+export interface RetryDiagnosticsSummary {
+  "kind": string;
+  "summary"?: string;
+  "failing_tests"?: Array<string>;
+  "exception_details"?: Array<string>;
+  "reviewer_issues"?: Array<string>;
+  "required_fixes"?: Array<string>;
+}
+
+export interface RetryEvidenceSummary {
+  "source_attempt_id": string;
+  "source_attempt_number": number;
+  "failure_category": string;
+  "candidate_identity_sha256": string;
+  "candidate_tree_id"?: string | null;
+  "retained_changed_files"?: Array<string>;
+  "diagnostics": RetryDiagnosticsSummary;
+  "created_at": string;
+  "evidence_sha256": string;
+  "source_disposition"?: string | null;
+  "mutations_retained"?: boolean | null;
+}
+
 export interface RoleModelOverrides {
   "planner"?: string | null;
   "coder"?: string | null;
@@ -1366,6 +1411,17 @@ export interface TraceValueReferenceSummary {
   "redacted"?: boolean;
   "required_for_replay"?: boolean | null;
   "replayable"?: boolean | null;
+}
+
+export interface TraceVerificationResponse {
+  "trace_id": string;
+  "run_id": string;
+  "provenance_root": string;
+  "object_count": number;
+  "protocol_drift"?: Array<string>;
+  "valid"?: boolean;
+  "provider_calls"?: 0;
+  "network_calls"?: 0;
 }
 
 export interface UsageResponse {

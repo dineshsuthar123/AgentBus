@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from pydantic import ValidationError
+
 from agentbus.config import AgentBusConfig
 from agentbus.control.intelligence import ControlIntelligenceService
 from agentbus.control.errors import (
@@ -26,6 +28,8 @@ from agentbus.control.models import (
     ApprovalDecisionResponse,
     ApprovalListResponse,
     ApprovalSummary,
+    AttemptListResponse,
+    AttemptSummary,
     CancellationLifecycle,
     ChangeListResponse,
     ChangeSummary,
@@ -46,6 +50,8 @@ from agentbus.control.models import (
     ProviderSummary,
     RegressionFixtureCaptureRequest,
     RegressionFixtureCaptureResponse,
+    RetryDiagnosticsSummary,
+    RetryEvidenceSummary,
     ReplayListResponse,
     ReplaySessionResponse,
     ReplaySpanResultResponse,
@@ -66,6 +72,7 @@ from agentbus.control.models import (
     TraceFailureSummary,
     TraceLinkSummary,
     TraceResponse,
+    TraceVerificationResponse,
     TraceSpanDetailResponse,
     TraceSpanListResponse,
     TraceSpanSummary,
@@ -135,6 +142,7 @@ from agentbus.replay.errors import (
 )
 from agentbus.replay.service import TraceReplayService
 from agentbus.replay.session import ReplaySession, ReplaySessionStatus
+from agentbus.runtime.schemas import RetryEvidence
 from agentbus.sandbox.platform import ExecutableCatalog
 from agentbus.security.redaction import (
     redact_text,
@@ -697,6 +705,122 @@ class ControlQueryService:
         ]
         return TaskListResponse(run_id=run_id, tasks=tasks)
 
+    def attempts(self, run_id: str, *, limit: int = 100) -> AttemptListResponse:
+        self.get_run(run_id)
+        attempts = self.store.list_attempts(run_id)
+        page = attempts[:limit]
+        return AttemptListResponse(
+            run_id=run_id,
+            attempts=[self._attempt_summary(attempt) for attempt in page],
+            total=len(attempts),
+            truncated=len(attempts) > limit,
+        )
+
+    @classmethod
+    def _attempt_summary(cls, attempt: Any) -> AttemptSummary:
+        metadata = attempt.metadata if isinstance(attempt.metadata, dict) else {}
+        return AttemptSummary(
+            attempt_id=attempt.attempt_id,
+            task_id=attempt.task_id,
+            attempt_number=attempt.attempt_number,
+            status=attempt.status.value,
+            started_at=attempt.started_at,
+            completed_at=attempt.completed_at,
+            failure_category=(
+                attempt.error_category.value if attempt.error_category else None
+            ),
+            failure_message=redact_text(
+                attempt.error_message,
+                max_chars=4_000,
+            ),
+            observation_summary=redact_text(
+                attempt.observation_summary,
+                max_chars=4_000,
+            ),
+            verifier_status=cls._attempt_outcome(
+                _nested(metadata, "verifier", "passed"),
+                positive="passed",
+                negative="failed",
+            ),
+            reviewer_status=cls._attempt_outcome(
+                _nested(metadata, "task_review", "approved"),
+                positive="approved",
+                negative="rejected",
+            ),
+            retry_evidence=cls._retry_evidence_summary(metadata),
+        )
+
+    @staticmethod
+    def _attempt_outcome(
+        value: Any,
+        *,
+        positive: str,
+        negative: str,
+    ) -> str | None:
+        if isinstance(value, bool):
+            return positive if value else negative
+        if isinstance(value, str):
+            if value.lower() == "true":
+                return positive
+            if value.lower() == "false":
+                return negative
+            return redact_text(value, max_chars=64)
+        return None
+
+    @staticmethod
+    def _retry_evidence_summary(
+        metadata: dict[str, Any],
+    ) -> RetryEvidenceSummary | None:
+        raw_evidence = metadata.get("retry_evidence")
+        source_disposition = None
+        mutations_retained = None
+        if not isinstance(raw_evidence, dict):
+            feedback = metadata.get("retry_feedback")
+            if isinstance(feedback, dict):
+                raw_evidence = feedback.get("source_evidence")
+                raw_disposition = feedback.get("source_disposition")
+                if isinstance(raw_disposition, str):
+                    source_disposition = redact_text(
+                        raw_disposition,
+                        max_chars=64,
+                    )
+                if isinstance(feedback.get("mutations_retained"), bool):
+                    mutations_retained = feedback["mutations_retained"]
+        if not isinstance(raw_evidence, dict):
+            return None
+        try:
+            evidence = RetryEvidence.model_validate(raw_evidence)
+        except (TypeError, ValidationError):
+            return None
+        diagnostics = evidence.diagnostics
+        return RetryEvidenceSummary(
+            source_attempt_id=evidence.source_attempt_id,
+            source_attempt_number=evidence.source_attempt_number,
+            failure_category=evidence.failure_category,
+            candidate_identity_sha256=evidence.candidate_identity_sha256,
+            candidate_tree_id=evidence.candidate_tree_id,
+            retained_changed_files=[
+                redact_text(path, max_chars=512) or "[redacted]"
+                for path in evidence.retained_changed_files
+            ],
+            diagnostics=RetryDiagnosticsSummary(
+                kind=diagnostics.kind,
+                summary=redact_text(
+                    diagnostics.summary,
+                    max_chars=4_096,
+                )
+                or "",
+                failing_tests=_redacted_items(diagnostics.failing_tests),
+                exception_details=_redacted_items(diagnostics.exception_details),
+                reviewer_issues=_redacted_items(diagnostics.reviewer_issues),
+                required_fixes=_redacted_items(diagnostics.required_fixes),
+            ),
+            created_at=evidence.created_at,
+            evidence_sha256=evidence.evidence_sha256,
+            source_disposition=source_disposition,
+            mutations_retained=mutations_retained,
+        )
+
     @staticmethod
     def _task_summary(task: TaskRecord, attempt: Any) -> TaskSummary:
         metadata = attempt.metadata if attempt else {}
@@ -842,6 +966,20 @@ class ControlQueryService:
             ),
             replay_mode=replay.mode.value if replay is not None else None,
             providerless=replay.providerless if replay is not None else None,
+        )
+
+    def verify_trace(self, run_id: str) -> TraceVerificationResponse:
+        trace_id = self._run_trace_id(run_id)
+        report = self._trace_replay().verify(trace_id)
+        return TraceVerificationResponse(
+            trace_id=report.trace_id,
+            run_id=report.run_id,
+            provenance_root=report.provenance_root,
+            object_count=report.object_count,
+            protocol_drift=report.protocol_drift,
+            valid=report.valid,
+            provider_calls=0,
+            network_calls=0,
         )
 
     def trace_spans(
@@ -2368,6 +2506,13 @@ def _nested(value: dict[str, Any], *keys: str) -> Any:
             return None
         current = current.get(key)
     return str(current).lower() if isinstance(current, bool) else current
+
+
+def _redacted_items(values: list[str]) -> list[str]:
+    return [
+        redact_text(value, max_chars=1_024) or "[redacted]"
+        for value in values[:32]
+    ]
 
 
 def _task_id_from_approval(run_id: str, approval_id: str) -> str:

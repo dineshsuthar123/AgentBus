@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { StudioApiError, StudioClient, validateStudioOrigin } from "./client";
+import { StudioClient, validateStudioOrigin, type FetchLike } from "./client";
 
 const TOKEN = "a".repeat(32);
 
@@ -12,7 +12,7 @@ describe("StudioClient", () => {
   });
 
   it("keeps authorization in the request header", async () => {
-    const fetcher = vi.fn(async () => new Response(JSON.stringify({ protocol_version: "1" }), {
+    const fetcher = vi.fn<FetchLike>(async () => new Response(JSON.stringify({ protocol_version: "1" }), {
       status: 200,
       headers: { "Content-Type": "application/json" }
     }));
@@ -27,13 +27,13 @@ describe("StudioClient", () => {
   });
 
   it("maps bounded control-plane errors without exposing an unknown response body", async () => {
-    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+    const fetcher = vi.fn<FetchLike>(async () => new Response(JSON.stringify({
       error: { code: "workspace_mismatch", message: "Workspace repository does not match.", retryable: false },
       secret_debug_body: "must not surface"
     }), { status: 409, headers: { "Content-Type": "application/json" } }));
     const client = new StudioClient(TOKEN, "http://127.0.0.1:5173", fetcher);
 
-    await expect(client.runs()).rejects.toMatchObject<Partial<StudioApiError>>({
+    await expect(client.runs()).rejects.toMatchObject({
       name: "StudioApiError",
       code: "workspace_mismatch",
       message: "Workspace repository does not match.",

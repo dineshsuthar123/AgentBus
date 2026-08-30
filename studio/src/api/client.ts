@@ -1,6 +1,7 @@
 import type {
-  ApprovalDecisionResponse,
-  ApprovalListResponse,
+    ApprovalDecisionResponse,
+    ApprovalListResponse,
+    AttemptListResponse,
   ChangeListResponse,
   DiffResponse,
   DoctorResponse,
@@ -21,8 +22,9 @@ import type {
   TaskListResponse,
   ToolAuditListResponse,
   ToolInvocationListResponse,
-  TraceResponse,
-  TraceSpanListResponse,
+    TraceResponse,
+    TraceSpanListResponse,
+    TraceVerificationResponse,
   UsageResponse,
   WorkspaceValidationResponse,
   WorktreeListResponse
@@ -69,6 +71,7 @@ export class StudioClient {
   public runs(limit = 100) { return this.request<RunListResponse>("GET", `/api/v1/runs?limit=${limit}`); }
   public run(runId: string) { return this.request<RunSummary>("GET", `/api/v1/runs/${segment(runId)}`); }
   public tasks(runId: string) { return this.request<TaskListResponse>("GET", `/api/v1/runs/${segment(runId)}/tasks`); }
+  public attempts(runId: string) { return this.request<AttemptListResponse>("GET", `/api/v1/runs/${segment(runId)}/attempts?limit=500`); }
   public approvals(runId: string) { return this.request<ApprovalListResponse>("GET", `/api/v1/runs/${segment(runId)}/approvals`); }
   public report(runId: string) { return this.request<RunReportResponse>("GET", `/api/v1/runs/${segment(runId)}/report`); }
   public changes(runId: string) { return this.request<ChangeListResponse>("GET", `/api/v1/runs/${segment(runId)}/changes`); }
@@ -83,6 +86,7 @@ export class StudioClient {
     return this.request<ToolAuditListResponse>("GET", `/api/v1/runs/${segment(runId)}/tool-audit?limit=500`);
   }
   public trace(runId: string) { return this.request<TraceResponse>("GET", `/api/v1/runs/${segment(runId)}/trace`); }
+  public verifyTrace(runId: string) { return this.request<TraceVerificationResponse>("POST", `/api/v1/runs/${segment(runId)}/trace/verify`); }
   public traceSpans(runId: string) {
     return this.request<TraceSpanListResponse>("GET", `/api/v1/runs/${segment(runId)}/trace/spans?limit=500`);
   }

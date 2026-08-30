@@ -18,7 +18,13 @@ from agentbus.control.models import (
     RunAcceptedResponse,
 )
 from agentbus.control.services import ControlQueryService
-from agentbus.execution.models import RunRecord, TaskSpec
+from agentbus.execution.models import (
+    AttemptStatus,
+    FailureCategory,
+    RunRecord,
+    TaskSpec,
+    TaskStatus,
+)
 from agentbus.execution.state_store import StateStore
 from agentbus.mcp import McpServerConfig, mcp_server_capabilities
 from agentbus.replay import (
@@ -527,6 +533,111 @@ def test_trace_inspection_is_authenticated_bounded_and_private(
     assert replayability.json()["trace_id"] == trace.trace_id
     assert len(replayability.json()["spans"]) == 1
     assert replayability.json()["truncated"] is True
+
+
+def test_attempt_history_is_bounded_redacted_and_excludes_raw_metadata(
+    tmp_path: Path,
+) -> None:
+    client, _ = _client(tmp_path)
+    store = client.app.state.query_service.store
+    store.update_task_status("run-1", "task-1", TaskStatus.READY)
+    store.update_task_status("run-1", "task-1", TaskStatus.RUNNING)
+    attempt = store.create_attempt("run-1", "task-1")
+    diagnostics = {
+        "kind": "reviewer",
+        "summary": "Reviewer rejected the non-idempotent confirmation path.",
+        "command": ["python", "unsafe-raw-argument"],
+        "exit_status": None,
+        "stdout": "raw stdout must stay private",
+        "stderr": "raw stderr must stay private",
+        "stdout_truncated": False,
+        "stderr_truncated": False,
+        "failing_tests": [],
+        "exception_details": [],
+        "reviewer_issues": ["Confirmation is not idempotent."],
+        "required_fixes": ["Use one atomic confirmation decision."],
+    }
+    diagnostics_sha256 = hashlib.sha256(
+        canonical_json_bytes(diagnostics)
+    ).hexdigest()
+    evidence_payload = {
+        "schema_version": 1,
+        "source_attempt_id": attempt.attempt_id,
+        "source_attempt_number": attempt.attempt_number,
+        "failure_category": "reviewer_rejection",
+        "candidate_identity_sha256": "a" * 64,
+        "candidate_tree_id": "b" * 40,
+        "candidate_source_sha256": "c" * 64,
+        "retained_changed_files": ["src/main/java/PaymentService.java"],
+        "diagnostics": diagnostics,
+        "diagnostics_sha256": diagnostics_sha256,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    evidence_payload["evidence_sha256"] = hashlib.sha256(
+        canonical_json_bytes(evidence_payload)
+    ).hexdigest()
+    store.complete_attempt(
+        attempt.attempt_id,
+        AttemptStatus.FAILED,
+        error_category=FailureCategory.REVIEWER_REJECTION,
+        error_message="Bearer attempt-private-token was rejected",
+        observation_summary="Reviewer requested one atomic decision.",
+        metadata={
+            "retry_evidence": evidence_payload,
+            "verifier": {"passed": True, "stdout": "must not escape"},
+            "task_review": {"approved": False},
+            "raw_prompt": "must not escape",
+        },
+    )
+
+    assert client.get("/api/v1/runs/run-1/attempts").status_code == 403
+    response = client.get(
+        "/api/v1/runs/run-1/attempts?limit=1",
+        headers=_auth(),
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 1
+    assert payload["truncated"] is False
+    summary = payload["attempts"][0]
+    assert summary["status"] == "failed"
+    assert summary["verifier_status"] == "passed"
+    assert summary["reviewer_status"] == "rejected"
+    assert summary["retry_evidence"]["evidence_sha256"]
+    assert summary["retry_evidence"]["diagnostics"]["reviewer_issues"] == [
+        "Confirmation is not idempotent."
+    ]
+    serialized = json.dumps(payload, sort_keys=True)
+    assert "attempt-private-token" not in serialized
+    assert "unsafe-raw-argument" not in serialized
+    assert "raw stdout" not in serialized
+    assert "raw_prompt" not in serialized
+
+
+def test_trace_verification_is_authenticated_and_providerless(tmp_path: Path) -> None:
+    client, _ = _client(tmp_path)
+    trace, manifest = _record_control_trace(client)
+
+    assert client.post("/api/v1/runs/run-1/trace/verify").status_code == 403
+    response = client.post(
+        "/api/v1/runs/run-1/trace/verify",
+        headers=_auth(),
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "trace_id": trace.trace_id,
+        "run_id": "run-1",
+        "provenance_root": manifest.integrity_root,
+        "object_count": sum(
+            entry.kind == "blob" for entry in manifest.integrity_entries
+        ),
+        "protocol_drift": [],
+        "valid": True,
+        "provider_calls": 0,
+        "network_calls": 0,
+    }
 
 
 def test_trace_inspection_returns_safe_not_found_and_validates_page_bounds(

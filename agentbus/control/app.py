@@ -37,6 +37,7 @@ from agentbus.control.models import (
     ApprovalDecisionRequest,
     ApprovalDecisionResponse,
     ApprovalListResponse,
+    AttemptListResponse,
     CancelResponse,
     ChangeListResponse,
     ComparisonCreateRequest,
@@ -77,6 +78,7 @@ from agentbus.control.models import (
     TraceResponse,
     TraceSpanDetailResponse,
     TraceSpanListResponse,
+    TraceVerificationResponse,
     ToolAuditListResponse,
     ToolDescriptorDetail,
     ToolInvocationCancelRequest,
@@ -606,6 +608,13 @@ def create_app(
     async def run_trace(run_id: str) -> TraceResponse:
         return query_service.trace(run_id)
 
+    @app.post(
+        f"{API_PREFIX}/runs/{{run_id}}/trace/verify",
+        response_model=TraceVerificationResponse,
+    )
+    async def verify_run_trace(run_id: str) -> TraceVerificationResponse:
+        return query_service.verify_trace(run_id)
+
     @app.get(
         f"{API_PREFIX}/runs/{{run_id}}/trace/spans",
         response_model=TraceSpanListResponse,
@@ -776,6 +785,16 @@ def create_app(
     @app.get(f"{API_PREFIX}/runs/{{run_id}}/tasks", response_model=TaskListResponse)
     async def tasks(run_id: str) -> TaskListResponse:
         return query_service.tasks(run_id)
+
+    @app.get(
+        f"{API_PREFIX}/runs/{{run_id}}/attempts",
+        response_model=AttemptListResponse,
+    )
+    async def attempts(
+        run_id: str,
+        limit: int = Query(default=100, ge=1, le=500),
+    ) -> AttemptListResponse:
+        return query_service.attempts(run_id, limit=limit)
 
     @app.get(
         f"{API_PREFIX}/runs/{{run_id}}/scheduler",
