@@ -125,7 +125,9 @@ kbd { padding: 2px 5px; border: 1px solid var(--obs-line-bright); border-radius:
 
 /* Run observatory */
 .observatory-loading { height: calc(100vh - var(--context-height)); }
-.run-observatory { display: grid; height: calc(100vh - var(--context-height)); min-height: 620px; grid-template-rows: auto auto minmax(0, 1fr) 52px; overflow: hidden; background: var(--obs-deep); }
+.run-observatory { display: grid; height: calc(100vh - var(--context-height)); min-height: 620px; grid-template-rows: auto auto minmax(0, 1fr) 126px; overflow: hidden; background: var(--obs-deep); }
+.run-observatory.timeline-collapsed { grid-template-rows: auto auto minmax(0, 1fr) 32px; }
+.run-observatory.presentation-replay .execution-mesh, .run-observatory.presentation-replay .context-inspector { border-color: #413866; }
 .run-command-strip { display: grid; min-height: 74px; grid-template-columns: minmax(280px, 1fr) auto auto; align-items: center; gap: 18px; padding: 10px 14px 10px 18px; border-bottom: 1px solid var(--obs-line); background: #0b1114; }
 .run-command-title { display: grid; min-width: 0; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; }
 .run-command-title h1 { overflow: hidden; margin: 0; color: var(--text-strong); font-size: 14px; font-weight: 560; letter-spacing: -.015em; text-overflow: ellipsis; white-space: nowrap; }
@@ -302,10 +304,44 @@ kbd { padding: 2px 5px; border: 1px solid var(--obs-line-bright); border-radius:
 .spine-stream.phase-connected, .spine-stream.phase-restored { color: var(--emerald); }
 .spine-stream.phase-reconnecting, .spine-stream.phase-degraded { color: var(--amber); }
 
-.flight-recorder-preview { display: grid; min-height: 52px; grid-template-columns: 160px 1fr auto; align-items: center; gap: 12px; padding: 0 16px; border-top: 1px solid var(--obs-line); background: #090e11; }
-.flight-recorder-preview > span { display: flex; align-items: center; gap: 7px; color: var(--cyan); font: 500 8px/1 "IBM Plex Mono", monospace; text-transform: uppercase; }
-.flight-recorder-preview strong { color: var(--muted); font-size: 8px; font-weight: 450; }
-.flight-recorder-preview code { color: var(--muted-2); font-size: 7px; }
+/* Event flight recorder */
+.flight-recorder { display: grid; min-height: 0; grid-template-rows: 34px 42px 1fr; border-top: 1px solid var(--obs-line); background: #080d10; transition: border-color var(--motion-panel); }
+.flight-recorder.mode-replay { border-top-color: var(--violet); background: #0d0b14; }
+.flight-recorder > header { display: grid; grid-template-columns: 170px auto minmax(150px, 260px) auto; align-items: center; gap: 10px; padding: 0 10px 0 15px; border-bottom: 1px solid var(--obs-line); }
+.recorder-identity { display: flex; align-items: center; gap: 7px; color: var(--cyan); font: 500 7px/1 "IBM Plex Mono", monospace; text-transform: uppercase; }
+.mode-replay .recorder-identity { color: var(--violet); }
+.recorder-identity strong { color: var(--muted-2); font-weight: 400; }
+.recorder-mode { display: flex; gap: 2px; }
+.recorder-mode button, .recorder-steps button { display: inline-flex; height: 24px; align-items: center; justify-content: center; gap: 4px; padding: 0 7px; border: 1px solid transparent; background: transparent; color: var(--muted); font-size: 7px; cursor: pointer; }
+.recorder-mode button:hover:not(:disabled), .recorder-steps button:hover:not(:disabled), .recorder-mode button.is-active { border-color: var(--obs-line-bright); background: #11191e; color: var(--cyan); }
+.mode-replay .recorder-mode button.is-active { border-color: #584b86; color: var(--violet); }
+.recorder-mode button:disabled, .recorder-steps button:disabled { opacity: .25; cursor: default; }
+.recorder-search { display: flex; height: 25px; align-items: center; gap: 6px; padding: 0 7px; border: 1px solid var(--obs-line); color: var(--muted-2); }
+.recorder-search input { width: 100%; height: 100%; padding: 0; border: 0; background: transparent; box-shadow: none; color: var(--text); font-size: 7px; }
+.recorder-search code { color: var(--cyan); font-size: 7px; }
+.recorder-steps { display: flex; justify-content: flex-end; }
+.recorder-steps button { width: 25px; padding: 0; }
+.recorder-track { position: relative; margin: 0 18px; }
+.track-line { position: absolute; top: 20px; left: 0; right: 0; height: 1px; background: #34424a; }
+.timeline-tick { position: absolute; z-index: 2; top: 13px; display: grid; width: 15px; height: 15px; place-items: center; padding: 0; border: 0; background: transparent; color: #5b6970; transform: translateX(-50%); cursor: pointer; }
+.timeline-tick i { width: 6px; height: 6px; border: 1px solid currentColor; border-radius: 50%; background: #080d10; }
+.timeline-tick:hover i, .timeline-tick.is-selected i { width: 10px; height: 10px; background: currentColor; }
+.timeline-tick small { position: absolute; top: -6px; left: 8px; color: var(--muted-2); font: 500 5px/1 "IBM Plex Mono", monospace; }
+.timeline-tick.status-success { color: var(--emerald); }
+.timeline-tick.status-danger { color: var(--coral); }
+.timeline-tick.status-approval { color: var(--amber); }
+.timeline-tick.status-active { color: var(--cyan); }
+.mode-replay .timeline-tick.is-selected { color: var(--violet); }
+.timeline-cursor { position: absolute; z-index: 1; top: 5px; bottom: 0; width: 1px; background: var(--cyan); box-shadow: 0 0 8px rgba(109, 225, 242, .5); transform: translateX(-50%); transition: left var(--motion-micro) linear; }
+.mode-replay .timeline-cursor { background: var(--violet); box-shadow: 0 0 8px rgba(178, 156, 255, .5); }
+.flight-recorder > footer { display: grid; grid-template-columns: 66px 90px minmax(130px, auto) 80px 1fr; align-items: center; gap: 9px; padding: 0 15px; overflow: hidden; border-top: 1px solid #172128; }
+.flight-recorder > footer time, .flight-recorder > footer span, .flight-recorder > footer code { color: var(--muted-2); font: 500 6px/1 "IBM Plex Mono", monospace; }
+.flight-recorder > footer strong { overflow: hidden; color: var(--text); font-size: 8px; font-weight: 520; text-overflow: ellipsis; white-space: nowrap; }
+.flight-recorder > footer p { overflow: hidden; margin: 0; color: var(--muted); font-size: 7px; text-overflow: ellipsis; white-space: nowrap; }
+.flight-recorder.is-collapsed { display: block; min-height: 32px; }
+.flight-recorder.is-collapsed > button { display: grid; width: 100%; height: 31px; grid-template-columns: 20px 130px 1fr 20px; align-items: center; gap: 5px; padding: 0 13px; border: 0; background: #090e11; color: var(--muted); text-align: left; cursor: pointer; }
+.flight-recorder.is-collapsed > button span { color: var(--cyan); font: 500 7px/1 "IBM Plex Mono", monospace; text-transform: uppercase; }
+.flight-recorder.is-collapsed > button strong { font-size: 7px; font-weight: 400; }
 
 @keyframes active-edge { to { stroke-dashoffset: -24; } }
 @keyframes palette-enter { from { opacity: 0; transform: translateY(-8px) scale(.99); } }

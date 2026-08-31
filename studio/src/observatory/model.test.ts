@@ -1,6 +1,6 @@
 import type { RunBundle } from "../api/runBundle";
 import { describe, expect, it } from "vitest";
-import { buildExecutionMesh } from "./model";
+import { buildExecutionMesh, projectExecutionMesh } from "./model";
 
 function bundle(): RunBundle {
   return {
@@ -125,5 +125,18 @@ describe("execution mesh model", () => {
     });
     expect(model.nodes.find((node) => node.id === "evidence")?.dimmed).toBe(true);
     expect(model.nodes.filter((node) => node.kind === "retry")).toHaveLength(1);
+  });
+
+  it("projects historical presentation without mutating current execution state", () => {
+    const current = buildExecutionMesh(bundle());
+    const historical = projectExecutionMesh(current, "2026-08-31T10:01:30Z");
+
+    expect(current.nodes.find((node) => node.id === "evidence")?.tone).toBe("success");
+    expect(historical.nodes.find((node) => node.id === "evidence")).toMatchObject({
+      tone: "blocked",
+      rawStatus: "not observed at cursor",
+      dimmed: true
+    });
+    expect(historical.activeNodeId).toBe("coder:step-1:1");
   });
 });

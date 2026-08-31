@@ -7,9 +7,11 @@ import { ErrorPanel, LoadingState, StatusSignal, TraceIdentity } from "../compon
 import { displayWorkspace, durationBetween, humanize } from "../lib/format";
 import { ContextInspector } from "../observatory/ContextInspector";
 import { ExecutionMesh } from "../observatory/ExecutionMesh";
+import { FlightRecorder, type TimelinePresentation } from "../observatory/FlightRecorder";
 import { IntegritySpine, type PresentationMode } from "../observatory/IntegritySpine";
-import { buildExecutionMesh, isPendingApproval, type MeshEdge, type MeshNode } from "../observatory/model";
+import { buildExecutionMesh, isPendingApproval, projectExecutionMesh, type MeshEdge, type MeshNode } from "../observatory/model";
 import type { InspectorView, ObservatorySelection } from "../observatory/selection";
+import { buildTimeline, type TimelineRecord } from "../observatory/timelineModel";
 import { useLayoutPreferences } from "../state/layoutPreferences";
 import { useRunEvents, useStudio } from "../state/StudioContext";
 
@@ -24,6 +26,7 @@ export function RunPage({ runId }: { runId: string }) {
   const [traceVerification, setTraceVerification] = useState<TraceVerificationResponse>();
   const [focusRequest, setFocusRequest] = useState(0);
   const [announcement, setAnnouncement] = useState("");
+  const [presentation, setPresentation] = useState<TimelinePresentation>({ mode: "live" });
   const [preferences, setPreferences] = useLayoutPreferences();
   const eventVersion = runEvents.version;
 
@@ -53,6 +56,12 @@ export function RunPage({ runId }: { runId: string }) {
   }, [client, eventVersion, runId]);
 
   const model = useMemo(() => bundle ? buildExecutionMesh(bundle) : undefined, [bundle]);
+  const timeline = useMemo(() => bundle ? buildTimeline(bundle, runEvents.events) : [], [bundle, runEvents.events]);
+  const presentationRecord = presentation.recordId ? timeline.find((record) => record.id === presentation.recordId) : undefined;
+  const presentedModel = useMemo(
+    () => model && presentation.mode !== "live" ? projectExecutionMesh(model, presentationRecord?.timestamp) : model,
+    [model, presentation.mode, presentationRecord?.timestamp]
+  );
   const pendingApproval = bundle?.approvals.approvals.find(isPendingApproval);
   const pendingNode = pendingApproval && model?.nodes.find((node) => node.approvalId === pendingApproval.approval_id);
 
@@ -160,6 +169,13 @@ export function RunPage({ runId }: { runId: string }) {
     if (key === "f") handleCommand("focus-active");
     else if (key === "d") selectView("source");
     else if (key === "e") selectView("evidence");
+    else if ((event.key === "[" || event.key === "]") && model) {
+      const attempts = model.nodes.filter((node) => node.kind === "coder" && node.attemptNumber);
+      if (!attempts.length) return;
+      const current = selection.kind === "node" ? attempts.findIndex((node) => node.id === selection.node.id) : -1;
+      const direction = event.key === "]" ? 1 : -1;
+      selectNode(attempts[(Math.max(0, current) + direction + attempts.length) % attempts.length]);
+    }
     else if (key === "escape" && selection.kind !== "view") selectView("run");
     else return;
     event.preventDefault();
@@ -174,7 +190,7 @@ export function RunPage({ runId }: { runId: string }) {
   if (!bundle) return <div className="page"><ErrorPanel message={error ?? "Run not found."} action={<a className="text-link" href="#/history">Return to history</a>} /></div>;
 
   const terminal = isTerminal(bundle.run.status);
-  const mode: PresentationMode = bundle.replays?.replays.some((item) => item.status === "running") ? "REPLAY" : terminal ? "HISTORICAL" : "LIVE";
+  const mode: PresentationMode = presentation.mode === "replay" ? "REPLAY" : presentation.mode === "manual" || terminal ? "HISTORICAL" : "LIVE";
   const effectiveSelection: ObservatorySelection = pendingNode ? { kind: "node", node: pendingNode } : selection;
   const inspectorCollapsed = preferences.inspectorCollapsed && !pendingNode;
 
@@ -200,8 +216,17 @@ export function RunPage({ runId }: { runId: string }) {
     setAnnouncement(message);
   }
 
+  function selectTimelineRecord(record: TimelineRecord) {
+    if (record.event) setSelection({ kind: "event", event: record.event });
+    else if (record.nodeId) {
+      const node = model?.nodes.find((item) => item.id === record.nodeId);
+      if (node) setSelection({ kind: "node", node });
+    }
+    setPreferences((current) => ({ ...current, inspectorCollapsed: false }));
+  }
+
   return (
-    <div className={`run-observatory density-${preferences.density} ${inspectorCollapsed ? "inspector-collapsed" : ""}`}>
+    <div className={`run-observatory density-${preferences.density} presentation-${presentation.mode} ${inspectorCollapsed ? "inspector-collapsed" : ""} ${preferences.timelineCollapsed ? "timeline-collapsed" : ""}`}>
       <header className="run-command-strip">
         <div className="run-command-title"><StatusSignal status={bundle.run.status} /><h1>{bundle.run.original_task}</h1><span>{humanize(bundle.run.workflow)}</span></div>
         <div className="run-command-meta"><TraceIdentity label="Run" value={bundle.run.run_id} compact /><span><small>Repository</small><strong>{displayWorkspace(bundle.run.workspace)}</strong></span><span><small>Elapsed</small><strong>{durationBetween(bundle.run.created_at, bundle.run.completed_at)}</strong></span></div>
@@ -219,14 +244,12 @@ export function RunPage({ runId }: { runId: string }) {
       {bundle.partialErrors && <div className="partial-state" role="status"><Activity size={13} /><span>Partial snapshot</span><strong>{Object.keys(bundle.partialErrors).join(", ")} unavailable</strong></div>}
 
       <div className="observatory-grid">
-        <PanelBoundary name="Execution mesh"><ExecutionMesh model={model!} selectedId={effectiveSelection.kind === "node" ? effectiveSelection.node.id : undefined} onSelectNode={selectNode} onSelectEdge={selectEdge} focusRequest={focusRequest} /></PanelBoundary>
+        <PanelBoundary name="Execution mesh"><ExecutionMesh model={presentedModel!} selectedId={effectiveSelection.kind === "node" ? effectiveSelection.node.id : undefined} onSelectNode={selectNode} onSelectEdge={selectEdge} focusRequest={focusRequest} /></PanelBoundary>
         {!inspectorCollapsed ? <PanelBoundary name={pendingApproval ? "Approval inspector" : "Context inspector"} safetyCritical={Boolean(pendingApproval)}><ContextInspector bundle={bundle} selection={effectiveSelection} busy={busy} traceVerification={traceVerification} onDecision={decide} onReplay={replay} onVerify={verifyEvidence} onClose={pendingApproval ? undefined : () => setPreferences((current) => ({ ...current, inspectorCollapsed: true }))} /></PanelBoundary> : <button className="inspector-reopen" type="button" onClick={() => setPreferences((current) => ({ ...current, inspectorCollapsed: false }))}><PanelRightOpen size={15} /><span>Inspector</span></button>}
         <IntegritySpine bundle={bundle} mode={mode} stream={streamStatus} onSelect={selectView} />
       </div>
 
-      <section className="flight-recorder-preview" aria-label="Event flight recorder">
-        <span><Activity size={13} /> Flight recorder</span><strong>{runEvents.events.length ? `${runEvents.events.length} live events buffered` : `${bundle.trace?.event_count ?? 0} persisted trace events`}</strong><code>{runEvents.latest ? `#${runEvents.latest.sequence} ${runEvents.latest.event_type}` : mode}</code>
-      </section>
+      <FlightRecorder events={timeline} presentation={presentation} terminal={terminal} collapsed={preferences.timelineCollapsed} onChange={setPresentation} onSelect={selectTimelineRecord} onToggle={() => setPreferences((current) => ({ ...current, timelineCollapsed: !current.timelineCollapsed }))} />
       <div className="sr-only" aria-live="polite" aria-atomic="true">{pendingApproval ? "Approval required. Execution is paused at the exact policy gate." : announcement}</div>
     </div>
   );

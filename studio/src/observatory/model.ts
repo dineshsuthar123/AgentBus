@@ -29,6 +29,7 @@ export interface MeshNode {
   invocationId?: string;
   kind: MeshNodeKind;
   label: string;
+  observedAt?: string;
   rawStatus: string;
   taskId?: string;
   tone: MeshTone;
@@ -80,6 +81,7 @@ export function buildExecutionMesh(bundle: RunBundle): ExecutionMeshModel {
     label: "Planner",
     detail: tasks.length ? `${tasks.length} durable task${tasks.length === 1 ? "" : "s"}` : "Task graph not persisted",
     rawStatus: plannerStatus,
+    observedAt: bundle.run.created_at,
     tone: tasks.length ? "success" : toneFor(plannerStatus),
     x: 34,
     y: plannerY
@@ -109,6 +111,7 @@ export function buildExecutionMesh(bundle: RunBundle): ExecutionMeshModel {
         label: `${roleLabel(task.assigned_role)} #${attempt.number}`,
         detail: task.title,
         rawStatus: coderStatus,
+        observedAt: attempt.record?.started_at ?? task.created_at,
         tone: toneFor(coderStatus),
         taskId: task.task_id,
         attemptId: attempt.record?.attempt_id,
@@ -161,6 +164,7 @@ export function buildExecutionMesh(bundle: RunBundle): ExecutionMeshModel {
           label: `Verifier #${attempt.number}`,
           detail: attempt.record?.failure_message ?? task.failure_message ?? "Repository-defined verification",
           rawStatus: verifierStatus,
+          observedAt: attempt.record?.completed_at ?? task.updated_at,
           tone: toneFor(verifierStatus),
           taskId: task.task_id,
           attemptId: attempt.record?.attempt_id,
@@ -181,6 +185,7 @@ export function buildExecutionMesh(bundle: RunBundle): ExecutionMeshModel {
           label: "RetryEvidence",
           detail: attempt.record.retry_evidence.diagnostics.summary || attempt.record.retry_evidence.failure_category,
           rawStatus: "persisted",
+          observedAt: attempt.record.retry_evidence.created_at,
           tone: "replay",
           taskId: task.task_id,
           attemptId: attempt.record.attempt_id,
@@ -203,6 +208,7 @@ export function buildExecutionMesh(bundle: RunBundle): ExecutionMeshModel {
         label: roleLabel(task.assigned_role),
         detail: task.title,
         rawStatus: task.status,
+        observedAt: task.created_at,
         tone: toneFor(task.status),
         taskId: task.task_id,
         x: cursorX,
@@ -221,6 +227,7 @@ export function buildExecutionMesh(bundle: RunBundle): ExecutionMeshModel {
         label: "Task review",
         detail: task.title,
         rawStatus: task.reviewer_status,
+        observedAt: task.updated_at,
         tone: toneFor(task.reviewer_status),
         taskId: task.task_id,
         x: cursorX,
@@ -258,6 +265,7 @@ export function buildExecutionMesh(bundle: RunBundle): ExecutionMeshModel {
       label: "Final reviewer",
       detail: "Mandatory whole-run decision",
       rawStatus: bundle.run.reviewer_status,
+      observedAt: bundle.run.completed_at ?? bundle.run.updated_at,
       tone: toneFor(bundle.run.reviewer_status),
       dimmed: pendingApproval,
       x: finalX,
@@ -276,6 +284,7 @@ export function buildExecutionMesh(bundle: RunBundle): ExecutionMeshModel {
       label: "Evidence",
       detail: `${bundle.trace.event_count} events sealed`,
       rawStatus: bundle.trace.status,
+      observedAt: bundle.trace.completed_at ?? bundle.trace.created_at,
       tone: toneFor(bundle.trace.status),
       dimmed: pendingApproval,
       x: evidenceX,
@@ -326,6 +335,7 @@ function addToolNode(model: MutableModel, id: string, invocation: ToolInvocation
     label: invocation.tool_name,
     detail: invocation.capabilities.map((capability) => capability.name).join(" | ") || "Managed invocation",
     rawStatus: invocation.status,
+    observedAt: invocation.started_at ?? invocation.requested_at,
     tone: toneFor(invocation.status),
     taskId: invocation.task_id,
     invocationId: invocation.invocation_id,
@@ -341,6 +351,7 @@ function addApprovalNode(model: MutableModel, id: string, approval: ApprovalSumm
     label: "Approval gate",
     detail: approval.requested_action,
     rawStatus: approval.state,
+    observedAt: approval.created_at,
     tone: isPendingApproval(approval) ? "approval" : toneFor(approval.state),
     taskId: approval.task_id,
     approvalId: approval.approval_id,
@@ -413,4 +424,21 @@ export function toneFor(status?: string | null): MeshTone {
 
 export function isPendingApproval(approval: ApprovalSummary): boolean {
   return ["pending", "requested", "waiting", "awaiting_approval"].includes(approval.state.toLowerCase());
+}
+
+export function projectExecutionMesh(model: ExecutionMeshModel, timestamp?: string): ExecutionMeshModel {
+  if (!timestamp) return model;
+  const selectedTime = new Date(timestamp).valueOf();
+  if (!Number.isFinite(selectedTime)) return model;
+  const visible = model.nodes.filter((node) => !node.observedAt || new Date(node.observedAt).valueOf() <= selectedTime);
+  const visibleIds = new Set(visible.map((node) => node.id));
+  const active = [...visible].reverse().find((node) => node.observedAt)?.id ?? visible.at(-1)?.id;
+  const nodes = model.nodes.map((node) => {
+    if (visibleIds.has(node.id)) return { ...node, dimmed: node.id !== active && node.dimmed };
+    return { ...node, dimmed: true, rawStatus: "not observed at cursor", tone: "blocked" as const };
+  });
+  const edges = model.edges.map((edge) => visibleIds.has(edge.source) && visibleIds.has(edge.target)
+    ? edge
+    : { ...edge, tone: "blocked" as const });
+  return { ...model, activeNodeId: active, edges, nodes };
 }
