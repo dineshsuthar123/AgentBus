@@ -5,6 +5,7 @@ import type {
   ChangeListResponse,
   DiffResponse,
   DoctorResponse,
+  FileContentResponse,
   InfoResponse,
   ProviderListResponse,
   ProvenanceResponse,
@@ -48,9 +49,32 @@ export class StudioApiError extends Error {
 
 export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
+export interface ReadRequestOptions {
+  force?: boolean;
+  signal?: AbortSignal;
+  staleTimeMilliseconds?: number;
+  timeoutMilliseconds?: number;
+}
+
+interface CachedRead {
+  storedAt: number;
+  value: unknown;
+}
+
+interface InflightRead {
+  consumers: Set<symbol>;
+  controller: AbortController;
+  promise: Promise<unknown>;
+  settled: boolean;
+}
+
 export class StudioClient {
   private readonly origin: URL;
   private readonly fetcher: FetchLike;
+  private readonly cache = new Map<string, CachedRead>();
+  private readonly inflight = new Map<string, InflightRead>();
+  private cacheHits = 0;
+  private deduplicatedReads = 0;
 
   public constructor(
     private readonly token: string,
@@ -64,47 +88,55 @@ export class StudioClient {
     this.fetcher = fetcher ?? bindBrowserFetch();
   }
 
-  public info() { return this.request<InfoResponse>("GET", "/api/v1/info"); }
-  public providers() { return this.request<ProviderListResponse>("GET", "/api/v1/providers"); }
-  public doctor(workspace?: string) {
+  public info(options?: ReadRequestOptions) { return this.read<InfoResponse>("/api/v1/info", options); }
+  public providers(options?: ReadRequestOptions) { return this.read<ProviderListResponse>("/api/v1/providers", options); }
+  public doctor(workspace?: string, options?: ReadRequestOptions) {
     const query = workspace ? `?workspace=${encodeURIComponent(workspace)}` : "";
-    return this.request<DoctorResponse>("GET", `/api/v1/doctor${query}`);
+    return this.read<DoctorResponse>(`/api/v1/doctor${query}`, options);
   }
-  public runs(limit = 100) { return this.request<RunListResponse>("GET", `/api/v1/runs?limit=${limit}`); }
-  public run(runId: string) { return this.request<RunSummary>("GET", `/api/v1/runs/${segment(runId)}`); }
-  public tasks(runId: string) { return this.request<TaskListResponse>("GET", `/api/v1/runs/${segment(runId)}/tasks`); }
-  public attempts(runId: string) { return this.request<AttemptListResponse>("GET", `/api/v1/runs/${segment(runId)}/attempts?limit=500`); }
-  public approvals(runId: string) { return this.request<ApprovalListResponse>("GET", `/api/v1/runs/${segment(runId)}/approvals`); }
-  public report(runId: string) { return this.request<RunReportResponse>("GET", `/api/v1/runs/${segment(runId)}/report`); }
-  public changes(runId: string) { return this.request<ChangeListResponse>("GET", `/api/v1/runs/${segment(runId)}/changes`); }
-  public diff(runId: string, path?: string) {
+  public runs(limit = 100, options?: ReadRequestOptions) { return this.read<RunListResponse>(`/api/v1/runs?limit=${limit}`, options); }
+  public run(runId: string, options?: ReadRequestOptions) { return this.read<RunSummary>(`/api/v1/runs/${segment(runId)}`, options); }
+  public tasks(runId: string, options?: ReadRequestOptions) { return this.read<TaskListResponse>(`/api/v1/runs/${segment(runId)}/tasks`, options); }
+  public attempts(runId: string, options?: ReadRequestOptions) { return this.read<AttemptListResponse>(`/api/v1/runs/${segment(runId)}/attempts?limit=500`, options); }
+  public approvals(runId: string, options?: ReadRequestOptions) { return this.read<ApprovalListResponse>(`/api/v1/runs/${segment(runId)}/approvals`, options); }
+  public report(runId: string, options?: ReadRequestOptions) { return this.read<RunReportResponse>(`/api/v1/runs/${segment(runId)}/report`, options); }
+  public changes(runId: string, options?: ReadRequestOptions) { return this.read<ChangeListResponse>(`/api/v1/runs/${segment(runId)}/changes`, options); }
+  public diff(runId: string, path?: string, options?: ReadRequestOptions) {
     const query = path ? `?path=${encodeURIComponent(path)}` : "";
-    return this.request<DiffResponse>("GET", `/api/v1/runs/${segment(runId)}/diff${query}`);
+    return this.read<DiffResponse>(`/api/v1/runs/${segment(runId)}/diff${query}`, options);
   }
-  public invocations(runId: string) {
-    return this.request<ToolInvocationListResponse>("GET", `/api/v1/runs/${segment(runId)}/tool-invocations?limit=500`);
+  public file(runId: string, path: string, revision: "before" | "after", options?: ReadRequestOptions) {
+    const safePath = path.split(/[\\/]/).filter(Boolean).map(segment).join("/");
+    if (!safePath) throw new Error("Unsafe AgentBus path.");
+    return this.read<FileContentResponse>(
+      `/api/v1/runs/${segment(runId)}/changes/${safePath}?revision=${revision}`,
+      options
+    );
   }
-  public audit(runId: string) {
-    return this.request<ToolAuditListResponse>("GET", `/api/v1/runs/${segment(runId)}/tool-audit?limit=500`);
+  public invocations(runId: string, options?: ReadRequestOptions) {
+    return this.read<ToolInvocationListResponse>(`/api/v1/runs/${segment(runId)}/tool-invocations?limit=500`, options);
   }
-  public trace(runId: string) { return this.request<TraceResponse>("GET", `/api/v1/runs/${segment(runId)}/trace`); }
+  public audit(runId: string, options?: ReadRequestOptions) {
+    return this.read<ToolAuditListResponse>(`/api/v1/runs/${segment(runId)}/tool-audit?limit=500`, options);
+  }
+  public trace(runId: string, options?: ReadRequestOptions) { return this.read<TraceResponse>(`/api/v1/runs/${segment(runId)}/trace`, options); }
   public verifyTrace(runId: string) { return this.request<TraceVerificationResponse>("POST", `/api/v1/runs/${segment(runId)}/trace/verify`); }
-  public traceSpans(runId: string) {
-    return this.request<TraceSpanListResponse>("GET", `/api/v1/runs/${segment(runId)}/trace/spans?limit=500`);
+  public traceSpans(runId: string, options?: ReadRequestOptions) {
+    return this.read<TraceSpanListResponse>(`/api/v1/runs/${segment(runId)}/trace/spans?limit=500`, options);
   }
-  public provenance(runId: string) { return this.request<ProvenanceResponse>("GET", `/api/v1/runs/${segment(runId)}/provenance`); }
-  public replayability(runId: string) {
-    return this.request<RunReplayabilityResponse>("GET", `/api/v1/runs/${segment(runId)}/replayability?limit=500`);
+  public provenance(runId: string, options?: ReadRequestOptions) { return this.read<ProvenanceResponse>(`/api/v1/runs/${segment(runId)}/provenance`, options); }
+  public replayability(runId: string, options?: ReadRequestOptions) {
+    return this.read<RunReplayabilityResponse>(`/api/v1/runs/${segment(runId)}/replayability?limit=500`, options);
   }
-  public replays(traceId?: string) {
+  public replays(traceId?: string, options?: ReadRequestOptions) {
     const query = new URLSearchParams({ limit: "500" });
     if (traceId) query.set("source_trace_id", traceId);
-    return this.request<ReplayListResponse>("GET", `/api/v1/replays?${query.toString()}`);
+    return this.read<ReplayListResponse>(`/api/v1/replays?${query.toString()}`, options);
   }
-  public replay(replayId: string) { return this.request<ReplaySessionResponse>("GET", `/api/v1/replays/${segment(replayId)}`); }
-  public scheduler(runId: string) { return this.request<SchedulerResponse>("GET", `/api/v1/runs/${segment(runId)}/scheduler`); }
-  public usage(runId: string) { return this.request<UsageResponse>("GET", `/api/v1/runs/${segment(runId)}/usage`); }
-  public worktrees(runId: string) { return this.request<WorktreeListResponse>("GET", `/api/v1/runs/${segment(runId)}/worktrees`); }
+  public replay(replayId: string, options?: ReadRequestOptions) { return this.read<ReplaySessionResponse>(`/api/v1/replays/${segment(replayId)}`, options); }
+  public scheduler(runId: string, options?: ReadRequestOptions) { return this.read<SchedulerResponse>(`/api/v1/runs/${segment(runId)}/scheduler`, options); }
+  public usage(runId: string, options?: ReadRequestOptions) { return this.read<UsageResponse>(`/api/v1/runs/${segment(runId)}/usage`, options); }
+  public worktrees(runId: string, options?: ReadRequestOptions) { return this.read<WorktreeListResponse>(`/api/v1/runs/${segment(runId)}/worktrees`, options); }
 
   public validateWorkspace(workspace: string) {
     return this.request<WorkspaceValidationResponse>("POST", "/api/v1/workspaces/validate", {
@@ -150,9 +182,116 @@ export class StudioClient {
 
   public authorizationHeader(): string { return `Bearer ${this.token}`; }
 
+  public queryCacheSummary(): {
+    cachedReads: number;
+    cacheHits: number;
+    deduplicatedReads: number;
+    inflightReads: number;
+  } {
+    return {
+      cachedReads: this.cache.size,
+      cacheHits: this.cacheHits,
+      deduplicatedReads: this.deduplicatedReads,
+      inflightReads: this.inflight.size
+    };
+  }
+
+  public invalidate(pathPrefix = "/api/v1/"): void {
+    for (const key of this.cache.keys()) {
+      if (key.startsWith(pathPrefix)) this.cache.delete(key);
+    }
+  }
+
+  private read<T>(path: string, options: ReadRequestOptions = {}): Promise<T> {
+    const staleTime = Math.max(0, options.staleTimeMilliseconds ?? 500);
+    const cached = this.cache.get(path);
+    if (!options.force && cached && Date.now() - cached.storedAt <= staleTime) {
+      this.cacheHits += 1;
+      return abortedOrValue(cached.value as T, options.signal);
+    }
+
+    let entry = this.inflight.get(path);
+    if (!entry) {
+      const controller = new AbortController();
+      entry = {
+        consumers: new Set<symbol>(),
+        controller,
+        promise: Promise.resolve(undefined),
+        settled: false
+      };
+      entry.promise = this.readFromNetwork<T>(path, controller.signal, options.timeoutMilliseconds)
+        .then((value) => {
+          this.cache.set(path, { storedAt: Date.now(), value });
+          return value;
+        })
+        .finally(() => {
+          entry!.settled = true;
+          this.inflight.delete(path);
+        });
+      this.inflight.set(path, entry);
+    } else {
+      this.deduplicatedReads += 1;
+    }
+    return this.consumeInflight<T>(entry, options.signal);
+  }
+
+  private consumeInflight<T>(entry: InflightRead, signal?: AbortSignal): Promise<T> {
+    if (signal?.aborted) return Promise.reject(abortError());
+    const consumer = Symbol("studio-read");
+    entry.consumers.add(consumer);
+    return new Promise<T>((resolve, reject) => {
+      const onAbort = () => {
+        release();
+        reject(abortError());
+      };
+      const release = () => {
+        signal?.removeEventListener("abort", onAbort);
+        entry.consumers.delete(consumer);
+        if (!entry.settled && entry.consumers.size === 0) entry.controller.abort();
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      entry.promise.then(
+        (value) => {
+          if (signal?.aborted) return;
+          release();
+          resolve(value as T);
+        },
+        (error: unknown) => {
+          if (signal?.aborted) return;
+          release();
+          reject(error);
+        }
+      );
+    });
+  }
+
+  private async readFromNetwork<T>(path: string, signal: AbortSignal, timeoutMilliseconds = 30_000): Promise<T> {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        return await this.fetchJson<T>("GET", path, undefined, signal, timeoutMilliseconds);
+      } catch (error) {
+        if (attempt > 0 || signal.aborted || !isRetryableReadError(error)) throw error;
+        await delay(120, signal);
+      }
+    }
+    throw new Error("Unreachable read retry state.");
+  }
+
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+    return this.fetchJson<T>(method, path, body, undefined, 30_000);
+  }
+
+  private async fetchJson<T>(
+    method: string,
+    path: string,
+    body: unknown,
+    externalSignal: AbortSignal | undefined,
+    timeoutMilliseconds: number
+  ): Promise<T> {
     const controller = new AbortController();
-    const timer = window.setTimeout(() => controller.abort(), 30_000);
+    const abort = () => controller.abort();
+    externalSignal?.addEventListener("abort", abort, { once: true });
+    const timer = window.setTimeout(abort, Math.max(1, timeoutMilliseconds));
     try {
       const response = await this.fetcher(new URL(path, this.origin), {
         method,
@@ -171,12 +310,13 @@ export class StudioClient {
           payload.error?.code ?? "http_error",
           payload.error?.message ?? `AgentBus request failed with HTTP ${response.status}.`,
           response.status,
-          payload.error?.retryable ?? false
+          payload.error?.retryable ?? response.status >= 500
         );
       }
       return await response.json() as T;
     } finally {
       window.clearTimeout(timer);
+      externalSignal?.removeEventListener("abort", abort);
     }
   }
 }
@@ -199,4 +339,35 @@ function segment(value: string): string {
     throw new Error("Unsafe AgentBus identifier.");
   }
   return encodeURIComponent(value);
+}
+
+function abortedOrValue<T>(value: T, signal?: AbortSignal): Promise<T> {
+  return signal?.aborted ? Promise.reject(abortError()) : Promise.resolve(value);
+}
+
+function abortError(): DOMException {
+  return new DOMException("AgentBus request was cancelled.", "AbortError");
+}
+
+function isRetryableReadError(error: unknown): boolean {
+  return error instanceof StudioApiError ? error.retryable : error instanceof TypeError;
+}
+
+function delay(milliseconds: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(abortError());
+      return;
+    }
+    const timer = window.setTimeout(done, milliseconds);
+    signal.addEventListener("abort", cancelled, { once: true });
+    function done() {
+      signal.removeEventListener("abort", cancelled);
+      resolve();
+    }
+    function cancelled() {
+      window.clearTimeout(timer);
+      reject(abortError());
+    }
+  });
 }

@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { StudioClient } from "../api/client";
 import type { RunSummary } from "../api/types";
+import { StudioEventStore } from "../events/eventStore";
 import { useStudio } from "../state/StudioContext";
 import { DashboardPage } from "./DashboardPage";
 import { HistoryPage } from "./HistoryPage";
@@ -54,7 +55,10 @@ function studioValue(overrides: Partial<ReturnType<typeof useStudio>> = {}): Ret
     providers: [],
     runs,
     streamConnected: false,
+    streamStatus: { connected: false, cursor: 0, phase: "stopped", reconnectCount: 0 },
+    eventStore: new StudioEventStore(),
     eventRevision: 0,
+    refreshing: false,
     connect: vi.fn(async () => undefined),
     disconnect: vi.fn(),
     refresh: vi.fn(async () => undefined),

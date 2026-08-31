@@ -1,7 +1,8 @@
-import { createContext, useContext, useEffect, useEffectEvent, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useEffectEvent, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import type { DoctorResponse, InfoResponse, ProviderSummary, RunSummary } from "../api/types";
 import { StudioClient } from "../api/client";
-import { StudioEventStream } from "../api/sse";
+import { StudioEventStream, type StreamStatus } from "../api/sse";
+import { StudioEventStore } from "../events/eventStore";
 
 type ConnectionStatus = "disconnected" | "connecting" | "connected" | "error";
 
@@ -14,7 +15,10 @@ interface StudioContextValue {
   doctor?: DoctorResponse;
   runs: RunSummary[];
   streamConnected: boolean;
+  streamStatus: StreamStatus;
+  eventStore: StudioEventStore;
   eventRevision: number;
+  refreshing: boolean;
   connect: (token: string) => Promise<void>;
   disconnect: () => void;
   refresh: () => Promise<void>;
@@ -31,15 +35,24 @@ export function StudioProvider({ children }: { children: ReactNode }) {
   const [doctor, setDoctor] = useState<DoctorResponse>();
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [streamConnected, setStreamConnected] = useState(false);
+  const [streamStatus, setStreamStatus] = useState<StreamStatus>({
+    connected: false,
+    cursor: 0,
+    phase: "stopped",
+    reconnectCount: 0
+  });
   const [eventRevision, setEventRevision] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+  const [eventStore] = useState(() => new StudioEventStore());
   const refreshTimer = useRef<number | undefined>(undefined);
 
-  async function load(candidate: StudioClient): Promise<void> {
+  async function load(candidate: StudioClient, force = false): Promise<void> {
+    const options = { force };
     const [nextInfo, nextProviders, nextDoctor, nextRuns] = await Promise.all([
-      candidate.info(),
-      candidate.providers(),
-      candidate.doctor(),
-      candidate.runs()
+      candidate.info(options),
+      candidate.providers(options),
+      candidate.doctor(undefined, options),
+      candidate.runs(100, options)
     ]);
     setInfo(nextInfo);
     setProviders(nextProviders.providers);
@@ -71,32 +84,51 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     setDoctor(undefined);
     setRuns([]);
     setStreamConnected(false);
+    setStreamStatus({ connected: false, cursor: 0, phase: "stopped", reconnectCount: 0 });
+    eventStore.clear();
   }
 
   async function refresh(): Promise<void> {
     if (!client) return;
+    setRefreshing(true);
     try {
-      await load(client);
+      await load(client, true);
       setConnection("connected");
       setConnectionMessage(undefined);
     } catch (error) {
       setConnection("error");
       setConnectionMessage(error instanceof Error ? error.message : "Runtime refresh failed.");
+    } finally {
+      setRefreshing(false);
     }
   }
 
-  const refreshFromEvent = useEffectEvent(() => {
-    setEventRevision((value) => value + 1);
-    void refresh();
+  const refreshFromEvent = useEffectEvent(async () => {
+    if (!client) return;
+    try {
+      const nextRuns = await client.runs(100, { force: true });
+      setRuns(nextRuns.runs);
+      setEventRevision((value) => value + 1);
+    } catch (error) {
+      setConnectionMessage(error instanceof Error ? error.message : "Run reconciliation failed.");
+    }
+  });
+
+  const reconcileFromStream = useEffectEvent(async () => {
+    await refresh();
   });
 
   useEffect(() => {
     if (!client) return;
     const stream = new StudioEventStream(client, {
       onState: setStreamConnected,
-      onEvent: () => {
+      onStatus: setStreamStatus,
+      onDrop: (reason) => eventStore.recordDrop(reason),
+      onReconcile: reconcileFromStream,
+      onEvent: (event) => {
+        eventStore.ingest(event);
         window.clearTimeout(refreshTimer.current);
-        refreshTimer.current = window.setTimeout(refreshFromEvent, 180);
+        refreshTimer.current = window.setTimeout(() => void refreshFromEvent(), 240);
       }
     });
     stream.start();
@@ -104,7 +136,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
       window.clearTimeout(refreshTimer.current);
       stream.stop();
     };
-  }, [client]);
+  }, [client, eventStore]);
 
   return (
     <StudioContext.Provider value={{
@@ -116,7 +148,10 @@ export function StudioProvider({ children }: { children: ReactNode }) {
       doctor,
       runs,
       streamConnected,
+      streamStatus,
+      eventStore,
       eventRevision,
+      refreshing,
       connect,
       disconnect,
       refresh
@@ -130,4 +165,22 @@ export function useStudio(): StudioContextValue {
   const value = useContext(StudioContext);
   if (!value) throw new Error("useStudio must be used inside StudioProvider");
   return value;
+}
+
+export function useRunEvents(runId: string) {
+  const { eventStore } = useStudio();
+  return useSyncExternalStore(
+    (listener) => eventStore.subscribeRun(runId, listener),
+    () => eventStore.getRunSnapshot(runId),
+    () => eventStore.getRunSnapshot(runId)
+  );
+}
+
+export function useEventDiagnostics() {
+  const { eventStore } = useStudio();
+  return useSyncExternalStore(
+    eventStore.subscribe,
+    eventStore.getSnapshot,
+    eventStore.getSnapshot
+  );
 }

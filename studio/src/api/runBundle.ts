@@ -17,7 +17,7 @@ import type {
   UsageResponse,
   WorktreeListResponse
 } from "./types";
-import { StudioClient } from "./client";
+import { StudioClient, type ReadRequestOptions } from "./client";
 
 export interface RunBundle {
   run: RunSummary;
@@ -37,33 +37,39 @@ export interface RunBundle {
   scheduler?: SchedulerResponse;
   usage?: UsageResponse;
   worktrees?: WorktreeListResponse;
+  partialErrors?: Readonly<Record<string, string>>;
 }
 
-export async function loadRunBundle(client: StudioClient, runId: string): Promise<RunBundle> {
+export async function loadRunBundle(
+  client: StudioClient,
+  runId: string,
+  options: ReadRequestOptions = {}
+): Promise<RunBundle> {
+  const errors: Record<string, string> = {};
   const [run, tasks, approvals] = await Promise.all([
-    client.run(runId),
-    client.tasks(runId),
-    client.approvals(runId)
+    client.run(runId, options),
+    client.tasks(runId, options),
+    client.approvals(runId, options)
   ]);
   const [attempts, report, changes, diff, invocations, audit, trace, spans, scheduler, usage, worktrees] =
     await Promise.all([
-      optional(client.attempts(runId)),
-      optional(client.report(runId)),
-      optional(client.changes(runId)),
-      optional(client.diff(runId)),
-      optional(client.invocations(runId)),
-      optional(client.audit(runId)),
-      optional(client.trace(runId)),
-      optional(client.traceSpans(runId)),
-      optional(client.scheduler(runId)),
-      optional(client.usage(runId)),
-      optional(client.worktrees(runId))
+      optional("attempts", client.attempts(runId, options), errors),
+      optional("report", client.report(runId, options), errors),
+      optional("changes", client.changes(runId, options), errors),
+      optional("diff", client.diff(runId, undefined, options), errors),
+      optional("invocations", client.invocations(runId, options), errors),
+      optional("audit", client.audit(runId, options), errors),
+      optional("trace", client.trace(runId, options), errors),
+      optional("spans", client.traceSpans(runId, options), errors),
+      optional("scheduler", client.scheduler(runId, options), errors),
+      optional("usage", client.usage(runId, options), errors),
+      optional("worktrees", client.worktrees(runId, options), errors)
     ]);
   const [provenance, replayability, replays] = trace
     ? await Promise.all([
-        optional(client.provenance(runId)),
-        optional(client.replayability(runId)),
-        optional(client.replays(trace.trace_id))
+        optional("provenance", client.provenance(runId, options), errors),
+        optional("replayability", client.replayability(runId, options), errors),
+        optional("replays", client.replays(trace.trace_id, options), errors)
       ])
     : [undefined, undefined, undefined];
   return {
@@ -83,14 +89,21 @@ export async function loadRunBundle(client: StudioClient, runId: string): Promis
     replays,
     scheduler,
     usage,
-    worktrees
+    worktrees,
+    partialErrors: Object.keys(errors).length ? Object.freeze(errors) : undefined
   };
 }
 
-async function optional<T>(request: Promise<T>): Promise<T | undefined> {
+async function optional<T>(
+  name: string,
+  request: Promise<T>,
+  errors: Record<string, string>
+): Promise<T | undefined> {
   try {
     return await request;
-  } catch {
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    errors[name] = error instanceof Error ? error.message : `${name} is unavailable.`;
     return undefined;
   }
 }

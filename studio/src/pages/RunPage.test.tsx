@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { StudioClient } from "../api/client";
 import { loadRunBundle, type RunBundle } from "../api/runBundle";
 import type { ApprovalSummary, RunSummary, TaskSummary } from "../api/types";
+import { StudioEventStore } from "../events/eventStore";
 import { useStudio } from "../state/StudioContext";
 import { RunPage } from "./RunPage";
 
@@ -150,7 +151,10 @@ function installStudioClient() {
     providers: [],
     runs: [run],
     streamConnected: true,
+    streamStatus: { connected: true, cursor: 0, phase: "connected", reconnectCount: 0 },
+    eventStore: new StudioEventStore(),
     eventRevision: 0,
+    refreshing: false,
     connect: vi.fn(async () => undefined),
     disconnect: vi.fn(),
     refresh: vi.fn(async () => undefined)
