@@ -1,5 +1,5 @@
 import { ArrowRight, Ban, Clock3, LockKeyhole } from "lucide-react";
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import type { ApprovalSummary } from "../api/types";
 import { displayCommand, displayWorkspace } from "../lib/format";
 import { CapabilityScope } from "./CapabilityScope";
@@ -11,13 +11,17 @@ export function ApprovalGate({ approval, onDecision, busy = false }: {
   busy?: boolean;
 }) {
   const [reason, setReason] = useState("");
+  const heading = useRef<HTMLHeadingElement>(null);
+  useLayoutEffect(() => {
+    heading.current?.focus();
+  }, [approval.approval_id, approval.revision]);
   return (
-    <section className="approval-gate" aria-label="Approval gate">
+    <section className="approval-gate" aria-labelledby={`approval-title-${approval.approval_id}`} aria-busy={busy}>
       <div className="gate-rule"><span /><strong><LockKeyhole size={14} /> Approval gate</strong><span /></div>
       <div className="gate-body">
         <div className="gate-main">
           <p className="eyebrow">Execution paused by policy</p>
-          <h2>{approval.requested_action}</h2>
+          <h2 id={`approval-title-${approval.approval_id}`} ref={heading} tabIndex={-1}>{approval.requested_action}</h2>
           <dl className="gate-command">
             <div><dt>Tool</dt><dd><code>{approval.tool_name ?? "managed tool"}</code></dd></div>
             <div><dt>Executable</dt><dd><code>{approval.executable ?? approval.command?.[0] ?? "bounded action"}</code></dd></div>
@@ -28,7 +32,10 @@ export function ApprovalGate({ approval, onDecision, busy = false }: {
             <div><dt>Policy rule</dt><dd><code>{approval.policy_rule ?? approval.risk_category}</code></dd></div>
             <div><dt>Reason</dt><dd>{approval.reason ?? "Exact human authorization is required."}</dd></div>
             <div><dt>Revision</dt><dd>{approval.revision ?? 1}</dd></div>
+            <div><dt>Task</dt><dd><code>{approval.task_id}</code></dd></div>
+            <div><dt>Approval state</dt><dd>{approval.state}</dd></div>
           </dl>
+          {approval.arguments_summary?.length ? <div className="gate-arguments"><span>Bounded argument summary</span>{approval.arguments_summary.map((item) => <code key={item}>{item}</code>)}</div> : null}
           <TraceIdentity label="Approval" value={approval.approval_id} />
         </div>
         <div className="gate-scope">
@@ -40,10 +47,11 @@ export function ApprovalGate({ approval, onDecision, busy = false }: {
       <div className="gate-actions">
         <label><span>Decision note <small>optional</small></span><input value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Why are you approving or rejecting?" maxLength={2_000} /></label>
         <div>
-          <button className="button button-danger" type="button" disabled={busy} onClick={() => void onDecision("reject", reason)}><Ban size={15} /> Reject</button>
-          <button className="button button-approval" type="button" disabled={busy} onClick={() => void onDecision("approve", reason)}>Approve &amp; continue <ArrowRight size={15} /></button>
+          <button className="button button-danger" type="button" disabled={busy} title={busy ? "Waiting for server confirmation" : undefined} onClick={() => void onDecision("reject", reason)}><Ban size={15} /> {busy ? "Decision pending" : "Reject"}</button>
+          <button className="button button-approval" type="button" disabled={busy} title={busy ? "Waiting for server confirmation" : undefined} onClick={() => void onDecision("approve", reason)}>{busy ? "Waiting for AgentBus" : "Approve & continue"} <ArrowRight size={15} /></button>
         </div>
       </div>
+      <p className="gate-authority" aria-live="polite">{busy ? "Decision submitted. The gate remains closed until AgentBus confirms it." : "Server-authoritative gate. No execution continues before confirmation."}</p>
     </section>
   );
 }

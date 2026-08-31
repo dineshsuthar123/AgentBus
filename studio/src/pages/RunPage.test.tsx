@@ -5,14 +5,15 @@ import type { StudioClient } from "../api/client";
 import { loadRunBundle, type RunBundle } from "../api/runBundle";
 import type { ApprovalSummary, RunSummary, TaskSummary } from "../api/types";
 import { StudioEventStore } from "../events/eventStore";
-import { useStudio } from "../state/StudioContext";
+import { useRunEvents, useStudio } from "../state/StudioContext";
 import { RunPage } from "./RunPage";
 
 vi.mock("../api/runBundle", () => ({ loadRunBundle: vi.fn() }));
-vi.mock("../state/StudioContext", () => ({ useStudio: vi.fn() }));
+vi.mock("../state/StudioContext", () => ({ useStudio: vi.fn(), useRunEvents: vi.fn() }));
 
 const mockedLoadRunBundle = vi.mocked(loadRunBundle);
 const mockedUseStudio = vi.mocked(useStudio);
+const mockedUseRunEvents = vi.mocked(useRunEvents);
 
 const run: RunSummary = {
   run_id: "run-payment-001",
@@ -165,6 +166,7 @@ function installStudioClient() {
 describe("live run page", () => {
   beforeEach(() => {
     mockedLoadRunBundle.mockReset();
+    mockedUseRunEvents.mockReturnValue({ events: [], runId: run.run_id, version: 0 });
     installStudioClient();
   });
 
@@ -294,6 +296,6 @@ describe("live run page", () => {
     await user.click(screen.getByRole("button", { name: "Run offline replay" }));
     await waitFor(() => expect(methods.createReplay).toHaveBeenCalledOnce());
     expect(methods.createReplay).toHaveBeenCalledWith(run.run_id, { mode: "offline" });
-    expect(methods.replay).toHaveBeenCalledWith("replay-payment-002");
+    expect(methods.replay).toHaveBeenCalledWith("replay-payment-002", { force: true });
   });
 });

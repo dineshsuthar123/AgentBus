@@ -6,6 +6,7 @@ import "@fontsource/ibm-plex-mono/500.css";
 import { App } from "./App";
 import { StudioProvider } from "./state/StudioContext";
 import "./styles.css";
+import "./observatory.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

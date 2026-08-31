@@ -76,13 +76,13 @@ describe("Studio pages", () => {
     render(<DashboardPage />);
 
     const signals = screen.getByRole("region", { name: "System signals" });
-    expect(within(screen.getByText("Active runs").closest("article")!).getByText("1")).toBeInTheDocument();
-    expect(within(screen.getByText("Completed").closest("article")!).getByText("1")).toBeInTheDocument();
-    expect(within(screen.getByText("Needs attention").closest("article")!).getByText("1")).toBeInTheDocument();
-    expect(within(screen.getByText("Observed files").closest("article")!).getByText("3")).toBeInTheDocument();
+    expect(within(screen.getByText("Active runs").closest("span")!).getByText("1")).toBeInTheDocument();
+    expect(within(screen.getByText("Completed").closest("span")!).getByText("1")).toBeInTheDocument();
+    expect(within(screen.getByText("Needs attention").closest("span")!).getByText("1")).toBeInTheDocument();
+    expect(within(screen.getByText("Observed files").closest("span")!).getByText("3")).toBeInTheDocument();
     expect(signals).toBeInTheDocument();
-    expect(screen.getByText("Repair order reconciliation", { selector: ".run-copy strong" })).toBeInTheDocument();
-    expect(screen.queryByText("Make payment confirmation idempotent", { selector: ".run-copy strong" })).not.toBeInTheDocument();
+    expect(screen.getByText("Repair order reconciliation", { selector: ".active-run-card strong" })).toBeInTheDocument();
+    expect(screen.queryByText("Make payment confirmation idempotent", { selector: ".active-run-card strong" })).not.toBeInTheDocument();
   });
 
   it("filters durable history by query and terminal status", async () => {
