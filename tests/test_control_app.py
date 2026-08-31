@@ -147,8 +147,10 @@ def _record_control_trace(
     run_id: str = "run-1",
     marker: str = "primary",
     include_source_object: bool = False,
+    workspace: Path | None = None,
 ):
     query = client.app.state.query_service
+    trace_workspace = workspace or query.config.workspace_path
     if run_id != "run-1":
         query.store.create_run(
             RunRecord(
@@ -156,15 +158,18 @@ def _record_control_trace(
                 original_task="Compare me",
                 workflow_type="multi",
                 model="fake",
-                workspace=str(query.config.workspace_path),
+                workspace=str(trace_workspace),
                 graph_data={"version": 1, "tasks": []},
             )
         )
+    trace_config = query.config.with_overrides(
+        workspace_dir=str(trace_workspace)
+    )
     runtime = RuntimeTrace.open(
         query.store,
         run_id,
-        object_root=query.config.trace_store_path,
-        workspace=query.config.workspace_path,
+        object_root=trace_config.trace_store_path,
+        workspace=trace_workspace,
     )
     with runtime.scope(runtime.root_context):
         if include_source_object:
@@ -215,7 +220,7 @@ def _record_control_trace(
                 "marker": marker,
             },
             attributes={
-                "workspace": str(query.config.workspace_path),
+                "workspace": str(trace_workspace),
                 "authorization": "Bearer control-private-token",
             },
             capture="json",
@@ -638,6 +643,34 @@ def test_trace_verification_is_authenticated_and_providerless(tmp_path: Path) ->
         "provider_calls": 0,
         "network_calls": 0,
     }
+
+
+def test_trace_verification_and_replayability_use_run_workspace_store(
+    tmp_path: Path,
+) -> None:
+    client, _ = _client(tmp_path / "control", seed_run=False)
+    external_workspace = tmp_path / "external-workspace"
+    external_workspace.mkdir()
+    trace, manifest = _record_control_trace(
+        client,
+        run_id="run-external",
+        workspace=external_workspace,
+    )
+
+    verified = client.post(
+        "/api/v1/runs/run-external/trace/verify",
+        headers=_auth(),
+    )
+    replayability = client.get(
+        "/api/v1/runs/run-external/replayability",
+        headers=_auth(),
+    )
+
+    assert verified.status_code == 200
+    assert verified.json()["trace_id"] == trace.trace_id
+    assert verified.json()["provenance_root"] == manifest.integrity_root
+    assert replayability.status_code == 200
+    assert replayability.json()["missing_input_hashes"] == []
 
 
 def test_trace_inspection_returns_safe_not_found_and_validates_page_bounds(

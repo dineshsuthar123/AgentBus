@@ -1,6 +1,7 @@
 import { ArrowRight, Ban, Clock3, LockKeyhole } from "lucide-react";
 import { useState } from "react";
 import type { ApprovalSummary } from "../api/types";
+import { displayCommand, displayWorkspace } from "../lib/format";
 import { CapabilityScope } from "./CapabilityScope";
 import { TraceIdentity } from "./Primitives";
 
@@ -16,13 +17,14 @@ export function ApprovalGate({ approval, onDecision, busy = false }: {
       <div className="gate-body">
         <div className="gate-main">
           <p className="eyebrow">Execution paused by policy</p>
-          <h2>{approval.tool_name ?? approval.requested_action}</h2>
-          <div className="gate-command">
-            <span>Executable</span>
-            <code>{approval.executable ?? approval.command?.[0] ?? "bounded action"}</code>
-          </div>
+          <h2>{approval.requested_action}</h2>
+          <dl className="gate-command">
+            <div><dt>Tool</dt><dd><code>{approval.tool_name ?? "managed tool"}</code></dd></div>
+            <div><dt>Executable</dt><dd><code>{approval.executable ?? approval.command?.[0] ?? "bounded action"}</code></dd></div>
+            <div className="gate-command-exact"><dt>Exact command</dt><dd><code>{displayCommand(approval.command)}</code></dd></div>
+          </dl>
           <dl className="technical-grid">
-            <div><dt>Working directory</dt><dd>{approval.working_directory ?? "Current workspace"}</dd></div>
+            <div><dt>Workspace scope</dt><dd title="Canonical path retained by AgentBus">{displayWorkspace(approval.working_directory)}</dd></div>
             <div><dt>Policy rule</dt><dd><code>{approval.policy_rule ?? approval.risk_category}</code></dd></div>
             <div><dt>Reason</dt><dd>{approval.reason ?? "Exact human authorization is required."}</dd></div>
             <div><dt>Revision</dt><dd>{approval.revision ?? 1}</dd></div>

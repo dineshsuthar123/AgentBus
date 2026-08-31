@@ -1,7 +1,7 @@
 import { AlertTriangle, ArrowUpRight, CheckCircle2, CircleDot, Cpu, FileCode2, Plus, RadioTower } from "lucide-react";
 import type { RunSummary } from "../api/types";
 import { EmptyState, PageIntro, StatusSignal, TraceIdentity } from "../components/Primitives";
-import { formatDate, humanize } from "../lib/format";
+import { displayWorkspace, formatDate, humanize } from "../lib/format";
 import { useStudio } from "../state/StudioContext";
 
 export function DashboardPage() {
@@ -75,7 +75,7 @@ function RunRow({ run, index }: { run: RunSummary; index: number }) {
   return (
     <a className="run-row" href={`#/runs/${encodeURIComponent(run.run_id)}`} style={{ "--row-index": index } as React.CSSProperties}>
       <span className="run-index">{String(index + 1).padStart(2, "0")}</span>
-      <span className="run-copy"><strong>{run.original_task}</strong><small>{run.workspace}</small></span>
+      <span className="run-copy"><strong>{run.original_task}</strong><small title="Canonical workspace hidden for presentation safety">{displayWorkspace(run.workspace)}</small></span>
       <TraceIdentity label="Run" value={run.run_id} compact />
       <StatusSignal status={run.status} />
       <ArrowUpRight size={15} />

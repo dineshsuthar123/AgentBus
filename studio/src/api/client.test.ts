@@ -4,6 +4,23 @@ import { StudioClient, validateStudioOrigin, type FetchLike } from "./client";
 const TOKEN = "a".repeat(32);
 
 describe("StudioClient", () => {
+  it("binds the native browser fetch receiver", async () => {
+    const browserFetch = vi.fn(function (this: unknown) {
+      if (this !== window) throw new TypeError("Illegal invocation");
+      return Promise.resolve(new Response(JSON.stringify({ protocol_version: "1.0" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      }));
+    });
+    vi.stubGlobal("fetch", browserFetch);
+
+    const client = new StudioClient(TOKEN, "http://127.0.0.1:5173");
+    await expect(client.info()).resolves.toEqual({ protocol_version: "1.0" });
+    expect(browserFetch).toHaveBeenCalledOnce();
+
+    vi.unstubAllGlobals();
+  });
+
   it("accepts numeric loopback origins and rejects hostname aliases", () => {
     expect(validateStudioOrigin("http://127.0.0.1:5173").origin).toBe("http://127.0.0.1:5173");
     expect(validateStudioOrigin("http://[::1]:5173").origin).toBe("http://[::1]:5173");

@@ -43,6 +43,18 @@ export function humanize(value?: string | null): string {
   return value.replace(/[._-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+export function displayWorkspace(value?: string | null): string {
+  if (!value) return "Current workspace";
+  const normalized = value.replace(/\\/g, "/").replace(/\/+$/, "");
+  const name = normalized.split("/").filter(Boolean).at(-1);
+  return name ? `${name}/` : "Current workspace";
+}
+
+export function displayCommand(command?: string[] | null): string {
+  if (!command?.length) return "Bounded managed action";
+  return command.map((part) => /\s/.test(part) ? JSON.stringify(part) : part).join(" ");
+}
+
 export function arrayOfStrings(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }

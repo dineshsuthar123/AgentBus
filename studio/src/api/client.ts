@@ -50,16 +50,18 @@ export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promis
 
 export class StudioClient {
   private readonly origin: URL;
+  private readonly fetcher: FetchLike;
 
   public constructor(
     private readonly token: string,
     origin = window.location.origin,
-    private readonly fetcher: FetchLike = fetch
+    fetcher?: FetchLike
   ) {
     if (token.trim().length < 32) {
       throw new Error("The AgentBus session token must contain at least 32 characters.");
     }
     this.origin = validateStudioOrigin(origin);
+    this.fetcher = fetcher ?? bindBrowserFetch();
   }
 
   public info() { return this.request<InfoResponse>("GET", "/api/v1/info"); }
@@ -177,6 +179,10 @@ export class StudioClient {
       window.clearTimeout(timer);
     }
   }
+}
+
+export function bindBrowserFetch(): FetchLike {
+  return window.fetch.bind(window);
 }
 
 export function validateStudioOrigin(value: string): URL {

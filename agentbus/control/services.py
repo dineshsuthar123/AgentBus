@@ -970,7 +970,7 @@ class ControlQueryService:
 
     def verify_trace(self, run_id: str) -> TraceVerificationResponse:
         trace_id = self._run_trace_id(run_id)
-        report = self._trace_replay().verify(trace_id)
+        report = self._trace_replay_for_run(run_id).verify(trace_id)
         return TraceVerificationResponse(
             trace_id=report.trace_id,
             run_id=report.run_id,
@@ -1125,7 +1125,9 @@ class ControlQueryService:
         limit: int = 100,
     ) -> RunReplayabilityResponse:
         trace = self._run_trace(run_id)
-        classification = self._trace_replay().replayability(trace.trace_id)
+        classification = self._trace_replay_for_run(run_id).replayability(
+            trace.trace_id
+        )
         sequence_by_span = {
             span.span_id: span.sequence for span in trace.spans
         }
@@ -1562,6 +1564,11 @@ class ControlQueryService:
                     state_store=self.store,
                 )
             return self._trace_replay_service
+
+    def _trace_replay_for_run(self, run_id: str) -> TraceReplayService:
+        run = self.get_run(run_id)
+        config = self.config.with_overrides(workspace_dir=run.workspace)
+        return TraceReplayService(config, state_store=self.store)
 
     @staticmethod
     def _trace_span_summary(span: TraceSpan) -> TraceSpanSummary:

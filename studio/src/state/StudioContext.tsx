@@ -86,6 +86,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
   }
 
   const refreshFromEvent = useEffectEvent(() => {
+    setEventRevision((value) => value + 1);
     void refresh();
   });
 
@@ -94,7 +95,6 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     const stream = new StudioEventStream(client, {
       onState: setStreamConnected,
       onEvent: () => {
-        setEventRevision((value) => value + 1);
         window.clearTimeout(refreshTimer.current);
         refreshTimer.current = window.setTimeout(refreshFromEvent, 180);
       }

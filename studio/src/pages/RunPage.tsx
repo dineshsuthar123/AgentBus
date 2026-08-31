@@ -28,7 +28,7 @@ import { ErrorPanel, LoadingState, StatusSignal, TraceIdentity, VerificationMark
 import { SourcePulse } from "../components/SourcePulse";
 import { ToolTimeline } from "../components/ToolTimeline";
 import { VerificationSeal } from "../components/VerificationSeal";
-import { arrayOfStrings, durationBetween, formatDate, humanize, recordOf, shortId } from "../lib/format";
+import { arrayOfStrings, displayWorkspace, durationBetween, formatDate, humanize, recordOf, shortId } from "../lib/format";
 import { useStudio } from "../state/StudioContext";
 
 type RunTab = "overview" | "tools" | "attempts" | "source" | "review" | "evidence";
@@ -84,6 +84,7 @@ export function RunPage({ runId }: { runId: string }) {
     setBusy(`approval:${approval.approval_id}`);
     try {
       await client.decideApproval(runId, approval.approval_id, approval.revision ?? 1, decision, reason);
+      if (decision === "approve") await client.resume(runId);
       await refresh();
     } catch (reasonValue) {
       setError(reasonValue instanceof Error ? reasonValue.message : "The approval decision was not accepted.");
@@ -179,7 +180,7 @@ function RunHero({ run, tasks }: { run: RunSummary; tasks: TaskSummary[] }) {
       <div className="run-hero-copy">
         <div className="run-kicker"><StatusSignal status={run.status} /><span>{humanize(run.workflow)} workflow</span><span>v{run.version}</span></div>
         <h1>{run.original_task}</h1>
-        <div className="run-identities"><TraceIdentity label="Run" value={run.run_id} /><TraceIdentity label="Workspace" value={run.workspace} /></div>
+        <div className="run-identities"><TraceIdentity label="Run" value={run.run_id} /><TraceIdentity label="Workspace" value={displayWorkspace(run.workspace)} /></div>
       </div>
       <div className="progress-dial" style={{ "--progress": `${progress * 3.6}deg` } as React.CSSProperties}>
         <div><strong>{completed}<small>/{tasks.length || "--"}</small></strong><span>tasks sealed</span></div>

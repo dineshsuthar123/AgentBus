@@ -1,6 +1,5 @@
 import {
   Activity,
-  Braces,
   Command,
   Gauge,
   History,
@@ -8,8 +7,7 @@ import {
   Play,
   Plus,
   Radio,
-  ShieldCheck,
-  Sparkles
+  ShieldCheck
 } from "lucide-react";
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { DashboardPage } from "./pages/DashboardPage";
@@ -57,7 +55,7 @@ export function App() {
         </nav>
         <div className="nav-divider" />
         <a className={route.path === "/demo" ? "nav-link is-active" : "nav-link"} href="#/demo">
-          <Sparkles size={17} /><span>Payment demo</span>
+          <ShieldCheck size={17} /><span>Payment demo</span>
         </a>
         <div className="nav-foot">
           <div className={`stream-pill ${studio.streamConnected ? "is-live" : ""}`}>
@@ -81,7 +79,7 @@ function ConnectionScreen() {
     event.preventDefault();
     try {
       await connect(token);
-      window.location.hash = "#/";
+      window.location.hash = connectionDestination(window.location.hash);
     } catch {
       // The context exposes the sanitized connection error.
     }
@@ -93,9 +91,9 @@ function ConnectionScreen() {
         <div className="brand-lockup brand-lockup-large"><img src="/agentbus-mark.svg" alt="" /><span><strong>AgentBus</strong><small>Studio</small></span></div>
         <p className="connection-kicker"><ShieldCheck size={15} /> Local execution control plane</p>
         <h1>See the agent.<br /><span>Trust the evidence.</span></h1>
-        <p className="connection-lede">A flight deck for durable coding runs, exact approval gates, bounded repository changes, and providerless replay.</p>
-        <div className="connection-rail" aria-hidden="true">
-          <span><Braces size={16} /></span><i /><span><Activity size={16} /></span><i /><span><ShieldCheck size={16} /></span>
+        <p className="connection-lede"><strong>Safe execution for autonomous software engineering.</strong> Plan repository changes, hold risky tools at exact approval gates, and verify every outcome with durable evidence.</p>
+        <div className="connection-rail" aria-label="AgentBus execution lifecycle">
+          {['Plan', 'Execute', 'Approve', 'Verify', 'Review', 'Replay'].map((stage) => <span key={stage}><i />{stage}</span>)}
         </div>
       </section>
       <section className="connection-panel">
@@ -117,6 +115,10 @@ function ConnectionScreen() {
       </section>
     </main>
   );
+}
+
+export function connectionDestination(currentHash: string): string {
+  return currentHash && currentHash !== "#" ? currentHash : "#/";
 }
 
 function NavLink({ route, href, label, icon }: { route: string; href: string; label: string; icon: ReactNode }) {

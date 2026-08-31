@@ -1,6 +1,6 @@
 import { Activity, CheckCircle2, CircleAlert, Cpu, Database, RadioTower, RefreshCw, Server, ShieldCheck } from "lucide-react";
 import { ErrorPanel, PageIntro, StatusSignal } from "../components/Primitives";
-import { humanize, recordOf } from "../lib/format";
+import { displayWorkspace, humanize, recordOf } from "../lib/format";
 import { useStudio } from "../state/StudioContext";
 
 export function RuntimePage() {
@@ -35,7 +35,11 @@ export function RuntimePage() {
 function DoctorCheck({ value, index }: { value: Record<string, unknown>; index: number }) {
   const name = String(value.name ?? value.check ?? value.id ?? `check-${index + 1}`);
   const status = String(value.status ?? (value.ok === true ? "passed" : value.ok === false ? "failed" : "unknown"));
-  const message = String(value.message ?? value.summary ?? value.path ?? "No diagnostic detail reported.");
+  const message = value.message ?? value.summary
+    ? String(value.message ?? value.summary)
+    : value.path
+      ? `${displayWorkspace(String(value.path))} managed path is available.`
+      : "No diagnostic detail reported.";
   const healthy = ["ok", "passed", "ready", "healthy", "writable"].some((item) => status.toLowerCase().includes(item));
   return <article className="doctor-check">{healthy ? <CheckCircle2 size={16} /> : status === "unknown" ? <Activity size={16} /> : <CircleAlert size={16} />}<div><strong>{humanize(name)}</strong><p>{message}</p></div><StatusSignal status={status} /></article>;
 }

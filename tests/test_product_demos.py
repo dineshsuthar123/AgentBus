@@ -41,11 +41,17 @@ def test_payment_demo_contains_concurrent_retry_proof(tmp_path):
         result.workspace
         / "src/test/java/com/agentbus/demo/PaymentServiceTest.java"
     ).read_text(encoding="utf-8")
+    pom = (result.workspace / "pom.xml").read_text(encoding="utf-8")
 
     assert "confirmedPaymentIds.add(paymentId);\n        return 1;" in source
     assert "CountDownLatch" in test_source
     assert "assertEquals(1, accepted)" in test_source
     assert result.test_command == ("mvn", "-q", "-o", "test")
+    assert "<junit.version>5.10.2</junit.version>" in pom
+    assert "<artifactId>maven-compiler-plugin</artifactId>" in pom
+    assert "<version>3.13.0</version>" in pom
+    assert "<artifactId>maven-surefire-plugin</artifactId>" in pom
+    assert "<version>3.2.5</version>" in pom
 
 
 def test_demo_git_initialization_creates_clean_isolated_baseline(tmp_path):

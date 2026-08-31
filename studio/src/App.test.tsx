@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { App } from "./App";
+import { App, connectionDestination } from "./App";
 import { StudioProvider } from "./state/StudioContext";
 
 describe("AgentBus Studio connection", () => {
@@ -11,5 +11,11 @@ describe("AgentBus Studio connection", () => {
     expect(screen.getByLabelText("Session token")).toHaveAttribute("type", "password");
     expect(screen.getByText(/token stays in browser memory/i)).toBeInTheDocument();
     expect(screen.getByText(/agentbus serve --port 8765 --json-ready/i)).toBeInTheDocument();
+  });
+
+  it("preserves a durable deep link across reauthentication", () => {
+    expect(connectionDestination("#/runs/run-123")).toBe("#/runs/run-123");
+    expect(connectionDestination("#/history")).toBe("#/history");
+    expect(connectionDestination("")).toBe("#/");
   });
 });

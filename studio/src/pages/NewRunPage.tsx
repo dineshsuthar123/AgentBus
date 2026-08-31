@@ -2,7 +2,7 @@ import { ArrowRight, CheckCircle2, GitBranch, LoaderCircle, LockKeyhole, Network
 import { useState, type FormEvent } from "react";
 import type { RunCreateRequest, WorkspaceValidationResponse } from "../api/types";
 import { ErrorPanel, PageIntro, StatusSignal } from "../components/Primitives";
-import { humanize } from "../lib/format";
+import { displayWorkspace, humanize } from "../lib/format";
 import { useStudio } from "../state/StudioContext";
 
 const PAYMENT_TASK = "Make payment confirmation idempotent under concurrent retries, preserve the public API, and prove the behavior with repository tests.";
@@ -14,7 +14,7 @@ export function NewRunPage({ demo }: { demo: string | null }) {
   const [workspace, setWorkspace] = useState("");
   const [provider, setProvider] = useState<"deterministic" | "ollama" | "azure">(paymentPreset ? "deterministic" : preferredProvider(providers));
   const [workflow, setWorkflow] = useState<"single" | "multi">("multi");
-  const [parallel, setParallel] = useState(true);
+  const [parallel, setParallel] = useState(!paymentPreset);
   const [maxWorkers, setMaxWorkers] = useState(3);
   const [commitChanges, setCommitChanges] = useState(false);
   const [createPr, setCreatePr] = useState(false);
@@ -95,13 +95,16 @@ export function NewRunPage({ demo }: { demo: string | null }) {
 
           <fieldset className="form-section">
             <legend><span>02</span><div>Repository boundary<small>Canonical Git root required</small></div></legend>
-            <div className="workspace-entry">
+            {validation?.valid ? <div className="workspace-entry workspace-entry-confirmed">
+              <div><span className="field-label-text">Selected repository</span><strong>{displayWorkspace(validation.workspace)}</strong><small>Canonical path retained privately by the local control plane</small></div>
+              <button className="button button-secondary" type="button" onClick={() => setValidation(undefined)} disabled={busy !== undefined}>Change repository</button>
+            </div> : <div className="workspace-entry">
               <label className="field-label"><span>Absolute workspace</span><input value={workspace} onChange={(event) => { setWorkspace(event.target.value); setValidation(undefined); }} placeholder="C:\work\payment-safety-demo" required /></label>
               <button className="button button-secondary" type="button" onClick={() => void validate()} disabled={!workspace.trim() || busy !== undefined}>{busy === "validate" ? <LoaderCircle className="spin" size={15} /> : <ScanSearch size={15} />} Validate</button>
-            </div>
+            </div>}
             {validation && <div className={`workspace-verdict ${validation.valid ? "is-valid" : "is-invalid"}`}>
               {validation.valid ? <CheckCircle2 size={18} /> : <LockKeyhole size={18} />}
-              <div><strong>{validation.valid ? "Repository boundary confirmed" : "Workspace rejected"}</strong><p>{validation.message ?? validation.workspace}</p><code>{validation.git_top_level ?? "No Git top-level detected"}</code></div>
+              <div><strong>{validation.valid ? "Repository boundary confirmed" : "Workspace rejected"}</strong><p>{validation.message ?? "AgentBus inspected the canonical repository boundary."}</p><code>{validation.git_top_level ? displayWorkspace(validation.git_top_level) : "No Git top-level detected"}</code></div>
             </div>}
           </fieldset>
 

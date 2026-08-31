@@ -11,7 +11,8 @@ import type {
   RunSummary,
   TaskSummary,
   ToolInvocationSummary,
-  TraceResponse
+  TraceResponse,
+  TraceSpanSummary
 } from "../api/types";
 import { ApprovalGate } from "./ApprovalGate";
 import { AttemptStack } from "./AttemptStack";
@@ -47,6 +48,9 @@ describe("execution evidence components", () => {
 
     expect(screen.getByText("7")).toBeInTheDocument();
     expect(screen.getByText("mvn")).toBeInTheDocument();
+    expect(screen.getByText("mvn -q -o test")).toBeInTheDocument();
+    expect(screen.getByText("payment-demo/")).toBeInTheDocument();
+    expect(screen.queryByText("C:\\work\\payment-demo")).not.toBeInTheDocument();
     await user.type(screen.getByLabelText(/decision note/i), "Offline Maven execution reviewed.");
     await user.click(screen.getByRole("button", { name: /approve & continue/i }));
 
@@ -208,12 +212,28 @@ describe("execution evidence components", () => {
       updated_at: "2026-08-30T10:01:00Z"
     } satisfies TaskSummary;
 
-    render(<ExecutionRail run={run} tasks={[task]} waitingApproval />);
+    const staleVerifierSpan = {
+      trace_id: "trace-rail-001",
+      span_id: "span-verifier-001",
+      run_id: run.run_id,
+      span_type: "verifier",
+      name: "verifier",
+      sequence: 5,
+      started_at: "2026-08-30T10:00:30Z",
+      ended_at: "2026-08-30T10:00:45Z",
+      status: "succeeded"
+    } satisfies TraceSpanSummary;
+
+    render(<ExecutionRail run={run} tasks={[task]} spans={[staleVerifierSpan]} waitingApproval />);
 
     const rail = screen.getByRole("region", { name: "Execution rail" });
     expect(within(rail).getByText("Waiting Approval")).toBeInTheDocument();
     expect(within(rail).getByText("Coder + managed tools")).toBeInTheDocument();
     expect(within(rail).getByText(/repository-defined checks gate candidate completion/i)).toBeInTheDocument();
+    const verifierStage = within(rail).getByText("Verifier").closest("article");
+    expect(verifierStage).not.toBeNull();
+    expect(within(verifierStage!).getByText("Blocked")).toBeInTheDocument();
+    expect(within(verifierStage!).queryByText("Succeeded")).not.toBeInTheDocument();
   });
 
   it("renders real source deltas and managed tool capabilities", () => {

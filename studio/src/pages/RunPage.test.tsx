@@ -205,6 +205,43 @@ describe("live run page", () => {
       "reject",
       "The repository boundary changed."
     );
+    expect(methods.resume).not.toHaveBeenCalled();
+  });
+
+  it("resumes the durable run after approving the exact revision", async () => {
+    const user = userEvent.setup();
+    const methods = installStudioClient();
+    const approval: ApprovalSummary = {
+      approval_id: "approval-payment-resume-001",
+      run_id: run.run_id,
+      task_id: task.task_id,
+      risk_category: "process_execution",
+      requested_action: "Run offline Maven tests",
+      command: ["mvn", "-q", "-o", "test"],
+      created_at: "2026-08-30T10:01:00Z",
+      state: "pending",
+      revision: 4,
+      tool_name: "test.execute",
+      executable: "mvn"
+    };
+    mockedLoadRunBundle.mockResolvedValue(makeBundle({
+      run: { ...run, status: "waiting_for_approval", completed_at: null },
+      tasks: { run_id: run.run_id, tasks: [{ ...task, status: "waiting_for_approval" }] },
+      approvals: { run_id: run.run_id, approvals: [approval] }
+    }));
+
+    render(<RunPage runId={run.run_id} />);
+    await screen.findByRole("heading", { name: run.original_task });
+    await user.click(screen.getByRole("button", { name: /Approve & continue/i }));
+
+    await waitFor(() => expect(methods.resume).toHaveBeenCalledWith(run.run_id));
+    expect(methods.decideApproval).toHaveBeenCalledWith(
+      run.run_id,
+      approval.approval_id,
+      4,
+      "approve",
+      ""
+    );
   });
 
   it("shows verifier success and a mandatory final-review rejection truthfully", async () => {

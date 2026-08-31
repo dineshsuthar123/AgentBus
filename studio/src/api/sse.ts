@@ -1,5 +1,5 @@
 import type { EventEnvelope } from "./types";
-import { StudioClient } from "./client";
+import { bindBrowserFetch, StudioClient } from "./client";
 
 export class SseParser {
   private buffer = "";
@@ -54,7 +54,7 @@ export class StudioEventStream {
   }
 
   private async connect(runId?: string): Promise<void> {
-    const fetcher = this.options.fetcher ?? fetch;
+    const fetcher = this.options.fetcher ?? bindBrowserFetch();
     while (this.active) {
       this.controller = new AbortController();
       try {

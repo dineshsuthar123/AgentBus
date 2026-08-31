@@ -63,13 +63,13 @@ function buildStages(run: RunSummary, tasks: TaskSummary[], spans: TraceSpanSumm
     },
     {
       id: "verify", label: "Verify", actor: "Verifier", icon: CheckCheck,
-      status: String(run.verifier_status ?? verifierSpan?.status ?? (taskSucceeded ? "pending" : "blocked")),
+      status: waitingApproval ? "blocked" : String(run.verifier_status ?? verifierSpan?.status ?? (taskSucceeded ? "pending" : "blocked")),
       summary: run.verifier_status ? `Verifier reported ${humanize(run.verifier_status).toLowerCase()}.` : "Repository-defined checks gate candidate completion.",
       duration: verifierSpan ? durationBetween(verifierSpan.started_at, verifierSpan.ended_at) : undefined
     },
     {
       id: "review", label: "Review", actor: "Task + final reviewer", icon: ShieldQuestion,
-      status: String(run.reviewer_status ?? reviewerSpan?.status ?? "pending"),
+      status: waitingApproval ? "blocked" : String(run.reviewer_status ?? reviewerSpan?.status ?? "pending"),
       summary: run.reviewer_status ? `Review gate is ${humanize(run.reviewer_status).toLowerCase()}.` : "Task scope is reviewed before the mandatory whole-run decision.",
       duration: reviewerSpan ? durationBetween(reviewerSpan.started_at, reviewerSpan.ended_at) : undefined
     },

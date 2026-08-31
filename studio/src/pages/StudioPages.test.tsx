@@ -126,6 +126,8 @@ describe("Studio pages", () => {
     await user.type(screen.getByLabelText("Absolute workspace"), workspace);
     await user.click(screen.getByRole("button", { name: "Validate" }));
     expect(await screen.findByText("Repository boundary confirmed")).toBeInTheDocument();
+    expect(screen.getAllByText("agentbus-payment-demo/")).toHaveLength(2);
+    expect(screen.queryByDisplayValue(workspace)).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Launch execution" }));
 
     await waitFor(() => expect(createRun).toHaveBeenCalledOnce());
@@ -135,7 +137,8 @@ describe("Studio pages", () => {
       provider: "deterministic",
       workflow: "multi",
       durable: true,
-      parallel: true,
+      parallel: false,
+      max_workers: 1,
       live_provider_consent: false,
       commit_changes: false,
       create_pr: false,
