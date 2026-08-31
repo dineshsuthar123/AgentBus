@@ -101,9 +101,11 @@ try {
   }
 
   await go(page, `#/runs/${encodeURIComponent(runId)}`, completed.original_task);
+  await page.getByRole("button", { name: /^Overview/ }).click();
+  await page.getByRole("region", { name: "Execution rail" }).waitFor();
+  await capture(page, "09-verification-passed.png");
   await page.getByRole("button", { name: /^Review/ }).click();
   await page.getByRole("heading", { name: "Verifier" }).waitFor();
-  await capture(page, "09-verification-passed.png");
   await page.locator(".reviewer-decision").scrollIntoViewIfNeeded();
   await capture(page, "10-final-review.png");
 

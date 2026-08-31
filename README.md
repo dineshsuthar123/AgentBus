@@ -63,6 +63,12 @@ agentbus runs
 
 ## AgentBus Studio
 
+**A visual control plane for safe autonomous software engineering.**
+
+**Plan -> Execute -> Approve -> Verify -> Review -> Replay**
+
+![AgentBus Studio live durable run](docs/submission/screenshots/05-active-run.png)
+
 AgentBus Studio is the local visual control plane for durable runs. It exposes
 the real task graph, managed-tool timeline, exact approval gates, attempts,
 review, scoped Git diff, trace provenance, integrity verification, and offline
@@ -86,7 +92,7 @@ Paste the `bearer_token` from the ready handshake into Studio, open **Payment
 demo**, and use the absolute demo repository path. The `payment-safety`
 deterministic profile makes a real Java patch and pauses the real `mvn -q -o
 test` invocation for exact approval. [Submission overview](docs/submission/product.md)
-| [2-3 minute demo script](docs/submission/demo-script.md)
+| [2:36 demo script](docs/submission/demo-script.md) | [Judging summary](docs/submission/judging-summary.md)
 
 ## Why AgentBus
 
