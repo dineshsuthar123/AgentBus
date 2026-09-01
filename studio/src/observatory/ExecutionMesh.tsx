@@ -4,6 +4,7 @@ import type { ExecutionMeshModel, MeshEdge, MeshNode } from "./model";
 
 export interface ExecutionMeshProps {
   focusRequest?: number;
+  highlightTaskId?: string;
   model: ExecutionMeshModel;
   onSelectEdge?: (edge: MeshEdge) => void;
   onSelectNode: (node: MeshNode) => void;
@@ -24,7 +25,7 @@ interface DragState {
   startY: number;
 }
 
-export function ExecutionMesh({ focusRequest = 0, model, onSelectEdge, onSelectNode, selectedId }: ExecutionMeshProps) {
+export function ExecutionMesh({ focusRequest = 0, highlightTaskId, model, onSelectEdge, onSelectNode, selectedId }: ExecutionMeshProps) {
   const viewport = useRef<HTMLDivElement>(null);
   const nodeRefs = useRef(new Map<string, SVGGElement>());
   const drag = useRef<DragState | undefined>(undefined);
@@ -145,7 +146,7 @@ export function ExecutionMesh({ focusRequest = 0, model, onSelectEdge, onSelectN
                 <g
                   aria-current={isActive ? "step" : undefined}
                   aria-label={`${node.label}, ${node.rawStatus}. ${node.detail}`}
-                  className={`mesh-node kind-${node.kind} tone-${node.tone} ${isSelected ? "is-selected" : ""} ${isActive ? "is-active" : ""} ${node.dimmed ? "is-dimmed" : ""}`}
+                  className={`mesh-node kind-${node.kind} tone-${node.tone} ${isSelected ? "is-selected" : ""} ${isActive ? "is-active" : ""} ${node.dimmed ? "is-dimmed" : ""} ${highlightTaskId && node.taskId === highlightTaskId ? "is-related" : ""} ${highlightTaskId && node.taskId && node.taskId !== highlightTaskId ? "is-unrelated" : ""}`}
                   data-node-id={node.id}
                   key={node.id}
                   onClick={() => onSelectNode(node)}

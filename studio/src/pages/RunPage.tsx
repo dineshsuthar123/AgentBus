@@ -1,5 +1,5 @@
 import { Activity, CircleStop, FileCode2, Fingerprint, LoaderCircle, PanelRightOpen, RefreshCw, RotateCcw, ShieldCheck } from "lucide-react";
-import { useEffect, useEffectEvent, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useEffectEvent, useMemo, useState } from "react";
 import type { ApprovalSummary, TraceVerificationResponse } from "../api/types";
 import { loadRunBundle, type RunBundle } from "../api/runBundle";
 import { PanelBoundary } from "../components/PanelBoundary";
@@ -15,6 +15,8 @@ import { buildTimeline, type TimelineRecord } from "../observatory/timelineModel
 import { useLayoutPreferences } from "../state/layoutPreferences";
 import { useRunEvents, useStudio } from "../state/StudioContext";
 
+const SourceLens = lazy(() => import("../observatory/SourceLens").then((module) => ({ default: module.SourceLens })));
+
 export function RunPage({ runId }: { runId: string }) {
   const { client, streamStatus } = useStudio();
   const runEvents = useRunEvents(runId);
@@ -27,6 +29,7 @@ export function RunPage({ runId }: { runId: string }) {
   const [focusRequest, setFocusRequest] = useState(0);
   const [announcement, setAnnouncement] = useState("");
   const [presentation, setPresentation] = useState<TimelinePresentation>({ mode: "live" });
+  const [sourceOpen, setSourceOpen] = useState(false);
   const [preferences, setPreferences] = useLayoutPreferences();
   const eventVersion = runEvents.version;
 
@@ -206,6 +209,7 @@ export function RunPage({ runId }: { runId: string }) {
   }
 
   function selectView(view: InspectorView) {
+    if (view === "source") setSourceOpen(true);
     setSelection({ kind: "view", view });
     setPreferences((current) => ({ ...current, inspectorCollapsed: false }));
     updateDeepLink(runId, { view });
@@ -224,6 +228,22 @@ export function RunPage({ runId }: { runId: string }) {
     }
     setPreferences((current) => ({ ...current, inspectorCollapsed: false }));
   }
+
+  function selectFile(path: string) {
+    setSelection({ kind: "file", path });
+    setPreferences((current) => ({ ...current, inspectorCollapsed: false }));
+    updateDeepLink(runId, { view: "source", file: path });
+  }
+
+  function locateTask(taskId: string) {
+    const node = [...(model?.nodes ?? [])].reverse().find((item) => item.taskId === taskId && item.kind === "coder")
+      ?? model?.nodes.find((item) => item.taskId === taskId);
+    if (node) selectNode(node);
+  }
+
+  const highlightedTaskId = effectiveSelection.kind === "node" ? effectiveSelection.node.taskId
+    : effectiveSelection.kind === "file" ? bundle.changes?.changes.find((change) => change.path === effectiveSelection.path)?.task_id ?? undefined
+      : undefined;
 
   return (
     <div className={`run-observatory density-${preferences.density} presentation-${presentation.mode} ${inspectorCollapsed ? "inspector-collapsed" : ""} ${preferences.timelineCollapsed ? "timeline-collapsed" : ""}`}>
@@ -244,7 +264,7 @@ export function RunPage({ runId }: { runId: string }) {
       {bundle.partialErrors && <div className="partial-state" role="status"><Activity size={13} /><span>Partial snapshot</span><strong>{Object.keys(bundle.partialErrors).join(", ")} unavailable</strong></div>}
 
       <div className="observatory-grid">
-        <PanelBoundary name="Execution mesh"><ExecutionMesh model={presentedModel!} selectedId={effectiveSelection.kind === "node" ? effectiveSelection.node.id : undefined} onSelectNode={selectNode} onSelectEdge={selectEdge} focusRequest={focusRequest} /></PanelBoundary>
+        <PanelBoundary name="Execution mesh"><div className={`execution-source-stage ${sourceOpen ? "source-is-open" : ""}`}><ExecutionMesh model={presentedModel!} selectedId={effectiveSelection.kind === "node" ? effectiveSelection.node.id : undefined} highlightTaskId={highlightedTaskId} onSelectNode={selectNode} onSelectEdge={selectEdge} focusRequest={focusRequest} />{sourceOpen && <Suspense fallback={<LoadingState label="Opening source lens" />}><SourceLens bundle={bundle} client={client} timeline={timeline} highlightTaskId={highlightedTaskId} initialPath={effectiveSelection.kind === "file" ? effectiveSelection.path : undefined} onSelectFile={selectFile} onLocateTask={locateTask} onClose={() => setSourceOpen(false)} /></Suspense>}</div></PanelBoundary>
         {!inspectorCollapsed ? <PanelBoundary name={pendingApproval ? "Approval inspector" : "Context inspector"} safetyCritical={Boolean(pendingApproval)}><ContextInspector bundle={bundle} selection={effectiveSelection} busy={busy} traceVerification={traceVerification} onDecision={decide} onReplay={replay} onVerify={verifyEvidence} onClose={pendingApproval ? undefined : () => setPreferences((current) => ({ ...current, inspectorCollapsed: true }))} /></PanelBoundary> : <button className="inspector-reopen" type="button" onClick={() => setPreferences((current) => ({ ...current, inspectorCollapsed: false }))}><PanelRightOpen size={15} /><span>Inspector</span></button>}
         <IntegritySpine bundle={bundle} mode={mode} stream={streamStatus} onSelect={selectView} />
       </div>
