@@ -67,6 +67,7 @@ describe("StudioEventStore", () => {
     const listener = vi.fn();
     store.subscribe(listener);
     const fixture = Array.from({ length: 10_000 }, (_, index) => event(index + 1));
+    const started = performance.now();
 
     expect(store.ingestBatch(fixture)).toBe(10_000);
     expect(scheduled).toHaveLength(1);
@@ -80,5 +81,6 @@ describe("StudioEventStore", () => {
       size: 10_000
     });
     expect(listener).toHaveBeenCalledOnce();
+    console.info(`[studio-perf] 10k-events ingestion=${(performance.now() - started).toFixed(2)}ms notifications=${listener.mock.calls.length} retained=${store.getSnapshot().metrics.size}`);
   });
 });

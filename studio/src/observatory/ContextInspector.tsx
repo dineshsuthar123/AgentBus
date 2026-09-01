@@ -1,16 +1,21 @@
 import { Activity, CheckCheck, FileClock, Fingerprint, GitCompareArrows, LoaderCircle, PanelRightClose, ShieldCheck, TerminalSquare } from "lucide-react";
-import type { ApprovalSummary, TraceVerificationResponse } from "../api/types";
+import { lazy, Suspense, useMemo } from "react";
+import type { ApprovalSummary, EventEnvelope, TraceVerificationResponse } from "../api/types";
 import type { RunBundle } from "../api/runBundle";
 import { ApprovalGate } from "../components/ApprovalGate";
 import { CapabilityScope } from "../components/CapabilityScope";
-import { StatusSignal, TraceIdentity, VerificationMark } from "../components/Primitives";
+import { eventLogRecords } from "../components/logModel";
+import { LoadingState, StatusSignal, TraceIdentity, VerificationMark } from "../components/Primitives";
 import { VerificationSeal } from "../components/VerificationSeal";
-import { arrayOfStrings, durationBetween, humanize, recordOf, shortId } from "../lib/format";
+import { arrayOfStrings, displayPath, durationBetween, humanize, recordOf, sanitizeDisplayText, shortId } from "../lib/format";
 import type { ObservatorySelection } from "./selection";
+
+const VirtualLog = lazy(() => import("../components/VirtualLog").then((module) => ({ default: module.VirtualLog })));
 
 export interface ContextInspectorProps {
   busy?: string;
   bundle: RunBundle;
+  events?: readonly EventEnvelope[];
   onClose?: () => void;
   onDecision: (approval: ApprovalSummary, decision: "approve" | "reject", reason?: string) => Promise<void>;
   onReplay: () => Promise<void>;
@@ -44,6 +49,7 @@ function InspectorBody(props: ContextInspectorProps) {
     if (selection.view === "review") return <ReviewInspector bundle={bundle} />;
     if (selection.view === "verifier") return <VerifierInspector bundle={bundle} />;
     if (selection.view === "source") return <SourceSummary bundle={bundle} />;
+    if (selection.view === "runtime") return <RuntimeInspector bundle={bundle} events={props.events ?? []} />;
     return <RunInspector bundle={bundle} />;
   }
 
@@ -199,7 +205,7 @@ function FileInspector({ bundle, path }: { bundle: RunBundle; path: string }) {
   const task = change?.task_id ? bundle.tasks.tasks.find((item) => item.task_id === change.task_id) : undefined;
   return <div className="inspector-stack">
     <InspectorSignal icon={<FileClock size={15} />} label="Observed repository file" status={change?.status ?? "not_available"} />
-    <code className="inspector-path">{path}</code>
+    <code className="inspector-path">{displayPath(path)}</code>
     <DefinitionList rows={[
       ["Classification", change?.classification ?? "Not reported"],
       ["Tracked", change?.tracked == null ? "Not reported" : change.tracked ? "Yes" : "No"],
@@ -236,7 +242,17 @@ function EdgeInspector({ edge }: { edge: import("./model").MeshEdge }) {
 
 function SourceSummary({ bundle }: { bundle: RunBundle }) {
   const changes = bundle.changes?.changes ?? [];
-  return <div className="inspector-stack"><InspectorSignal icon={<FileClock size={15} />} label="Source lens" status={changes.length ? "observed" : "empty"} /><DefinitionList rows={[["Workspace", bundle.changes?.workspace ?? bundle.run.workspace], ["Observed files", changes.length], ["Generated", changes.filter((item) => item.generated).length], ["Review relevant", changes.filter((item) => item.classification.includes("review")).length]]} /><InspectorList title="Changed files" items={changes.map((item) => item.path)} empty="No repository changes were observed." /></div>;
+  return <div className="inspector-stack"><InspectorSignal icon={<FileClock size={15} />} label="Source lens" status={changes.length ? "observed" : "empty"} /><DefinitionList rows={[["Workspace", displayPath(bundle.changes?.workspace ?? bundle.run.workspace)], ["Observed files", changes.length], ["Generated", changes.filter((item) => item.generated).length], ["Review relevant", changes.filter((item) => item.classification.includes("review")).length]]} /><InspectorList title="Changed files" items={changes.map((item) => displayPath(item.path))} empty="No repository changes were observed." /></div>;
+}
+
+function RuntimeInspector({ bundle, events }: { bundle: RunBundle; events: readonly EventEnvelope[] }) {
+  const logs = useMemo(() => eventLogRecords(events), [events]);
+  return <div className="inspector-stack runtime-inspector">
+    <InspectorSignal icon={<Activity size={15} />} label="Run event stream" status={events.length ? "observed" : "snapshot_only"} />
+    <DefinitionList rows={[["Run", shortId(bundle.run.run_id)], ["Retained events", events.length], ["Trace events", bundle.trace?.event_count ?? "Not reported"], ["Source", events.length ? "Redacted SSE envelopes" : "No live envelopes retained"]]} />
+    <Suspense fallback={<LoadingState label="Opening virtual event log" />}><VirtualLog records={logs} height={300} /></Suspense>
+    <p className="inspector-footnote">Payloads and unrestricted tool arguments are intentionally omitted from this operational log.</p>
+  </div>;
 }
 
 function RunInspector({ bundle }: { bundle: RunBundle }) {
@@ -274,9 +290,5 @@ function textFrom(...values: unknown[]): string | undefined {
 function boundedValue(value: unknown): string {
   const output = typeof value === "string" ? value : JSON.stringify(value);
   if (!output) return "null";
-  const sanitized = [...output].filter((character) => {
-    const code = character.charCodeAt(0);
-    return code === 9 || code >= 32 && code !== 127;
-  }).join("");
-  return sanitized.length > 240 ? `${sanitized.slice(0, 237)}...` : sanitized;
+  return sanitizeDisplayText(output, 240);
 }

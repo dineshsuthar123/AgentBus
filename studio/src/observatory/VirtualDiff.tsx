@@ -1,6 +1,7 @@
 import { LoaderCircle } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { VirtualList } from "../components/VirtualList";
+import { sanitizeDisplayText } from "../lib/format";
 import type { DiffLine } from "../workers/diff.worker";
 
 const WORKER_THRESHOLD = 200_000;
@@ -29,7 +30,7 @@ export function VirtualDiff({ diff, onSelectHunk, truncated = false }: { diff: s
     {truncated && <div className="diff-warning">Bounded output reached its byte limit.</div>}
     <VirtualList ariaLabel="Bounded source diff" className="diff-lines" height={330} itemCount={lines.length} rowHeight={19} overscan={12} renderItem={(index) => {
       const line = lines[index];
-      const content = <><i>{line.number}</i><code>{line.text || " "}</code></>;
+      const content = <><i>{line.number}</i><code>{sanitizeDisplayText(line.text, 4_096) || " "}</code></>;
       return line.kind === "hunk"
         ? <button className="virtual-diff-line diff-hunk" type="button" onClick={() => onSelectHunk?.(line)}>{content}</button>
         : <div className={`virtual-diff-line diff-${line.kind}`}>{content}</div>;

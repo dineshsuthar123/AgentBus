@@ -298,4 +298,30 @@ describe("live run page", () => {
     expect(methods.createReplay).toHaveBeenCalledWith(run.run_id, { mode: "offline" });
     expect(methods.replay).toHaveBeenCalledWith("replay-payment-002", { force: true });
   });
+
+  it("opens bounded run events without exposing event payload arguments", async () => {
+    const user = userEvent.setup();
+    mockedUseRunEvents.mockReturnValue({
+      events: [{
+        sequence: 41,
+        event_type: "task.updated",
+        timestamp: "2026-08-30T10:01:00Z",
+        run_id: run.run_id,
+        task_id: task.task_id,
+        payload: { status: "running", unrestricted_tool_arguments: "must-not-render" }
+      }],
+      runId: run.run_id,
+      version: 1
+    });
+    mockedLoadRunBundle.mockResolvedValue(makeBundle());
+
+    render(<RunPage runId={run.run_id} />);
+    await screen.findByRole("heading", { name: run.original_task });
+    await user.click(screen.getByRole("button", { name: "Events" }));
+
+    expect(await screen.findByRole("region", { name: /runtime event log/i })).toBeInTheDocument();
+    expect(screen.getAllByText("Task Updated")).not.toHaveLength(0);
+    expect(screen.queryByText("must-not-render")).not.toBeInTheDocument();
+    expect(screen.getByText(/unrestricted tool arguments are intentionally omitted/i)).toBeInTheDocument();
+  });
 });

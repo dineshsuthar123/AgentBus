@@ -45,14 +45,33 @@ export function humanize(value?: string | null): string {
 
 export function displayWorkspace(value?: string | null): string {
   if (!value) return "Current workspace";
-  const normalized = value.replace(/\\/g, "/").replace(/\/+$/, "");
+  const normalized = sanitizeDisplayText(value, 1_024).replace(/\\/g, "/").replace(/\/+$/, "");
   const name = normalized.split("/").filter(Boolean).at(-1);
   return name ? `${name}/` : "Current workspace";
 }
 
 export function displayCommand(command?: string[] | null): string {
   if (!command?.length) return "Bounded managed action";
-  return command.map((part) => /\s/.test(part) ? JSON.stringify(part) : part).join(" ");
+  return command.map((part) => {
+    const safe = sanitizeDisplayText(part, 512);
+    return /\s/.test(safe) ? JSON.stringify(safe) : safe;
+  }).join(" ");
+}
+
+export function displayPath(value?: string | null): string {
+  if (!value) return "Unavailable path";
+  return sanitizeDisplayText(value, 512).replace(/[\t\r\n]+/g, "") || "Unavailable path";
+}
+
+export function sanitizeDisplayText(value: string, maximumLength = 2_000): string {
+  const escape = String.fromCharCode(27);
+  const ansi = new RegExp(`${escape}(?:\\][^\\u0007]*(?:\\u0007|${escape}\\\\)|\\[[0-?]*[ -/]*[@-~])`, "g");
+  const clean = [...value.replace(ansi, "")].filter((character) => {
+    const code = character.charCodeAt(0);
+    return code === 9 || code === 10 || code === 13 || code >= 32 && code !== 127;
+  }).join("");
+  if (clean.length <= maximumLength) return clean;
+  return `${clean.slice(0, Math.max(0, maximumLength - 3))}...`;
 }
 
 export function arrayOfStrings(value: unknown): string[] {

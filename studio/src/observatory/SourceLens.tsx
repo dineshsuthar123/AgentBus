@@ -4,7 +4,7 @@ import type { StudioClient } from "../api/client";
 import type { ChangeSummary } from "../api/types";
 import type { RunBundle } from "../api/runBundle";
 import { StatusSignal } from "../components/Primitives";
-import { humanize } from "../lib/format";
+import { displayPath, humanize } from "../lib/format";
 import type { TimelineRecord } from "./timelineModel";
 import { VirtualDiff } from "./VirtualDiff";
 
@@ -73,7 +73,7 @@ export function SourceLens({ bundle, client, highlightTaskId, initialPath, onClo
       </aside>
       <div className="source-detail">
         {selected ? <>
-          <div className="source-detail-head"><div><code>{selected.path}</code><span>{selected.classification}</span></div><StatusSignal status={selected.status} /></div>
+          <div className="source-detail-head"><div><code>{displayPath(selected.path)}</code><span>{selected.classification}</span></div><StatusSignal status={selected.status} /></div>
           <div className="file-activity">
             <span><small>Observed change</small><strong>{selected.binary ? "Binary" : `+${selected.additions ?? 0} / -${selected.deletions ?? 0}`}</strong></span>
             <span><small>Task link</small><strong>{task?.title ?? "Not persisted"}</strong></span>
@@ -90,7 +90,7 @@ export function SourceLens({ bundle, client, highlightTaskId, initialPath, onClo
 
 function FileRow({ change, onClick, related, selected }: { change: ChangeSummary; onClick: () => void; related: boolean; selected: boolean }) {
   const Icon = change.generated ? Wand2 : change.classification.includes("excluded") ? FileLock2 : FileCode2;
-  return <div role="listitem"><button className={`${selected ? "is-selected" : ""} ${related ? "is-related" : ""}`} type="button" onClick={onClick}><Icon size={13} /><code>{change.path}</code><span>{change.generated ? "generated" : change.classification}</span><small>{change.binary ? "bin" : `+${change.additions ?? 0} -${change.deletions ?? 0}`}</small></button></div>;
+  return <div role="listitem"><button className={`${selected ? "is-selected" : ""} ${related ? "is-related" : ""}`} type="button" onClick={onClick}><Icon size={13} /><code>{displayPath(change.path)}</code><span>{change.generated ? "generated" : change.classification}</span><small>{change.binary ? "bin" : `+${change.additions ?? 0} -${change.deletions ?? 0}`}</small></button></div>;
 }
 
 function preferredPath(changes: ChangeSummary[]): string {

@@ -22,6 +22,7 @@ const HistoryPage = lazy(() => import("./pages/HistoryPage").then((module) => ({
 const NewRunPage = lazy(() => import("./pages/NewRunPage").then((module) => ({ default: module.NewRunPage })));
 const RunPage = lazy(() => import("./pages/RunPage").then((module) => ({ default: module.RunPage })));
 const RuntimePage = lazy(() => import("./pages/RuntimePage").then((module) => ({ default: module.RuntimePage })));
+const DiagnosticsOverlay = lazy(() => import("./components/DiagnosticsOverlay").then((module) => ({ default: module.DiagnosticsOverlay })));
 
 interface RouteState {
   path: string;
@@ -59,6 +60,7 @@ export function App() {
         <Suspense fallback={<LoadingState label="Opening Studio surface" />}>{page}</Suspense>
       </main>
       <StudioAnnouncements runs={studio.runs} streamPhase={studio.streamStatus.phase} />
+      {import.meta.env.DEV && <Suspense><DiagnosticsOverlay /></Suspense>}
     </div>
   );
 }

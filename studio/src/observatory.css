@@ -303,6 +303,50 @@ kbd { padding: 2px 5px; border: 1px solid var(--obs-line-bright); border-radius:
 .virtual-diff-line.diff-hunk { color: var(--cyan); cursor: pointer; }
 .virtual-diff-line.diff-file { color: var(--amber); }
 
+/* Large operational streams retain logical volume without retaining DOM volume. */
+.virtual-log { min-width: 0; border: 1px solid var(--obs-line); background: #060a0c; }
+.virtual-log-toolbar { display: flex; min-height: 29px; align-items: center; gap: 4px; padding: 4px; border-bottom: 1px solid var(--obs-line); background: #0b1114; }
+.virtual-log-toolbar label { display: flex; height: 22px; min-width: 0; align-items: center; gap: 5px; padding: 0 5px; border: 1px solid #253239; color: var(--muted-2); }
+.virtual-log-toolbar .log-search { flex: 1; }
+.virtual-log-toolbar select, .virtual-log-toolbar input { min-width: 0; height: 100%; border: 0; background: transparent; color: #aab6bb; box-shadow: none; font: 500 7px/1 "IBM Plex Mono", monospace; }
+.virtual-log-toolbar input { width: 100%; }
+.virtual-log-toolbar option { background: #0a1013; }
+.virtual-log-toolbar button { display: inline-flex; height: 22px; align-items: center; gap: 4px; padding: 0 6px; border: 1px solid #253239; background: transparent; color: var(--muted); font-size: 6px; white-space: nowrap; cursor: pointer; }
+.virtual-log-toolbar button[aria-pressed="true"] { border-color: #8a6b2a; color: var(--amber); }
+.virtual-log-toolbar button:disabled { opacity: .38; cursor: default; }
+.virtual-log-summary { display: flex; height: 20px; align-items: center; justify-content: space-between; padding: 0 7px; border-bottom: 1px solid #131d22; color: var(--muted-2); font: 500 6px/1 "IBM Plex Mono", monospace; }
+.virtual-log-row { display: grid; width: 100%; height: 22px; grid-template-columns: 58px 45px 74px minmax(0, 1fr); align-items: center; gap: 6px; padding: 0 7px; border: 0; border-left: 2px solid transparent; border-bottom: 1px solid #10181c; background: transparent; color: #87959b; text-align: left; cursor: pointer; }
+.virtual-log-row:hover, .virtual-log-row.is-selected { background: #11191d; }
+.virtual-log-row.is-selected { border-left-color: var(--cyan); }
+.virtual-log-row time, .virtual-log-row span, .virtual-log-row code { overflow: hidden; color: var(--muted-2); font: 500 6px/1 "IBM Plex Mono", monospace; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
+.virtual-log-row strong { overflow: hidden; font-size: 7px; font-weight: 450; text-overflow: ellipsis; white-space: nowrap; }
+.virtual-log-row.level-error { color: #e49385; }
+.virtual-log-row.level-error span { color: var(--coral); }
+.virtual-log-row.level-warning { color: #d3ad64; }
+.virtual-log-row.level-warning span { color: var(--amber); }
+.virtual-log-row.level-debug { opacity: .72; }
+.virtual-log-empty { display: grid; height: 160px; place-items: center; color: var(--muted-2); font-size: 7px; }
+.runtime-inspector .virtual-log { margin: 2px -7px; }
+
+.diagnostics-trigger { position: fixed; z-index: 80; right: 8px; bottom: 8px; display: inline-flex; height: 24px; align-items: center; gap: 4px; padding: 0 7px; border: 1px solid #3a4b52; background: #081014; color: var(--cyan); font: 600 7px/1 "IBM Plex Mono", monospace; cursor: pointer; }
+.diagnostics-overlay { position: fixed; z-index: 79; right: 8px; bottom: 40px; width: min(620px, calc(100vw - 78px)); max-height: calc(100vh - 54px); overflow: auto; border: 1px solid #43545c; background: #071014; box-shadow: 0 18px 60px rgba(0, 0, 0, .55); color: var(--text); }
+.diagnostics-overlay > header { display: flex; height: 45px; align-items: center; justify-content: space-between; padding: 0 10px; border-bottom: 1px solid var(--obs-line); background: #0c1519; }
+.diagnostics-overlay > header div { display: grid; gap: 3px; }
+.diagnostics-overlay > header span { color: var(--cyan); font: 600 6px/1 "IBM Plex Mono", monospace; letter-spacing: .12em; text-transform: uppercase; }
+.diagnostics-overlay > header strong { font-size: 10px; }
+.diagnostics-overlay > header button { border: 0; background: transparent; color: var(--muted); cursor: pointer; }
+.diagnostic-status { display: flex; height: 29px; align-items: center; gap: 8px; padding: 0 9px; border-bottom: 1px solid var(--obs-line); color: var(--muted-2); font: 500 7px/1 "IBM Plex Mono", monospace; }
+.diagnostic-status strong { color: var(--cyan); text-transform: uppercase; }
+.diagnostic-grid { display: grid; grid-template-columns: repeat(4, 1fr); margin: 0; gap: 1px; background: var(--obs-line); }
+.diagnostic-grid > div { display: grid; gap: 5px; padding: 8px; background: #081014; }
+.diagnostic-grid dt { color: var(--muted-2); font-size: 6px; }
+.diagnostic-grid dd { margin: 0; color: #b6c3c8; font: 500 10px/1 "IBM Plex Mono", monospace; }
+.diagnostic-cache { display: grid; grid-template-columns: 18px 75px minmax(0, 1fr); align-items: center; gap: 5px; padding: 8px; border-top: 1px solid var(--obs-line); border-bottom: 1px solid var(--obs-line); color: var(--muted-2); font-size: 7px; }
+.diagnostic-cache code { overflow: hidden; color: #91a2a9; text-overflow: ellipsis; white-space: nowrap; }
+.diagnostic-cache small { grid-column: 3; color: var(--muted-2); }
+.diagnostics-overlay > .virtual-log { margin: 8px; }
+.diagnostics-overlay > footer { padding: 7px 9px; border-top: 1px solid var(--obs-line); color: var(--muted-2); font-size: 6px; }
+
 /* Approval and capability are topology controls, not cards. */
 .context-inspector .approval-gate { margin: -14px; border: 0; background: #110f09; }
 .context-inspector .gate-rule { margin: 0; padding: 10px 12px; }

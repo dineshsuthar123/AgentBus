@@ -1,4 +1,4 @@
-import { Activity, CircleStop, FileCode2, Fingerprint, LoaderCircle, PanelRightOpen, RefreshCw, RotateCcw, ShieldCheck } from "lucide-react";
+import { Activity, CircleStop, FileCode2, Fingerprint, LoaderCircle, PanelRightOpen, RefreshCw, RotateCcw, ScrollText, ShieldCheck } from "lucide-react";
 import { lazy, Suspense, useEffect, useEffectEvent, useMemo, useState } from "react";
 import type { ApprovalSummary, TraceVerificationResponse } from "../api/types";
 import { loadRunBundle, type RunBundle } from "../api/runBundle";
@@ -209,7 +209,7 @@ export function RunPage({ runId }: { runId: string }) {
   }
 
   function selectView(view: InspectorView) {
-    if (view === "source") setSourceOpen(true);
+    setSourceOpen(view === "source");
     setSelection({ kind: "view", view });
     setPreferences((current) => ({ ...current, inspectorCollapsed: false }));
     updateDeepLink(runId, { view });
@@ -252,6 +252,7 @@ export function RunPage({ runId }: { runId: string }) {
         <div className="run-command-meta"><TraceIdentity label="Run" value={bundle.run.run_id} compact /><span><small>Repository</small><strong>{displayWorkspace(bundle.run.workspace)}</strong></span><span><small>Elapsed</small><strong>{durationBetween(bundle.run.created_at, bundle.run.completed_at)}</strong></span></div>
         <div className="run-command-actions">
           <button type="button" onClick={() => selectView("source")}><FileCode2 size={14} /> Source</button>
+          <button type="button" onClick={() => selectView("runtime")}><ScrollText size={14} /> Events</button>
           <button type="button" onClick={() => selectView("review")}><ShieldCheck size={14} /> Review</button>
           <button type="button" onClick={() => selectView("evidence")}><Fingerprint size={14} /> Evidence</button>
           <button type="button" onClick={() => void refresh()} disabled={refreshing || busy !== undefined} aria-label="Refresh run">{refreshing ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />}</button>
@@ -265,7 +266,7 @@ export function RunPage({ runId }: { runId: string }) {
 
       <div className="observatory-grid">
         <PanelBoundary name="Execution mesh"><div className={`execution-source-stage ${sourceOpen ? "source-is-open" : ""}`}><ExecutionMesh model={presentedModel!} selectedId={effectiveSelection.kind === "node" ? effectiveSelection.node.id : undefined} highlightTaskId={highlightedTaskId} onSelectNode={selectNode} onSelectEdge={selectEdge} focusRequest={focusRequest} />{sourceOpen && <Suspense fallback={<LoadingState label="Opening source lens" />}><SourceLens bundle={bundle} client={client} timeline={timeline} highlightTaskId={highlightedTaskId} initialPath={effectiveSelection.kind === "file" ? effectiveSelection.path : undefined} onSelectFile={selectFile} onLocateTask={locateTask} onClose={() => setSourceOpen(false)} /></Suspense>}</div></PanelBoundary>
-        {!inspectorCollapsed ? <PanelBoundary name={pendingApproval ? "Approval inspector" : "Context inspector"} safetyCritical={Boolean(pendingApproval)}><ContextInspector bundle={bundle} selection={effectiveSelection} busy={busy} traceVerification={traceVerification} onDecision={decide} onReplay={replay} onVerify={verifyEvidence} onClose={pendingApproval ? undefined : () => setPreferences((current) => ({ ...current, inspectorCollapsed: true }))} /></PanelBoundary> : <button className="inspector-reopen" type="button" onClick={() => setPreferences((current) => ({ ...current, inspectorCollapsed: false }))}><PanelRightOpen size={15} /><span>Inspector</span></button>}
+        {!inspectorCollapsed ? <PanelBoundary name={pendingApproval ? "Approval inspector" : "Context inspector"} safetyCritical={Boolean(pendingApproval)}><ContextInspector bundle={bundle} events={runEvents.events} selection={effectiveSelection} busy={busy} traceVerification={traceVerification} onDecision={decide} onReplay={replay} onVerify={verifyEvidence} onClose={pendingApproval ? undefined : () => setPreferences((current) => ({ ...current, inspectorCollapsed: true }))} /></PanelBoundary> : <button className="inspector-reopen" type="button" onClick={() => setPreferences((current) => ({ ...current, inspectorCollapsed: false }))}><PanelRightOpen size={15} /><span>Inspector</span></button>}
         <IntegritySpine bundle={bundle} mode={mode} stream={streamStatus} onSelect={selectView} />
       </div>
 
