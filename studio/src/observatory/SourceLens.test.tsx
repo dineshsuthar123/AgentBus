@@ -14,7 +14,7 @@ const bundle = {
     original_task: "Make payment confirmation idempotent",
     created_at: "2026-08-30T10:00:00Z",
     updated_at: "2026-08-30T10:02:00Z",
-    changed_files: ["src/payment.ts", "dist/payment.js"],
+    changed_files: [".agentbus", "src/payment.ts", "dist/payment.js"],
     version: 4
   },
   tasks: { run_id: "run-source-001", tasks: [{
@@ -40,7 +40,8 @@ const bundle = {
     completed_at: "2026-08-30T10:01:30Z"
   }] },
   changes: { run_id: "run-source-001", workspace: "C:\\work\\payment-demo", changes: [
-    { path: "src/payment.ts", status: "modified", tracked: true, additions: 4, deletions: 1, classification: "review", task_id: "step-1" },
+    { path: ".agentbus", status: "ignored", tracked: false, classification: "ignored" },
+    { path: "src/payment.ts", status: "modified", tracked: true, additions: 4, deletions: 1, classification: "relevant", task_id: "step-1" },
     { path: "dist/payment.js", status: "created", tracked: false, additions: 30, deletions: 0, generated: true, classification: "generated-excluded" }
   ] },
   diff: { run_id: "run-source-001", diff: "", truncated: false, byte_limit: 262_144 }
@@ -72,6 +73,13 @@ describe("source lens", () => {
     expect(await screen.findByText("1 task attempts; exact writer not persisted")).toBeInTheDocument();
     expect(screen.getByText("1 related persisted records")).toBeInTheDocument();
     await waitFor(() => expect(diff).toHaveBeenCalledWith("run-source-001", "src/payment.ts", expect.objectContaining({ signal: expect.any(AbortSignal) })));
+
+    await user.click(screen.getByRole("button", { name: /^review$/i }));
+    expect(screen.getByRole("button", { name: /src\/payment.ts/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /\.agentbus/i })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /^excluded$/i }));
+    expect(screen.getByRole("button", { name: /\.agentbus/i })).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /locate execution/i }));
     expect(locate).toHaveBeenCalledWith("step-1");

@@ -44,14 +44,15 @@ try {
   await rejectedSession.close();
 
   await connect(page);
-  await page.getByRole("heading", { name: "Command deck" }).waitFor();
+  await page.getByRole("heading", { name: "Execution, attention, integrity." }).waitFor();
   await capture(page, "02-dashboard.png");
 
   await go(page, "#/demo", "Payment confirmation, made retry-safe");
   await capture(page, "04-payment-demo.png");
 
   await go(page, "#/new?demo=payment", "Launch the idempotency repair");
-  await page.getByLabel("Absolute workspace").fill(workspace);
+  const workspaceInput = page.getByLabel("Absolute workspace");
+  await workspaceInput.fill(workspace);
   await page.getByRole("button", { name: "Validate" }).click();
   await page.getByText("Repository boundary confirmed", { exact: true }).waitFor();
   await capture(page, "03-new-task.png");
@@ -61,81 +62,98 @@ try {
   if (launchedNewRun) {
     await page.getByRole("button", { name: "Launch execution" }).click();
     await page.waitForURL((url) => url.hash.startsWith("#/runs/"), { timeout: 30_000 });
-    runId = decodeURIComponent(new globalThis.URL(page.url()).hash.slice("#/runs/".length));
+    const hashPath = new globalThis.URL(page.url()).hash.slice(2).split("?", 1)[0];
+    runId = decodeURIComponent(hashPath.slice("runs/".length));
   } else {
     await go(page, `#/runs/${encodeURIComponent(runId)}`);
   }
   globalThis.console.log(`RUN_ID=${runId}`);
 
-  await page.locator(".run-page").waitFor({ timeout: 30_000 });
+  await page.locator(".run-observatory").waitFor({ timeout: 30_000 });
+  await page.getByRole("region", { name: "Execution mesh" }).waitFor();
   if (launchedNewRun) await capture(page, "05-active-run.png");
   let completed = await api(`/api/v1/runs/${encodeURIComponent(runId)}`);
   if (!terminal(completed.status)) {
-    await page.getByRole("region", { name: "Approval gate" }).waitFor({ timeout: 180_000 });
-    await frameApproval(page);
+    await page.locator(".approval-gate").waitFor({ timeout: 180_000 });
+    await frameApprovalTop(page);
     await capture(page, "06-approval-gate.png");
+    await frameApproval(page);
+    await capture(page, "06-approval-decision.png");
 
-    await page.reload({ waitUntil: "networkidle" });
-    await connect(page);
-    await page.getByRole("region", { name: "Approval gate" }).waitFor({ timeout: 30_000 });
-
-    await page.getByRole("button", { name: /^Source/ }).click();
-    await page.getByRole("heading", { name: "Candidate diff" }).waitFor();
-    await capture(page, "11-git-diff.png");
-    await page.getByRole("button", { name: /^Overview/ }).click();
+    await page.getByRole("button", { name: "Source", exact: true }).click();
+    await page.getByRole("region", { name: "Source lens" }).waitFor();
+    await waitForSource(page);
+    await capture(page, "11-source-lens-pending.png");
+    await page.getByRole("button", { name: "Close source lens" }).click();
 
     if (!approve) {
       throw new Error(
         "Approval gate captured. Set AGENTBUS_SCREENSHOTS_APPROVE=true to explicitly approve and continue the real run.",
       );
     }
-    await page.getByLabel(/Decision note/i).fill(
-      "Exact offline Maven invocation reviewed for the submission demo.",
-    );
-    await page.getByRole("button", { name: /Approve & continue/i }).click();
-    await resumeThroughStudio(page, runId);
-    completed = await waitForRun(runId, (run) => terminal(run.status), 180_000);
+    completed = await completeThroughStudio(page, runId, 180_000);
   }
   if (completed.status !== "succeeded") {
     throw new Error(`Payment run ended with ${completed.status}, not succeeded.`);
   }
 
   await go(page, `#/runs/${encodeURIComponent(runId)}`, completed.original_task);
-  await page.getByRole("button", { name: /^Overview/ }).click();
-  await page.getByRole("region", { name: "Execution rail" }).waitFor();
+  await page.locator(".run-observatory").waitFor({ timeout: 30_000 });
+  await page.getByRole("region", { name: "Execution mesh" }).waitFor();
+  await selectLastMeshNode(page, ".mesh-node.kind-verifier");
   await capture(page, "09-verification-passed.png");
-  await page.getByRole("button", { name: /^Review/ }).click();
-  await page.getByRole("heading", { name: "Verifier" }).waitFor();
-  await page.locator(".reviewer-decision").scrollIntoViewIfNeeded();
+  await page.getByRole("button", { name: "Review", exact: true }).click();
+  await page.getByText("Mandatory final review", { exact: true }).waitFor();
   await capture(page, "10-final-review.png");
 
-  await page.getByRole("button", { name: /^Attempts/ }).click();
-  await capture(page, "07-attempt-stack.png");
+  await capture(page, "07-attempt-topology.png");
 
-  await page.getByRole("button", { name: /^Source/ }).click();
-  await capture(page, "11-git-diff.png");
+  await page.getByRole("button", { name: "Source", exact: true }).click();
+  await page.getByRole("region", { name: "Source lens" }).waitFor();
+  await waitForSource(page);
+  await capture(page, "11-source-lens.png");
 
-  await page.getByRole("button", { name: /^Evidence/ }).click();
+  await page.getByRole("button", { name: "Evidence", exact: true }).click();
   await page.getByRole("button", { name: "Verify sealed trace" }).click();
   await page.getByText("Integrity verified", { exact: true }).waitFor({ timeout: 30_000 });
   await capture(page, "12-evidence-trace.png");
+  const replayBefore = await latestReplay(runId);
   await page.getByRole("button", { name: "Run offline replay" }).click();
-  await page.locator(".replay-result").waitFor({ timeout: 60_000 });
+  const replay = await waitForReplay(runId, replayBefore?.replay_id, 60_000);
+  await page.getByText("PROCESS NOT DISPATCHED", { exact: true }).waitFor({ timeout: 30_000 });
   await capture(page, "13-offline-replay.png");
+
+  await page.getByRole("group", { name: "Timeline mode" }).getByRole("button", { name: "Replay" }).click();
+  await page.locator(".run-observatory.presentation-replay").waitFor();
+  await capture(page, "18-presentation-replay.png");
+  await page.getByRole("button", { name: "Events", exact: true }).click();
+  await page.getByText("Run event stream", { exact: true }).waitFor();
+  await capture(page, "19-runtime-events.png");
 
   const retryRunId = process.env.AGENTBUS_RETRY_RUN_ID;
   if (retryRunId) {
     await go(page, `#/runs/${encodeURIComponent(retryRunId)}`);
-    await page.locator(".run-page").waitFor({ timeout: 30_000 });
+    await page.locator(".run-observatory").waitFor({ timeout: 30_000 });
     await page.getByText(retryRunId.slice(0, 8), { exact: false }).first().waitFor();
-    await page.getByRole("button", { name: /^Overview/ }).click();
-    await page.getByRole("region", { name: "Approval gate" }).waitFor({ timeout: 30_000 });
-    await frameApproval(page);
-    await capture(page, "06-approval-gate.png");
-    await page.getByRole("button", { name: /^Attempts/ }).click();
-    await capture(page, "07-attempt-stack.png");
-    await page.getByRole("button", { name: /^Tools/ }).click();
-    await page.getByRole("heading", { name: "Tool invocation timeline" }).waitFor();
+    await page.getByRole("region", { name: "Execution mesh" }).waitFor();
+    const retryNode = page.locator(".mesh-node.kind-retry").first();
+    if (!(await retryNode.isVisible().catch(() => false))) {
+      throw new Error(`Run ${retryRunId} does not contain persisted retry evidence.`);
+    }
+    await retryNode.click();
+    await page.getByText("Immutable RetryEvidence", { exact: true }).waitFor();
+    await capture(page, "08-retry-evidence.png");
+  }
+
+  const failureRunId = process.env.AGENTBUS_FAILURE_RUN_ID;
+  if (failureRunId) {
+    await go(page, `#/runs/${encodeURIComponent(failureRunId)}`);
+    await page.locator(".run-observatory").waitFor({ timeout: 30_000 });
+    const failedVerifier = page.locator(".mesh-node.kind-verifier.tone-danger").first();
+    if (!(await failedVerifier.isVisible().catch(() => false))) {
+      throw new Error(`Run ${failureRunId} does not contain a persisted verifier failure.`);
+    }
+    await failedVerifier.click();
     await capture(page, "08-verification-failure.png");
   }
 
@@ -144,16 +162,16 @@ try {
   await go(page, "#/history", "Run history");
   await capture(page, "15-run-history.png");
 
-  await go(page, "#/", "Command deck");
+  await go(page, "#/", "Execution, attention, integrity.");
   await page.setViewportSize({ width: 1280, height: 800 });
   await capture(page, "17-dashboard-1280.png");
+  await capture(page, "20-reduced-motion-dashboard.png");
   await page.setViewportSize({ width: 1440, height: 900 });
 
-  await page.getByRole("button", { name: "Disconnect" }).click();
+  await page.getByRole("button", { name: "Disconnect Studio" }).click();
   await page.getByRole("heading", { name: "Connect to AgentBus" }).waitFor();
   await capture(page, "16-runtime-disconnected.png");
 
-  const replay = await latestReplay(runId);
   globalThis.console.log(`FINAL_STATUS=${completed.status}`);
   globalThis.console.log(`VERIFIER=${completed.verifier_status ?? "not-reported"}`);
   globalThis.console.log(`REVIEWER=${completed.reviewer_status ?? "not-reported"}`);
@@ -188,13 +206,20 @@ async function frameApproval(targetPage) {
   await targetPage.waitForTimeout(100);
 }
 
+async function frameApprovalTop(targetPage) {
+  await targetPage.locator(".inspector-scroll").evaluate((element) => {
+    element.scrollTop = 0;
+  });
+  await targetPage.waitForTimeout(100);
+}
+
 async function stabilize(targetPage) {
   await targetPage.addStyleTag({
     content: "*,*::before,*::after{animation:none!important;transition:none!important;caret-color:transparent!important}",
   });
 }
 
-async function capture(targetPage, name) {
+async function capture(targetPage, name, options = {}) {
   await targetPage.waitForTimeout(200);
   await assertPublicSafe(targetPage, name);
   await targetPage.mouse.move(1435, 5);
@@ -202,6 +227,7 @@ async function capture(targetPage, name) {
     path: path.join(outputDirectory, name),
     animations: "disabled",
     fullPage: false,
+    ...options,
   });
 }
 
@@ -216,6 +242,25 @@ async function assertPublicSafe(targetPage, name) {
       throw new Error(`${name} contains a presentation-sensitive local value.`);
     }
   }
+}
+
+async function waitForSource(targetPage) {
+  const started = Date.now();
+  while (Date.now() - started < 30_000) {
+    const error = targetPage.locator(".source-diff-error");
+    if (await error.isVisible().catch(() => false)) {
+      throw new Error(`Source lens failed: ${await error.innerText()}`);
+    }
+    if (await targetPage.locator(".virtual-diff, .quiet-copy").first().isVisible().catch(() => false)) return;
+    await targetPage.waitForTimeout(100);
+  }
+  throw new Error("Source lens did not render a bounded diff within 30000ms.");
+}
+
+async function selectLastMeshNode(targetPage, selector) {
+  const nodes = targetPage.locator(selector);
+  const count = await nodes.count();
+  if (count > 0) await nodes.nth(count - 1).click();
 }
 
 async function resumeThroughStudio(targetPage, runId) {
@@ -234,19 +279,54 @@ async function resumeThroughStudio(targetPage, runId) {
   throw new Error("Studio did not expose a resumable continuation after approval.");
 }
 
-async function waitForRun(runId, predicate, timeoutMs) {
+async function completeThroughStudio(targetPage, runId, timeoutMs) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     const run = await api(`/api/v1/runs/${encodeURIComponent(runId)}`);
-    if (predicate(run)) return run;
-    await new Promise((resolve) => globalThis.setTimeout(resolve, 500));
+    if (terminal(run.status)) return run;
+    if (run.status === "waiting_for_approval") {
+      const approvals = await api(`/api/v1/runs/${encodeURIComponent(runId)}/approvals`);
+      const pending = approvals.approvals?.find((approval) => approval.state === "pending");
+      if (pending) {
+        await targetPage.locator(".approval-gate").waitFor({ timeout: 30_000 });
+        await targetPage.getByLabel(/Decision note/i).fill(
+          "Exact offline managed invocation reviewed for the submission demo.",
+        );
+        await targetPage.getByRole("button", { name: /Approve & continue/i }).click();
+        await waitForApprovalDecision(runId, pending.approval_id, 30_000);
+      }
+      await resumeThroughStudio(targetPage, runId);
+      continue;
+    }
+    await targetPage.waitForTimeout(500);
   }
-  throw new Error(`Run ${runId} did not reach the expected state within ${timeoutMs}ms.`);
+  throw new Error(`Run ${runId} did not complete through Studio within ${timeoutMs}ms.`);
+}
+
+async function waitForApprovalDecision(runId, approvalId, timeoutMs) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const response = await api(`/api/v1/runs/${encodeURIComponent(runId)}/approvals`);
+    const approval = response.approvals?.find((item) => item.approval_id === approvalId);
+    if (approval && approval.state !== "pending") return approval;
+    await new Promise((resolve) => globalThis.setTimeout(resolve, 250));
+  }
+  throw new Error(`Approval ${approvalId} remained pending for ${timeoutMs}ms.`);
 }
 
 async function latestReplay(runId) {
   const response = await api(`/api/v1/replays?run_id=${encodeURIComponent(runId)}&limit=10`);
   return response.replays?.[0];
+}
+
+async function waitForReplay(runId, previousReplayId, timeoutMs) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const replay = await latestReplay(runId);
+    if (replay && replay.replay_id !== previousReplayId) return replay;
+    await new Promise((resolve) => globalThis.setTimeout(resolve, 250));
+  }
+  throw new Error(`Run ${runId} did not persist a new replay within ${timeoutMs}ms.`);
 }
 
 async function api(apiPath) {

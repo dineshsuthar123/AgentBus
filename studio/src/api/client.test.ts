@@ -108,6 +108,34 @@ describe("StudioClient", () => {
     expect(requestSignal?.aborted).toBe(true);
   });
 
+  it("replaces an aborted in-flight read before its cleanup microtask settles", async () => {
+    let secondResponse: ((response: Response) => void) | undefined;
+    const fetcher = vi.fn<FetchLike>((_input, init) => {
+      const signal = init?.signal as AbortSignal;
+      if (fetcher.mock.calls.length === 1) {
+        return new Promise<Response>((_resolve, reject) => {
+          signal.addEventListener("abort", () => queueMicrotask(() => reject(new DOMException("aborted", "AbortError"))));
+        });
+      }
+      return new Promise<Response>((resolve) => { secondResponse = resolve; });
+    });
+    const client = new StudioClient(TOKEN, "http://127.0.0.1:5173", fetcher);
+    const obsolete = new AbortController();
+
+    const first = client.run("run-remounted", { signal: obsolete.signal, force: true });
+    obsolete.abort();
+    const remounted = client.run("run-remounted", { force: true });
+    secondResponse!(new Response(JSON.stringify({ run_id: "run-remounted", status: "running" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    }));
+
+    await expect(first).rejects.toMatchObject({ name: "AbortError" });
+    await expect(remounted).resolves.toMatchObject({ run_id: "run-remounted" });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(client.queryCacheSummary().inflightReads).toBe(0);
+  });
+
   it("never retries a non-idempotent approval mutation", async () => {
     const fetcher = vi.fn<FetchLike>(async () => new Response(JSON.stringify({
       error: { code: "temporarily_unavailable", message: "Try later.", retryable: true }

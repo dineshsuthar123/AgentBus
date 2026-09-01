@@ -5,6 +5,19 @@ All images are captured from the real authenticated local Studio at `1440 x
 script rejects visible bearer tokens, user-profile paths, and workspace parent
 paths.
 
+The current Execution Observatory set is in [`studio-v2/`](studio-v2/). The
+legacy submission frames remain in this directory for historical comparison.
+
+## Execution Observatory Highlights
+
+| Category | Screenshot | What it demonstrates |
+| --- | --- | --- |
+| APPROVAL | [studio-v2/06-approval-gate.png](studio-v2/06-approval-gate.png) | A real server-authoritative gate with the exact offline Maven command, policy rule, and persisted revision. |
+| RETRY | [studio-v2/08-retry-evidence.png](studio-v2/08-retry-evidence.png) | Spatial retry topology and immutable retained-change evidence from a real failed run. |
+| SOURCE | [studio-v2/11-source-lens.png](studio-v2/11-source-lens.png) | The review-relevant Java file selected ahead of ignored runtime/build paths, with a bounded virtualized diff. |
+| REVIEW | [studio-v2/10-final-review.png](studio-v2/10-final-review.png) | Mechanical verifier success followed by the mandatory whole-run reviewer decision. |
+| REPLAY | [studio-v2/13-offline-replay.png](studio-v2/13-offline-replay.png) | Captured results reused with zero provider, network, and process dispatches. |
+
 ## Best Five
 
 | Category | Screenshot | What it demonstrates |

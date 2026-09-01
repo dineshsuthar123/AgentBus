@@ -211,24 +211,29 @@ export class StudioClient {
     }
 
     let entry = this.inflight.get(path);
+    if (entry?.controller.signal.aborted) {
+      this.inflight.delete(path);
+      entry = undefined;
+    }
     if (!entry) {
       const controller = new AbortController();
-      entry = {
+      const created: InflightRead = {
         consumers: new Set<symbol>(),
         controller,
         promise: Promise.resolve(undefined),
         settled: false
       };
-      entry.promise = this.readFromNetwork<T>(path, controller.signal, options.timeoutMilliseconds)
+      created.promise = this.readFromNetwork<T>(path, controller.signal, options.timeoutMilliseconds)
         .then((value) => {
           this.cache.set(path, { storedAt: Date.now(), value });
           return value;
         })
         .finally(() => {
-          entry!.settled = true;
-          this.inflight.delete(path);
+          created.settled = true;
+          if (this.inflight.get(path) === created) this.inflight.delete(path);
         });
-      this.inflight.set(path, entry);
+      entry = created;
+      this.inflight.set(path, created);
     } else {
       this.deduplicatedReads += 1;
     }

@@ -278,6 +278,19 @@ describe("live run page", () => {
     expect(screen.getByText("Add a rollback regression test.")).toBeInTheDocument();
   });
 
+  it("keeps the canonical workspace path private in the source inspector", async () => {
+    const user = userEvent.setup();
+    mockedLoadRunBundle.mockResolvedValue(makeBundle());
+
+    render(<RunPage runId={run.run_id} />);
+    await screen.findByRole("heading", { name: run.original_task });
+    await user.click(screen.getByRole("button", { name: "Source" }));
+
+    expect(await screen.findByRole("region", { name: "Source lens" })).toBeInTheDocument();
+    expect(screen.getAllByText(/payment-demo/).length).toBeGreaterThan(0);
+    expect(screen.queryByText(run.workspace, { exact: false })).not.toBeInTheDocument();
+  });
+
   it("verifies a sealed trace and requests providerless offline replay", async () => {
     const user = userEvent.setup();
     const methods = installStudioClient();

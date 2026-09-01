@@ -7,6 +7,7 @@ import { StatusSignal } from "../components/Primitives";
 import { displayPath, humanize } from "../lib/format";
 import type { TimelineRecord } from "./timelineModel";
 import { VirtualDiff } from "./VirtualDiff";
+import { isExcludedClassification, isReviewRelevantClassification } from "./sourceClassification";
 
 type SourceFilter = "all" | "review" | "generated" | "excluded";
 
@@ -94,11 +95,15 @@ function FileRow({ change, onClick, related, selected }: { change: ChangeSummary
 }
 
 function preferredPath(changes: ChangeSummary[]): string {
-  return changes.find((change) => !change.generated && !change.classification.includes("excluded"))?.path ?? changes[0]?.path ?? "";
+  return changes.find((change) => isReviewRelevantClassification(change.classification))?.path
+    ?? changes.find((change) => !change.generated && !isExcludedClassification(change.classification))?.path
+    ?? changes[0]?.path
+    ?? "";
 }
 
 function matchesFilter(change: ChangeSummary, filter: SourceFilter): boolean {
   if (filter === "all") return true;
   if (filter === "generated") return Boolean(change.generated);
-  return change.classification.includes(filter);
+  if (filter === "review") return isReviewRelevantClassification(change.classification);
+  return isExcludedClassification(change.classification);
 }

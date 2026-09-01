@@ -7,8 +7,9 @@ import { CapabilityScope } from "../components/CapabilityScope";
 import { eventLogRecords } from "../components/logModel";
 import { LoadingState, StatusSignal, TraceIdentity, VerificationMark } from "../components/Primitives";
 import { VerificationSeal } from "../components/VerificationSeal";
-import { arrayOfStrings, displayPath, durationBetween, humanize, recordOf, sanitizeDisplayText, shortId } from "../lib/format";
+import { arrayOfStrings, displayPath, displayWorkspace, durationBetween, humanize, recordOf, sanitizeDisplayText, shortId } from "../lib/format";
 import type { ObservatorySelection } from "./selection";
+import { isReviewRelevantClassification } from "./sourceClassification";
 
 const VirtualLog = lazy(() => import("../components/VirtualLog").then((module) => ({ default: module.VirtualLog })));
 
@@ -242,7 +243,7 @@ function EdgeInspector({ edge }: { edge: import("./model").MeshEdge }) {
 
 function SourceSummary({ bundle }: { bundle: RunBundle }) {
   const changes = bundle.changes?.changes ?? [];
-  return <div className="inspector-stack"><InspectorSignal icon={<FileClock size={15} />} label="Source lens" status={changes.length ? "observed" : "empty"} /><DefinitionList rows={[["Workspace", displayPath(bundle.changes?.workspace ?? bundle.run.workspace)], ["Observed files", changes.length], ["Generated", changes.filter((item) => item.generated).length], ["Review relevant", changes.filter((item) => item.classification.includes("review")).length]]} /><InspectorList title="Changed files" items={changes.map((item) => displayPath(item.path))} empty="No repository changes were observed." /></div>;
+  return <div className="inspector-stack"><InspectorSignal icon={<FileClock size={15} />} label="Source lens" status={changes.length ? "observed" : "empty"} /><DefinitionList rows={[["Workspace", displayWorkspace(bundle.changes?.workspace ?? bundle.run.workspace)], ["Observed files", changes.length], ["Generated", changes.filter((item) => item.generated).length], ["Review relevant", changes.filter((item) => isReviewRelevantClassification(item.classification)).length]]} /><InspectorList title="Changed files" items={changes.map((item) => displayPath(item.path))} empty="No repository changes were observed." /></div>;
 }
 
 function RuntimeInspector({ bundle, events }: { bundle: RunBundle; events: readonly EventEnvelope[] }) {

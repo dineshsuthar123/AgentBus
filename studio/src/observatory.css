@@ -90,8 +90,8 @@
 .recent-toolbar .deck-section-heading { min-width: 260px; }
 .recent-toolbar label { display: flex; width: min(420px, 42vw); height: 34px; align-items: center; gap: 8px; padding: 0 10px; border: 1px solid var(--obs-line); background: #090e11; color: var(--muted); }
 .recent-toolbar input { width: 100%; height: 100%; padding: 0; border: 0; background: transparent; box-shadow: none; color: var(--text); font-size: 9px; }
-.mini-run-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; background: var(--obs-line); }
-.mini-run { display: grid; min-height: 145px; grid-template-rows: auto 1fr auto auto; gap: 10px; padding: 12px; background: #090e11; transition: background var(--motion-micro); }
+.mini-run-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; }
+.mini-run { display: grid; min-height: 145px; grid-template-rows: auto 1fr auto auto; gap: 10px; padding: 12px; border: 1px solid var(--obs-line); background: #090e11; transition: background var(--motion-micro); }
 .mini-run:hover { background: #10191e; }
 .mini-run header, .mini-run footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .mini-run header > code { color: var(--cyan); font-size: 7px; }
