@@ -1,5 +1,5 @@
 import { Activity, CircleStop, FileCode2, Fingerprint, LoaderCircle, PanelRightOpen, RefreshCw, RotateCcw, ScrollText, ShieldCheck } from "lucide-react";
-import { lazy, Suspense, useEffect, useEffectEvent, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import type { ApprovalSummary, TraceVerificationResponse } from "../api/types";
 import { loadRunBundle, type RunBundle } from "../api/runBundle";
 import { PanelBoundary } from "../components/PanelBoundary";
@@ -16,8 +16,9 @@ import { useLayoutPreferences } from "../state/layoutPreferences";
 import { useRunEvents, useStudio } from "../state/StudioContext";
 
 const SourceLens = lazy(() => import("../observatory/SourceLens").then((module) => ({ default: module.SourceLens })));
+const EMPTY_QUERY = new URLSearchParams();
 
-export function RunPage({ runId }: { runId: string }) {
+export function RunPage({ query = EMPTY_QUERY, runId }: { query?: URLSearchParams; runId: string }) {
   const { client, streamStatus } = useStudio();
   const runEvents = useRunEvents(runId);
   const [bundle, setBundle] = useState<RunBundle>();
@@ -31,6 +32,7 @@ export function RunPage({ runId }: { runId: string }) {
   const [presentation, setPresentation] = useState<TimelinePresentation>({ mode: "live" });
   const [sourceOpen, setSourceOpen] = useState(false);
   const [preferences, setPreferences] = useLayoutPreferences();
+  const deepLinkApplied = useRef(false);
   const eventVersion = runEvents.version;
 
   useEffect(() => {
@@ -43,6 +45,15 @@ export function RunPage({ runId }: { runId: string }) {
           if (!controller.signal.aborted) {
             setBundle(next);
             setError(undefined);
+            if (!deepLinkApplied.current) {
+              const linked = selectionFromDeepLink(query, next);
+              if (linked) {
+                setSelection(linked.selection);
+                setSourceOpen(linked.sourceOpen);
+                setPreferences((current) => ({ ...current, inspectorCollapsed: false }));
+              }
+              deepLinkApplied.current = true;
+            }
           }
         })
         .catch((reason: unknown) => {
@@ -56,7 +67,7 @@ export function RunPage({ runId }: { runId: string }) {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [client, eventVersion, runId]);
+  }, [client, eventVersion, query, runId, setPreferences]);
 
   const model = useMemo(() => bundle ? buildExecutionMesh(bundle) : undefined, [bundle]);
   const timeline = useMemo(() => bundle ? buildTimeline(bundle, runEvents.events) : [], [bundle, runEvents.events]);
@@ -293,4 +304,30 @@ function updateDeepLink(runId: string, values: Record<string, string | undefined
   for (const [key, value] of Object.entries(values)) if (value) query.set(key, value);
   const suffix = query.size ? `?${query.toString()}` : "";
   window.history.replaceState(null, "", `#/runs/${encodeURIComponent(runId)}${suffix}`);
+}
+
+function selectionFromDeepLink(query: URLSearchParams, bundle: RunBundle): { selection: ObservatorySelection; sourceOpen: boolean } | undefined {
+  const file = query.get("file");
+  if (file && bundle.changes?.changes.some((change) => change.path === file)) {
+    return { selection: { kind: "file", path: file }, sourceOpen: true };
+  }
+
+  const model = buildExecutionMesh(bundle);
+  const nodeId = query.get("node");
+  const node = nodeId ? model.nodes.find((item) => item.id === nodeId) : undefined;
+  if (node) return { selection: { kind: "node", node }, sourceOpen: false };
+
+  const attemptValue = query.get("attempt");
+  if (attemptValue) {
+    const attempt = model.nodes.find((item) => item.attemptId === attemptValue || String(item.attemptNumber ?? "") === attemptValue);
+    if (attempt) return { selection: { kind: "node", node: attempt }, sourceOpen: false };
+  }
+
+  const view = query.get("view");
+  if (view && isInspectorView(view)) return { selection: { kind: "view", view }, sourceOpen: view === "source" };
+  return undefined;
+}
+
+function isInspectorView(value: string): value is InspectorView {
+  return ["run", "source", "verifier", "review", "evidence", "runtime"].includes(value);
 }

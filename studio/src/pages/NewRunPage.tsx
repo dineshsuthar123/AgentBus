@@ -1,5 +1,5 @@
 import { ArrowRight, CheckCircle2, GitBranch, LoaderCircle, LockKeyhole, Network, ScanSearch, ShieldCheck, Workflow } from "lucide-react";
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { RunCreateRequest, WorkspaceValidationResponse } from "../api/types";
 import { ErrorPanel, PageIntro, StatusSignal } from "../components/Primitives";
 import { displayWorkspace, humanize } from "../lib/format";
@@ -7,7 +7,7 @@ import { useStudio } from "../state/StudioContext";
 
 const PAYMENT_TASK = "Make payment confirmation idempotent under concurrent retries, preserve the public API, and prove the behavior with repository tests.";
 
-export function NewRunPage({ demo }: { demo: string | null }) {
+export function NewRunPage({ demo, focus }: { demo: string | null; focus?: string | null }) {
   const { client, providers } = useStudio();
   const paymentPreset = demo === "payment";
   const [task, setTask] = useState(paymentPreset ? PAYMENT_TASK : "");
@@ -22,6 +22,11 @@ export function NewRunPage({ demo }: { demo: string | null }) {
   const [validation, setValidation] = useState<WorkspaceValidationResponse>();
   const [busy, setBusy] = useState<"validate" | "launch">();
   const [error, setError] = useState<string>();
+  const workspaceInput = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (focus === "repository") window.requestAnimationFrame(() => workspaceInput.current?.focus());
+  }, [focus]);
 
   async function validate(): Promise<WorkspaceValidationResponse | undefined> {
     if (!client || !workspace.trim()) return undefined;
@@ -77,6 +82,11 @@ export function NewRunPage({ demo }: { demo: string | null }) {
     }
   }
 
+  const selectedRoute = providers.find((item) => item.name === provider);
+  const taskPreview = task.trim() ? `${task.trim().slice(0, 96)}${task.trim().length > 96 ? "..." : ""}` : "Define the bounded objective";
+  const sideEffectSummary = createPr ? "Commit + pull request after mandatory review" : commitChanges ? "Commit after mandatory review" : "Workspace edits only; no commit or PR";
+  const launchDisabled = busy !== undefined || !task.trim() || !workspace.trim() || provider !== "deterministic" && !liveConsent;
+
   return (
     <div className="page new-run-page">
       <PageIntro eyebrow={paymentPreset ? "Payment safety scenario" : "Durable execution"} title={paymentPreset ? "Launch the idempotency repair" : "Launch a bounded run"}>
@@ -99,7 +109,7 @@ export function NewRunPage({ demo }: { demo: string | null }) {
               <div><span className="field-label-text">Selected repository</span><strong>{displayWorkspace(validation.workspace)}</strong><small>Canonical path retained privately by the local control plane</small></div>
               <button className="button button-secondary" type="button" onClick={() => setValidation(undefined)} disabled={busy !== undefined}>Change repository</button>
             </div> : <div className="workspace-entry">
-              <label className="field-label"><span>Absolute workspace</span><input value={workspace} onChange={(event) => { setWorkspace(event.target.value); setValidation(undefined); }} placeholder="C:\work\payment-safety-demo" required /></label>
+              <label className="field-label"><span>Absolute workspace</span><input ref={workspaceInput} value={workspace} onChange={(event) => { setWorkspace(event.target.value); setValidation(undefined); }} placeholder="C:\work\payment-safety-demo" required /></label>
               <button className="button button-secondary" type="button" onClick={() => void validate()} disabled={!workspace.trim() || busy !== undefined}>{busy === "validate" ? <LoaderCircle className="spin" size={15} /> : <ScanSearch size={15} />} Validate</button>
             </div>}
             {validation && <div className={`workspace-verdict ${validation.valid ? "is-valid" : "is-invalid"}`}>
@@ -134,8 +144,25 @@ export function NewRunPage({ demo }: { demo: string | null }) {
 
           <section className="control-block">
             <p className="section-label">Side effects</p>
-            <Toggle checked={commitChanges} onChange={setCommitChanges} icon={<GitBranch size={16} />} label="Commit after final review" copy="Reviewer rejection still blocks commit." />
+            <Toggle checked={commitChanges} onChange={(value) => { setCommitChanges(value); if (!value) setCreatePr(false); }} icon={<GitBranch size={16} />} label="Commit after final review" copy="Reviewer rejection still blocks commit." />
             <Toggle checked={createPr} onChange={(value) => { setCreatePr(value); if (value) setCommitChanges(true); }} icon={<ArrowRight size={16} />} label="Create pull request" copy="Off by default; never implied by execution." />
+          </section>
+
+          <section className="execution-manifest" aria-label="Pre-launch execution scope">
+            <header><span>Scope preview</span><strong>Execution manifest</strong></header>
+            <dl>
+              <ManifestRow label="Task" value={taskPreview} />
+              <ManifestRow label="Repository" value={validation?.valid ? displayWorkspace(validation.workspace) : workspace.trim() ? displayWorkspace(workspace) : "Not selected"} />
+              <ManifestRow label="Branch" value="Not exposed by validation API" />
+              <ManifestRow label="Git status" value={validation?.valid ? "Repository boundary valid; status not reported" : "Awaiting boundary validation"} />
+              <ManifestRow label="Intelligence" value="Bounded scanner runs after launch" />
+              <ManifestRow label="Test command" value={paymentPreset ? "mvn -q -o test (deterministic profile)" : "Derived by the persisted plan"} />
+              <ManifestRow label="Provider route" value={`${humanize(provider)} / ${selectedRoute?.model ?? (provider === "deterministic" ? "offline" : "model not reported")}`} />
+              <ManifestRow label="Agents" value={workflow === "multi" ? "Planner / coder / verifier / reviewer" : "Single bounded loop / mandatory review"} />
+              <ManifestRow label="Workflow" value={workflow === "multi" && parallel ? `Parallel graph / ${maxWorkers} workers max` : `${humanize(workflow)} / sequential`} />
+              <ManifestRow label="Durable state" value="Always on / resumable checkpoints" />
+              <ManifestRow label="Side effects" value={sideEffectSummary} danger={commitChanges || createPr} />
+            </dl>
           </section>
 
           <div className="launch-summary">
@@ -143,11 +170,16 @@ export function NewRunPage({ demo }: { demo: string | null }) {
             <span><LockKeyhole size={15} /> Exact approvals enforced</span>
             <span><GitBranch size={15} /> Repository scoped</span>
           </div>
-          <button className="button button-primary button-wide launch-button" type="submit" disabled={busy !== undefined || !task.trim() || !workspace.trim()}>{busy === "launch" ? <LoaderCircle className="spin" size={16} /> : <ArrowRight size={16} />}{busy === "launch" ? "Persisting run" : "Launch execution"}</button>
+          {provider !== "deterministic" && !liveConsent && <p className="launch-blocker" role="status">Live provider consent is required before this route can launch.</p>}
+          <button className="button button-primary button-wide launch-button" type="submit" disabled={launchDisabled}>{busy === "launch" ? <LoaderCircle className="spin" size={16} /> : <ArrowRight size={16} />}{busy === "launch" ? "Persisting run" : "Launch execution"}</button>
         </aside>
       </form>
     </div>
   );
+}
+
+function ManifestRow({ danger = false, label, value }: { danger?: boolean; label: string; value: string }) {
+  return <div className={danger ? "is-dangerous" : ""}><dt>{label}</dt><dd>{value}</dd></div>;
 }
 
 function Choice({ active, disabled = false, onClick, icon, title, copy }: { active: boolean; disabled?: boolean; onClick: () => void; icon: React.ReactNode; title: string; copy: string }) {

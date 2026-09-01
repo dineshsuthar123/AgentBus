@@ -130,7 +130,11 @@ describe("Studio pages", () => {
     await user.type(screen.getByLabelText("Absolute workspace"), workspace);
     await user.click(screen.getByRole("button", { name: "Validate" }));
     expect(await screen.findByText("Repository boundary confirmed")).toBeInTheDocument();
-    expect(screen.getAllByText("agentbus-payment-demo/")).toHaveLength(2);
+    expect(screen.getAllByText("agentbus-payment-demo/")).toHaveLength(3);
+    const manifest = screen.getByRole("region", { name: /pre-launch execution scope/i });
+    expect(manifest).toHaveTextContent("BranchNot exposed by validation API");
+    expect(manifest).toHaveTextContent("Git statusRepository boundary valid; status not reported");
+    expect(manifest).toHaveTextContent("mvn -q -o test (deterministic profile)");
     expect(screen.queryByDisplayValue(workspace)).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Launch execution" }));
 
@@ -151,5 +155,38 @@ describe("Studio pages", () => {
       metadata: { entrypoint: "agentbus-studio", demo: "payment-safety" }
     }));
     expect(window.location.hash).toBe("#/runs/run-payment-safe-004");
+  });
+
+  it("focuses repository scope and blocks live routes until explicit consent", async () => {
+    const user = userEvent.setup();
+    mockedUseStudio.mockReturnValue(studioValue({
+      client: {} as StudioClient,
+      providers: [{ name: "azure", configured: true, ready: true, model: "gpt-live" }]
+    }));
+    render(<NewRunPage demo={null} focus="repository" />);
+
+    const workspace = screen.getByLabelText("Absolute workspace");
+    await waitFor(() => expect(workspace).toHaveFocus());
+    await user.type(screen.getByLabelText(/what should agentbus change/i), "Repair bounded behavior");
+    await user.type(workspace, "C:\\work\\bounded-repo");
+    expect(screen.getByRole("button", { name: "Launch execution" })).toBeDisabled();
+    expect(screen.getByText(/live provider consent is required/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("checkbox", { name: /live provider consent/i }));
+    expect(screen.getByRole("button", { name: "Launch execution" })).toBeEnabled();
+  });
+
+  it("cannot retain pull-request creation after commit is disabled", async () => {
+    const user = userEvent.setup();
+    render(<NewRunPage demo={null} />);
+
+    const commit = screen.getByRole("checkbox", { name: /commit after final review/i });
+    const pullRequest = screen.getByRole("checkbox", { name: /create pull request/i });
+    await user.click(pullRequest);
+    expect(commit).toBeChecked();
+    expect(pullRequest).toBeChecked();
+    await user.click(commit);
+    expect(commit).not.toBeChecked();
+    expect(pullRequest).not.toBeChecked();
   });
 });

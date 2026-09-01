@@ -324,4 +324,13 @@ describe("live run page", () => {
     expect(screen.queryByText("must-not-render")).not.toBeInTheDocument();
     expect(screen.getByText(/unrestricted tool arguments are intentionally omitted/i)).toBeInTheDocument();
   });
+
+  it("restores a persisted evidence deep link without mutating the run", async () => {
+    mockedLoadRunBundle.mockResolvedValue(makeBundle());
+
+    render(<RunPage runId={run.run_id} query={new URLSearchParams("view=evidence")} />);
+
+    expect(await screen.findByText("Captured results")).toBeInTheDocument();
+    expect(screen.getByText("PROCESS NOT DISPATCHED")).toBeInTheDocument();
+  });
 });

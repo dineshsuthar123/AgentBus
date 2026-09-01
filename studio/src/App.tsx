@@ -14,6 +14,7 @@ import type { RunSummary } from "./api/types";
 import { CommandPalette } from "./components/CommandPalette";
 import { LoadingState } from "./components/Primitives";
 import { displayWorkspace, shortId } from "./lib/format";
+import { decodeHashSegment } from "./lib/routing";
 import { useStudio } from "./state/StudioContext";
 
 const DashboardPage = lazy(() => import("./pages/DashboardPage").then((module) => ({ default: module.DashboardPage })));
@@ -36,11 +37,11 @@ export function App() {
   if (!studio.client) return <ConnectionScreen />;
 
   const runMatch = /^\/runs\/([^/]+)$/.exec(route.path);
-  const runId = runMatch ? decodeURIComponent(runMatch[1]) : undefined;
+  const runId = runMatch ? decodeHashSegment(runMatch[1]) : undefined;
   const currentRun = runId ? studio.runs.find((run) => run.run_id === runId) : undefined;
   let page: ReactNode;
-  if (runId) page = <RunPage runId={runId} />;
-  else if (route.path === "/new") page = <NewRunPage demo={route.query.get("demo")} />;
+  if (runId) page = <RunPage key={runId} runId={runId} query={route.query} />;
+  else if (route.path === "/new") page = <NewRunPage demo={route.query.get("demo")} focus={route.query.get("focus")} />;
   else if (route.path === "/history") page = <HistoryPage />;
   else if (route.path === "/runtime") page = <RuntimePage />;
   else if (route.path === "/demo") page = <DemoPage />;
@@ -129,12 +130,16 @@ function ConnectionScreen() {
   );
 }
 
-function StudioAnnouncements({ runs, streamPhase }: { runs: RunSummary[]; streamPhase: string }) {
+export function StudioAnnouncements({ runs, streamPhase }: { runs: RunSummary[]; streamPhase: string }) {
   const active = runs.find((run) => !["succeeded", "completed", "failed", "rejected", "cancelled"].includes(run.status.toLowerCase()));
+  const latest = runs[0];
+  const latestStatus = latest?.status.toLowerCase();
   const message = streamPhase === "reconnecting" ? "AgentBus event stream reconnecting. Last authoritative state remains visible."
     : streamPhase === "restored" ? "AgentBus event stream restored."
       : active?.status === "waiting_for_approval" ? "Approval required. Execution is paused."
-        : active ? `Run ${active.status}.` : "";
+        : active ? `Run ${active.status}.`
+          : latestStatus === "succeeded" || latestStatus === "completed" ? "Run succeeded. Durable verification and review state are available."
+            : latestStatus === "failed" || latestStatus === "rejected" || latestStatus === "cancelled" ? `Run ${latestStatus}. Inspect the persisted failure evidence.` : "";
   return <div className="sr-only" aria-live="polite" aria-atomic="true">{message}</div>;
 }
 
