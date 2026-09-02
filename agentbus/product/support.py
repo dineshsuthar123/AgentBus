@@ -72,7 +72,7 @@ def create_support_bundle(
     private_roots = (
         config.workspace_path,
         config.state_database_path.resolve().parent,
-        Path(config.runs_dir).expanduser().resolve(),
+        config.runs_path,
         Path.home().resolve(),
     )
     documents: dict[str, Any] = {}

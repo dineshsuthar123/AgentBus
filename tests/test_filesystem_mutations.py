@@ -216,6 +216,20 @@ def test_patch_requires_exact_context_and_detects_stale_hash(tmp_path: Path) -> 
     assert target.read_text(encoding="utf-8") == "value = 2\nvalue = 2\n"
 
 
+def test_patch_cannot_create_a_missing_target(tmp_path: Path) -> None:
+    target = tmp_path / "missing.py"
+
+    with pytest.raises(FileNotFoundError):
+        ContainedFileSystem(tmp_path).patch(
+            "missing.py",
+            "value = 1",
+            "value = 2",
+            **ATTRIBUTION,
+        )
+
+    assert target.exists() is False
+
+
 def test_patch_rejects_binary_content(tmp_path: Path) -> None:
     (tmp_path / "binary.dat").write_bytes(b"prefix\x00suffix")
 

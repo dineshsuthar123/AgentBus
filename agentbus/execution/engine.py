@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import uuid
+import threading
 from collections.abc import Callable
 from typing import Any, Protocol
 
 from agentbus import __version__
 from agentbus.execution.cancellation import CancellationToken
 from agentbus.execution.cancellation_registry import CancellationRegistry
+from agentbus.execution.leases import (
+    LeaseError,
+    LeaseService,
+    LeaseUnavailableError,
+)
 from agentbus.execution.models import (
     ApprovalOutcome,
     AttemptStatus,
@@ -25,8 +31,15 @@ from agentbus.execution.models import (
     TaskStatus,
 )
 from agentbus.execution.retry import FailureClassifier, RetryController
-from agentbus.execution.state_store import RunNotFoundError, StateStore
+from agentbus.execution.state_store import (
+    AttemptLimitExceededError,
+    NonterminalAttemptExistsError,
+    RunNotFoundError,
+    StateStore,
+    StateStoreError,
+)
 from agentbus.execution.task_graph import TaskGraph
+from agentbus.security.redaction import redact_text
 from agentbus.trace import RuntimeTrace
 
 
@@ -70,6 +83,9 @@ class DurableExecutionEngine:
         self._explicit_cancellation = cancellation
         self._explicit_cancellation_run_id: str | None = None
         self.runtime_trace = runtime_trace
+        self._resume_leases = LeaseService(state_store)
+        self._resume_worker_id = f"durable-engine-{uuid.uuid4().hex}"
+        self._execution_fenced = False
 
     def close(self) -> None:
         close = getattr(self.task_executor, "close", None)
@@ -94,7 +110,10 @@ class DurableExecutionEngine:
         metadata: dict[str, Any] | None = None,
         run_id: str | None = None,
     ) -> RunRecord:
-        graph = TaskGraph.from_planner_output(planner_output)
+        graph = TaskGraph.from_planner_output(
+            planner_output,
+            workspace=workspace,
+        )
         run_metadata = dict(metadata or {})
         run_metadata["agentbus_version"] = __version__
         raw_execution_metadata = run_metadata.get("execution", {})
@@ -135,6 +154,7 @@ class DurableExecutionEngine:
         return self.store.get_run(record.run_id)
 
     def run_until_blocked(self, run_id: str) -> ExecutionReport:
+        self._execution_fenced = False
         if self._cancellation_token(run_id).is_requested:
             return self.finalize_cancellation(run_id)
         snapshot = self.store.load_snapshot(run_id)
@@ -163,6 +183,8 @@ class DurableExecutionEngine:
             if self._cancellation_token(run_id).is_requested:
                 return self.finalize_cancellation(run_id)
             report = self.execute_next(run_id)
+            if self._execution_fenced:
+                return report
             if report.status in {
                 RunStatus.SUCCEEDED,
                 RunStatus.FAILED,
@@ -205,7 +227,18 @@ class DurableExecutionEngine:
         if snapshot.run.status != RunStatus.RUNNING:
             return self._report(snapshot)
 
-        task_record = next(
+        resumable = next(
+            (
+                (task, attempts[-1])
+                for task in snapshot.tasks
+                if task.status == TaskStatus.RUNNING
+                and (attempts := snapshot.attempts_for(task.task_id))
+                and attempts[-1].status == AttemptStatus.RUNNING
+                and _attempt_continuation(attempts[-1]) is not None
+            ),
+            None,
+        )
+        task_record = resumable[0] if resumable is not None else next(
             (task for task in snapshot.tasks if task.status == TaskStatus.READY),
             None,
         )
@@ -215,24 +248,48 @@ class DurableExecutionEngine:
 
         if cancellation.is_requested:
             return self.finalize_cancellation(run_id)
-        self.store.update_task_status(
-            run_id,
-            task_record.task_id,
-            TaskStatus.RUNNING,
-            event_type="durable_task_started",
-        )
-        self._log(
-            "durable_task_started",
-            run_id,
-            task_id=task_record.task_id,
-        )
-        attempt = self.store.create_attempt(run_id, task_record.task_id)
-        self._log(
-            "task_attempt_started",
-            run_id,
-            task_id=task_record.task_id,
-            attempt_number=attempt.attempt_number,
-        )
+        if resumable is not None:
+            attempt = resumable[1]
+            continuation = _attempt_continuation(attempt)
+            self._log(
+                "task_attempt_continued",
+                run_id,
+                task_id=task_record.task_id,
+                attempt_number=attempt.attempt_number,
+            )
+        else:
+            try:
+                attempt = self.store.start_attempt(run_id, task_record.task_id)
+            except NonterminalAttemptExistsError as exc:
+                self._log(
+                    "task_attempt_creation_fenced",
+                    run_id,
+                    task_id=task_record.task_id,
+                    attempt_number=exc.attempt_number,
+                    metadata={"attempt_status": exc.status.value},
+                )
+                return self.get_report(run_id)
+            except AttemptLimitExceededError as exc:
+                self.store.fail_attempt_exhaustion(run_id, task_record.task_id, str(exc))
+                self._log(
+                    "task_attempt_exhausted",
+                    run_id,
+                    task_id=task_record.task_id,
+                    metadata={"maximum_attempts": exc.maximum_attempts},
+                )
+                return self.get_report(run_id)
+            continuation = None
+            self._log(
+                "durable_task_started",
+                run_id,
+                task_id=task_record.task_id,
+            )
+            self._log(
+                "task_attempt_started",
+                run_id,
+                task_id=task_record.task_id,
+                attempt_number=attempt.attempt_number,
+            )
 
         snapshot = self.store.load_snapshot(run_id)
         previous_attempts = [
@@ -244,34 +301,123 @@ class DurableExecutionEngine:
             run=snapshot.run,
             task=task_record.spec,
             attempt_number=attempt.attempt_number,
+            attempt_id=attempt.attempt_id,
             previous_attempts=previous_attempts,
+            continuation=continuation,
+            attempt_metadata=attempt.metadata,
         )
 
-        if self.crash_hook is not None:
-            # The hook runs outside the executor exception boundary to emulate a
-            # process disappearing after durable attempt creation.
-            self.crash_hook("after_attempt_started", context)
-
-        try:
-            result = self._execute(context)
-        except Exception as exc:
-            classification = self.failure_classifier.classify(exc)
-            result = TaskExecutionResult(
-                succeeded=False,
-                summary="Task executor raised an exception.",
-                failure_category=classification.category,
-                error_message=classification.message,
-                retryable=classification.retryable,
-                metadata=(
-                    {"provider_failure": classification.metadata}
-                    if classification.metadata
-                    else {}
-                ),
+        resume_lease = None
+        heartbeat_stop: threading.Event | None = None
+        heartbeat_thread: threading.Thread | None = None
+        if continuation is not None:
+            try:
+                resume_lease = self._resume_leases.acquire_lease(
+                    run_id,
+                    task_record.task_id,
+                    self._resume_worker_id,
+                    metadata={
+                        "purpose": "durable_continuation",
+                        "attempt_id": attempt.attempt_id,
+                        "attempt_number": attempt.attempt_number,
+                    },
+                )
+            except LeaseUnavailableError:
+                self._execution_fenced = True
+                self.store.record_event(
+                    run_id,
+                    "task_continuation_resume_fenced",
+                    {
+                        "task_id": task_record.task_id,
+                        "attempt_id": attempt.attempt_id,
+                        "attempt_number": attempt.attempt_number,
+                    },
+                    task_id=task_record.task_id,
+                )
+                return self.get_report(run_id)
+            heartbeat_stop, heartbeat_thread = self._start_resume_heartbeat(
+                resume_lease
             )
 
-        self._persist_execution_result(attempt, task_record, result)
-        if result.succeeded:
-            self._checkpoint_completed_task(attempt, task_record, result)
+        try:
+            try:
+                context = self._prepare_attempt_context(context)
+            except Exception as exc:
+                classification = self.failure_classifier.classify(exc)
+                result = TaskExecutionResult(
+                    succeeded=False,
+                    summary="Task baseline preparation failed safely.",
+                    failure_category=FailureCategory.RESUMABILITY_FAILURE,
+                    error_message=classification.message,
+                    retryable=False,
+                    metadata=(
+                        {"baseline_failure": classification.metadata}
+                        if classification.metadata
+                        else {}
+                    ),
+                )
+                self._persist_execution_result(attempt, task_record, result)
+                self._synchronize_graph(run_id)
+                return self.get_report(run_id)
+
+            if self.crash_hook is not None:
+                # Baselines are durable before emulating a process disappearance.
+                self.crash_hook("after_attempt_started", context)
+            try:
+                result = self._execute(context)
+            except Exception as exc:
+                classification = self.failure_classifier.classify(exc)
+                result = TaskExecutionResult(
+                    succeeded=False,
+                    summary="Task executor raised an exception.",
+                    failure_category=classification.category,
+                    error_message=classification.message,
+                    retryable=classification.retryable,
+                    metadata=(
+                        {"provider_failure": classification.metadata}
+                        if classification.metadata
+                        else {}
+                    ),
+                )
+            result = self._prepare_retry_result(context, result)
+
+            if resume_lease is not None:
+                self._resume_leases.validate_fencing_token(
+                    resume_lease.lease_id,
+                    self._resume_worker_id,
+                    resume_lease.fencing_token,
+                )
+            self._persist_execution_result(attempt, task_record, result)
+            if result.succeeded:
+                self._checkpoint_completed_task(attempt, task_record, result)
+        except LeaseError:
+            self._execution_fenced = True
+            self.store.record_event(
+                run_id,
+                "task_continuation_fence_lost",
+                {
+                    "task_id": task_record.task_id,
+                    "attempt_id": attempt.attempt_id,
+                    "attempt_number": attempt.attempt_number,
+                },
+                task_id=task_record.task_id,
+            )
+            return self.get_report(run_id)
+        finally:
+            if heartbeat_stop is not None:
+                heartbeat_stop.set()
+            if heartbeat_thread is not None:
+                heartbeat_thread.join(timeout=5)
+            if resume_lease is not None:
+                try:
+                    self._resume_leases.release_lease(
+                        resume_lease.lease_id,
+                        self._resume_worker_id,
+                        resume_lease.fencing_token,
+                    )
+                except LeaseError:
+                    pass
+
         if cancellation.is_requested:
             if result.succeeded:
                 cancellation.record_task_completed_after_request(
@@ -320,6 +466,41 @@ class DurableExecutionEngine:
                 f"Task '{task_id}' is not waiting for approval; current status is "
                 f"'{task.status.value}'."
             )
+        attempts = self.store.list_attempts(run_id, task_id)
+        latest_attempt = attempts[-1] if attempts else None
+        pending_tool = (
+            _pending_tool_approval(latest_attempt)
+            if latest_attempt is not None
+            else None
+        )
+        if pending_tool is not None:
+            approval_id = str(pending_tool.get("approval_id") or "")
+            if not approval_id:
+                raise DurableExecutionError(
+                    "Persisted tool approval suspension is incomplete."
+                )
+            self.store.decide_tool_approval(
+                run_id,
+                approval_id,
+                disposition="approved",
+                reason=reason,
+            )
+            self._log(
+                "tool_approval_approved",
+                run_id,
+                task_id=task_id,
+                attempt_number=latest_attempt.attempt_number,
+                metadata={"approval_id": approval_id},
+            )
+            self._checkpoint_tool_approval(
+                run_id,
+                latest_attempt,
+                pending_tool,
+                ApprovalOutcome.APPROVED,
+            )
+            self._reactivate_after_persisted_approval(run_id)
+            return self.get_report(run_id)
+
         self.store.record_approval(
             run_id,
             task_id,
@@ -359,6 +540,50 @@ class DurableExecutionEngine:
                 f"Task '{task_id}' is not waiting for approval; current status is "
                 f"'{task.status.value}'."
             )
+        attempts = self.store.list_attempts(run_id, task_id)
+        latest_attempt = attempts[-1] if attempts else None
+        pending_tool = (
+            _pending_tool_approval(latest_attempt)
+            if latest_attempt is not None
+            else None
+        )
+        if pending_tool is not None:
+            approval_id = str(pending_tool.get("approval_id") or "")
+            if not approval_id:
+                self._fail_resumability(
+                    latest_attempt,
+                    "Persisted tool approval suspension is incomplete.",
+                )
+                return self.get_report(run_id)
+            self.store.decide_tool_approval(
+                run_id,
+                approval_id,
+                disposition="rejected",
+                reason=reason,
+            )
+            self._log(
+                "tool_approval_rejected",
+                run_id,
+                task_id=task_id,
+                attempt_number=latest_attempt.attempt_number,
+                metadata={"approval_id": approval_id},
+            )
+            self._checkpoint_tool_approval(
+                run_id,
+                latest_attempt,
+                pending_tool,
+                ApprovalOutcome.REJECTED,
+            )
+            self._reactivate_after_persisted_approval(run_id)
+            self._synchronize_graph(run_id)
+            if self.store.get_run(run_id).status == RunStatus.RUNNING:
+                self._fail_run(
+                    run_id,
+                    f"Tool invocation for task '{task_id}' was rejected"
+                    + (f": {reason}" if reason else "."),
+                )
+            return self.get_report(run_id)
+
         self.store.record_approval(
             run_id,
             task_id,
@@ -516,7 +741,10 @@ class DurableExecutionEngine:
                 )
                 cancellation.record_task_completed_after_request(task.task_id)
                 continue
-            if latest is not None and latest.status == AttemptStatus.RUNNING:
+            if latest is not None and latest.status in {
+                AttemptStatus.RUNNING,
+                AttemptStatus.WAITING_FOR_APPROVAL,
+            }:
                 self.store.complete_attempt(
                     latest.attempt_id,
                     AttemptStatus.INTERRUPTED,
@@ -563,6 +791,29 @@ class DurableExecutionEngine:
     def get_report(self, run_id: str) -> ExecutionReport:
         return self._report(self.store.load_snapshot(run_id))
 
+    def _start_resume_heartbeat(self, lease):
+        stop = threading.Event()
+        interval = max(0.1, min(30.0, self._resume_leases.lease_seconds / 3.0))
+
+        def heartbeat() -> None:
+            while not stop.wait(interval):
+                try:
+                    self._resume_leases.renew_lease(
+                        lease.lease_id,
+                        self._resume_worker_id,
+                        lease.fencing_token,
+                    )
+                except LeaseError:
+                    return
+
+        thread = threading.Thread(
+            target=heartbeat,
+            name=f"agentbus-resume-{lease.lease_id[:8]}",
+            daemon=True,
+        )
+        thread.start()
+        return stop, thread
+
     def _execute(self, context: TaskExecutionContext) -> TaskExecutionResult:
         if self.task_executor is None:
             raise DurableExecutionError(
@@ -576,6 +827,64 @@ class DurableExecutionEngine:
         if isinstance(raw_result, TaskExecutionResult):
             return raw_result
         return TaskExecutionResult.model_validate(raw_result)
+
+    def _prepare_retry_result(
+        self,
+        context: TaskExecutionContext,
+        result: TaskExecutionResult,
+    ) -> TaskExecutionResult:
+        if self.task_executor is None:
+            return result
+        prepare = getattr(self.task_executor, "prepare_retry_result", None)
+        if prepare is None:
+            return result
+        try:
+            prepared = prepare(context, result)
+            if not isinstance(prepared, TaskExecutionResult):
+                prepared = TaskExecutionResult.model_validate(prepared)
+            return prepared
+        except Exception as exc:
+            classification = self.failure_classifier.classify(exc)
+            metadata = dict(result.metadata)
+            if classification.metadata:
+                metadata["retry_evidence_failure"] = classification.metadata
+            return TaskExecutionResult(
+                succeeded=False,
+                summary="Corrective retry evidence could not be persisted safely.",
+                artifacts=result.artifacts,
+                failure_category=FailureCategory.RESUMABILITY_FAILURE,
+                error_message=classification.message,
+                retryable=False,
+                verifier_status=result.verifier_status,
+                reviewer_status=result.reviewer_status,
+                changed_files=result.changed_files,
+                metadata=metadata,
+            )
+
+    def _prepare_attempt_context(
+        self,
+        context: TaskExecutionContext,
+    ) -> TaskExecutionContext:
+        if self.task_executor is None:
+            return context
+        prepare = getattr(self.task_executor, "prepare_attempt", None)
+        if prepare is None:
+            return context
+        updates = prepare(context)
+        if not isinstance(updates, dict) or not updates:
+            raise DurableExecutionError(
+                "Task executor baseline preparation returned no durable metadata."
+            )
+        if context.attempt_id is None:
+            raise DurableExecutionError(
+                "Task baseline preparation requires an active attempt identity."
+            )
+        attempt = self.store.checkpoint_attempt_metadata(
+            context.attempt_id,
+            metadata_updates=updates,
+            event_type="task_repository_baselines_checkpointed",
+        )
+        return context.model_copy(update={"attempt_metadata": attempt.metadata})
 
     def _persist_execution_result(
         self,
@@ -603,6 +912,11 @@ class DurableExecutionEngine:
         )
 
         attempt_metadata = dict(result.metadata)
+        checkpointed = self.store.get_attempt(attempt.attempt_id).metadata.get(
+            "repository_baselines"
+        )
+        if isinstance(checkpointed, dict):
+            attempt_metadata["repository_baselines"] = checkpointed
         agentbus_metadata = dict(attempt_metadata.get("_agentbus", {}))
         agentbus_metadata["retryable_override"] = result.retryable
         attempt_metadata["_agentbus"] = agentbus_metadata
@@ -614,27 +928,29 @@ class DurableExecutionEngine:
                 pending_tool_approval.get("invocation_id") or ""
             )
             if not approval_id or not invocation_id:
-                raise DurableExecutionError(
-                    "Tool approval suspension metadata is incomplete."
+                self._fail_resumability(
+                    attempt,
+                    "Tool approval suspension metadata is incomplete.",
+                    metadata=attempt_metadata,
                 )
-            self.store.complete_attempt(
+                return
+            continuation = agentbus_metadata.get("task_continuation")
+            if not isinstance(continuation, dict) or not continuation:
+                continuation = agentbus_metadata.get("loop_continuation")
+            if not isinstance(continuation, dict) or not continuation:
+                self._fail_resumability(
+                    attempt,
+                    "Tool approval suspension omitted its durable task continuation.",
+                    metadata=attempt_metadata,
+                )
+                return
+            self.store.suspend_attempt_for_tool_approval(
                 attempt.attempt_id,
-                AttemptStatus.INTERRUPTED,
-                error_category=FailureCategory.POLICY_VIOLATION,
-                error_message=result.error_message or result.summary,
-                observation_summary=result.summary,
                 metadata=attempt_metadata,
-                event_type="task_attempt_awaiting_tool_approval",
-            )
-            self.store.update_task_status(
-                run_id,
-                task_id,
-                TaskStatus.WAITING_FOR_APPROVAL,
-                event_type="task_awaiting_tool_approval",
-                event_payload={
-                    "approval_id": approval_id,
-                    "invocation_id": invocation_id,
-                },
+                approval_id=approval_id,
+                invocation_id=invocation_id,
+                tool_name=str(pending_tool_approval.get("tool_name") or "unknown"),
+                observation_summary=result.summary,
             )
             self._log(
                 "task_awaiting_tool_approval",
@@ -642,6 +958,10 @@ class DurableExecutionEngine:
                 task_id=task_id,
                 attempt_number=attempt.attempt_number,
                 metadata={"approval_id": approval_id},
+            )
+            self._checkpoint_tool_approval_suspension(
+                attempt,
+                pending_tool_approval,
             )
             return
 
@@ -783,6 +1103,7 @@ class DurableExecutionEngine:
                     task_record.task_id,
                 ).status.value,
                 "changed_files": result.changed_files,
+                **_repository_baseline_trace_metadata(result.metadata),
             },
         )
 
@@ -809,6 +1130,72 @@ class DurableExecutionEngine:
                 "decision": outcome.value,
                 "task_status": self.store.get_task(run_id, task_id).status.value,
             },
+        )
+
+    def _checkpoint_tool_approval(
+        self,
+        run_id: str,
+        attempt: TaskAttempt,
+        pending: dict[str, Any],
+        outcome: ApprovalOutcome,
+    ) -> None:
+        if self.runtime_trace is None:
+            return
+        self.runtime_trace.replay_checkpoint(
+            "approval_decided",
+            f"tool-approval-{outcome.value}-{attempt.task_id}",
+            task_id=attempt.task_id,
+            durable_state={
+                "approval_kind": "tool",
+                "approval_id": pending.get("approval_id"),
+                "decision": outcome.value,
+                "attempt_id": attempt.attempt_id,
+                "attempt_number": attempt.attempt_number,
+                "invocation_id": pending.get("invocation_id"),
+                "tool_name": pending.get("tool_name"),
+            },
+        )
+
+    def _checkpoint_tool_approval_suspension(
+        self,
+        attempt: TaskAttempt,
+        pending: dict[str, Any],
+    ) -> None:
+        if self.runtime_trace is None:
+            return
+        self.runtime_trace.replay_checkpoint(
+            "approval_requested",
+            f"tool-approval-requested-{attempt.task_id}",
+            task_id=attempt.task_id,
+            durable_state={
+                "approval_kind": "tool",
+                "approval_id": pending.get("approval_id"),
+                "attempt_id": attempt.attempt_id,
+                "attempt_number": attempt.attempt_number,
+                "invocation_id": pending.get("invocation_id"),
+                "tool_name": pending.get("tool_name"),
+                "attempt_status": AttemptStatus.WAITING_FOR_APPROVAL.value,
+            },
+        )
+
+    def _fail_resumability(
+        self,
+        attempt: TaskAttempt,
+        message: str,
+        *,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        self.store.fail_attempt_resumability(
+            attempt.attempt_id,
+            message,
+            metadata=metadata,
+        )
+        self._log(
+            "task_attempt_resumability_failed",
+            attempt.run_id,
+            task_id=attempt.task_id,
+            attempt_number=attempt.attempt_number,
+            metadata={"error_category": FailureCategory.RESUMABILITY_FAILURE.value},
         )
 
     def _recover_running_tasks(
@@ -849,6 +1236,31 @@ class DurableExecutionEngine:
                     task_id=task.task_id,
                     attempt_number=latest.attempt_number,
                     metadata={"policy": "promote_completed_attempt"},
+                )
+                continue
+
+            if (
+                latest is not None
+                and latest.status == AttemptStatus.RUNNING
+                and _attempt_continuation(latest) is not None
+            ):
+                self._log(
+                    "task_attempt_continuation_recovered",
+                    run_id,
+                    task_id=task.task_id,
+                    attempt_number=latest.attempt_number,
+                )
+                continue
+
+            if (
+                latest is not None
+                and latest.status == AttemptStatus.RUNNING
+                and _pending_tool_approval(latest) is not None
+            ):
+                self._fail_resumability(
+                    latest,
+                    "Suspended tool approval has no valid durable continuation.",
+                    metadata=latest.metadata,
                 )
                 continue
 
@@ -936,42 +1348,87 @@ class DurableExecutionEngine:
             latest_attempt = attempts[-1] if attempts else None
             pending_tool = None
             if latest_attempt is not None:
-                internal = latest_attempt.metadata.get("_agentbus", {})
-                if isinstance(internal, dict):
-                    candidate = internal.get("tool_approval_pending")
-                    if isinstance(candidate, dict):
-                        pending_tool = candidate
+                pending_tool = _pending_tool_approval(latest_attempt)
             if pending_tool is not None:
                 approval_id = str(pending_tool.get("approval_id") or "")
                 if not approval_id:
+                    if latest_attempt is not None:
+                        self._fail_resumability(
+                            latest_attempt,
+                            "Persisted tool approval suspension is incomplete.",
+                        )
+                        changed = True
+                        continue
                     raise DurableExecutionError(
-                        "Persisted tool approval suspension is incomplete."
+                        "Tool approval suspension has no durable attempt identity."
                     )
-                tool_approval = self.store.get_tool_approval(
-                    run_id,
-                    approval_id,
-                )
+                try:
+                    tool_approval = self.store.get_tool_approval(
+                        run_id,
+                        approval_id,
+                    )
+                except StateStoreError:
+                    if latest_attempt is None:
+                        raise
+                    self._fail_resumability(
+                        latest_attempt,
+                        "Persisted exact tool approval could not be recovered.",
+                    )
+                    changed = True
+                    continue
                 if tool_approval.disposition is None:
                     continue
-                target = (
-                    TaskStatus.READY
-                    if tool_approval.disposition == "approved"
-                    else TaskStatus.REJECTED
-                )
-                self.store.update_task_status(
-                    run_id,
-                    task.task_id,
-                    target,
-                    event_type=(
-                        "approved_tool_task_recovered"
-                        if target == TaskStatus.READY
-                        else "rejected_tool_task_recovered"
-                    ),
-                    event_payload={
-                        "approval_id": approval_id,
-                        "invocation_id": pending_tool.get("invocation_id"),
-                    },
-                )
+                if tool_approval.disposition == "approved":
+                    if latest_attempt is None or _attempt_continuation(
+                        latest_attempt
+                    ) is None:
+                        if latest_attempt is None:
+                            raise DurableExecutionError(
+                                "Approved tool invocation has no attempt identity."
+                            )
+                        self._fail_resumability(
+                            latest_attempt,
+                            "Approved tool invocation has no safe durable continuation.",
+                        )
+                        changed = True
+                        continue
+                    try:
+                        self.store.resume_attempt_after_tool_approval(
+                            latest_attempt.attempt_id,
+                            approval_id=approval_id,
+                            invocation_id=str(
+                                pending_tool.get("invocation_id") or ""
+                            ),
+                        )
+                    except StateStoreError:
+                        self._fail_resumability(
+                            latest_attempt,
+                            "Approved tool continuation failed exact identity validation.",
+                        )
+                        changed = True
+                        continue
+                else:
+                    if latest_attempt is not None and latest_attempt.status == (
+                        AttemptStatus.WAITING_FOR_APPROVAL
+                    ):
+                        self.store.complete_attempt(
+                            latest_attempt.attempt_id,
+                            AttemptStatus.FAILED,
+                            error_category=FailureCategory.POLICY_VIOLATION,
+                            error_message="The exact tool approval was rejected.",
+                            metadata=latest_attempt.metadata,
+                            event_type="task_attempt_tool_approval_rejected",
+                        )
+                    self.store.update_task_status(
+                        run_id,
+                        task.task_id,
+                        TaskStatus.REJECTED,
+                        event_type="rejected_tool_task_recovered",
+                        event_payload={
+                            "approval_id": approval_id,
+                            "invocation_id": pending_tool.get("invocation_id"),
+                        },
+                    )
                 changed = True
                 continue
             approval = latest.get(task.task_id)
@@ -994,7 +1451,15 @@ class DurableExecutionEngine:
                 )
                 changed = True
         run = self.store.get_run(run_id)
-        if changed and run.status == RunStatus.WAITING_FOR_APPROVAL:
+        still_waiting = any(
+            task.status == TaskStatus.WAITING_FOR_APPROVAL
+            for task in self.store.list_tasks(run_id)
+        )
+        if (
+            changed
+            and not still_waiting
+            and run.status == RunStatus.WAITING_FOR_APPROVAL
+        ):
             self.store.update_run_status(
                 run_id,
                 RunStatus.RUNNING,
@@ -1212,6 +1677,63 @@ class DurableExecutionEngine:
             for task in snapshot.tasks
             if task.status == TaskStatus.WAITING_FOR_APPROVAL
         ]
+        approval_details: list[dict[str, Any]] = []
+        for task in snapshot.tasks:
+            if task.status != TaskStatus.WAITING_FOR_APPROVAL:
+                continue
+            attempts = snapshot.attempts_for(task.task_id)
+            latest_attempt = attempts[-1] if attempts else None
+            pending_tool = (
+                _pending_tool_approval(latest_attempt)
+                if latest_attempt is not None
+                else None
+            )
+            if pending_tool is None:
+                approval_details.append(
+                    {
+                        "approval_kind": "task",
+                        "task_id": task.task_id,
+                        "approval_id": f"{snapshot.run.run_id}:{task.task_id}",
+                        "risk": task.spec.risk.value,
+                        "safe_reason": redact_text(
+                            str(task.spec.metadata.get("risk_reason") or "")
+                        ),
+                    }
+                )
+                continue
+            detail: dict[str, Any] = {
+                "approval_kind": "tool",
+                "task_id": task.task_id,
+                "attempt_number": latest_attempt.attempt_number,
+                "tool_name": str(
+                    pending_tool.get("tool_name") or "unknown"
+                )[:128],
+                "approval_id": str(
+                    pending_tool.get("approval_id") or "unknown"
+                )[:128],
+                "capabilities": [],
+                "safe_reason": None,
+            }
+            try:
+                tool_approval = self.store.get_tool_approval(
+                    snapshot.run.run_id,
+                    detail["approval_id"],
+                )
+            except StateStoreError:
+                pass
+            else:
+                detail["tool_name"] = tool_approval.request.tool_name
+                detail["capabilities"] = sorted(
+                    {
+                        str(getattr(capability, "value", capability))[:128]
+                        for capability in tool_approval.request.requested_capabilities
+                    }
+                )[:64]
+                detail["safe_reason"] = redact_text(
+                    tool_approval.request.reason,
+                    max_chars=2_000,
+                )
+            approval_details.append(detail)
         terminal_count = len(successful) + len(failed) + len(blocked) + sum(
             task.status == TaskStatus.CANCELLED for task in snapshot.tasks
         )
@@ -1224,23 +1746,55 @@ class DurableExecutionEngine:
         reviewer_summary = final_review.get("summary")
         reviewer_issues = final_review.get("issues", [])
         required_fixes = final_review.get("required_fixes", [])
-        if not reviewer_summary:
-            latest_review = next(
-                (
-                    attempt.metadata.get("task_review")
-                    or attempt.metadata.get("reviewer_feedback")
-                    for attempt in reversed(snapshot.attempts)
-                    if attempt.metadata.get("task_review")
-                    or attempt.metadata.get("reviewer_feedback")
-                ),
-                {},
-            )
+        reviewer_stage = (
+            "final"
+            if final_review.get("status")
+            in {"approved", "rejected", "blocked_by_verification"}
+            else None
+        )
+        if (
+            not reviewer_summary
+            and reviewer_stage is None
+            and snapshot.run.status
+            not in {RunStatus.RUNNING, RunStatus.WAITING_FOR_APPROVAL}
+        ):
+            latest_review: dict[str, Any] = {}
+            for task in reversed(snapshot.tasks):
+                attempts = snapshot.attempts_for(task.task_id)
+                if not attempts:
+                    continue
+                latest_attempt = attempts[-1]
+                candidate = latest_attempt.metadata.get(
+                    "task_review"
+                ) or latest_attempt.metadata.get("reviewer_feedback")
+                if isinstance(candidate, dict):
+                    latest_review = candidate
+                    reviewer_stage = "task"
+                    break
             if isinstance(latest_review, dict):
                 reviewer_summary = latest_review.get("summary")
                 reviewer_issues = latest_review.get("issues", [])
                 required_fixes = latest_review.get("required_fixes", [])
         task_failures = []
+        resumability_failure = snapshot.run.metadata.get(
+            "resumability_failure",
+            {},
+        )
+        if not isinstance(resumability_failure, dict):
+            resumability_failure = {}
         for task_id in failed:
+            if resumability_failure.get("task_id") == task_id:
+                task_failures.append(
+                    {
+                        "task_id": task_id,
+                        "category": FailureCategory.RESUMABILITY_FAILURE.value,
+                        "message": str(
+                            resumability_failure.get("message")
+                            or "Task continuation could not be resumed safely."
+                        ),
+                    }
+                )
+                continue
             attempt = next(
                 (
                     item
@@ -1340,6 +1894,7 @@ class DurableExecutionEngine:
             failed_tasks=failed,
             blocked_tasks=blocked,
             pending_approvals=approvals,
+            pending_approval_details=approval_details,
             attempts_per_task={
                 task.task_id: task.current_attempt_count for task in snapshot.tasks
             },
@@ -1361,6 +1916,7 @@ class DurableExecutionEngine:
             failure_reason=snapshot.run.failure_reason,
             workspace=snapshot.run.workspace,
             git_top_level=workspace_repository.get("git_top_level"),
+            reviewer_stage=reviewer_stage,
             reviewer_summary=reviewer_summary,
             reviewer_issues=(reviewer_issues if isinstance(reviewer_issues, list) else []),
             required_fixes=(required_fixes if isinstance(required_fixes, list) else []),
@@ -1423,3 +1979,45 @@ class DurableExecutionEngine:
         if metadata:
             data["metadata"] = metadata
         self.logger.log(event_type, data)
+
+
+def _pending_tool_approval(attempt: TaskAttempt) -> dict[str, Any] | None:
+    internal = attempt.metadata.get("_agentbus", {})
+    if not isinstance(internal, dict):
+        return None
+    pending = internal.get("tool_approval_pending")
+    return pending if isinstance(pending, dict) else None
+
+
+def _repository_baseline_trace_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    baselines = metadata.get("repository_baselines", {})
+    if not isinstance(baselines, dict):
+        return {}
+    task = baselines.get("task", {})
+    attempt = baselines.get("attempt", {})
+    return {
+        "task_baseline_identity_sha256": (
+            task.get("identity_sha256") if isinstance(task, dict) else None
+        ),
+        "attempt_baseline_identity_sha256": (
+            attempt.get("identity_sha256") if isinstance(attempt, dict) else None
+        ),
+        "candidate_source_identity_sha256": (
+            metadata.get("verification_evidence", {}).get(
+                "candidate_identity_sha256"
+            )
+            if isinstance(metadata.get("verification_evidence"), dict)
+            else None
+        ),
+        "retry_workspace": baselines.get("retry_workspace"),
+    }
+
+
+def _attempt_continuation(attempt: TaskAttempt) -> dict[str, Any] | None:
+    internal = attempt.metadata.get("_agentbus", {})
+    if not isinstance(internal, dict):
+        return None
+    continuation = internal.get("task_continuation")
+    if not isinstance(continuation, dict) or not continuation:
+        continuation = internal.get("loop_continuation")
+    return continuation if isinstance(continuation, dict) and continuation else None

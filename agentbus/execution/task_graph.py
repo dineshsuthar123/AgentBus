@@ -1,17 +1,90 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Iterable
 
 from agentbus.execution.models import (
     RiskLevel,
     TaskDependency,
+    TaskExecutionKind,
     TaskSpec,
     TaskStatus,
 )
+from agentbus.tools.filesystem_security import (
+    ContainedPathResolver,
+    FileSystemSecurityError,
+)
+from agentbus.tools.protocol import ToolCapabilityName
 
 
 class TaskGraphValidationError(ValueError):
     """Raised when planner output cannot form a safe deterministic graph."""
+
+
+@dataclass(frozen=True)
+class PlanContractIssue:
+    code: str
+    task_id: str
+    message: str
+
+
+class PlanContractValidationError(TaskGraphValidationError):
+    """Raised when planner steps are not executable durable work units."""
+
+    def __init__(self, issues: Iterable[PlanContractIssue]):
+        self.issues = tuple(issues)
+        details = "; ".join(
+            f"{str(issue.task_id)[:128]} [{issue.code}]: {issue.message}"
+            for issue in self.issues[:8]
+        )
+        if len(self.issues) > 8:
+            details += f"; and {len(self.issues) - 8} more issue(s)"
+        super().__init__(f"Durable planner contract is invalid: {details}")
+
+    def feedback(self) -> list[str]:
+        return [
+            (
+                f"{str(issue.task_id)[:128]} [{issue.code}]: "
+                f"{issue.message}"
+            )[:512]
+            for issue in self.issues[:8]
+        ]
+
+    def safe_metadata(self) -> dict[str, Any]:
+        issue_codes = sorted({issue.code for issue in self.issues})
+        task_ids = sorted({str(issue.task_id)[:128] for issue in self.issues})
+        return {
+            "issue_count": len(self.issues),
+            "issue_codes": issue_codes[:8],
+            "task_ids": task_ids[:8],
+            "metadata_truncated": len(issue_codes) > 8 or len(task_ids) > 8,
+        }
+
+
+_REPOSITORY_MUTATION_CAPABILITIES = frozenset(
+    {
+        ToolCapabilityName.FILESYSTEM_WRITE,
+        ToolCapabilityName.FILESYSTEM_CREATE,
+        ToolCapabilityName.FILESYSTEM_DELETE,
+        ToolCapabilityName.FILESYSTEM_RENAME,
+    }
+)
+_ANALYSIS_READ_ONLY_CAPABILITIES = frozenset(
+    {
+        ToolCapabilityName.FILESYSTEM_READ,
+        ToolCapabilityName.GIT_READ,
+        ToolCapabilityName.ENVIRONMENT_READ_SAFE,
+    }
+)
+_IMPLEMENTATION_EFFECT_CAPABILITIES = frozenset(ToolCapabilityName).difference(
+    _ANALYSIS_READ_ONLY_CAPABILITIES
+)
+_PLANNED_REPOSITORY_PATH_FIELDS = (
+    "expected_outputs",
+    "targeted_files",
+    "proposed_tests",
+)
 
 
 FAILED_DEPENDENCY_STATUSES = {
@@ -32,7 +105,12 @@ class TaskGraph:
         self._validate()
 
     @classmethod
-    def from_planner_output(cls, planner_output: dict[str, Any]) -> "TaskGraph":
+    def from_planner_output(
+        cls,
+        planner_output: dict[str, Any],
+        *,
+        workspace: str | Path | None = None,
+    ) -> "TaskGraph":
         raw_steps = planner_output.get("steps")
         if not isinstance(raw_steps, list) or not raw_steps:
             raise TaskGraphValidationError(
@@ -42,6 +120,24 @@ class TaskGraph:
         explicit_dependencies = any(
             isinstance(step, dict) and "dependencies" in step for step in raw_steps
         )
+        contract_declarations = [
+            isinstance(step, dict) and "execution_kind" in step for step in raw_steps
+        ]
+        if any(contract_declarations) and not all(contract_declarations):
+            raise PlanContractValidationError(
+                [
+                    PlanContractIssue(
+                        "partial_execution_kind_contract",
+                        str(
+                            raw_step.get("id") or f"step-{index + 1}"
+                        ),
+                        "all planner steps must declare execution_kind",
+                    )
+                    for index, raw_step in enumerate(raw_steps)
+                    if isinstance(raw_step, dict)
+                    and "execution_kind" not in raw_step
+                ]
+            )
         overall_done = planner_output.get("done_criteria", [])
         tasks: list[TaskSpec] = []
 
@@ -67,6 +163,19 @@ class TaskGraph:
                 metadata = {
                     **dict(raw_step.get("metadata", {})),
                     "planner_index": index,
+                    "execution_kind": str(
+                        getattr(
+                            raw_step.get(
+                                "execution_kind",
+                                TaskExecutionKind.IMPLEMENTATION,
+                            ),
+                            "value",
+                            raw_step.get(
+                                "execution_kind",
+                                TaskExecutionKind.IMPLEMENTATION.value,
+                            ),
+                        )
+                    ),
                     "required_capabilities": list(
                         raw_step.get("required_capabilities") or []
                     ),
@@ -113,7 +222,12 @@ class TaskGraph:
                 ) from exc
             tasks.append(task)
 
-        return cls(tasks)
+        graph = cls(tasks)
+        if all(contract_declarations):
+            graph._validate_planner_contract()
+            if workspace is not None:
+                graph._validate_repository_capability_contract(workspace)
+        return graph
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "TaskGraph":
@@ -182,6 +296,222 @@ class TaskGraph:
                     )
 
         self._validate_acyclic()
+
+    def _validate_planner_contract(self) -> None:
+        issues: list[PlanContractIssue] = []
+        dependents = {
+            dependency_id
+            for task in self.tasks
+            for dependency_id in task.dependency_ids
+        }
+        for task in self.tasks:
+            try:
+                kind = task.execution_kind
+            except ValueError:
+                issues.append(
+                    PlanContractIssue(
+                        "unsupported_execution_kind",
+                        task.task_id,
+                        "execution_kind must be implementation or analysis",
+                    )
+                )
+                continue
+
+            raw_capabilities = task.metadata.get("required_capabilities", [])
+            capabilities: set[ToolCapabilityName] = set()
+            invalid_capabilities: list[str] = []
+            if not isinstance(raw_capabilities, list):
+                invalid_capabilities.append("non-list capability declaration")
+            else:
+                for value in raw_capabilities:
+                    try:
+                        capabilities.add(ToolCapabilityName(value))
+                    except ValueError:
+                        invalid_capabilities.append(str(value)[:128])
+                if len(capabilities) != len(raw_capabilities):
+                    issues.append(
+                        PlanContractIssue(
+                            "duplicate_capability",
+                            task.task_id,
+                            "required capabilities must be unique",
+                        )
+                    )
+            if invalid_capabilities:
+                issues.append(
+                    PlanContractIssue(
+                        "invalid_capability",
+                        task.task_id,
+                        "required capabilities contain unsupported values",
+                    )
+                )
+                continue
+
+            mutation_capabilities = capabilities.intersection(
+                _REPOSITORY_MUTATION_CAPABILITIES
+            )
+            effect_capabilities = capabilities.intersection(
+                _IMPLEMENTATION_EFFECT_CAPABILITIES
+            )
+            if kind == TaskExecutionKind.IMPLEMENTATION:
+                if not capabilities:
+                    issues.append(
+                        PlanContractIssue(
+                            "missing_capabilities",
+                            task.task_id,
+                            "implementation tasks must declare their capability upper bound",
+                        )
+                    )
+                if not effect_capabilities:
+                    issues.append(
+                        PlanContractIssue(
+                            "implementation_without_mutation",
+                            task.task_id,
+                            "implementation tasks must declare a mutation or other "
+                            "effectful capability",
+                        )
+                    )
+            else:
+                if mutation_capabilities:
+                    issues.append(
+                        PlanContractIssue(
+                            "analysis_with_mutation",
+                            task.task_id,
+                            "analysis tasks cannot declare repository mutation capabilities",
+                        )
+                    )
+                indirect_side_effect_capabilities = capabilities.difference(
+                    _ANALYSIS_READ_ONLY_CAPABILITIES,
+                    _REPOSITORY_MUTATION_CAPABILITIES,
+                )
+                if indirect_side_effect_capabilities:
+                    issues.append(
+                        PlanContractIssue(
+                            "analysis_with_side_effect_capability",
+                            task.task_id,
+                            "analysis tasks may declare only read-only capabilities",
+                        )
+                    )
+                if task.expected_outputs:
+                    issues.append(
+                        PlanContractIssue(
+                            "analysis_with_repository_outputs",
+                            task.task_id,
+                            "analysis tasks persist a bounded analysis artifact, not repository files",
+                        )
+                    )
+                if task.task_id in dependents:
+                    issues.append(
+                        PlanContractIssue(
+                            "analysis_prerequisite_unsupported",
+                            task.task_id,
+                            "analysis artifacts are not executable authorization or downstream task input",
+                        )
+                    )
+
+            if not task.done_criteria:
+                issues.append(
+                    PlanContractIssue(
+                        "missing_done_criteria",
+                        task.task_id,
+                        "every durable task requires independently checkable done criteria",
+                    )
+                )
+
+        if issues:
+            raise PlanContractValidationError(issues)
+
+    def _validate_repository_capability_contract(
+        self,
+        workspace: str | Path,
+    ) -> None:
+        explicit_paths = {
+            task.task_id: self._task_repository_paths(task)
+            for task in self.tasks
+        }
+        if not any(explicit_paths.values()):
+            return
+
+        resolver = ContainedPathResolver(workspace)
+        issues: list[PlanContractIssue] = []
+        available_after_task: dict[str, set[str]] = {}
+        for task in self.topological_order():
+            available_from_dependencies: set[str] = set()
+            for dependency_id in task.dependency_ids:
+                available_from_dependencies.update(
+                    available_after_task.get(dependency_id, set())
+                )
+
+            capabilities = {
+                ToolCapabilityName(value)
+                for value in task.metadata.get("required_capabilities", [])
+            }
+            can_create = ToolCapabilityName.FILESYSTEM_CREATE in capabilities
+            materialized_by_task: set[str] = set()
+            evaluated_paths: set[str] = set()
+            for field_name, raw_path in explicit_paths[task.task_id]:
+                try:
+                    resolved = resolver.resolve(raw_path, reject_any_link=True)
+                except FileSystemSecurityError:
+                    issues.append(
+                        PlanContractIssue(
+                            "unsafe_repository_path",
+                            task.task_id,
+                            f"{field_name} contains an unsafe repository-relative path",
+                        )
+                    )
+                    continue
+
+                if resolved.relative_path in evaluated_paths:
+                    continue
+                evaluated_paths.add(resolved.relative_path)
+                if (
+                    resolved.exists
+                    or resolved.relative_path in available_from_dependencies
+                ):
+                    continue
+                if can_create:
+                    materialized_by_task.add(resolved.relative_path)
+                    continue
+                issues.append(
+                    PlanContractIssue(
+                        "missing_create_capability",
+                        task.task_id,
+                        (
+                            f"structured {field_name} path "
+                            f"'{resolved.relative_path}' does not exist in the target "
+                            "repository; the corrected planner response must explicitly "
+                            "declare filesystem.create for this task or target an "
+                            "existing file"
+                        ),
+                    )
+                )
+
+            available_after_task[task.task_id] = {
+                *available_from_dependencies,
+                *materialized_by_task,
+            }
+
+        if issues:
+            raise PlanContractValidationError(issues)
+
+    @staticmethod
+    def _task_repository_paths(task: TaskSpec) -> list[tuple[str, str]]:
+        values = {
+            "expected_outputs": task.expected_outputs,
+            "targeted_files": task.metadata.get("targeted_files", []),
+            "proposed_tests": task.metadata.get("proposed_tests", []),
+        }
+        paths: list[tuple[str, str]] = []
+        for field_name in _PLANNED_REPOSITORY_PATH_FIELDS:
+            raw_values = values[field_name]
+            if not isinstance(raw_values, list):
+                continue
+            paths.extend(
+                (field_name, raw_path)
+                for raw_path in raw_values
+                if isinstance(raw_path, str)
+            )
+        return paths
 
     def _validate_acyclic(self) -> None:
         visiting: set[str] = set()

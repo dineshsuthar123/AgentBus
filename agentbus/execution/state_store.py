@@ -132,6 +132,36 @@ class AttemptNotFoundError(StateStoreError):
     pass
 
 
+class AttemptLimitExceededError(StateStoreError):
+    def __init__(self, task_id: str, maximum_attempts: int):
+        self.task_id = task_id
+        self.maximum_attempts = maximum_attempts
+        super().__init__(
+            f"Task '{task_id}' exhausted its maximum attempts "
+            f"({maximum_attempts})."
+        )
+
+
+class NonterminalAttemptExistsError(StateStoreError):
+    """Raised when creating N+1 would overlap a resumable attempt N."""
+
+    def __init__(
+        self,
+        task_id: str,
+        attempt_id: str,
+        attempt_number: int,
+        status: AttemptStatus,
+    ):
+        self.task_id = task_id
+        self.attempt_id = attempt_id
+        self.attempt_number = attempt_number
+        self.status = status
+        super().__init__(
+            f"Task '{task_id}' already has nonterminal attempt "
+            f"{attempt_number} ({status.value}); refusing to create another."
+        )
+
+
 class ToolInvocationNotFoundError(StateStoreError):
     pass
 
@@ -848,6 +878,125 @@ class StateStore:
             )
         return self.get_task(run_id, task_id)
 
+    def start_attempt(self, run_id: str, task_id: str) -> TaskAttempt:
+        """Atomically transition a ready task and create its next real attempt."""
+        _require_id(run_id, "run")
+        _require_id(task_id, "task")
+        with self._write_transaction() as connection:
+            task_row = connection.execute(
+                """
+                SELECT status, maximum_attempts FROM tasks
+                WHERE run_id = ? AND task_id = ?
+                """,
+                (run_id, task_id),
+            ).fetchone()
+            if task_row is None:
+                raise TaskNotFoundError(
+                    f"Task '{task_id}' was not found in run '{run_id}'."
+                )
+            nonterminal = connection.execute(
+                """
+                SELECT attempt_id, attempt_number, status FROM attempts
+                WHERE run_id = ? AND task_id = ? AND status IN (?, ?)
+                ORDER BY attempt_number DESC LIMIT 1
+                """,
+                (
+                    run_id,
+                    task_id,
+                    AttemptStatus.RUNNING.value,
+                    AttemptStatus.WAITING_FOR_APPROVAL.value,
+                ),
+            ).fetchone()
+            if nonterminal is not None:
+                raise NonterminalAttemptExistsError(
+                    task_id,
+                    nonterminal["attempt_id"],
+                    int(nonterminal["attempt_number"]),
+                    AttemptStatus(nonterminal["status"]),
+                )
+            current = TaskStatus(task_row["status"])
+            if current != TaskStatus.READY:
+                raise StateStoreError(
+                    f"Task '{task_id}' must be ready before an attempt is started."
+                )
+            latest = connection.execute(
+                """
+                SELECT MAX(attempt_number) AS latest FROM attempts
+                WHERE run_id = ? AND task_id = ?
+                """,
+                (run_id, task_id),
+            ).fetchone()
+            attempt_number = int(latest["latest"] or 0) + 1
+            maximum_attempts = int(task_row["maximum_attempts"])
+            if attempt_number > maximum_attempts:
+                raise AttemptLimitExceededError(task_id, maximum_attempts)
+
+            validate_task_transition(current, TaskStatus.RUNNING)
+            now = utc_now()
+            attempt = TaskAttempt(
+                attempt_id=uuid.uuid4().hex,
+                run_id=run_id,
+                task_id=task_id,
+                attempt_number=attempt_number,
+                started_at=now,
+            )
+            connection.execute(
+                """
+                UPDATE tasks SET status = ?, current_attempt_count = ?, updated_at = ?
+                WHERE run_id = ? AND task_id = ?
+                """,
+                (
+                    TaskStatus.RUNNING.value,
+                    attempt_number,
+                    _timestamp(now),
+                    run_id,
+                    task_id,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO attempts(
+                    attempt_id, run_id, task_id, attempt_number, status,
+                    started_at, completed_at, error_category, error_message,
+                    observation_summary, metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    attempt.attempt_id,
+                    run_id,
+                    task_id,
+                    attempt_number,
+                    AttemptStatus.RUNNING.value,
+                    _timestamp(now),
+                    None,
+                    None,
+                    None,
+                    None,
+                    _dump_json({}),
+                ),
+            )
+            self._insert_event(
+                connection,
+                run_id,
+                task_id,
+                "durable_task_started",
+                {
+                    "from_status": current.value,
+                    "to_status": TaskStatus.RUNNING.value,
+                },
+            )
+            self._insert_event(
+                connection,
+                run_id,
+                task_id,
+                "task_attempt_started",
+                {
+                    "attempt_number": attempt_number,
+                    "attempt_id": attempt.attempt_id,
+                },
+            )
+        return self.get_attempt(attempt.attempt_id)
+
     def create_attempt(self, run_id: str, task_id: str) -> TaskAttempt:
         _require_id(run_id, "run")
         _require_id(task_id, "task")
@@ -863,6 +1012,26 @@ class StateStore:
                 raise TaskNotFoundError(
                     f"Task '{task_id}' was not found in run '{run_id}'."
                 )
+            nonterminal = connection.execute(
+                """
+                SELECT attempt_id, attempt_number, status FROM attempts
+                WHERE run_id = ? AND task_id = ? AND status IN (?, ?)
+                ORDER BY attempt_number DESC LIMIT 1
+                """,
+                (
+                    run_id,
+                    task_id,
+                    AttemptStatus.RUNNING.value,
+                    AttemptStatus.WAITING_FOR_APPROVAL.value,
+                ),
+            ).fetchone()
+            if nonterminal is not None:
+                raise NonterminalAttemptExistsError(
+                    task_id,
+                    nonterminal["attempt_id"],
+                    int(nonterminal["attempt_number"]),
+                    AttemptStatus(nonterminal["status"]),
+                )
             if TaskStatus(task_row["status"]) != TaskStatus.RUNNING:
                 raise StateStoreError(
                     f"Task '{task_id}' must be running before an attempt is created."
@@ -876,9 +1045,9 @@ class StateStore:
             ).fetchone()
             attempt_number = int(latest["latest"] or 0) + 1
             if attempt_number > int(task_row["maximum_attempts"]):
-                raise StateStoreError(
-                    f"Task '{task_id}' exhausted its maximum attempts "
-                    f"({task_row['maximum_attempts']})."
+                raise AttemptLimitExceededError(
+                    task_id,
+                    int(task_row["maximum_attempts"]),
                 )
             attempt = TaskAttempt(
                 attempt_id=uuid.uuid4().hex,
@@ -924,6 +1093,558 @@ class StateStore:
             )
         return attempt
 
+    def checkpoint_attempt_metadata(
+        self,
+        attempt_id: str,
+        *,
+        metadata_updates: dict[str, Any],
+        event_type: str = "task_attempt_metadata_checkpointed",
+    ) -> TaskAttempt:
+        """Merge safe metadata while an attempt is nonterminal."""
+        _require_id(attempt_id, "attempt")
+        if not isinstance(metadata_updates, dict) or not metadata_updates:
+            raise StateStoreError("Attempt metadata checkpoint must not be empty.")
+        with self._write_transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM attempts WHERE attempt_id = ?",
+                (attempt_id,),
+            ).fetchone()
+            if row is None:
+                raise AttemptNotFoundError(f"Attempt '{attempt_id}' was not found.")
+            status = AttemptStatus(row["status"])
+            if status not in {
+                AttemptStatus.RUNNING,
+                AttemptStatus.WAITING_FOR_APPROVAL,
+            }:
+                raise StateStoreError(
+                    "Terminal attempt metadata is immutable and cannot be checkpointed."
+                )
+            metadata = _load_json(row["metadata_json"], "attempt metadata")
+            safe_updates = _sanitize(metadata_updates)
+            metadata.update(safe_updates)
+            connection.execute(
+                "UPDATE attempts SET metadata_json = ? WHERE attempt_id = ?",
+                (_dump_json(metadata), attempt_id),
+            )
+            self._insert_event(
+                connection,
+                row["run_id"],
+                row["task_id"],
+                event_type,
+                {
+                    "attempt_id": attempt_id,
+                    "attempt_number": int(row["attempt_number"]),
+                    "metadata_keys": sorted(safe_updates),
+                },
+            )
+        return self.get_attempt(attempt_id)
+
+    def suspend_attempt_for_tool_approval(
+        self,
+        attempt_id: str,
+        *,
+        metadata: dict[str, Any],
+        approval_id: str,
+        invocation_id: str,
+        tool_name: str,
+        observation_summary: str,
+    ) -> TaskAttempt:
+        """Persist an in-attempt approval pause without consuming retry budget."""
+        _require_id(attempt_id, "attempt")
+        _require_id(approval_id, "tool approval")
+        _require_id(invocation_id, "tool invocation")
+        with self._write_transaction() as connection:
+            row = connection.execute(
+                """
+                SELECT a.*, t.status AS task_status, r.status AS run_status
+                FROM attempts AS a
+                JOIN tasks AS t ON t.run_id = a.run_id AND t.task_id = a.task_id
+                JOIN runs AS r ON r.run_id = a.run_id
+                WHERE a.attempt_id = ?
+                """,
+                (attempt_id,),
+            ).fetchone()
+            if row is None:
+                raise AttemptNotFoundError(f"Attempt '{attempt_id}' was not found.")
+            attempt_status = AttemptStatus(row["status"])
+            task_status = TaskStatus(row["task_status"])
+            run_status = RunStatus(row["run_status"])
+            if (
+                attempt_status != AttemptStatus.RUNNING
+                or task_status != TaskStatus.RUNNING
+                or run_status
+                not in {RunStatus.RUNNING, RunStatus.WAITING_FOR_APPROVAL}
+            ):
+                raise StateStoreError(
+                    "Tool approval suspension requires a running run, task, and attempt."
+                )
+            validate_attempt_transition(
+                attempt_status,
+                AttemptStatus.WAITING_FOR_APPROVAL,
+            )
+            validate_task_transition(task_status, TaskStatus.WAITING_FOR_APPROVAL)
+            if run_status == RunStatus.RUNNING:
+                validate_run_transition(run_status, RunStatus.WAITING_FOR_APPROVAL)
+            now = utc_now()
+            suspension_metadata = _sanitize(metadata)
+            checkpointed_metadata = _load_json(
+                row["metadata_json"],
+                "attempt metadata",
+            )
+            for key in ("repository_baselines", "retry_feedback"):
+                if (
+                    key not in suspension_metadata
+                    and isinstance(checkpointed_metadata.get(key), dict)
+                ):
+                    suspension_metadata[key] = checkpointed_metadata[key]
+            connection.execute(
+                """
+                UPDATE attempts SET status = ?, completed_at = NULL,
+                    error_category = NULL, error_message = NULL,
+                    observation_summary = ?, metadata_json = ?
+                WHERE attempt_id = ?
+                """,
+                (
+                    AttemptStatus.WAITING_FOR_APPROVAL.value,
+                    _safe_text(observation_summary),
+                    _dump_json(suspension_metadata),
+                    attempt_id,
+                ),
+            )
+            connection.execute(
+                """
+                UPDATE tasks SET status = ?, updated_at = ?
+                WHERE run_id = ? AND task_id = ?
+                """,
+                (
+                    TaskStatus.WAITING_FOR_APPROVAL.value,
+                    _timestamp(now),
+                    row["run_id"],
+                    row["task_id"],
+                ),
+            )
+            connection.execute(
+                """
+                UPDATE runs SET status = ?, updated_at = ?, version = version + 1
+                WHERE run_id = ?
+                """,
+                (
+                    RunStatus.WAITING_FOR_APPROVAL.value,
+                    _timestamp(now),
+                    row["run_id"],
+                ),
+            )
+            payload = {
+                "attempt_number": row["attempt_number"],
+                "attempt_id": attempt_id,
+                "status": AttemptStatus.WAITING_FOR_APPROVAL.value,
+                "approval_id": approval_id,
+                "invocation_id": invocation_id,
+                "tool_name": tool_name,
+            }
+            self._insert_event(
+                connection,
+                row["run_id"],
+                row["task_id"],
+                "task_attempt_awaiting_tool_approval",
+                payload,
+            )
+            self._insert_event(
+                connection,
+                row["run_id"],
+                row["task_id"],
+                "task_awaiting_tool_approval",
+                {
+                    "from_status": task_status.value,
+                    "to_status": TaskStatus.WAITING_FOR_APPROVAL.value,
+                    "approval_id": approval_id,
+                    "invocation_id": invocation_id,
+                    "attempt_number": row["attempt_number"],
+                },
+            )
+            self._insert_event(
+                connection,
+                row["run_id"],
+                row["task_id"],
+                "run_awaiting_tool_approval",
+                {
+                    "from_status": run_status.value,
+                    "to_status": RunStatus.WAITING_FOR_APPROVAL.value,
+                    "approval_id": approval_id,
+                    "attempt_number": row["attempt_number"],
+                },
+            )
+        return self.get_attempt(attempt_id)
+
+    def resume_attempt_after_tool_approval(
+        self,
+        attempt_id: str,
+        *,
+        approval_id: str,
+        invocation_id: str,
+    ) -> TaskAttempt:
+        """Atomically reactivate the exact suspended attempt after approval."""
+        _require_id(attempt_id, "attempt")
+        _require_id(approval_id, "tool approval")
+        _require_id(invocation_id, "tool invocation")
+        with self._write_transaction() as connection:
+            row = connection.execute(
+                """
+                SELECT a.*, t.status AS task_status, r.status AS run_status
+                FROM attempts AS a
+                JOIN tasks AS t ON t.run_id = a.run_id AND t.task_id = a.task_id
+                JOIN runs AS r ON r.run_id = a.run_id
+                WHERE a.attempt_id = ?
+                """,
+                (attempt_id,),
+            ).fetchone()
+            if row is None:
+                raise AttemptNotFoundError(f"Attempt '{attempt_id}' was not found.")
+            attempt_status = AttemptStatus(row["status"])
+            task_status = TaskStatus(row["task_status"])
+            run_status = RunStatus(row["run_status"])
+            if (
+                attempt_status != AttemptStatus.WAITING_FOR_APPROVAL
+                or task_status != TaskStatus.WAITING_FOR_APPROVAL
+                or run_status != RunStatus.WAITING_FOR_APPROVAL
+            ):
+                raise StateStoreError(
+                    "Tool approval continuation requires matching suspended state."
+                )
+            internal = _load_json(row["metadata_json"], "attempt metadata").get(
+                "_agentbus",
+                {},
+            )
+            pending = (
+                internal.get("tool_approval_pending")
+                if isinstance(internal, dict)
+                else None
+            )
+            continuation = (
+                internal.get("task_continuation")
+                if isinstance(internal, dict)
+                else None
+            )
+            if not isinstance(continuation, dict) or not continuation:
+                continuation = (
+                    internal.get("loop_continuation")
+                    if isinstance(internal, dict)
+                    else None
+                )
+            if (
+                not isinstance(pending, dict)
+                or pending.get("approval_id") != approval_id
+                or pending.get("invocation_id") != invocation_id
+                or not isinstance(continuation, dict)
+                or continuation.get("approval_id") != approval_id
+                or continuation.get("invocation_id") != invocation_id
+                or continuation.get("attempt_id") != attempt_id
+                or continuation.get("attempt_number") != row["attempt_number"]
+            ):
+                raise StateStoreError(
+                    "Tool approval does not match the suspended attempt identity."
+                )
+            approval_row = connection.execute(
+                """
+                SELECT disposition, task_id, invocation_id, invocation_revision
+                FROM tool_approvals
+                WHERE run_id = ? AND approval_id = ?
+                """,
+                (row["run_id"], approval_id),
+            ).fetchone()
+            invocation_row = connection.execute(
+                """
+                SELECT task_id, status, invocation_revision
+                FROM tool_invocations
+                WHERE run_id = ? AND invocation_id = ?
+                """,
+                (row["run_id"], invocation_id),
+            ).fetchone()
+            if (
+                approval_row is None
+                or approval_row["disposition"] != "approved"
+                or approval_row["task_id"] != row["task_id"]
+                or approval_row["invocation_id"] != invocation_id
+                or invocation_row is None
+                or invocation_row["task_id"] != row["task_id"]
+                or invocation_row["invocation_revision"]
+                != approval_row["invocation_revision"]
+                or invocation_row["status"]
+                not in {
+                    ToolInvocationStatus.AWAITING_APPROVAL.value,
+                    *(status.value for status in TERMINAL_TOOL_STATUSES),
+                }
+            ):
+                raise StateStoreError(
+                    "The exact persisted tool invocation has not been approved."
+                )
+            cancellation_row = connection.execute(
+                "SELECT requested FROM cancellations WHERE run_id = ?",
+                (row["run_id"],),
+            ).fetchone()
+            if cancellation_row is not None and bool(cancellation_row["requested"]):
+                raise StateStoreError(
+                    "Cancellation prevents the approved tool invocation from resuming."
+                )
+            validate_attempt_transition(attempt_status, AttemptStatus.RUNNING)
+            validate_task_transition(task_status, TaskStatus.RUNNING)
+            now = utc_now()
+            connection.execute(
+                "UPDATE attempts SET status = ? WHERE attempt_id = ?",
+                (AttemptStatus.RUNNING.value, attempt_id),
+            )
+            connection.execute(
+                """
+                UPDATE tasks SET status = ?, updated_at = ?
+                WHERE run_id = ? AND task_id = ?
+                """,
+                (
+                    TaskStatus.RUNNING.value,
+                    _timestamp(now),
+                    row["run_id"],
+                    row["task_id"],
+                ),
+            )
+            other_waiting = connection.execute(
+                """
+                SELECT COUNT(*) AS count FROM tasks
+                WHERE run_id = ? AND task_id <> ? AND status = ?
+                """,
+                (
+                    row["run_id"],
+                    row["task_id"],
+                    TaskStatus.WAITING_FOR_APPROVAL.value,
+                ),
+            ).fetchone()
+            target_run_status = (
+                RunStatus.WAITING_FOR_APPROVAL
+                if int(other_waiting["count"]) > 0
+                else RunStatus.RUNNING
+            )
+            if target_run_status == RunStatus.RUNNING:
+                validate_run_transition(run_status, target_run_status)
+            connection.execute(
+                """
+                UPDATE runs SET status = ?, updated_at = ?, version = version + 1
+                WHERE run_id = ?
+                """,
+                (
+                    target_run_status.value,
+                    _timestamp(now),
+                    row["run_id"],
+                ),
+            )
+            self._insert_event(
+                connection,
+                row["run_id"],
+                row["task_id"],
+                "task_attempt_resumed_after_tool_approval",
+                {
+                    "attempt_id": attempt_id,
+                    "attempt_number": row["attempt_number"],
+                    "approval_id": approval_id,
+                    "invocation_id": invocation_id,
+                    "run_status": target_run_status.value,
+                },
+            )
+        return self.get_attempt(attempt_id)
+
+    def fail_attempt_exhaustion(
+        self,
+        run_id: str,
+        task_id: str,
+        message: str,
+    ) -> RunRecord:
+        """Atomically make an impossible retry terminal and truthfully report it."""
+        _require_id(run_id, "run")
+        _require_id(task_id, "task")
+        with self._write_transaction() as connection:
+            task_row = connection.execute(
+                "SELECT status FROM tasks WHERE run_id = ? AND task_id = ?",
+                (run_id, task_id),
+            ).fetchone()
+            run_row = connection.execute(
+                "SELECT status FROM runs WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+            if task_row is None:
+                raise TaskNotFoundError(
+                    f"Task '{task_id}' was not found in run '{run_id}'."
+                )
+            if run_row is None:
+                raise RunNotFoundError(f"Run '{run_id}' was not found.")
+            task_status = TaskStatus(task_row["status"])
+            run_status = RunStatus(run_row["status"])
+            validate_task_transition(task_status, TaskStatus.FAILED)
+            validate_run_transition(run_status, RunStatus.FAILED)
+            now = utc_now()
+            safe_message = _safe_text(message)
+            connection.execute(
+                """
+                UPDATE tasks SET status = ?, updated_at = ?
+                WHERE run_id = ? AND task_id = ?
+                """,
+                (TaskStatus.FAILED.value, _timestamp(now), run_id, task_id),
+            )
+            connection.execute(
+                """
+                UPDATE runs SET status = ?, updated_at = ?, completed_at = ?,
+                    failure_reason = ?, version = version + 1
+                WHERE run_id = ?
+                """,
+                (
+                    RunStatus.FAILED.value,
+                    _timestamp(now),
+                    _timestamp(now),
+                    safe_message,
+                    run_id,
+                ),
+            )
+            self._insert_event(
+                connection,
+                run_id,
+                task_id,
+                "task_attempt_exhausted",
+                {"message": safe_message},
+            )
+            self._insert_event(
+                connection,
+                run_id,
+                None,
+                "durable_run_failed",
+                {"reason": safe_message, "task_id": task_id},
+            )
+        return self.get_run(run_id)
+
+    def fail_attempt_resumability(
+        self,
+        attempt_id: str,
+        message: str,
+        *,
+        metadata: dict[str, Any] | None = None,
+    ) -> TaskAttempt:
+        """Atomically fail a task whose suspended attempt cannot resume safely."""
+        _require_id(attempt_id, "attempt")
+        with self._write_transaction() as connection:
+            row = connection.execute(
+                """
+                SELECT a.*, t.status AS task_status, r.status AS run_status,
+                       r.metadata_json AS run_metadata_json
+                FROM attempts AS a
+                JOIN tasks AS t ON t.run_id = a.run_id AND t.task_id = a.task_id
+                JOIN runs AS r ON r.run_id = a.run_id
+                WHERE a.attempt_id = ?
+                """,
+                (attempt_id,),
+            ).fetchone()
+            if row is None:
+                raise AttemptNotFoundError(f"Attempt '{attempt_id}' was not found.")
+            attempt_status = AttemptStatus(row["status"])
+            task_status = TaskStatus(row["task_status"])
+            run_status = RunStatus(row["run_status"])
+            if attempt_status not in {
+                AttemptStatus.RUNNING,
+                AttemptStatus.WAITING_FOR_APPROVAL,
+                AttemptStatus.INTERRUPTED,
+            }:
+                raise StateStoreError(
+                    "Only an active, approval-suspended, or legacy interrupted "
+                    "attempt can fail resumption."
+                )
+            validate_task_transition(task_status, TaskStatus.FAILED)
+            validate_run_transition(run_status, RunStatus.FAILED)
+            now = utc_now()
+            safe_message = _safe_text(message) or (
+                "The task attempt could not be resumed safely."
+            )
+            persisted_metadata = (
+                metadata
+                if metadata is not None
+                else _load_json(row["metadata_json"], "attempt metadata")
+            )
+            run_metadata = _load_json(row["run_metadata_json"], "run metadata")
+            run_metadata["resumability_failure"] = {
+                "task_id": row["task_id"],
+                "attempt_id": attempt_id,
+                "category": FailureCategory.RESUMABILITY_FAILURE.value,
+                "message": safe_message,
+                "attempt_record_preserved": (
+                    attempt_status == AttemptStatus.INTERRUPTED
+                ),
+            }
+            if attempt_status != AttemptStatus.INTERRUPTED:
+                validate_attempt_transition(attempt_status, AttemptStatus.FAILED)
+                connection.execute(
+                    """
+                    UPDATE attempts SET status = ?, completed_at = ?,
+                        error_category = ?, error_message = ?, metadata_json = ?
+                    WHERE attempt_id = ?
+                    """,
+                    (
+                        AttemptStatus.FAILED.value,
+                        _timestamp(now),
+                        FailureCategory.RESUMABILITY_FAILURE.value,
+                        safe_message,
+                        _dump_json(persisted_metadata),
+                        attempt_id,
+                    ),
+                )
+            connection.execute(
+                """
+                UPDATE tasks SET status = ?, updated_at = ?
+                WHERE run_id = ? AND task_id = ?
+                """,
+                (
+                    TaskStatus.FAILED.value,
+                    _timestamp(now),
+                    row["run_id"],
+                    row["task_id"],
+                ),
+            )
+            connection.execute(
+                """
+                UPDATE runs SET status = ?, updated_at = ?, completed_at = ?,
+                    failure_reason = ?, metadata_json = ?, version = version + 1
+                WHERE run_id = ?
+                """,
+                (
+                    RunStatus.FAILED.value,
+                    _timestamp(now),
+                    _timestamp(now),
+                    safe_message,
+                    _dump_json(run_metadata),
+                    row["run_id"],
+                ),
+            )
+            payload = {
+                "attempt_id": attempt_id,
+                "attempt_number": row["attempt_number"],
+                "error_category": FailureCategory.RESUMABILITY_FAILURE.value,
+                "message": safe_message,
+                "attempt_record_preserved": (
+                    attempt_status == AttemptStatus.INTERRUPTED
+                ),
+            }
+            self._insert_event(
+                connection,
+                row["run_id"],
+                row["task_id"],
+                "task_attempt_resumability_failed",
+                payload,
+            )
+            self._insert_event(
+                connection,
+                row["run_id"],
+                None,
+                "durable_run_failed",
+                {
+                    "reason": safe_message,
+                    "task_id": row["task_id"],
+                    "error_category": FailureCategory.RESUMABILITY_FAILURE.value,
+                },
+            )
+        return self.get_attempt(attempt_id)
+
     def complete_attempt(
         self,
         attempt_id: str,
@@ -945,6 +1666,25 @@ class StateStore:
             current = AttemptStatus(row["status"])
             validate_attempt_transition(current, status)
             completed_at = utc_now()
+            terminal_metadata = _sanitize(metadata or {})
+            checkpointed_metadata = _load_json(
+                row["metadata_json"],
+                "attempt metadata",
+            )
+            if (
+                "repository_baselines" not in terminal_metadata
+                and isinstance(checkpointed_metadata.get("repository_baselines"), dict)
+            ):
+                terminal_metadata["repository_baselines"] = checkpointed_metadata[
+                    "repository_baselines"
+                ]
+            if (
+                "retry_feedback" not in terminal_metadata
+                and isinstance(checkpointed_metadata.get("retry_feedback"), dict)
+            ):
+                terminal_metadata["retry_feedback"] = checkpointed_metadata[
+                    "retry_feedback"
+                ]
             connection.execute(
                 """
                 UPDATE attempts SET
@@ -958,7 +1698,7 @@ class StateStore:
                     error_category.value if error_category else None,
                     _safe_text(error_message),
                     _safe_text(observation_summary),
-                    _dump_json(metadata or {}),
+                    _dump_json(terminal_metadata),
                     attempt_id,
                 ),
             )
@@ -1031,6 +1771,17 @@ class StateStore:
             validate_task_transition(
                 TaskStatus(task["status"]), TaskStatus.INTEGRATION_PENDING
             )
+            terminal_metadata = _sanitize(metadata or {})
+            checkpointed_metadata = _load_json(
+                attempt["metadata_json"],
+                "attempt metadata",
+            )
+            for key in ("repository_baselines", "retry_feedback"):
+                if (
+                    key not in terminal_metadata
+                    and isinstance(checkpointed_metadata.get(key), dict)
+                ):
+                    terminal_metadata[key] = checkpointed_metadata[key]
             connection.execute(
                 """UPDATE attempts SET status = ?, completed_at = ?,
                    observation_summary = ?, metadata_json = ? WHERE attempt_id = ?""",
@@ -1038,7 +1789,7 @@ class StateStore:
                     AttemptStatus.SUCCEEDED.value,
                     _timestamp(completed_at),
                     _safe_text(summary),
-                    _dump_json(metadata or {}),
+                    _dump_json(terminal_metadata),
                     attempt_id,
                 ),
             )
@@ -2897,6 +3648,41 @@ class StateStore:
                     "Tool approval grant binding does not match its persisted request."
                 )
             if record.disposition is None:
+                lifecycle = connection.execute(
+                    """
+                    SELECT r.status AS run_status, t.status AS task_status,
+                           COALESCE(c.requested, 0) AS cancellation_requested
+                    FROM runs AS r
+                    JOIN tasks AS t
+                      ON t.run_id = r.run_id AND t.task_id = ?
+                    LEFT JOIN cancellations AS c ON c.run_id = r.run_id
+                    WHERE r.run_id = ?
+                    """,
+                    (grant.request.task_id, grant.request.run_id),
+                ).fetchone()
+                if lifecycle is None:
+                    raise ToolInvocationConflictError(
+                        "Tool approval task lifecycle is unavailable."
+                    )
+                if bool(lifecycle["cancellation_requested"]) or (
+                    lifecycle["run_status"]
+                    in {
+                        RunStatus.SUCCEEDED.value,
+                        RunStatus.FAILED.value,
+                        RunStatus.CANCELLED.value,
+                    }
+                    or lifecycle["task_status"]
+                    in {
+                        TaskStatus.SUCCEEDED.value,
+                        TaskStatus.FAILED.value,
+                        TaskStatus.REJECTED.value,
+                        TaskStatus.BLOCKED.value,
+                        TaskStatus.CANCELLED.value,
+                    }
+                ):
+                    raise ToolInvocationConflictError(
+                        "A terminal or cancelled task cannot receive tool approval."
+                    )
                 invocation_row = self._require_tool_invocation_row(
                     connection,
                     grant.request.run_id,
@@ -2907,6 +3693,10 @@ class StateStore:
                     invocation_record,
                     grant.request,
                 )
+                if invocation_record.status != ToolInvocationStatus.AWAITING_APPROVAL:
+                    raise ToolInvocationConflictError(
+                        "Only an invocation awaiting approval can receive a decision."
+                    )
                 if (
                     grant.disposition == ToolApprovalDisposition.APPROVED
                     and grant.request.expires_at is not None
@@ -4929,9 +5719,16 @@ def _validate_replay_session_update(
             raise ReplaySessionConflictError(
                 f"Recorded replay {field.replace('_', ' ')} cannot be rewritten."
             )
-    if (
-        current.provider_calls < previous.provider_calls
-        or current.network_calls < previous.network_calls
+    counter_fields = (
+        "provider_calls",
+        "network_calls",
+        "historical_authorizations_validated",
+        "captured_tool_results_reused",
+        "process_dispatches",
+    )
+    if any(
+        getattr(current, field) < getattr(previous, field)
+        for field in counter_fields
     ):
         raise ReplaySessionConflictError(
             "Replay side-effect counters cannot decrease."

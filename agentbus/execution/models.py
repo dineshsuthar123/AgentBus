@@ -44,6 +44,7 @@ class TaskStatus(str, Enum):
 
 class AttemptStatus(str, Enum):
     RUNNING = "running"
+    WAITING_FOR_APPROVAL = "waiting_for_approval"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     INTERRUPTED = "interrupted"
@@ -55,15 +56,24 @@ class RiskLevel(str, Enum):
     HIGH = "high"
 
 
+class TaskExecutionKind(str, Enum):
+    IMPLEMENTATION = "implementation"
+    ANALYSIS = "analysis"
+
+
 class FailureCategory(str, Enum):
     CANCELLED = "cancelled"
     MODEL_OUTPUT_ERROR = "model_output_error"
     MODEL_TRANSPORT_ERROR = "model_transport_error"
+    MODEL_PROVIDER_ERROR = "model_provider_error"
     TOOL_VALIDATION_ERROR = "tool_validation_error"
+    PLAN_CAPABILITY_MISMATCH = "plan_capability_mismatch"
     COMMAND_FAILURE = "command_failure"
     VERIFIER_FAILURE = "verifier_failure"
     REVIEWER_REJECTION = "reviewer_rejection"
     POLICY_VIOLATION = "policy_violation"
+    RESUMABILITY_FAILURE = "resumability_failure"
+    STEP_BUDGET_EXHAUSTED = "step_budget_exhausted"
     INTERRUPTED = "interrupted"
     UNKNOWN = "unknown"
 
@@ -102,6 +112,14 @@ class TaskSpec(DomainModel):
     @property
     def dependency_ids(self) -> list[str]:
         return [dependency.task_id for dependency in self.dependencies if dependency.required]
+
+    @property
+    def execution_kind(self) -> TaskExecutionKind:
+        value = self.metadata.get(
+            "execution_kind",
+            TaskExecutionKind.IMPLEMENTATION.value,
+        )
+        return TaskExecutionKind(value)
 
 
 class TaskRecord(DomainModel):
@@ -218,7 +236,10 @@ class TaskExecutionContext(DomainModel):
     run: RunRecord
     task: TaskSpec
     attempt_number: int
+    attempt_id: str | None = None
     previous_attempts: list[TaskAttempt] = Field(default_factory=list)
+    continuation: dict[str, Any] | None = None
+    attempt_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class TaskExecutionResult(DomainModel):
@@ -252,6 +273,7 @@ class ExecutionReport(DomainModel):
     failed_tasks: list[str] = Field(default_factory=list)
     blocked_tasks: list[str] = Field(default_factory=list)
     pending_approvals: list[str] = Field(default_factory=list)
+    pending_approval_details: list[dict[str, Any]] = Field(default_factory=list)
     attempts_per_task: dict[str, int] = Field(default_factory=dict)
     verifier_status: str | None = None
     reviewer_status: str | None = None
@@ -270,6 +292,7 @@ class ExecutionReport(DomainModel):
     resume_command: str | None = None
     workspace: str | None = None
     git_top_level: str | None = None
+    reviewer_stage: str | None = None
     reviewer_summary: str | None = None
     reviewer_issues: list[dict[str, Any]] = Field(default_factory=list)
     required_fixes: list[str] = Field(default_factory=list)

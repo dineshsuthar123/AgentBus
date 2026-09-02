@@ -4,18 +4,23 @@ import json
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
+
 from agentbus.config import AgentBusConfig
 from agentbus.execution.cancellation import CancellationRequested, CancellationToken
 from agentbus.execution.cancellation_registry import CancellationRegistry
 from agentbus.execution.models import (
+    FailureCategory,
     RunRecord,
     RunStatus,
     TaskSpec,
     TaskStatus,
 )
+from agentbus.execution.retry import TaskExecutionError
 from agentbus.execution.state_store import (
     RunNotFoundError,
     StateStore,
+    StateStoreError,
 )
 from agentbus.memory.run_log import RunLogger
 from agentbus.models.errors import (
@@ -26,22 +31,126 @@ from agentbus.models.errors import (
 from agentbus.models.router import ModelRouter, model_request_context
 from agentbus.models.types import ModelRole
 from agentbus.runtime.prompts import SYSTEM_PROMPT
-from agentbus.runtime.schemas import AgentAction
+from agentbus.runtime.schemas import AgentAction, AgentLoopContinuation
+from agentbus.security.redaction import sanitize_json
 from agentbus.tools.protocol import (
     ToolCapabilityEscalationError,
+    ToolInvocationStatus,
     ToolResourceBudget,
+    idempotency_key_sha256,
+    sha256_json,
 )
+from agentbus.tools.records import (
+    TERMINAL_TOOL_STATUSES,
+    approval_request_scope_sha256,
+    policy_decision_sha256,
+)
+from agentbus.tools.registry import ToolRegistryError
 from agentbus.tools.runtime import ManagedToolRuntime, build_managed_tool_runtime
 
 
 class ManagedToolApprovalRequired(RuntimeError):
     """Signals that a managed task must suspend for exact tool approval."""
 
-    def __init__(self, *, approval_id: str, invocation_id: str, tool_name: str):
+    def __init__(
+        self,
+        *,
+        approval_id: str,
+        approval_request_sha256: str,
+        invocation_id: str,
+        invocation_revision: int,
+        invocation_sha256: str,
+        operation_sha256: str,
+        arguments_sha256: str,
+        capability_fingerprint: str,
+        policy_identity_sha256: str,
+        tool_name: str,
+        tool_version: dict[str, Any],
+    ):
         super().__init__(f"Tool '{tool_name}' is awaiting scoped approval.")
         self.approval_id = approval_id
+        self.approval_request_sha256 = approval_request_sha256
         self.invocation_id = invocation_id
+        self.invocation_revision = invocation_revision
+        self.invocation_sha256 = invocation_sha256
+        self.operation_sha256 = operation_sha256
+        self.arguments_sha256 = arguments_sha256
+        self.capability_fingerprint = capability_fingerprint
+        self.policy_identity_sha256 = policy_identity_sha256
         self.tool_name = tool_name
+        self.tool_version = tool_version
+        self.continuation: AgentLoopContinuation | None = None
+
+
+class ManagedToolContinuationError(TaskExecutionError):
+    """Signals that a suspended tool action cannot be reconstructed safely."""
+
+    def __init__(self, message: str):
+        super().__init__(
+            message,
+            category=FailureCategory.RESUMABILITY_FAILURE,
+            retryable=False,
+        )
+
+
+class StepBudgetExhaustedError(TaskExecutionError):
+    """Signals that a terminal observation turn requested another action."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        maximum_action_steps: int,
+        requested_tool_name: str | None = None,
+    ):
+        super().__init__(
+            f"step_budget_exhausted: {message}",
+            category=FailureCategory.STEP_BUDGET_EXHAUSTED,
+            retryable=False,
+        )
+        self.maximum_action_steps = maximum_action_steps
+        self.requested_tool_name = requested_tool_name
+
+    def safe_metadata(self) -> dict[str, Any]:
+        return {
+            "maximum_action_steps": self.maximum_action_steps,
+            "requested_tool_name": self.requested_tool_name,
+            "terminal_observation_consumed": True,
+        }
+
+
+class PlannedCapabilityMismatchError(ToolCapabilityEscalationError):
+    """Signals that a model tool call exceeded its durable task contract."""
+
+    def __init__(
+        self,
+        *,
+        task_id: str,
+        tool_name: str,
+        requested_capabilities,
+        declared_capabilities,
+    ):
+        self.task_id = str(task_id)[:128]
+        self.tool_name = str(tool_name)[:128]
+        self.requested_capabilities = _bounded_names(requested_capabilities)
+        self.declared_capabilities = _bounded_names(declared_capabilities)
+        self.undeclared_capabilities = sorted(
+            set(self.requested_capabilities) - set(self.declared_capabilities)
+        )
+        missing = ", ".join(self.undeclared_capabilities) or "unknown"
+        super().__init__(
+            "Planner capability contract prevented task completion: "
+            f"tool '{self.tool_name}' requested undeclared capabilities: {missing}."
+        )
+
+    def safe_metadata(self) -> dict[str, Any]:
+        return {
+            "task_id": self.task_id,
+            "tool_name": self.tool_name,
+            "requested_capabilities": self.requested_capabilities,
+            "declared_capabilities": self.declared_capabilities,
+            "undeclared_capabilities": self.undeclared_capabilities,
+        }
 
 
 class AgentLoop:
@@ -63,6 +172,8 @@ class AgentLoop:
         provider_consented: bool = True,
         resource_budget: ToolResourceBudget | None = None,
         policy_context: dict[str, Any] | None = None,
+        attempt_id: str | None = None,
+        attempt_number: int | None = None,
     ):
         config = config or AgentBusConfig.from_env()
         config = config.with_overrides(
@@ -80,7 +191,7 @@ class AgentLoop:
         else:
             self.model_router = model_router or ModelRouter(config)
             self.model = self.model_router.for_role(ModelRole.CODER)
-        self.logger = RunLogger(log_dir=config.runs_dir)
+        self.logger = RunLogger(log_dir=config.runs_path, run_id=run_id)
         self.max_history_chars = max_history_chars or config.max_history_chars
         self.cancellation = cancellation
         self.tool_runtime = tool_runtime
@@ -92,13 +203,27 @@ class AgentLoop:
         self.provider_consented = provider_consented
         self.resource_budget = resource_budget
         self.policy_context = dict(policy_context or {})
+        self.attempt_id = attempt_id
+        self.attempt_number = attempt_number
         self._owns_state_records = False
         self._owns_tool_runtime = False
 
-    def run(self, user_task: str, max_steps: int | None = None) -> str:
+    def run(
+        self,
+        user_task: str,
+        max_steps: int | None = None,
+        continuation: AgentLoopContinuation | dict[str, Any] | None = None,
+    ) -> str:
         self._ensure_tool_runtime(user_task)
         try:
-            return self._run_steps(user_task, max_steps=max_steps)
+            return self._run_steps(
+                user_task,
+                max_steps=max_steps,
+                continuation=continuation,
+            )
+        except ManagedToolContinuationError as exc:
+            self._finish_standalone(succeeded=False, reason=str(exc))
+            raise
         finally:
             if self._owns_tool_runtime and self.tool_runtime is not None:
                 runtime = self.tool_runtime
@@ -106,19 +231,94 @@ class AgentLoop:
                 self._owns_tool_runtime = False
                 runtime.close()
 
-    def _run_steps(self, user_task: str, max_steps: int | None = None) -> str:
+    def _run_steps(
+        self,
+        user_task: str,
+        max_steps: int | None = None,
+        continuation: AgentLoopContinuation | dict[str, Any] | None = None,
+    ) -> str:
+        selected_max_steps = max_steps or self.config.max_steps
+        try:
+            state = (
+                AgentLoopContinuation.model_validate(continuation)
+                if continuation is not None
+                else None
+            )
+        except ValidationError as exc:
+            raise ManagedToolContinuationError(
+                "Persisted loop continuation is invalid or incomplete."
+            ) from exc
         history = ""
-        max_steps = max_steps or self.config.max_steps
+        start_step = 1
+        last_tool_observation_step: int | None = None
+        if state is not None:
+            self._validate_continuation(state, user_task)
+            selected_max_steps = min(selected_max_steps, state.maximum_steps)
+            if state.step > selected_max_steps:
+                raise ManagedToolContinuationError(
+                    "Persisted loop continuation exceeds the current step budget."
+                )
+            history = state.history
 
         self.logger.log(
             "run_started",
             {
                 "task_chars": len(user_task),
                 "workspace": self.workspace,
+                "continued": state is not None,
             },
         )
 
-        for step in range(1, max_steps + 1):
+        if state is not None:
+            step = state.step
+            action = state.pending_action
+            raw_action = action.model_dump(mode="json")
+            self._checkpoint(f"before-tool-continuation-{step}")
+            self.logger.log(
+                "tool_continuation_started",
+                {
+                    "step": step,
+                    "attempt_number": self.attempt_number,
+                    "tool_name": state.tool_name,
+                    "approval_id": state.approval_id,
+                },
+            )
+            try:
+                observation = self._execute(action, step=step)
+                self._checkpoint(f"after-tool-continuation-{step}")
+            except (CancellationRequested, ModelCancellationError):
+                raise
+            except ManagedToolApprovalRequired as approval:
+                approval.continuation = state
+                self._mark_standalone_waiting_for_approval()
+                raise
+            except ManagedToolContinuationError:
+                raise
+            except PlannedCapabilityMismatchError as error:
+                self.logger.log(
+                    "plan_capability_mismatch",
+                    {"step": step, **error.safe_metadata()},
+                )
+                self._finish_standalone(succeeded=False, reason=str(error))
+                raise
+            except Exception as error:
+                observation = f"Tool error: {str(error)}"
+
+            self.logger.log(
+                "tool_observation",
+                {
+                    "step": step,
+                    "observation_chars": len(observation),
+                    "continued": True,
+                },
+            )
+            history += self._format_history(step, raw_action, observation)
+            history = self._trim_history(history)
+            last_tool_observation_step = step
+            start_step = step + 1
+
+        for step in range(start_step, selected_max_steps + 1):
+            last_tool_observation_step = None
             self._checkpoint(f"before-step-{step}")
             self.logger.log("step_started", {
                 "step": step,
@@ -174,8 +374,37 @@ class AgentLoop:
                     self._checkpoint(f"after-tool-step-{step}")
                 except (CancellationRequested, ModelCancellationError):
                     raise
-                except ManagedToolApprovalRequired:
+                except ManagedToolApprovalRequired as approval:
+                    approval.continuation = self._capture_continuation(
+                        user_task=user_task,
+                        history=history,
+                        action=action,
+                        step=step,
+                        maximum_steps=selected_max_steps,
+                        approval=approval,
+                        worktree_snapshot=(
+                            state.worktree_snapshot if state is not None else {}
+                        ),
+                    )
+                    self.logger.log(
+                        "tool_continuation_suspended",
+                        {
+                            "step": step,
+                            "attempt_number": self.attempt_number,
+                            "tool_name": approval.tool_name,
+                            "approval_id": approval.approval_id,
+                        },
+                    )
                     self._mark_standalone_waiting_for_approval()
+                    raise
+                except ManagedToolContinuationError:
+                    raise
+                except PlannedCapabilityMismatchError as error:
+                    self.logger.log(
+                        "plan_capability_mismatch",
+                        {"step": step, **error.safe_metadata()},
+                    )
+                    self._finish_standalone(succeeded=False, reason=str(error))
                     raise
                 except Exception as e:
                     observation = f"Tool error: {str(e)}"
@@ -197,6 +426,16 @@ class AgentLoop:
                 })
                 self._finish_standalone(succeeded=True)
                 return action.summary
+            if action and action.action == "tool_call":
+                last_tool_observation_step = step
+
+        if last_tool_observation_step == selected_max_steps:
+            return self._consume_terminal_observation(
+                user_task,
+                history,
+                action_step=selected_max_steps,
+                maximum_action_steps=selected_max_steps,
+            )
 
         final = "Stopped because max_steps was reached. Check run logs for details."
 
@@ -210,6 +449,103 @@ class AgentLoop:
         )
 
         return final
+
+    def _capture_continuation(
+        self,
+        *,
+        user_task: str,
+        history: str,
+        action: AgentAction,
+        step: int,
+        maximum_steps: int,
+        approval: ManagedToolApprovalRequired,
+        worktree_snapshot: dict[str, str],
+    ) -> AgentLoopContinuation:
+        action_payload = action.model_dump(mode="json")
+        # Match the state store's per-string persistence bound so suspension
+        # fails before asking a human to approve unreconstructable arguments.
+        safe_payload = sanitize_json(action_payload, max_chars=20_000)
+        if safe_payload != action_payload:
+            raise ManagedToolContinuationError(
+                "Pending tool arguments contain data that cannot be persisted safely."
+            )
+        safe_action = AgentAction.model_validate(safe_payload)
+        safe_history = sanitize_json(history, max_chars=20_000)
+        if not isinstance(safe_history, str):
+            raise ManagedToolContinuationError(
+                "Loop observation history could not be sanitized safely."
+            )
+        safe_history = safe_history[:20_000]
+        return AgentLoopContinuation(
+            run_id=self.run_id or "standalone-run",
+            task_id=self.task_id or "single-task",
+            attempt_id=self.attempt_id,
+            attempt_number=self.attempt_number,
+            user_task_sha256=hashlib.sha256(user_task.encode("utf-8")).hexdigest(),
+            step=step,
+            maximum_steps=maximum_steps,
+            history=safe_history,
+            worktree_snapshot=worktree_snapshot,
+            pending_action=safe_action,
+            pending_action_sha256=sha256_json(action_payload),
+            approval_id=approval.approval_id,
+            approval_request_sha256=approval.approval_request_sha256,
+            invocation_id=approval.invocation_id,
+            invocation_revision=approval.invocation_revision,
+            invocation_sha256=approval.invocation_sha256,
+            operation_sha256=approval.operation_sha256,
+            arguments_sha256=approval.arguments_sha256,
+            capability_fingerprint=approval.capability_fingerprint,
+            policy_identity_sha256=approval.policy_identity_sha256,
+            tool_name=approval.tool_name,
+            tool_version=approval.tool_version,
+        )
+
+    def _validate_continuation(
+        self,
+        continuation: AgentLoopContinuation,
+        user_task: str,
+    ) -> None:
+        if self.run_id != continuation.run_id or self.task_id != continuation.task_id:
+            raise ManagedToolContinuationError(
+                "Loop continuation run or task identity does not match."
+            )
+        if continuation.attempt_id is not None and (
+            self.attempt_id != continuation.attempt_id
+            or self.attempt_number != continuation.attempt_number
+        ):
+            raise ManagedToolContinuationError(
+                "Loop continuation attempt identity does not match."
+            )
+        task_sha256 = hashlib.sha256(user_task.encode("utf-8")).hexdigest()
+        if task_sha256 != continuation.user_task_sha256:
+            raise ManagedToolContinuationError(
+                "Loop continuation task content does not match."
+            )
+        action_payload = continuation.pending_action.model_dump(mode="json")
+        if sha256_json(action_payload) != continuation.pending_action_sha256:
+            raise ManagedToolContinuationError(
+                "Loop continuation action identity is corrupt."
+            )
+        call = continuation.pending_action.tool_call
+        assert call is not None
+        if sha256_json(call.arguments) != continuation.arguments_sha256:
+            raise ManagedToolContinuationError(
+                "Loop continuation argument identity is corrupt."
+            )
+        if (
+            self._invocation_id(call.idempotency_key, call.invocation_revision)
+            != continuation.invocation_id
+        ):
+            raise ManagedToolContinuationError(
+                "Loop continuation invocation identity is corrupt."
+            )
+        validate_exact_tool_approval(
+            self.tool_runtime,
+            continuation,
+            idempotency_key=call.idempotency_key,
+            caller_role="coder",
+        )
 
     def _build_prompt(self, user_task: str, history: str) -> str:
         return f"""
@@ -227,6 +563,133 @@ Managed tool catalog:
 Return the next JSON action.
 """
 
+    def _consume_terminal_observation(
+        self,
+        user_task: str,
+        history: str,
+        *,
+        action_step: int,
+        maximum_action_steps: int,
+    ) -> str:
+        """Allow one decision-only turn after the final action observation."""
+        self._checkpoint("before-terminal-observation-consumption")
+        self.logger.log(
+            "terminal_observation_consumption_started",
+            {
+                "action_step": action_step,
+                "maximum_action_steps": maximum_action_steps,
+                "decision_turn": 1,
+            },
+        )
+        prompt = self._build_prompt(user_task, history) + """
+
+Terminal decision turn:
+- The final permitted action already executed and its observation is above.
+- No action budget remains. Consume that evidence and return action=finish.
+- Do not request another tool. A tool request cannot execute and will stop the
+  run with step_budget_exhausted.
+"""
+        try:
+            method = self.model.generate_json
+            with model_request_context(cancellation=self.cancellation):
+                if _accepts_schema(method):
+                    raw_action = method(prompt, schema=AgentAction)
+                else:
+                    raw_action = method(prompt)
+            self._checkpoint("after-terminal-observation-consumption")
+            action = AgentAction(**raw_action)
+        except (CancellationRequested, ModelCancellationError):
+            raise
+        except ModelProviderError as error:
+            self.logger.log(
+                "model_error",
+                {
+                    "terminal_observation_consumption": True,
+                    **error.safe_metadata(),
+                },
+            )
+            raise
+        except ModelOutputError as error:
+            self.logger.log(
+                "model_error",
+                {
+                    "terminal_observation_consumption": True,
+                    **error.safe_metadata(),
+                },
+            )
+            self._stop_for_step_budget(
+                "terminal decision output was invalid",
+                history=history,
+                maximum_action_steps=maximum_action_steps,
+            )
+        except Exception as error:
+            self.logger.log(
+                "model_error",
+                {
+                    "terminal_observation_consumption": True,
+                    "error_type": type(error).__name__,
+                    "error_chars": len(str(error)),
+                },
+            )
+            self._stop_for_step_budget(
+                "terminal decision output was invalid",
+                history=history,
+                maximum_action_steps=maximum_action_steps,
+            )
+
+        self.logger.log(
+            "model_action",
+            {
+                "step": action_step,
+                "terminal_observation_consumption": True,
+                **_action_log_metadata(action),
+            },
+        )
+        if action.action == "finish":
+            self.logger.log(
+                "run_finished",
+                {
+                    "summary_chars": len(action.summary or ""),
+                    "terminal_observation_consumption": True,
+                },
+            )
+            self._finish_standalone(succeeded=True)
+            return action.summary
+
+        call = action.tool_call
+        self._stop_for_step_budget(
+            "terminal decision requested another tool action",
+            history=history,
+            maximum_action_steps=maximum_action_steps,
+            requested_tool_name=call.tool_name if call is not None else None,
+        )
+
+    def _stop_for_step_budget(
+        self,
+        message: str,
+        *,
+        history: str,
+        maximum_action_steps: int,
+        requested_tool_name: str | None = None,
+    ) -> None:
+        self.logger.log(
+            "run_stopped",
+            {
+                "reason": FailureCategory.STEP_BUDGET_EXHAUSTED.value,
+                "history_chars": len(history),
+                "maximum_action_steps": maximum_action_steps,
+                "requested_tool_name": requested_tool_name,
+                "terminal_observation_consumed": True,
+            },
+        )
+        error = StepBudgetExhaustedError(
+            message,
+            maximum_action_steps=maximum_action_steps,
+            requested_tool_name=requested_tool_name,
+        )
+        self._finish_standalone(succeeded=False, reason=str(error))
+        raise error
+
     def _execute(self, action: AgentAction, *, step: int) -> str:
         if action.action == "finish":
             return f"Finished: {action.summary}"
@@ -237,7 +700,7 @@ Return the next JSON action.
 
         requested = action.tool_call
         planned_capabilities = self.policy_context.get("planned_capabilities")
-        if isinstance(planned_capabilities, list) and planned_capabilities:
+        if isinstance(planned_capabilities, list):
             declared = {
                 str(getattr(value, "value", value))
                 for value in planned_capabilities
@@ -246,8 +709,11 @@ Return the next JSON action.
                 capability.value for capability in requested.expected_capabilities
             }
             if not requested_names.issubset(declared):
-                raise ToolCapabilityEscalationError(
-                    "Tool call exceeds the planner-declared capability requirements."
+                raise PlannedCapabilityMismatchError(
+                    task_id=self.task_id,
+                    tool_name=requested.tool_name,
+                    requested_capabilities=requested_names,
+                    declared_capabilities=declared,
                 )
         call = self.tool_runtime.prepare_model_call(
             tool_name=requested.tool_name,
@@ -281,10 +747,23 @@ Return the next JSON action.
         if response.awaiting_approval:
             request = response.approval_request
             assert request is not None
+            policy = response.record.policy_decision
+            if policy is None:
+                raise ManagedToolContinuationError(
+                    "Pending tool approval has no persisted policy identity."
+                )
             raise ManagedToolApprovalRequired(
                 approval_id=request.approval_id,
+                approval_request_sha256=approval_request_scope_sha256(request),
                 invocation_id=response.invocation.invocation_id,
+                invocation_revision=response.record.invocation_revision,
+                invocation_sha256=response.record.invocation_sha256,
+                operation_sha256=response.record.operation_sha256,
+                arguments_sha256=response.record.arguments_sha256,
+                capability_fingerprint=response.record.capability_fingerprint,
+                policy_identity_sha256=policy_decision_sha256(policy),
                 tool_name=response.invocation.tool_name,
+                tool_version=response.record.tool_version.model_dump(mode="json"),
             )
         if response.in_progress:
             return json.dumps(
@@ -390,8 +869,9 @@ Return the next JSON action.
     def _tool_catalog_json(self) -> str:
         if self.tool_runtime is None:
             return "[]"
-        catalog = [
-            {
+        catalog = []
+        for descriptor in self.tool_runtime.registry.descriptors():
+            entry = {
                 "name": descriptor.name,
                 "version": str(descriptor.version),
                 "description": descriptor.description,
@@ -400,8 +880,24 @@ Return the next JSON action.
                 ],
                 "argument_schema": descriptor.argument_schema,
             }
-            for descriptor in self.tool_runtime.registry.descriptors()
-        ]
+            executable_aliases = sorted(
+                {
+                    alias
+                    for capability in descriptor.capabilities
+                    for alias in capability.scope.executables
+                }
+            )
+            if executable_aliases:
+                entry["executable_aliases"] = executable_aliases
+            if descriptor.name == "filesystem.write":
+                entry["capability_rules"] = {
+                    "existing_path": ["filesystem.write"],
+                    "missing_path": [
+                        "filesystem.write",
+                        "filesystem.create",
+                    ],
+                }
+            catalog.append(entry)
         return json.dumps(catalog, ensure_ascii=False, sort_keys=True)
 
     def _invocation_id(self, idempotency_key: str, revision: int) -> str:
@@ -464,6 +960,89 @@ Return the next JSON action.
         return history[-self.max_history_chars:]
 
 
+def validate_exact_tool_approval(
+    tool_runtime: ManagedToolRuntime | None,
+    continuation: Any,
+    *,
+    idempotency_key: str,
+    caller_role: str,
+) -> None:
+    """Fail closed unless a continuation matches one exact approved invocation."""
+    if tool_runtime is None:
+        raise ManagedToolContinuationError(
+            "Managed tool runtime is unavailable for continuation."
+        )
+    store = tool_runtime.state_store
+    try:
+        record = store.get_tool_invocation(
+            continuation.run_id,
+            continuation.invocation_id,
+        )
+        approval = store.get_tool_approval(
+            continuation.run_id,
+            continuation.approval_id,
+        )
+        descriptor = tool_runtime.registry.descriptor(
+            continuation.tool_name,
+            version=continuation.tool_version,
+        )
+    except (StateStoreError, ToolRegistryError, LookupError, ValueError) as exc:
+        raise ManagedToolContinuationError(
+            "Persisted tool continuation dependencies are unavailable."
+        ) from exc
+
+    policy = record.policy_decision
+    request = approval.request
+    runtime_workspace = str(tool_runtime.workspace)
+    runtime_worktree = str(tool_runtime.worktree)
+    tool_version = continuation.tool_version.model_dump(mode="json")
+    matches = (
+        record.run_id == continuation.run_id
+        and record.task_id == continuation.task_id
+        and record.caller_role == caller_role
+        and record.tool_name == continuation.tool_name
+        and record.tool_version.model_dump(mode="json") == tool_version
+        and descriptor.version.model_dump(mode="json") == tool_version
+        and record.invocation_revision == continuation.invocation_revision
+        and record.invocation_sha256 == continuation.invocation_sha256
+        and record.operation_sha256 == continuation.operation_sha256
+        and record.arguments_sha256 == continuation.arguments_sha256
+        and record.idempotency_key_sha256
+        == idempotency_key_sha256(idempotency_key)
+        and record.capability_fingerprint == continuation.capability_fingerprint
+        and record.workspace_identity == runtime_workspace
+        and record.worktree_identity == runtime_worktree
+        and record.approval_id == continuation.approval_id
+        and record.status
+        in {
+            ToolInvocationStatus.AWAITING_APPROVAL,
+            *TERMINAL_TOOL_STATUSES,
+        }
+        and policy is not None
+        and policy_decision_sha256(policy) == continuation.policy_identity_sha256
+        and approval.approval_id == continuation.approval_id
+        and request.approval_id == continuation.approval_id
+        and request.run_id == continuation.run_id
+        and request.task_id == continuation.task_id
+        and request.invocation_id == continuation.invocation_id
+        and request.invocation_revision == continuation.invocation_revision
+        and request.tool_name == continuation.tool_name
+        and request.tool_version.model_dump(mode="json") == tool_version
+        and request.arguments_sha256 == continuation.arguments_sha256
+        and request.capability_fingerprint == continuation.capability_fingerprint
+        and request.workspace_identity == runtime_workspace
+        and request.worktree_identity == runtime_worktree
+        and request.idempotency_key_sha256 == record.idempotency_key_sha256
+        and approval_request_scope_sha256(request)
+        == continuation.approval_request_sha256
+        and approval.disposition == "approved"
+    )
+    if not matches:
+        raise ManagedToolContinuationError(
+            "Persisted tool continuation no longer matches its exact approval."
+        )
+
+
 def _accepts_schema(method) -> bool:
     try:
         parameters = inspect.signature(method).parameters.values()
@@ -474,6 +1053,15 @@ def _accepts_schema(method) -> bool:
         or parameter.name == "schema"
         for parameter in parameters
     )
+
+
+def _bounded_names(values) -> list[str]:
+    return sorted(
+        {
+            str(getattr(value, "value", value))[:128]
+            for value in values
+        }
+    )[:32]
 
 
 def _action_log_metadata(action: AgentAction) -> dict:

@@ -1,4 +1,5 @@
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -51,7 +52,11 @@ def create_run(settings, *, run_id="run-1", risk="low"):
 
 
 def patch_config(monkeypatch, settings):
-    monkeypatch.setattr(main_module.AgentBusConfig, "from_env", lambda: settings)
+    monkeypatch.setattr(
+        main_module,
+        "resolve_configuration",
+        lambda **_kwargs: SimpleNamespace(config=settings),
+    )
 
 
 def test_cli_accepts_durable_new_run_and_prints_id_first(monkeypatch, capsys, tmp_path):
@@ -202,6 +207,50 @@ def test_execution_report_renders_safe_durable_diagnostics():
     assert "Tasks prevented from starting: step-2" in output
     assert "Cancellation resume eligibility: unavailable" in output
     assert "Cancellation terminal reason: Cancelled safely." in output
+
+
+def test_execution_report_distinguishes_task_and_tool_approvals():
+    report = ExecutionReport(
+        run_id="approval-diagnostic-run",
+        original_task="Task",
+        status=RunStatus.WAITING_FOR_APPROVAL,
+        graph_progress=GraphProgress(
+            total=2,
+            succeeded=0,
+            failed=0,
+            blocked=0,
+            waiting_for_approval=2,
+            remaining=0,
+        ),
+        pending_approvals=["step-1", "step-2"],
+        pending_approval_details=[
+            {
+                "approval_kind": "tool",
+                "task_id": "step-1",
+                "attempt_number": 1,
+                "tool_name": "test.execute",
+                "approval_id": "tool-approval-1",
+                "capabilities": ["process.execute", "test.execute"],
+                "safe_reason": "Repository-defined verification requires approval.",
+            },
+            {
+                "approval_kind": "task",
+                "task_id": "step-2",
+                "approval_id": "approval-diagnostic-run:step-2",
+                "risk": "high",
+                "safe_reason": "High-risk task requires approval.",
+            },
+        ],
+    )
+
+    output = main_module.render_execution_report(report)
+
+    assert "Tool invocation approval pending: task=step-1 attempt=1" in output
+    assert "tool=test.execute approval=tool-approval-1" in output
+    assert "capabilities=process.execute, test.execute" in output
+    assert "Task approval pending: task=step-2" in output
+    assert "risk=high" in output
+    assert "arguments" not in output
 
 
 def test_cli_resume_uses_persisted_workspace_without_prompt(monkeypatch, capsys, tmp_path):

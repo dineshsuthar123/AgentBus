@@ -37,6 +37,7 @@ from agentbus.control.models import (
     ApprovalDecisionRequest,
     ApprovalDecisionResponse,
     ApprovalListResponse,
+    AttemptListResponse,
     CancelResponse,
     ChangeListResponse,
     ComparisonCreateRequest,
@@ -77,6 +78,7 @@ from agentbus.control.models import (
     TraceResponse,
     TraceSpanDetailResponse,
     TraceSpanListResponse,
+    TraceVerificationResponse,
     ToolAuditListResponse,
     ToolDescriptorDetail,
     ToolInvocationCancelRequest,
@@ -111,6 +113,7 @@ from agentbus.control.models import (
 from agentbus.control.replay_supervisor import BackgroundReplaySupervisor
 from agentbus.control.services import ControlQueryService
 from agentbus.control.supervisor import BackgroundRunSupervisor
+from agentbus.execution.engine import DurableExecutionEngine
 from agentbus.execution.models import ApprovalOutcome
 from agentbus.execution.state_store import StateStoreError
 from agentbus.git.repository import GitRepositoryError
@@ -605,6 +608,13 @@ def create_app(
     async def run_trace(run_id: str) -> TraceResponse:
         return query_service.trace(run_id)
 
+    @app.post(
+        f"{API_PREFIX}/runs/{{run_id}}/trace/verify",
+        response_model=TraceVerificationResponse,
+    )
+    async def verify_run_trace(run_id: str) -> TraceVerificationResponse:
+        return query_service.verify_trace(run_id)
+
     @app.get(
         f"{API_PREFIX}/runs/{{run_id}}/trace/spans",
         response_model=TraceSpanListResponse,
@@ -777,6 +787,16 @@ def create_app(
         return query_service.tasks(run_id)
 
     @app.get(
+        f"{API_PREFIX}/runs/{{run_id}}/attempts",
+        response_model=AttemptListResponse,
+    )
+    async def attempts(
+        run_id: str,
+        limit: int = Query(default=100, ge=1, le=500),
+    ) -> AttemptListResponse:
+        return query_service.attempts(run_id, limit=limit)
+
+    @app.get(
         f"{API_PREFIX}/runs/{{run_id}}/scheduler",
         response_model=SchedulerResponse,
     )
@@ -833,9 +853,14 @@ def create_app(
             invocation_id,
         )
         reason = request.reason if request else None
+        cancellation_reason = reason or f"Cancel tool invocation {invocation_id}."
+        DurableExecutionEngine(query_service.store).request_cancellation(
+            run_id,
+            cancellation_reason,
+        )
         cancelled = supervisor.cancel(
             run_id,
-            reason or f"Cancel tool invocation {invocation_id}.",
+            cancellation_reason,
         )
         return ToolInvocationCancelResponse(
             run_id=run_id,

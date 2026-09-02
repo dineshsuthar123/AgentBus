@@ -1,4 +1,6 @@
 import json
+import os
+import subprocess
 
 import pytest
 
@@ -27,6 +29,85 @@ def test_python_demo_preflight_observes_intentional_failure(tmp_path):
     assert result.test_executed is True
     assert result.test_exit_code != 0
     assert result.to_dict()["ready"] is True
+
+
+def test_payment_demo_contains_concurrent_retry_proof(tmp_path):
+    result = create_demo("payment", tmp_path / "payment")
+    source = (
+        result.workspace
+        / "src/main/java/com/agentbus/demo/PaymentService.java"
+    ).read_text(encoding="utf-8")
+    test_source = (
+        result.workspace
+        / "src/test/java/com/agentbus/demo/PaymentServiceTest.java"
+    ).read_text(encoding="utf-8")
+    pom = (result.workspace / "pom.xml").read_text(encoding="utf-8")
+
+    assert "confirmedPaymentIds.add(paymentId);\n        return 1;" in source
+    assert "CountDownLatch" in test_source
+    assert "assertEquals(1, accepted)" in test_source
+    assert result.test_command == ("mvn", "-q", "-o", "test")
+    assert "<junit.version>5.10.2</junit.version>" in pom
+    assert "<artifactId>maven-compiler-plugin</artifactId>" in pom
+    assert "<version>3.13.0</version>" in pom
+    assert "<artifactId>maven-surefire-plugin</artifactId>" in pom
+    assert "<version>3.2.5</version>" in pom
+
+
+def test_demo_git_initialization_creates_clean_isolated_baseline(tmp_path):
+    result = create_demo(
+        "payment",
+        tmp_path / "payment-git",
+        initialize_git=True,
+    )
+    status = subprocess.run(
+        ["git", "status", "--short"],
+        cwd=result.workspace,
+        capture_output=True,
+        text=True,
+        shell=False,
+        check=False,
+    )
+
+    assert result.git_initialized is True
+    assert status.returncode == 0
+    assert status.stdout == ""
+
+
+def test_demo_git_initialization_refuses_nonempty_destination(tmp_path):
+    destination = tmp_path / "occupied"
+    destination.mkdir()
+    unrelated = destination / "notes.txt"
+    unrelated.write_text("preserve", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="new empty"):
+        create_demo("payment", destination, initialize_git=True)
+
+    assert unrelated.read_text(encoding="utf-8") == "preserve"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows command shim regression")
+def test_demo_run_executes_windows_command_shim_with_shell_disabled(
+    tmp_path,
+    monkeypatch,
+):
+    workspace = tmp_path / "payment"
+    create_demo("payment", workspace)
+    executable_dir = tmp_path / "bin"
+    executable_dir.mkdir()
+    (executable_dir / "mvn.cmd").write_text(
+        "@echo PAYMENT_DEMO_SHIM\r\n@exit /b 7\r\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(
+        "PATH",
+        os.pathsep.join((str(executable_dir), os.environ.get("PATH", ""))),
+    )
+
+    result = run_demo("payment", workspace=workspace)
+
+    assert result.test_executed is True
+    assert result.test_exit_code == 7
 
 
 def test_demo_refuses_unmanaged_nonempty_destination(tmp_path):
@@ -62,3 +143,30 @@ def test_demo_cli_list_and_create_are_machine_readable(tmp_path, capsys):
     created = json.loads(capsys.readouterr().out)
     assert created["workspace"] == str(output.resolve())
     assert created["network_used"] is False
+
+
+def test_demo_cli_can_create_clean_payment_git_repository(tmp_path, capsys):
+    output = tmp_path / "payment-demo"
+
+    assert cli.main(
+        [
+            "demo",
+            "create",
+            "payment",
+            "--output",
+            str(output),
+            "--git",
+            "--json",
+        ]
+    ) == 0
+
+    created = json.loads(capsys.readouterr().out)
+    assert created["git_initialized"] is True
+    assert subprocess.run(
+        ["git", "status", "--short"],
+        cwd=output,
+        capture_output=True,
+        text=True,
+        shell=False,
+        check=False,
+    ).stdout == ""

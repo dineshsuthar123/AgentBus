@@ -5,6 +5,7 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
@@ -43,6 +44,10 @@ class GitRepositoryError(RuntimeError):
 
 class WorkspaceRepositoryMismatch(GitRepositoryError):
     """Raised when Git resolves the workspace to an unintended parent repository."""
+
+
+class RepositoryBaselineMismatch(GitRepositoryError):
+    """Raised when a persisted repository baseline cannot be trusted."""
 
 
 @dataclass(frozen=True)
@@ -342,6 +347,129 @@ class GitRepository:
         changes = self.change_set(paths)
         return self.full_diff(max_chars=max_chars, paths=changes.review_files)
 
+    def capture_review_baseline(self) -> dict[str, object]:
+        """Capture an immutable review baseline without changing the real index."""
+        self.validate_workspace()
+        worktree_snapshot = self.worktree_snapshot()
+        review_source_snapshot = self.review_source_snapshot()
+        review_files = sorted(review_source_snapshot)
+        try:
+            head_commit = self.head_commit(short=False)
+        except GitRepositoryError:
+            head_commit = None
+        tree_id = self._write_review_tree(head_commit, review_files)
+        payload: dict[str, object] = {
+            "schema_version": 1,
+            "head_commit": head_commit,
+            "tree_id": tree_id,
+            "worktree_snapshot": worktree_snapshot,
+            "review_source_snapshot": review_source_snapshot,
+            "review_files": review_files,
+            "state_sha256": self.repository_state_sha256(),
+        }
+        payload["identity_sha256"] = _json_sha256(payload)
+        return payload
+
+    def changed_files_since_review_baseline(
+        self,
+        baseline: dict[str, object],
+    ) -> list[str]:
+        trusted = self._validate_review_baseline(baseline)
+        snapshot = trusted["worktree_snapshot"]
+        assert isinstance(snapshot, dict)
+        return self.changed_since(snapshot)
+
+    def review_candidate(
+        self,
+        baseline: dict[str, object],
+    ) -> dict[str, object]:
+        trusted = self._validate_review_baseline(baseline)
+        head_commit = trusted.get("head_commit")
+        tree_id = trusted.get("tree_id")
+        try:
+            current_head = self.head_commit(short=False)
+        except GitRepositoryError:
+            current_head = None
+        if head_commit != current_head:
+            raise RepositoryBaselineMismatch(
+                "Repository HEAD changed after the durable task baseline was captured."
+            )
+
+        changed_files = self.changed_files_since_review_baseline(trusted)
+        changes = self.change_set(changed_files)
+        source_snapshot = self._snapshot_paths(changes.review_files)
+        candidate_tree = None
+        if isinstance(tree_id, str) and tree_id:
+            baseline_review_files = trusted.get("review_files", [])
+            assert isinstance(baseline_review_files, list)
+            candidate_tree = self._write_review_tree(
+                tree_id,
+                sorted(set(baseline_review_files) | set(changes.review_files)),
+            )
+        payload: dict[str, object] = {
+            "schema_version": 1,
+            "head_commit": current_head,
+            "tree_id": candidate_tree,
+            "source_snapshot": source_snapshot,
+            "changed_files": changes.review_files,
+        }
+        payload["identity_sha256"] = _json_sha256(payload)
+        return payload
+
+    def review_diff_since_baseline(
+        self,
+        baseline: dict[str, object],
+        *,
+        max_chars: int = 30_000,
+        paths: Iterable[str] | None = None,
+        candidate: dict[str, object] | None = None,
+    ) -> str:
+        if max_chars < 1 or max_chars > self.maximum_command_output_chars:
+            raise ValueError(
+                "max_chars must be positive and within the command output limit"
+            )
+        trusted = self._validate_review_baseline(baseline)
+        selected_candidate = (
+            self.review_candidate(trusted)
+            if candidate is None
+            else self._validate_review_candidate(candidate, trusted)
+        )
+        selected = (
+            self._normalize_paths(paths)
+            if paths is not None
+            else list(selected_candidate["changed_files"])
+        )
+        if self._protected_paths(selected):
+            raise GitRepositoryError(
+                "Protected repository paths cannot be included in Git diffs."
+            )
+        if not selected:
+            return "No diff."
+        baseline_tree = trusted.get("tree_id")
+        candidate_tree = selected_candidate.get("tree_id")
+        if not isinstance(baseline_tree, str) or not isinstance(candidate_tree, str):
+            raise RepositoryBaselineMismatch(
+                "Repository review baseline or candidate omitted its immutable tree."
+            )
+        diff = self._run(
+            [
+                "git",
+                "diff",
+                "--no-color",
+                "--no-ext-diff",
+                "--no-textconv",
+                baseline_tree,
+                candidate_tree,
+                "--",
+                *selected,
+            ]
+        )
+        return _truncate_with_marker(
+            _redact_git_output(diff or "No diff."),
+            max_chars,
+            "diff truncated",
+        )
+
     def changed_files_between(self, base_commit: str, head: str = "HEAD") -> list[str]:
         base_revision = self._resolve_commit(base_commit)
         head_revision = self._resolve_commit(head)
@@ -462,8 +590,15 @@ class GitRepository:
         )
 
     def worktree_snapshot(self) -> dict[str, str]:
+        return self._snapshot_paths(self.all_changed_files())
+
+    def review_source_snapshot(self) -> dict[str, str]:
+        """Hash review-eligible mutations, excluding ignored generated outputs."""
+        return self._snapshot_paths(self.change_set().review_files)
+
+    def _snapshot_paths(self, paths: Iterable[str]) -> dict[str, str]:
         snapshot: dict[str, str] = {}
-        for relative in self.all_changed_files():
+        for relative in paths:
             path = self.workspace / relative
             if path.is_file():
                 snapshot[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -507,7 +642,7 @@ class GitRepository:
             changes.append(record)
         encoded = json.dumps(
             {
-                "head_commit": self.head_commit(short=False),
+                "head_commit": self._head_commit_or_none(),
                 "changes": changes,
             },
             allow_nan=False,
@@ -524,6 +659,222 @@ class GitRepository:
             for path in set(snapshot) | set(current)
             if snapshot.get(path) != current.get(path)
         )
+
+    def _validate_review_baseline(
+        self,
+        baseline: dict[str, object],
+    ) -> dict[str, object]:
+        if not isinstance(baseline, dict):
+            raise RepositoryBaselineMismatch(
+                "Persisted repository baseline is not an object."
+            )
+        trusted = dict(baseline)
+        identity = trusted.pop("identity_sha256", None)
+        if not isinstance(identity, str) or identity != _json_sha256(trusted):
+            raise RepositoryBaselineMismatch(
+                "Persisted repository baseline identity does not match its content."
+            )
+        if trusted.get("schema_version") != 1:
+            raise RepositoryBaselineMismatch(
+                "Persisted repository baseline schema is unsupported."
+            )
+        worktree_snapshot = trusted.get("worktree_snapshot")
+        review_source_snapshot = trusted.get("review_source_snapshot")
+        review_files = trusted.get("review_files")
+        head_commit = trusted.get("head_commit")
+        tree_id = trusted.get("tree_id")
+        state_sha256 = trusted.get("state_sha256")
+        if (
+            (head_commit is not None and not _is_object_id(head_commit))
+            or not _is_object_id(tree_id)
+            or not isinstance(state_sha256, str)
+            or not re.fullmatch(r"[a-f0-9]{64}", state_sha256)
+            or not isinstance(worktree_snapshot, dict)
+            or not isinstance(review_source_snapshot, dict)
+            or not isinstance(review_files, list)
+            or len(worktree_snapshot) > 512
+            or len(review_source_snapshot) > 512
+            or len(review_files) > 512
+        ):
+            raise RepositoryBaselineMismatch(
+                "Persisted repository baseline snapshots are malformed or unbounded."
+            )
+        if (
+            self._normalize_paths(worktree_snapshot) != sorted(worktree_snapshot)
+            or self._normalize_paths(review_source_snapshot)
+            != sorted(review_source_snapshot)
+            or any(
+                not _is_snapshot_identity(value)
+                for value in (
+                    list(worktree_snapshot.values())
+                    + list(review_source_snapshot.values())
+                )
+            )
+        ):
+            raise RepositoryBaselineMismatch(
+                "Persisted repository baseline snapshots contain invalid paths or "
+                "identities."
+            )
+        normalized_review_files = self._normalize_paths(review_files)
+        if normalized_review_files != sorted(review_source_snapshot):
+            raise RepositoryBaselineMismatch(
+                "Persisted repository baseline review paths are inconsistent."
+            )
+        trusted["worktree_snapshot"] = {
+            str(path): str(value) for path, value in worktree_snapshot.items()
+        }
+        trusted["review_source_snapshot"] = {
+            str(path): str(value) for path, value in review_source_snapshot.items()
+        }
+        trusted["review_files"] = normalized_review_files
+        trusted["identity_sha256"] = identity
+        return trusted
+
+    def _validate_review_candidate(
+        self,
+        candidate: dict[str, object],
+        baseline: dict[str, object],
+    ) -> dict[str, object]:
+        if not isinstance(candidate, dict):
+            raise RepositoryBaselineMismatch(
+                "Persisted repository review candidate is not an object."
+            )
+        trusted = dict(candidate)
+        identity = trusted.pop("identity_sha256", None)
+        if not isinstance(identity, str) or identity != _json_sha256(trusted):
+            raise RepositoryBaselineMismatch(
+                "Repository review candidate identity does not match its content."
+            )
+        if trusted.get("schema_version") != 1:
+            raise RepositoryBaselineMismatch(
+                "Repository review candidate schema is unsupported."
+            )
+        head_commit = trusted.get("head_commit")
+        tree_id = trusted.get("tree_id")
+        source_snapshot = trusted.get("source_snapshot")
+        changed_files = trusted.get("changed_files")
+        if (
+            head_commit != baseline.get("head_commit")
+            or not _is_object_id(tree_id)
+            or not isinstance(source_snapshot, dict)
+            or not isinstance(changed_files, list)
+            or len(source_snapshot) > 512
+            or len(changed_files) > 512
+        ):
+            raise RepositoryBaselineMismatch(
+                "Repository review candidate is malformed or belongs to another HEAD."
+            )
+        normalized_changed = self._normalize_paths(changed_files)
+        if (
+            self._normalize_paths(source_snapshot) != sorted(source_snapshot)
+            or any(
+                not _is_snapshot_identity(value)
+                for value in source_snapshot.values()
+            )
+            or sorted(source_snapshot) != normalized_changed
+        ):
+            raise RepositoryBaselineMismatch(
+                "Repository review candidate source paths are inconsistent."
+            )
+        current_head = self._head_commit_or_none()
+        if current_head != head_commit:
+            raise RepositoryBaselineMismatch(
+                "Repository HEAD changed after the review candidate was captured."
+            )
+        trusted["source_snapshot"] = {
+            str(path): str(value) for path, value in source_snapshot.items()
+        }
+        trusted["changed_files"] = normalized_changed
+        trusted["identity_sha256"] = identity
+        return trusted
+
+    def _write_review_tree(
+        self,
+        base_tree: str | None,
+        paths: Iterable[str],
+    ) -> str:
+        selected = self._normalize_paths(paths)
+        with tempfile.TemporaryDirectory(prefix="agentbus-git-index-") as temporary:
+            index_path = Path(temporary) / "index"
+            environment = {"GIT_INDEX_FILE": str(index_path.resolve())}
+            self._run(
+                (
+                    ["git", "read-tree", base_tree]
+                    if base_tree is not None
+                    else ["git", "read-tree", "--empty"]
+                ),
+                environment_updates=environment,
+            )
+            for relative in selected:
+                if self._path_resolver is None:
+                    self._path_resolver = ContainedPathResolver(self.workspace)
+                resolved = self._path_resolver.resolve(
+                    relative,
+                    reject_any_link=True,
+                )
+                if not resolved.exists:
+                    self._run(
+                        ["git", "update-index", "--force-remove", "--", relative],
+                        environment_updates=environment,
+                    )
+                    continue
+                if not resolved.lexical_path.is_file():
+                    raise RepositoryBaselineMismatch(
+                        "Review baselines support contained regular files only."
+                    )
+                blob_id = self._run(
+                    [
+                        "git",
+                        "hash-object",
+                        "-w",
+                        "--no-filters",
+                        "--",
+                        relative,
+                    ]
+                )
+                mode = self._review_index_mode(
+                    relative,
+                    resolved.lexical_path,
+                    environment,
+                )
+                self._run(
+                    [
+                        "git",
+                        "update-index",
+                        "--add",
+                        "--cacheinfo",
+                        mode,
+                        blob_id,
+                        relative,
+                    ],
+                    environment_updates=environment,
+                )
+            return self._run(
+                ["git", "write-tree"],
+                environment_updates=environment,
+            )
+
+    def _review_index_mode(
+        self,
+        relative: str,
+        path: Path,
+        environment: dict[str, str],
+    ) -> str:
+        existing = self._run(
+            ["git", "ls-files", "-s", "--", relative],
+            environment_updates=environment,
+        )
+        if existing:
+            mode = existing.split(maxsplit=1)[0]
+            if mode in {"100644", "100755"}:
+                return mode
+        return "100755" if path.stat().st_mode & 0o111 else "100644"
+
+    def _head_commit_or_none(self) -> str | None:
+        try:
+            return self.head_commit(short=False)
+        except GitRepositoryError:
+            return None
 
     def commit(self, message: str, paths: Iterable[str] | None = None) -> str:
         if not isinstance(message, str) or not message.strip():
@@ -590,11 +941,24 @@ class GitRepository:
         self._run(["git", "push", "-u", "origin", branch])
         return f"Pushed branch: {branch}"
 
-    def _run(self, command: list[str]) -> str:
+    def _run(
+        self,
+        command: list[str],
+        *,
+        environment_updates: dict[str, str] | None = None,
+    ) -> str:
         self.validate_workspace()
-        return self._run_unvalidated(command)
+        return self._run_unvalidated(
+            command,
+            environment_updates=environment_updates,
+        )
 
-    def _run_unvalidated(self, command: list[str]) -> str:
+    def _run_unvalidated(
+        self,
+        command: list[str],
+        *,
+        environment_updates: dict[str, str] | None = None,
+    ) -> str:
         if not command or command[0] != "git" or len(command) < 2:
             raise GitRepositoryError("Only explicit Git argument arrays are supported.")
         operation = command[1]
@@ -621,6 +985,18 @@ class GitRepository:
                 f"Controlled Git command failure for operation '{operation}'."
             )
         try:
+            environment = safe_git_environment()
+            if environment_updates:
+                if set(environment_updates) != {"GIT_INDEX_FILE"}:
+                    raise GitRepositoryError(
+                        "Only an isolated Git index override is supported."
+                    )
+                index_path = Path(environment_updates["GIT_INDEX_FILE"])
+                if not index_path.is_absolute():
+                    raise GitRepositoryError(
+                        "The isolated Git index path must be absolute."
+                    )
+                environment.update(environment_updates)
             result = subprocess.run(
                 safe_command,
                 cwd=self.workspace,
@@ -628,7 +1004,7 @@ class GitRepository:
                 text=True,
                 timeout=self.timeout_seconds,
                 shell=False,
-                env=safe_git_environment(),
+                env=environment,
             )
         except subprocess.TimeoutExpired as exc:
             raise GitRepositoryError(
@@ -902,6 +1278,30 @@ def _truncate_with_marker(value: str, maximum: int, marker: str) -> str:
 
 def _redact_git_output(value: str) -> str:
     return redact_text(value, max_chars=max(len(value) * 4, 1)) or ""
+
+
+def _json_sha256(value: object) -> str:
+    encoded = json.dumps(
+        value,
+        allow_nan=False,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _is_object_id(value: object) -> bool:
+    return isinstance(value, str) and bool(
+        re.fullmatch(r"(?:[a-f0-9]{40}|[a-f0-9]{64})", value)
+    )
+
+
+def _is_snapshot_identity(value: object) -> bool:
+    return isinstance(value, str) and (
+        value in {"deleted", "directory"}
+        or bool(re.fullmatch(r"[a-f0-9]{64}", value))
+    )
 
 
 def _sha256_file(path: Path) -> str:

@@ -6,6 +6,7 @@ from agentbus.agents.planner import PlannerOutput
 from agentbus.agents.reviewer import ReviewerOutput
 from agentbus.config import AgentBusConfig, SUPPORTED_DETERMINISTIC_PROFILES
 from agentbus.control.models import RunCreateRequest
+from agentbus.execution.task_graph import TaskGraph
 from agentbus.models.deterministic import DeterministicProvider
 from agentbus.models.errors import ModelServiceUnavailableError
 from agentbus.models.router import ModelRouter, model_request_context
@@ -167,6 +168,13 @@ def test_deterministic_tool_profiles_declare_structured_capabilities(profile):
 
     declared = set(plan["steps"][0]["required_capabilities"])
     requested = set(action["tool_call"]["expected_capabilities"])
+    graph = TaskGraph.from_planner_output(plan)
+    expected_kind = (
+        "analysis"
+        if declared <= {"filesystem.read", "git.read", "environment.read_safe"}
+        else "implementation"
+    )
     assert plan["steps"][0]["id"] == "step-1"
+    assert graph.tasks[0].execution_kind.value == expected_kind
     assert requested
     assert requested <= declared

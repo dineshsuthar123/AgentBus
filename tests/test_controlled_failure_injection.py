@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
+import uvicorn
 
 from agentbus._failure_injection import (
     DeterministicFailureInjector,
@@ -336,6 +337,7 @@ def test_local_mcp_failure_closes_only_the_injected_peer(tmp_path: Path) -> None
 
 def test_daemon_termination_unwinds_owned_lifecycle_without_public_switch(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -351,6 +353,14 @@ def test_daemon_termination_unwinds_owned_lifecycle_without_public_switch(
         FailureInjectionPoint.DAEMON_TERMINATION,
         scope="before-server-run",
     )
+    config_arguments: dict[str, object] = {}
+    real_uvicorn_config = uvicorn.Config
+
+    def capture_uvicorn_config(*args, **kwargs):
+        config_arguments.update(kwargs)
+        return real_uvicorn_config(*args, **kwargs)
+
+    monkeypatch.setattr(uvicorn, "Config", capture_uvicorn_config)
 
     with pytest.raises(RuntimeError, match="Controlled AgentBus daemon termination"):
         serve(
@@ -370,6 +380,7 @@ def test_daemon_termination_unwinds_owned_lifecycle_without_public_switch(
         in {"agentbus-daemon-heartbeat", "agentbus-daemon-idle-monitor"}
         for thread in threading.enumerate()
     )
+    assert config_arguments["timeout_graceful_shutdown"] == 10
     assert probe.all_rules_fired is True
 
 

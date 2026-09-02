@@ -10,6 +10,7 @@ from agentbus.execution.cancellation import CancellationRequested, CancellationT
 from agentbus.sandbox.platform import ExecutableCatalog
 from agentbus.tools import ManagedToolContextError, builtin_tool_registry
 from agentbus.tools.protocol import (
+    ToolCapabilityName,
     ToolInvocation,
     ToolInvocationContext,
     ToolResourceBudget,
@@ -95,6 +96,73 @@ def test_filesystem_adapters_create_read_and_patch_with_attribution(
     assert (tmp_path / "src" / "module.py").read_text(encoding="utf-8") == (
         "value = 2\n"
     )
+
+
+def test_write_only_invocation_cannot_create_if_target_disappears(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "PaymentService.java"
+    target.write_text("class PaymentService {}\n", encoding="utf-8")
+    registry = _registry(tmp_path)
+    invocation = _invocation(
+        registry,
+        tmp_path,
+        "filesystem.write",
+        {
+            "path": "PaymentService.java",
+            "content": "class PaymentService { void process() {} }\n",
+        },
+        invocation_id="inv-existing-write",
+    )
+    invocation = invocation.model_copy(
+        update={
+            "requested_capabilities": tuple(
+                capability
+                for capability in invocation.requested_capabilities
+                if capability.name == ToolCapabilityName.FILESYSTEM_WRITE
+            )
+        }
+    )
+    target.unlink()
+
+    with pytest.raises(FileNotFoundError):
+        registry.resolve("filesystem.write").execute(invocation)
+
+    assert target.exists() is False
+
+
+def test_create_rejects_existing_and_patch_rejects_missing_without_mutation(
+    tmp_path: Path,
+) -> None:
+    existing = tmp_path / "existing.txt"
+    existing.write_text("preserve\n", encoding="utf-8")
+    registry = _registry(tmp_path)
+
+    with pytest.raises(FileExistsError):
+        registry.resolve("filesystem.create").execute(
+            _invocation(
+                registry,
+                tmp_path,
+                "filesystem.create",
+                {"path": "existing.txt", "content": "replace\n"},
+            )
+        )
+    with pytest.raises(FileNotFoundError):
+        registry.resolve("filesystem.patch").execute(
+            _invocation(
+                registry,
+                tmp_path,
+                "filesystem.patch",
+                {
+                    "path": "missing.txt",
+                    "expected": "old",
+                    "replacement": "new",
+                },
+            )
+        )
+
+    assert existing.read_text(encoding="utf-8") == "preserve\n"
+    assert (tmp_path / "missing.txt").exists() is False
 
 
 def test_adapter_rejects_different_invocation_context(tmp_path: Path) -> None:

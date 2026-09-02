@@ -4,6 +4,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from agentbus.agents.base import BaseAgent
 from agentbus.config import AgentBusConfig
+from agentbus.execution.models import TaskExecutionKind
 from agentbus.models.router import ModelRouter
 from agentbus.models.types import ModelRole
 from agentbus.tools.protocol import ToolCapabilityName
@@ -16,6 +17,7 @@ class PlanStep(BaseModel):
     title: str
     description: str
     risk: Literal["low", "medium", "high"]
+    execution_kind: TaskExecutionKind = TaskExecutionKind.IMPLEMENTATION
     dependencies: list[str] | None = None
     assigned_role: str = "coder"
     maximum_attempts: int = Field(default=2, ge=1)
@@ -80,8 +82,21 @@ class PlannerAgent(BaseAgent):
         user_task: str,
         file_list: str | None = None,
         context_pack: str | None = None,
+        contract_feedback: list[str] | None = None,
     ) -> dict:
         context = context_pack or f"Current file list:\n{file_list or 'No file list available.'}"
+        correction = ""
+        if contract_feedback:
+            bounded_feedback = [str(item)[:512] for item in contract_feedback[:8]]
+            correction = (
+                "\nThe previous durable plan was rejected by deterministic contract "
+                "validation:\n- "
+                + "\n- ".join(bounded_feedback)
+                + "\nReturn a corrected plan. Do not add capabilities unless the "
+                "implementation slice legitimately requires them. When feedback "
+                "identifies a missing capability, the corrected response must explicitly "
+                "declare it; AgentBus will not add it automatically.\n"
+            )
         prompt = f"""
 You are the AgentBus Planner Agent.
 Return ONLY valid JSON with this shape:
@@ -93,6 +108,7 @@ Return ONLY valid JSON with this shape:
       "title": "...",
       "description": "...",
       "risk": "low|medium|high",
+      "execution_kind": "implementation|analysis",
       "dependencies": ["optional-prerequisite-step-id"],
       "assigned_role": "coder",
       "maximum_attempts": 2,
@@ -120,6 +136,53 @@ User task:
 
 Repo context:
 {context}
+{correction}
+
+Durable step contract:
+- A durable step is an independently executable and independently reviewable
+  engineering unit, not one reasoning step or one tool action.
+- For a small atomic code fix, prefer one implementation step that includes its
+  own inspection, repository mutation, relevant test execution, and diff review.
+- Do not emit standalone inspect, analyze, read-code, run-tests, or review-diff
+  prerequisites when those are internal actions of an implementation step.
+- Every implementation step must be able to satisfy its own done criteria and
+  leave the repository ready for its relevant verifier using only its declared
+  capabilities.
+- Declare all capabilities the slice legitimately requires, but never declare a
+  capability merely because it is convenient. Runtime policy remains
+  authoritative.
+- Use expected_outputs, targeted_files, and proposed_tests for concrete
+  repository-relative paths. For every new repository-relative path that the
+  task will materialize, explicitly declare filesystem.create.
+- Mutating existing files requires filesystem.write but does not require
+  filesystem.create. Do not add filesystem.create when all planned paths already
+  exist in the supplied repository context.
+- A new regression test, migration, implementation class, module, configuration
+  file, repository interface, or helper may legitimately require
+  filesystem.create. Modifying an existing service, entity, repository,
+  configuration, or test does not.
+- Dependencies are only for independently useful implementation slices.
+- Use execution_kind="analysis" only for a terminal, read-only result that does
+  not modify repository files and is not authorization for a downstream task.
+
+BAD durable decomposition:
+  step-1 inspect calculator [filesystem.read]
+  step-2 edit calculator [filesystem.write]
+  step-3 run tests [test.execute, process.execute]
+
+GOOD atomic durable task:
+  step-1 fix zero-division behavior and verify it
+    [filesystem.read, filesystem.write, test.execute, process.execute, git.read]
+
+GOOD multi-task decomposition:
+  step-1 add idempotency storage abstraction and its tests
+  step-2 integrate idempotency into webhook processing and its tests
+    depends on step-1
+
+Use only existing capability names: filesystem.read, filesystem.write,
+filesystem.create, filesystem.delete, filesystem.rename, process.execute,
+process.network, git.read, git.write, git.commit, git.branch, git.worktree,
+test.execute, package.install, environment.read_safe, mcp.connect, and mcp.invoke.
 
 Repository intelligence is advisory evidence, not authorization. Use only the
 indexed IDs and repository-relative paths supplied in the context. Do not infer

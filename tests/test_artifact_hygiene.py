@@ -248,6 +248,11 @@ def test_durable_final_review_ignores_untracked_pycache_but_reports_it(tmp_path)
                         "title": "Implement and test",
                         "description": "Create calculator and tests",
                         "risk": "low",
+                        "execution_kind": "implementation",
+                        "required_capabilities": [
+                            "filesystem.write",
+                            "filesystem.create",
+                        ],
                         "maximum_attempts": 1,
                         "expected_outputs": ["calculator.py", "test_calculator.py"],
                         "done_criteria": ["Tests pass"],

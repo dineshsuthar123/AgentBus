@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -10,8 +11,9 @@ from pathlib import Path
 from typing import Any
 
 
-DEMO_LANGUAGES = ("python", "java", "typescript", "go")
+DEMO_LANGUAGES = ("python", "java", "typescript", "go", "payment")
 _MARKER = ".agentbus-demo.json"
+_WINDOWS_BATCH_UNSAFE = re.compile(r'[\x00-\x1f"%!&|<>^()]')
 
 
 @dataclass(frozen=True)
@@ -33,6 +35,7 @@ class DemoResult:
     test_executed: bool = False
     test_exit_code: int | None = None
     expected_initial_failure: bool = True
+    git_initialized: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -43,6 +46,7 @@ class DemoResult:
             "test_executed": self.test_executed,
             "test_exit_code": self.test_exit_code,
             "expected_initial_failure": self.expected_initial_failure,
+            "git_initialized": self.git_initialized,
             "ready": self.test_exit_code not in {0} if self.test_executed else True,
             "network_used": False,
         }
@@ -78,12 +82,14 @@ def demo_definitions() -> dict[str, DemoDefinition]:
                     "  <groupId>dev.agentbus.demo</groupId><artifactId>orders</artifactId><version>1</version>\n"
                     "  <properties><maven.compiler.release>17</maven.compiler.release>"
                     "<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>"
-                    "<junit.version>5.11.4</junit.version></properties>\n"
+                    "<junit.version>5.10.2</junit.version></properties>\n"
                     "  <dependencies><dependency><groupId>org.junit.jupiter</groupId>"
                     "<artifactId>junit-jupiter</artifactId><version>${junit.version}</version>"
                     "<scope>test</scope></dependency></dependencies>\n"
                     "  <build><plugins><plugin><groupId>org.apache.maven.plugins</groupId>"
-                    "<artifactId>maven-surefire-plugin</artifactId><version>3.5.2</version>"
+                    "<artifactId>maven-compiler-plugin</artifactId><version>3.13.0</version>"
+                    "</plugin><plugin><groupId>org.apache.maven.plugins</groupId>"
+                    "<artifactId>maven-surefire-plugin</artifactId><version>3.2.5</version>"
                     "</plugin></plugins></build>\n</project>\n"
                 ),
                 "src/main/java/demo/OrderService.java": (
@@ -94,6 +100,108 @@ def demo_definitions() -> dict[str, DemoDefinition]:
                     "package demo;\nimport static org.junit.jupiter.api.Assertions.assertEquals;\n"
                     "import org.junit.jupiter.api.Test;\nclass OrderServiceTest {\n"
                     "  @Test void totalsOrder() { assertEquals(12, new OrderService().total(10, 2)); }\n}\n"
+                ),
+            },
+            test_command=("mvn", "-q", "-o", "test"),
+            required_executable="mvn",
+        ),
+        "payment": DemoDefinition(
+            language="payment",
+            title="Concurrent payment confirmation",
+            task=(
+                "Make payment confirmation idempotent under concurrent retries, "
+                "preserve the public API, and prove the behavior with repository tests."
+            ),
+            files={
+                ".gitignore": ".agentbus/\ntarget/\n",
+                ".mvn/maven.config": "-q\n-o\n",
+                "pom.xml": (
+                    "<project xmlns=\"http://maven.apache.org/POM/4.0.0\">\n"
+                    "  <modelVersion>4.0.0</modelVersion>\n"
+                    "  <groupId>dev.agentbus.demo</groupId>\n"
+                    "  <artifactId>payment-safety</artifactId>\n"
+                    "  <version>1.0.0</version>\n"
+                    "  <properties>\n"
+                    "    <maven.compiler.release>17</maven.compiler.release>\n"
+                    "    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>\n"
+                    "    <junit.version>5.10.2</junit.version>\n"
+                    "  </properties>\n"
+                    "  <dependencies>\n"
+                    "    <dependency>\n"
+                    "      <groupId>org.junit.jupiter</groupId>\n"
+                    "      <artifactId>junit-jupiter</artifactId>\n"
+                    "      <version>${junit.version}</version>\n"
+                    "      <scope>test</scope>\n"
+                    "    </dependency>\n"
+                    "  </dependencies>\n"
+                    "  <build><plugins>\n"
+                    "  <plugin>\n"
+                    "    <groupId>org.apache.maven.plugins</groupId>\n"
+                    "    <artifactId>maven-compiler-plugin</artifactId>\n"
+                    "    <version>3.13.0</version>\n"
+                    "  </plugin>\n"
+                    "  <plugin>\n"
+                    "    <groupId>org.apache.maven.plugins</groupId>\n"
+                    "    <artifactId>maven-surefire-plugin</artifactId>\n"
+                    "    <version>3.2.5</version>\n"
+                    "  </plugin>\n"
+                    "  </plugins></build>\n"
+                    "</project>\n"
+                ),
+                "src/main/java/com/agentbus/demo/PaymentService.java": (
+                    "package com.agentbus.demo;\n\n"
+                    "import java.util.Objects;\n"
+                    "import java.util.Set;\n"
+                    "import java.util.concurrent.ConcurrentHashMap;\n\n"
+                    "public final class PaymentService {\n"
+                    "    private final Set<String> confirmedPaymentIds = "
+                    "ConcurrentHashMap.newKeySet();\n\n"
+                    "    public int confirm(String paymentId) {\n"
+                    "        Objects.requireNonNull(paymentId, \"paymentId\");\n"
+                    "        confirmedPaymentIds.add(paymentId);\n"
+                    "        return 1;\n"
+                    "    }\n"
+                    "}\n"
+                ),
+                "src/test/java/com/agentbus/demo/PaymentServiceTest.java": (
+                    "package com.agentbus.demo;\n\n"
+                    "import static org.junit.jupiter.api.Assertions.assertEquals;\n\n"
+                    "import java.util.ArrayList;\n"
+                    "import java.util.concurrent.CountDownLatch;\n"
+                    "import java.util.concurrent.Executors;\n"
+                    "import java.util.concurrent.Future;\n"
+                    "import org.junit.jupiter.api.Test;\n\n"
+                    "class PaymentServiceTest {\n"
+                    "    @Test\n"
+                    "    void confirmsOnlyOnceAcrossSequentialRetries() {\n"
+                    "        var service = new PaymentService();\n"
+                    "        assertEquals(1, service.confirm(\"pay_demo_001\"));\n"
+                    "        assertEquals(0, service.confirm(\"pay_demo_001\"));\n"
+                    "    }\n\n"
+                    "    @Test\n"
+                    "    void confirmsOnlyOnceAcrossConcurrentRetries() throws Exception {\n"
+                    "        var service = new PaymentService();\n"
+                    "        var start = new CountDownLatch(1);\n"
+                    "        var pool = Executors.newFixedThreadPool(8);\n"
+                    "        try {\n"
+                    "            var attempts = new ArrayList<Future<Integer>>();\n"
+                    "            for (int index = 0; index < 32; index++) {\n"
+                    "                attempts.add(pool.submit(() -> {\n"
+                    "                    start.await();\n"
+                    "                    return service.confirm(\"pay_demo_002\");\n"
+                    "                }));\n"
+                    "            }\n"
+                    "            start.countDown();\n"
+                    "            int accepted = 0;\n"
+                    "            for (var attempt : attempts) {\n"
+                    "                accepted += attempt.get();\n"
+                    "            }\n"
+                    "            assertEquals(1, accepted);\n"
+                    "        } finally {\n"
+                    "            pool.shutdownNow();\n"
+                    "        }\n"
+                    "    }\n"
+                    "}\n"
                 ),
             },
             test_command=("mvn", "-q", "-o", "test"),
@@ -146,10 +254,16 @@ def create_demo(
     destination: str | Path,
     *,
     force: bool = False,
+    initialize_git: bool = False,
 ) -> DemoResult:
     definition = _definition(language)
     root = Path(destination).expanduser().resolve()
     marker = root / _MARKER
+    if root.exists() and not root.is_dir():
+        raise ValueError("Demo destination must be a directory")
+    fresh_destination = not root.exists() or not any(root.iterdir())
+    if initialize_git and not fresh_destination:
+        raise ValueError("Git initialization requires a new empty demo destination")
     if root.exists() and any(root.iterdir()):
         if not force or not marker.is_file():
             raise ValueError(
@@ -181,11 +295,14 @@ def create_demo(
             raise ValueError("Demo template attempted to escape its destination")
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8", newline="\n")
+    if initialize_git:
+        _initialize_git_repository(root, tuple(sorted(files)))
     return DemoResult(
         language=definition.language,
         workspace=root,
         created_files=tuple(sorted(files)),
         test_command=definition.test_command,
+        git_initialized=initialize_git,
     )
 
 
@@ -214,19 +331,21 @@ def run_demo(
                 workspace=root,
                 created_files=tuple(marker.get("managed_files", ())),
                 test_command=definition.test_command,
+                git_initialized=(root / ".git").is_dir(),
             )
-    executable = definition.required_executable
-    available = Path(executable).is_file() if Path(executable).is_absolute() else shutil.which(executable)
-    if not available:
+    launch = _demo_process_command(definition)
+    if launch is None:
         return created
+    command, executable_override = launch
     result = subprocess.run(
-        list(definition.test_command),
+        command,
         cwd=created.workspace,
         capture_output=True,
         text=True,
         timeout=timeout_seconds,
         shell=False,
         check=False,
+        executable=executable_override,
     )
     return DemoResult(
         language=created.language,
@@ -235,6 +354,7 @@ def run_demo(
         test_command=created.test_command,
         test_executed=True,
         test_exit_code=result.returncode,
+        git_initialized=created.git_initialized,
     )
 
 
@@ -245,3 +365,66 @@ def _definition(language: str) -> DemoDefinition:
         raise ValueError(
             "Demo language must be one of: " + ", ".join(DEMO_LANGUAGES)
         ) from exc
+
+
+def _initialize_git_repository(root: Path, managed_files: tuple[str, ...]) -> None:
+    git = shutil.which("git")
+    if git is None:
+        raise ValueError("Git is required for --git demo initialization")
+    commands = [
+        [git, "init"],
+        [git, "config", "--local", "user.name", "AgentBus Demo"],
+        [git, "config", "--local", "user.email", "agentbus-demo@example.invalid"],
+        [git, "add", "--", *managed_files],
+        [
+            git,
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--no-verify",
+            "-m",
+            "chore: seed AgentBus demo",
+        ],
+    ]
+    for command in commands:
+        result = subprocess.run(
+            command,
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            shell=False,
+            check=False,
+        )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout).strip()
+            raise ValueError(f"Git demo initialization failed: {detail[:500]}")
+
+
+def _demo_process_command(
+    definition: DemoDefinition,
+) -> tuple[list[str] | str, str | None] | None:
+    executable = definition.required_executable
+    if Path(executable).is_absolute():
+        resolved = str(Path(executable)) if Path(executable).is_file() else None
+    else:
+        resolved = shutil.which(executable)
+    if resolved is None:
+        return None
+    arguments = list(definition.test_command[1:])
+    if sys.platform == "win32" and Path(resolved).suffix.lower() in {
+        ".bat",
+        ".cmd",
+    }:
+        command_interpreter = shutil.which("cmd.exe")
+        if command_interpreter is None:
+            return None
+        tokens = (resolved, *arguments)
+        if any(_WINDOWS_BATCH_UNSAFE.search(token) for token in tokens):
+            raise ValueError("Demo command contains unsafe Windows batch syntax")
+        batch_command = " ".join(f'"{token}"' for token in tokens)
+        command_line = (
+            f'"{command_interpreter}" /d /v:off /s /c "{batch_command}"'
+        )
+        return command_line, command_interpreter
+    return [resolved, *arguments], None

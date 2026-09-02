@@ -473,11 +473,20 @@ def _task(
         "title": title,
         "description": title,
         "risk": risk,
+        "execution_kind": "implementation",
         "dependencies": dependencies or [],
         "assigned_role": "coder",
         "maximum_attempts": 2,
         "expected_outputs": outputs,
         "done_criteria": [f"Complete {title.lower()}"],
+        "required_capabilities": [
+            "filesystem.read",
+            "filesystem.write",
+            "filesystem.create",
+            "test.execute",
+            "process.execute",
+            "git.read",
+        ],
     }
 
 

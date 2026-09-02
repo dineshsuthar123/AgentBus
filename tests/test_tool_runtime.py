@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -170,6 +171,74 @@ def test_runtime_uses_stable_authorization_revision_before_cancellation(
     assert invocation.cancellation_revision == 0
 
 
+def test_default_runtime_descriptor_contains_detected_maven_executable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "pom.xml").write_text("<project />\n", encoding="utf-8")
+    command_dir = tmp_path / "bin"
+    command_dir.mkdir()
+    _write_fake_executable(command_dir, "mvn")
+    monkeypatch.setenv(
+        "PATH",
+        str(command_dir) + os.pathsep + os.environ.get("PATH", ""),
+    )
+    store = _store(workspace)
+
+    runtime = build_managed_tool_runtime(
+        workspace=workspace,
+        state_store=store,
+    )
+    descriptor = runtime.registry.descriptor("test.execute")
+
+    assert all(
+        "mvn" in capability.scope.executables
+        for capability in descriptor.capabilities
+    )
+    call = runtime.prepare_model_call(
+        tool_name="test.execute",
+        arguments={
+            "executable": "mvn",
+            "arguments": ["test"],
+            "working_directory": ".",
+        },
+        expected_capabilities=tuple(
+            capability.name for capability in descriptor.capabilities
+        ),
+        run_id="run-1",
+        task_id="task-1",
+        caller_role="verifier",
+        workspace_trusted=True,
+        provider_consented=True,
+    )
+
+    assert {capability.name.value for capability in call.expected_capabilities} == {
+        "process.execute",
+        "test.execute",
+    }
+    assert all(
+        capability.scope.executables == ("mvn",)
+        for capability in call.expected_capabilities
+    )
+    pending = runtime.invoke(
+        call,
+        run_id="run-1",
+        task_id="task-1",
+        caller_role="verifier",
+        workspace_trusted=True,
+        provider_consented=True,
+        invocation_id="inv-maven-verification",
+    )
+    assert pending.awaiting_approval is True
+    assert (
+        pending.approval_request.policy_rule
+        == "approval.nonstandard_executable"
+    )
+    runtime.close()
+
+
 def test_runtime_rejects_invocation_context_outside_managed_roots(
     tmp_path: Path,
 ) -> None:
@@ -322,3 +391,14 @@ def _call(runtime, root: Path, tool_name: str, arguments: dict):
     )
     required = derive_required_capabilities(provisional, descriptor)
     return broad.model_copy(update={"expected_capabilities": required})
+
+
+def _write_fake_executable(directory: Path, name: str) -> Path:
+    if os.name == "nt":
+        path = directory / f"{name}.cmd"
+        path.write_text("@echo off\r\nexit /b 0\r\n", encoding="utf-8")
+    else:
+        path = directory / name
+        path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        path.chmod(0o755)
+    return path

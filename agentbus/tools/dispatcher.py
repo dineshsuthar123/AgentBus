@@ -325,6 +325,16 @@ class ToolDispatcher:
             try:
                 from agentbus.replay.tools import capture_tool_envelope
 
+                captured_approval = approval
+                if (
+                    captured_approval is None
+                    and response.record.approval_id is not None
+                ):
+                    approval_record = self.state_store.get_tool_approval(
+                        response.invocation.run_id,
+                        response.record.approval_id,
+                    )
+                    captured_approval = _grant_from_record(approval_record)
                 outputs.append(
                     capture_tool_envelope(
                         self.runtime_trace.object_store,
@@ -334,7 +344,7 @@ class ToolDispatcher:
                         producing_span_id=span.span_id,
                         reference_id=f"tool-result-{span.span_id}",
                         result=response.result,
-                        approval=approval,
+                        approval=captured_approval,
                     )
                 )
             except Exception as exc:

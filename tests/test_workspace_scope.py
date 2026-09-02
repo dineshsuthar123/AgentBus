@@ -299,6 +299,8 @@ def test_explicit_absolute_workspace_propagates_to_runtime_components(
                         "title": "No-op",
                         "description": "Finish safely",
                         "risk": "low",
+                        "execution_kind": "analysis",
+                        "required_capabilities": [],
                     }
                 ],
                 "test_strategy": "Fake",

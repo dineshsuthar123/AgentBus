@@ -155,7 +155,8 @@ def test_dispatcher_records_approval_wait_and_approved_resume(
             disposition=ToolApprovalDisposition.APPROVED,
             reason="Delete obsolete source",
         )
-        completed = dispatcher.dispatch(invocation, approval=grant)
+        store.record_persisted_tool_approval_grant(grant)
+        completed = dispatcher.dispatch(invocation)
     runtime_trace.finish(status=TraceStatus.SUCCEEDED)
     trace = store.get_run_trace("run-1")
     tool_spans = [

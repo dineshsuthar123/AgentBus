@@ -61,6 +61,39 @@ agentbus runs
 
 [Quickstart guide](docs/getting-started/quickstart.md) | [VS Code onboarding](docs/getting-started/vscode.md)
 
+## AgentBus Studio
+
+**A visual control plane for safe autonomous software engineering.**
+
+**Plan -> Execute -> Approve -> Verify -> Review -> Replay**
+
+![AgentBus Studio live durable run](docs/submission/screenshots/05-active-run.png)
+
+AgentBus Studio is the local visual control plane for durable runs. It exposes
+the real task graph, managed-tool timeline, exact approval gates, attempts,
+review, scoped Git diff, trace provenance, integrity verification, and offline
+replay. The browser never calls a model provider and keeps the one-time daemon
+token in memory only.
+
+```powershell
+# Create the isolated payment fixture once.
+.venv\Scripts\agentbus.exe demo create payment --output agentbus-payment-demo --git --json
+
+# Terminal 1: start the authenticated loopback daemon.
+.venv\Scripts\agentbus.exe serve --host 127.0.0.1 --port 8765 --json-ready
+
+# Terminal 2: start Studio and open http://127.0.0.1:5173.
+cd studio
+npm ci
+npm run dev
+```
+
+Paste the `bearer_token` from the ready handshake into Studio, open **Payment
+demo**, and use the absolute demo repository path. The `payment-safety`
+deterministic profile makes a real Java patch and pauses the real `mvn -q -o
+test` invocation for exact approval. [Submission overview](docs/submission/product.md)
+| [2:36 demo script](docs/submission/demo-script.md) | [Judging summary](docs/submission/judging-summary.md)
+
 ## Why AgentBus
 
 - Durable SQLite-backed task graphs can resume without rerunning terminal

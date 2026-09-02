@@ -24,10 +24,12 @@ SUPPORTED_PROVIDERS = ("ollama", "azure", "deterministic")
 SUPPORTED_AZURE_API_MODES = ("responses", "chat_completions")
 SUPPORTED_DETERMINISTIC_PROFILES = (
     "python-calculator",
+    "payment-safety",
     "cancellation-two-task",
     "tool-safe-read",
     "tool-atomic-write",
     "tool-source-patch",
+    "tool-source-patch-review-retry",
     "tool-pytest",
     "tool-git-diff",
     "tool-git-commit",
@@ -639,6 +641,46 @@ class AgentBusConfig:
         return Path(self.workspace_dir).expanduser().resolve()
 
     @property
+    def state_directory_path(self) -> Path:
+        directory = Path(self.state_dir).expanduser()
+        if directory.is_absolute():
+            return directory.resolve()
+        workspace = self.workspace_path
+        resolved = (workspace / directory).resolve()
+        if not resolved.is_relative_to(workspace):
+            raise ValueError(
+                "Relative state_dir must remain within the configured workspace; "
+                "use an absolute path for external AgentBus state."
+            )
+        return resolved
+
+    @property
+    def runs_path(self) -> Path:
+        directory = Path(self.runs_dir).expanduser()
+        if directory.is_absolute():
+            resolved = directory.resolve()
+        else:
+            state_root = self.state_directory_path
+            resolved = (state_root / directory).resolve()
+            if not resolved.is_relative_to(state_root):
+                raise ValueError(
+                    "Relative runs_dir must remain within the AgentBus state "
+                    "directory; use an absolute path for external run logs."
+                )
+
+        workspace = self.workspace_path
+        managed_workspace_root = (workspace / ".agentbus").resolve()
+        if resolved.is_relative_to(workspace) and not resolved.is_relative_to(
+            managed_workspace_root
+        ):
+            raise ValueError(
+                "AgentBus run logs inside the target repository must stay under "
+                f"{managed_workspace_root}; use an absolute external runs_dir "
+                "otherwise."
+            )
+        return resolved
+
+    @property
     def worktree_root_path(self) -> Path:
         if self.worktree_root:
             return Path(self.worktree_root).expanduser().resolve()
@@ -649,8 +691,15 @@ class AgentBusConfig:
     def state_database_path(self) -> Path:
         database = Path(self.state_db).expanduser()
         if database.is_absolute():
-            return database
-        return Path(self.state_dir).expanduser() / database
+            return database.resolve()
+        state_root = self.state_directory_path
+        resolved = (state_root / database).resolve()
+        if not resolved.is_relative_to(state_root):
+            raise ValueError(
+                "Relative state_db must remain within the AgentBus state directory; "
+                "use an absolute path for an external database."
+            )
+        return resolved
 
     @property
     def trace_store_path(self) -> Path:

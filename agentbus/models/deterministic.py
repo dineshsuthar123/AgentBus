@@ -38,9 +38,14 @@ _DELETE_PROFILE_SHA256 = hashlib.sha256(
 ).hexdigest()
 _RUNTIME_STEP_PATTERN = re.compile(r"--- Step (\d+) ---")
 _PROFILE_REQUIREMENTS: dict[str, list[str]] = {
+    "payment-safety": [
+        "filesystem.write",
+        "git.read",
+    ],
     "tool-safe-read": ["filesystem.read"],
     "tool-atomic-write": ["filesystem.write", "filesystem.create"],
     "tool-source-patch": ["filesystem.write"],
+    "tool-source-patch-review-retry": ["filesystem.write"],
     "tool-pytest": ["test.execute", "process.execute"],
     "tool-git-diff": ["git.read"],
     "tool-git-commit": [
@@ -66,9 +71,16 @@ _PROFILE_REQUIREMENTS: dict[str, list[str]] = {
         "process.execute",
     ],
 }
+_ANALYSIS_READ_ONLY_CAPABILITIES = {
+    "filesystem.read",
+    "git.read",
+    "environment.read_safe",
+}
 _PROFILE_OUTPUTS: dict[str, list[str]] = {
+    "payment-safety": ["src/main/java/com/agentbus/demo/PaymentService.java"],
     "tool-atomic-write": ["profile_result.txt"],
     "tool-source-patch": ["module.py"],
+    "tool-source-patch-review-retry": ["module.py"],
     "tool-git-commit": ["profile_commit.py"],
     "tool-control-acceptance": ["acceptance_tool.py"],
 }
@@ -309,6 +321,48 @@ class DeterministicProvider:
         if self.role == ModelRole.PLANNER:
             return self._plan()
         if self.role == ModelRole.REVIEWER:
+            if self.profile == "tool-source-patch-review-retry":
+                task_review = bool(metadata.get("task_id"))
+                if task_review and scope_call == 1:
+                    return {
+                        "approved": False,
+                        "issues": [
+                            {
+                                "severity": "medium",
+                                "message": "Exercise the durable review retry path.",
+                            }
+                        ],
+                        "summary": "Deterministic first task review rejection.",
+                        "required_fixes": ["Re-evaluate the retained candidate."],
+                    }
+                cumulative_diff_present = (
+                    "diff --git" in prompt
+                    and "-VALUE = 1" in prompt
+                    and "+VALUE = 2" in prompt
+                )
+                return {
+                    "approved": cumulative_diff_present or not task_review,
+                    "issues": (
+                        []
+                        if cumulative_diff_present or not task_review
+                        else [
+                            {
+                                "severity": "high",
+                                "message": "The cumulative task diff is missing.",
+                            }
+                        ]
+                    ),
+                    "summary": (
+                        "Deterministic cumulative retry review approved."
+                        if cumulative_diff_present or not task_review
+                        else "Deterministic cumulative retry review saw no task diff."
+                    ),
+                    "required_fixes": (
+                        []
+                        if cumulative_diff_present or not task_review
+                        else ["Review retained changes from the original task baseline."]
+                    ),
+                }
             return {
                 "approved": True,
                 "issues": [],
@@ -324,6 +378,39 @@ class DeterministicProvider:
         )
 
     def _plan(self) -> dict[str, Any]:
+        if self.profile == "payment-safety":
+            return {
+                "goal": "Make payment confirmation idempotent under concurrent retries.",
+                "steps": [
+                    {
+                        "id": "step-1",
+                        "title": "Make confirmation retry-safe",
+                        "description": (
+                            "Replace the non-atomic payment confirmation result with "
+                            "one atomic set insertion and prove sequential and concurrent "
+                            "retry behavior with the repository Maven tests."
+                        ),
+                        "risk": "medium",
+                        "execution_kind": "implementation",
+                        "dependencies": [],
+                        "assigned_role": "coder",
+                        "maximum_attempts": 2,
+                        "expected_outputs": _PROFILE_OUTPUTS[self.profile],
+                        "done_criteria": [
+                            "Exactly one concurrent confirmation returns success.",
+                            "Repeated confirmation preserves the public API and returns zero.",
+                            "The repository Maven tests pass.",
+                        ],
+                        "required_capabilities": _PROFILE_REQUIREMENTS[self.profile],
+                    }
+                ],
+                "test_strategy": (
+                    "Run mvn -q -o test through the approval-gated managed test tool."
+                ),
+                "done_criteria": [
+                    "The scoped Java patch is verified and approved by final review."
+                ],
+            }
         if self.profile in _PROFILE_REQUIREMENTS:
             outputs = _PROFILE_OUTPUTS.get(self.profile, [])
             return {
@@ -337,6 +424,13 @@ class DeterministicProvider:
                             "the deterministic provider."
                         ),
                         "risk": "low",
+                        "execution_kind": (
+                            "analysis"
+                            if set(_PROFILE_REQUIREMENTS[self.profile]).issubset(
+                                _ANALYSIS_READ_ONLY_CAPABILITIES
+                            )
+                            else "implementation"
+                        ),
                         "dependencies": [],
                         "assigned_role": "coder",
                         "maximum_attempts": 2,
@@ -360,6 +454,7 @@ class DeterministicProvider:
                     "Create a small calculator module and its deterministic test."
                 ),
                 "risk": "low",
+                "execution_kind": "implementation",
                 "dependencies": [],
                 "assigned_role": "coder",
                 "maximum_attempts": 2,
@@ -389,6 +484,7 @@ class DeterministicProvider:
                         "Create a second artifact only if scheduling remains active."
                     ),
                     "risk": "low",
+                    "execution_kind": "implementation",
                     "dependencies": [],
                     "assigned_role": "coder",
                     "maximum_attempts": 1,
@@ -539,6 +635,30 @@ class DeterministicProvider:
             "summary": f"Completed deterministic profile {self.profile}.",
         }
         calls: dict[str, list[dict[str, Any]]] = {
+            "payment-safety": [
+                _tool_action(
+                    "filesystem.patch",
+                    {
+                        "path": "src/main/java/com/agentbus/demo/PaymentService.java",
+                        "expected": (
+                            "confirmedPaymentIds.add(paymentId);\n"
+                            "        return 1;"
+                        ),
+                        "replacement": (
+                            "return confirmedPaymentIds.add(paymentId) ? 1 : 0;"
+                        ),
+                        "expected_occurrences": 1,
+                    },
+                    ["filesystem.write"],
+                    f"{task_id}:payment-idempotency-patch",
+                ),
+                _tool_action(
+                    "git.diff",
+                    {},
+                    ["git.read"],
+                    f"{task_id}:payment-git-diff",
+                ),
+            ],
             "tool-safe-read": [
                 _tool_action(
                     "filesystem.read",
@@ -569,6 +689,19 @@ class DeterministicProvider:
                     },
                     ["filesystem.write"],
                     f"{task_id}:source-patch",
+                )
+            ],
+            "tool-source-patch-review-retry": [
+                _tool_action(
+                    "filesystem.patch",
+                    {
+                        "path": "module.py",
+                        "expected": "VALUE = 1",
+                        "replacement": "VALUE = 2",
+                        "expected_occurrences": 1,
+                    },
+                    ["filesystem.write"],
+                    f"{task_id}:source-patch-review-retry",
                 )
             ],
             "tool-pytest": [

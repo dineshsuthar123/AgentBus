@@ -834,7 +834,11 @@ class OfflineTaskExecutor:
             return _task_failure(FailureCategory.MODEL_OUTPUT_ERROR, exc, retryable=True)
         except ModelProviderError as exc:
             return _task_failure(
-                FailureCategory.MODEL_TRANSPORT_ERROR,
+                (
+                    FailureCategory.MODEL_TRANSPORT_ERROR
+                    if exc.retryable
+                    else FailureCategory.MODEL_PROVIDER_ERROR
+                ),
                 exc,
                 retryable=exc.retryable,
             )
@@ -1122,11 +1126,20 @@ def _case_tasks(case: EvaluationCase) -> list[dict[str, Any]]:
             "title": case.title,
             "description": case.task_prompt,
             "risk": case.risk_level.value,
+            "execution_kind": "implementation",
             "dependencies": [],
             "assigned_role": "coder",
             "maximum_attempts": case.maximum_attempts,
             "expected_outputs": case.expected_files,
             "done_criteria": ["Evaluation assertions pass."],
+            "required_capabilities": [
+                "filesystem.read",
+                "filesystem.write",
+                "filesystem.create",
+                "test.execute",
+                "process.execute",
+                "git.read",
+            ],
         }
     ]
 

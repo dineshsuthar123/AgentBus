@@ -1,5 +1,5 @@
 import json
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -60,6 +60,8 @@ class ReviewerAgent(BaseAgent):
         ignored_files: list[str] | None = None,
         tracked_generated_artifacts: list[str] | None = None,
         repository_intelligence: str | None = None,
+        analysis_artifacts: list[dict[str, Any]] | None = None,
+        review_evidence: dict[str, Any] | None = None,
     ) -> dict:
         prompt = f"""
 You are the AgentBus Reviewer Agent.
@@ -96,6 +98,12 @@ Repository change classification:
 Repository intelligence review evidence:
 {_intelligence_note(repository_intelligence)}
 
+Persisted analysis artifacts:
+{_analysis_artifact_note(analysis_artifacts)}
+
+Bounded review source evidence:
+{_review_evidence_note(review_evidence)}
+
 Test output:
 {test_output or "No test output available."}
 
@@ -121,6 +129,8 @@ do not reject solely because a candidate is listed without corroborating evidenc
         ignored_files: list[str] | None = None,
         tracked_generated_artifacts: list[str] | None = None,
         repository_intelligence: str | None = None,
+        review_evidence: dict[str, Any] | None = None,
+        changed_files: list[str] | None = None,
     ) -> dict:
         prompt = f"""
 You are the AgentBus task-level Reviewer Agent.
@@ -144,6 +154,9 @@ Return ONLY valid JSON with this shape:
 
 Review only the current task against its own expected outputs and done criteria.
 Do not reject it because downstream, dependent, or later tasks are incomplete.
+The task diff is cumulative from the immutable task baseline. Attempt-local
+changes are diagnostics only; a retry may validly retain an earlier attempt's
+edits while making no additional source mutation itself.
 
 Original task context:
 {original_task}
@@ -157,6 +170,9 @@ Expected outputs:
 Current task artifacts:
 {json.dumps(artifacts, indent=2)}
 
+Cumulative task changed files:
+{json.dumps(list(changed_files or [])[:512], indent=2)}
+
 Repository change classification:
 {_artifact_note(artifacts, generated_artifacts, ignored_files, tracked_generated_artifacts)}
 
@@ -165,6 +181,9 @@ Current task diff and observations:
 
 Current task repository intelligence review evidence:
 {_intelligence_note(repository_intelligence)}
+
+Bounded cumulative baseline, candidate identity, and retry evidence:
+{_review_evidence_note(review_evidence)}
 
 Coder summary:
 {coder_summary}
@@ -175,6 +194,9 @@ Current task verifier result:
 Treat intelligence candidates as heuristics, not proof. Corroborate unplanned
 effects, missing tests, and boundary violations with this task's diff and
 verifier output, and report stale-index uncertainty explicitly.
+For execution_kind="analysis", evaluate the bounded analysis artifact against
+this task's done criteria. A code verifier is not applicable, and any repository
+mutation is a contract violation.
 """
         output = self.generate_json(prompt, schema=ReviewerOutput)
         return ReviewerOutput(**output).model_dump()
@@ -216,3 +238,31 @@ def _intelligence_note(value: str | None) -> str:
     if not value:
         return "No repository intelligence evidence is available."
     return value[:12_000]
+
+
+def _analysis_artifact_note(values: list[dict[str, Any]] | None) -> str:
+    if not values:
+        return "No analysis artifacts are available."
+    bounded: list[dict[str, Any]] = []
+    remaining_chars = 16_000
+    for value in values[:16]:
+        if not isinstance(value, dict) or remaining_chars <= 0:
+            continue
+        summary = str(value.get("summary") or "")[:remaining_chars]
+        remaining_chars -= len(summary)
+        bounded.append(
+            {
+                "task_id": str(value.get("task_id") or "")[:128],
+                "identifier": str(value.get("identifier") or "")[:128],
+                "summary": summary,
+                "truncated": bool(value.get("truncated")),
+            }
+        )
+    return json.dumps(bounded, indent=2)
+
+
+def _review_evidence_note(value: dict[str, Any] | None) -> str:
+    if not isinstance(value, dict):
+        return "No repository baseline identity evidence is available."
+    encoded = json.dumps(value, indent=2, sort_keys=True)
+    return encoded[:20_000]

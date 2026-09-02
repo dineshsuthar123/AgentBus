@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from pydantic import ValidationError
+
 from agentbus.config import AgentBusConfig
 from agentbus.control.intelligence import ControlIntelligenceService
 from agentbus.control.errors import (
@@ -26,6 +28,8 @@ from agentbus.control.models import (
     ApprovalDecisionResponse,
     ApprovalListResponse,
     ApprovalSummary,
+    AttemptListResponse,
+    AttemptSummary,
     CancellationLifecycle,
     ChangeListResponse,
     ChangeSummary,
@@ -46,6 +50,8 @@ from agentbus.control.models import (
     ProviderSummary,
     RegressionFixtureCaptureRequest,
     RegressionFixtureCaptureResponse,
+    RetryDiagnosticsSummary,
+    RetryEvidenceSummary,
     ReplayListResponse,
     ReplaySessionResponse,
     ReplaySpanResultResponse,
@@ -66,6 +72,7 @@ from agentbus.control.models import (
     TraceFailureSummary,
     TraceLinkSummary,
     TraceResponse,
+    TraceVerificationResponse,
     TraceSpanDetailResponse,
     TraceSpanListResponse,
     TraceSpanSummary,
@@ -96,6 +103,7 @@ from agentbus.execution.cancellation import (
 from agentbus.execution.engine import DurableExecutionEngine, DurableExecutionError
 from agentbus.execution.models import (
     ApprovalOutcome,
+    AttemptStatus,
     RunRecord,
     TaskRecord,
     TaskStatus,
@@ -106,6 +114,7 @@ from agentbus.execution.state_store import (
     ReplaySessionNotFoundError,
     RunNotFoundError,
     StateStore,
+    StateStoreError,
     TaskNotFoundError,
     TraceRecordNotFoundError,
     ToolApprovalNotFoundError,
@@ -133,6 +142,7 @@ from agentbus.replay.errors import (
 )
 from agentbus.replay.service import TraceReplayService
 from agentbus.replay.session import ReplaySession, ReplaySessionStatus
+from agentbus.runtime.schemas import RetryEvidence
 from agentbus.sandbox.platform import ExecutableCatalog
 from agentbus.security.redaction import (
     redact_text,
@@ -695,6 +705,122 @@ class ControlQueryService:
         ]
         return TaskListResponse(run_id=run_id, tasks=tasks)
 
+    def attempts(self, run_id: str, *, limit: int = 100) -> AttemptListResponse:
+        self.get_run(run_id)
+        attempts = self.store.list_attempts(run_id)
+        page = attempts[:limit]
+        return AttemptListResponse(
+            run_id=run_id,
+            attempts=[self._attempt_summary(attempt) for attempt in page],
+            total=len(attempts),
+            truncated=len(attempts) > limit,
+        )
+
+    @classmethod
+    def _attempt_summary(cls, attempt: Any) -> AttemptSummary:
+        metadata = attempt.metadata if isinstance(attempt.metadata, dict) else {}
+        return AttemptSummary(
+            attempt_id=attempt.attempt_id,
+            task_id=attempt.task_id,
+            attempt_number=attempt.attempt_number,
+            status=attempt.status.value,
+            started_at=attempt.started_at,
+            completed_at=attempt.completed_at,
+            failure_category=(
+                attempt.error_category.value if attempt.error_category else None
+            ),
+            failure_message=redact_text(
+                attempt.error_message,
+                max_chars=4_000,
+            ),
+            observation_summary=redact_text(
+                attempt.observation_summary,
+                max_chars=4_000,
+            ),
+            verifier_status=cls._attempt_outcome(
+                _nested(metadata, "verifier", "passed"),
+                positive="passed",
+                negative="failed",
+            ),
+            reviewer_status=cls._attempt_outcome(
+                _nested(metadata, "task_review", "approved"),
+                positive="approved",
+                negative="rejected",
+            ),
+            retry_evidence=cls._retry_evidence_summary(metadata),
+        )
+
+    @staticmethod
+    def _attempt_outcome(
+        value: Any,
+        *,
+        positive: str,
+        negative: str,
+    ) -> str | None:
+        if isinstance(value, bool):
+            return positive if value else negative
+        if isinstance(value, str):
+            if value.lower() == "true":
+                return positive
+            if value.lower() == "false":
+                return negative
+            return redact_text(value, max_chars=64)
+        return None
+
+    @staticmethod
+    def _retry_evidence_summary(
+        metadata: dict[str, Any],
+    ) -> RetryEvidenceSummary | None:
+        raw_evidence = metadata.get("retry_evidence")
+        source_disposition = None
+        mutations_retained = None
+        if not isinstance(raw_evidence, dict):
+            feedback = metadata.get("retry_feedback")
+            if isinstance(feedback, dict):
+                raw_evidence = feedback.get("source_evidence")
+                raw_disposition = feedback.get("source_disposition")
+                if isinstance(raw_disposition, str):
+                    source_disposition = redact_text(
+                        raw_disposition,
+                        max_chars=64,
+                    )
+                if isinstance(feedback.get("mutations_retained"), bool):
+                    mutations_retained = feedback["mutations_retained"]
+        if not isinstance(raw_evidence, dict):
+            return None
+        try:
+            evidence = RetryEvidence.model_validate(raw_evidence)
+        except (TypeError, ValidationError):
+            return None
+        diagnostics = evidence.diagnostics
+        return RetryEvidenceSummary(
+            source_attempt_id=evidence.source_attempt_id,
+            source_attempt_number=evidence.source_attempt_number,
+            failure_category=evidence.failure_category,
+            candidate_identity_sha256=evidence.candidate_identity_sha256,
+            candidate_tree_id=evidence.candidate_tree_id,
+            retained_changed_files=[
+                redact_text(path, max_chars=512) or "[redacted]"
+                for path in evidence.retained_changed_files
+            ],
+            diagnostics=RetryDiagnosticsSummary(
+                kind=diagnostics.kind,
+                summary=redact_text(
+                    diagnostics.summary,
+                    max_chars=4_096,
+                )
+                or "",
+                failing_tests=_redacted_items(diagnostics.failing_tests),
+                exception_details=_redacted_items(diagnostics.exception_details),
+                reviewer_issues=_redacted_items(diagnostics.reviewer_issues),
+                required_fixes=_redacted_items(diagnostics.required_fixes),
+            ),
+            created_at=evidence.created_at,
+            evidence_sha256=evidence.evidence_sha256,
+            source_disposition=source_disposition,
+            mutations_retained=mutations_retained,
+        )
+
     @staticmethod
     def _task_summary(task: TaskRecord, attempt: Any) -> TaskSummary:
         metadata = attempt.metadata if attempt else {}
@@ -842,6 +968,20 @@ class ControlQueryService:
             providerless=replay.providerless if replay is not None else None,
         )
 
+    def verify_trace(self, run_id: str) -> TraceVerificationResponse:
+        trace_id = self._run_trace_id(run_id)
+        report = self._trace_replay_for_run(run_id).verify(trace_id)
+        return TraceVerificationResponse(
+            trace_id=report.trace_id,
+            run_id=report.run_id,
+            provenance_root=report.provenance_root,
+            object_count=report.object_count,
+            protocol_drift=report.protocol_drift,
+            valid=report.valid,
+            provider_calls=0,
+            network_calls=0,
+        )
+
     def trace_spans(
         self,
         run_id: str,
@@ -985,7 +1125,9 @@ class ControlQueryService:
         limit: int = 100,
     ) -> RunReplayabilityResponse:
         trace = self._run_trace(run_id)
-        classification = self._trace_replay().replayability(trace.trace_id)
+        classification = self._trace_replay_for_run(run_id).replayability(
+            trace.trace_id
+        )
         sequence_by_span = {
             span.span_id: span.sequence for span in trace.spans
         }
@@ -1106,6 +1248,16 @@ class ControlQueryService:
                         str(self._safe_trace_value(value))
                         for value in item.drift
                     ],
+                    historical_authorization_validated=(
+                        item.historical_authorization_validated
+                    ),
+                    historical_executable=(
+                        str(self._safe_trace_value(item.historical_executable))
+                        if item.historical_executable is not None
+                        else None
+                    ),
+                    captured_result_reused=item.captured_result_reused,
+                    process_dispatched=item.process_dispatched,
                 )
                 for item in span_results[:500]
             ],
@@ -1137,6 +1289,13 @@ class ControlQueryService:
             ),
             provider_calls=session.provider_calls,
             network_calls=session.network_calls,
+            historical_authorizations_validated=(
+                session.historical_authorizations_validated
+            ),
+            captured_tool_results_reused=(
+                session.captured_tool_results_reused
+            ),
+            process_dispatches=session.process_dispatches,
         )
 
     def compare(
@@ -1405,6 +1564,11 @@ class ControlQueryService:
                     state_store=self.store,
                 )
             return self._trace_replay_service
+
+    def _trace_replay_for_run(self, run_id: str) -> TraceReplayService:
+        run = self.get_run(run_id)
+        config = self.config.with_overrides(workspace_dir=run.workspace)
+        return TraceReplayService(config, state_store=self.store)
 
     @staticmethod
     def _trace_span_summary(span: TraceSpan) -> TraceSpanSummary:
@@ -1877,11 +2041,60 @@ class ControlQueryService:
             raise ControlPlaneConflictError(
                 "The tool approval revision is stale; refresh before deciding."
             )
-        updated = self.store.decide_tool_approval(
+        task = self.store.get_task(
+            record.request.run_id,
+            record.request.task_id,
+        )
+        attempts = self.store.list_attempts(
+            record.request.run_id,
+            record.request.task_id,
+        )
+        latest_attempt = attempts[-1] if attempts else None
+        internal = (
+            latest_attempt.metadata.get("_agentbus", {})
+            if latest_attempt is not None
+            else {}
+        )
+        pending = (
+            internal.get("tool_approval_pending")
+            if isinstance(internal, dict)
+            else None
+        )
+        suspended_attempt = (
+            task.status == TaskStatus.WAITING_FOR_APPROVAL
+            and latest_attempt is not None
+            and latest_attempt.status == AttemptStatus.WAITING_FOR_APPROVAL
+            and isinstance(pending, dict)
+            and pending.get("approval_id") == record.approval_id
+            and pending.get("invocation_id") == record.request.invocation_id
+        )
+        try:
+            if suspended_attempt:
+                engine = DurableExecutionEngine(self.store)
+                if decision == ApprovalOutcome.APPROVED:
+                    engine.approve_task(
+                        record.request.run_id,
+                        record.request.task_id,
+                        request.reason,
+                    )
+                else:
+                    engine.reject_task(
+                        record.request.run_id,
+                        record.request.task_id,
+                        request.reason,
+                    )
+            else:
+                self.store.decide_tool_approval(
+                    record.request.run_id,
+                    record.approval_id,
+                    disposition=desired,
+                    reason=request.reason,
+                )
+        except (DurableExecutionError, StateStoreError) as exc:
+            raise ControlPlaneConflictError(str(exc)) from exc
+        updated = self.store.get_tool_approval(
             record.request.run_id,
             record.approval_id,
-            disposition=desired,
-            reason=request.reason,
         )
         return ApprovalDecisionResponse(
             approval=self._tool_approval_summary(updated)
@@ -2300,6 +2513,13 @@ def _nested(value: dict[str, Any], *keys: str) -> Any:
             return None
         current = current.get(key)
     return str(current).lower() if isinstance(current, bool) else current
+
+
+def _redacted_items(values: list[str]) -> list[str]:
+    return [
+        redact_text(value, max_chars=1_024) or "[redacted]"
+        for value in values[:32]
+    ]
 
 
 def _task_id_from_approval(run_id: str, approval_id: str) -> str:

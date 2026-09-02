@@ -69,6 +69,33 @@ Already succeeded terminal tasks are never selected again. Attempt numbering is 
 
 This policy does not claim exactly-once execution for arbitrary side effects. If a command or file write succeeds but the process stops before success is persisted, the attempt is considered interrupted and may run again. Future workspace isolation can make this safer; current task executors should be restart-tolerant.
 
+## Retry Workspace And Review Baselines
+
+Durable retries use retained cumulative workspace semantics. AgentBus does not automatically reset, clean, delete, or otherwise roll back files written by a rejected or failed attempt. A retry therefore starts from the candidate state left in its task workspace unless a separate explicit supported restore has already returned that workspace to the original task state.
+
+Each attempt checkpoints two distinct bounded source identities before model or tool execution:
+
+- The immutable task baseline is the repository candidate from which the durable task first started. Cumulative task review, task changed-file reporting, commit eligibility, final review, and completed-task provenance use this baseline.
+- The immutable attempt baseline is the repository candidate present when that specific attempt started. It is used only for attempt-local diagnostics and provenance.
+
+For a retained retry, the task reviewer receives the exact cumulative diff from the task baseline to the current candidate, even when the retry made no additional edit. The verifier result and reviewer packet identify the same candidate tree; source drift between verification, review, and Git finalization fails closed. Attempt records preserve both baseline identities across approval continuation, process reconstruction, lease changes, and task-worktree recovery.
+
+If an explicit restore makes the retry candidate equal to the task baseline before the next attempt starts, an empty cumulative diff is legitimate and is recorded as `restored_to_task_baseline`. AgentBus never infers that a rollback occurred merely because a retry was created.
+
+## Corrective Retry Evidence
+
+A retryable terminal attempt persists bounded structured evidence before the next attempt is scheduled. The source record includes the source attempt ID and number, failure category, candidate tree and source identities, cumulative changed files, redacted diagnostics, diagnostic hash, evidence hash, and a timezone-aware creation time. Verifier evidence includes its command, exit status, bounded stdout and stderr, truncation flags, failing-test lines, and bounded exception details. Reviewer evidence includes its bounded summary, issues, and required fixes. Retryable provider, command, and tool failures use the same typed envelope without persisting raw SDK objects or prompts.
+
+The destination attempt checkpoints a second binding that names its own attempt ID and number and records whether the failed candidate was retained or explicitly restored to the task baseline. A retained destination must have the same candidate identity and changed-file set as its source evidence. Unexpected source drift, malformed hashes, missing evidence, or an identity mismatch fails closed as a resumability error before the coder runs.
+
+The coder receives this packet as untrusted corrective evidence together with the original request and current task requirements. It is told to inspect and repair retained work instead of blindly repeating successful work. Retry evidence cannot add capabilities, widen paths, approve tools, change policy, or authorize downstream graph tasks. The persisted packet survives process, scheduler, lease, worker, and worktree reconstruction; no in-memory exception object is authoritative.
+
+## Action Step Budget
+
+`max_steps` bounds model action decisions, not approval process transitions. A tool action at the final permitted step may not leave its observation unread. AgentBus therefore permits exactly one additional terminal observation-consumption turn. That turn can return `finish`, but it cannot execute another tool. A tool request from the terminal turn stops explicitly with `step_budget_exhausted`, records the requested tool name without its unrestricted arguments, and preserves observed workspace side effects in the durable result.
+
+An exact approval suspension and resume remains the same logical action step. Pausing, approving, reconstructing a process, and executing the checkpointed invocation do not consume extra action steps. If the approved invocation was the final action, its observation is delivered to the same one-turn terminal consumer after resume. This rule adds no repair reserve and cannot create an unbounded tool loop.
+
 ## Approval Policy
 
 Low-risk tasks proceed normally. Medium-risk tasks are identified in structured ready events. High-risk tasks move to `waiting_for_approval`, and the run pauses before executor invocation.

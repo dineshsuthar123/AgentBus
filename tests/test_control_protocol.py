@@ -79,6 +79,9 @@ def test_trace_and_replay_models_are_bounded_protocol_extensions() -> None:
     assert "isolated_workspace" not in replay_properties
     assert "result_trace_id" in replay_properties
     assert "comparison_id" in replay_properties
+    assert "historical_authorizations_validated" in replay_properties
+    assert "captured_tool_results_reused" in replay_properties
+    assert "process_dispatches" in replay_properties
     assert replay_properties["isolation_scope"]["anyOf"][0]["const"] == (
         "daemon_managed_temporary_workspace"
     )

@@ -37,8 +37,12 @@ from agentbus.replay.substitutions import (
 )
 from agentbus.replay.tools import (
     TOOL_ENVELOPE_MEDIA_TYPE,
+    CapturedToolEnvelope,
     ToolReplayPlanner,
+    historical_execution_catalog,
+    is_managed_process_invocation,
     load_tool_envelope,
+    requires_authenticated_process_replay,
 )
 from agentbus.trace.models import ReplayMode, Trace, TraceSpan, TraceSpanType, utc_now
 from agentbus.trace.intelligence import (
@@ -118,6 +122,18 @@ class ReplayEngine:
             trace,
             available_object_hashes=catalog.available_hashes,
         )
+        captured_provider_requests = {
+            span.parent_span_id
+            for span in trace.spans
+            if span.span_type == TraceSpanType.PROVIDER_RESPONSE
+            and span.parent_span_id is not None
+            and any(
+                reference.replayable
+                and reference.media_type == MODEL_ENVELOPE_MEDIA_TYPE
+                and reference.sha256 in catalog.available_hashes
+                for reference in span.output_references
+            )
+        }
         created_at = session_created_at or self.clock()
         session = ReplaySession(
             replay_id=request.replay_id,
@@ -137,6 +153,10 @@ class ReplayEngine:
         repository_intelligence = None
         try:
             catalog.validate_all()
+            historical_authorizations = historical_execution_catalog(
+                trace,
+                self.store,
+            )
             effective_request = self._prepare_partial_replay(
                 trace,
                 request,
@@ -152,8 +172,18 @@ class ReplayEngine:
                     span,
                     request=effective_request,
                     inputs=catalog,
+                    captured_provider_response=(
+                        span.span_id in captured_provider_requests
+                    ),
+                    historical_authorizations=historical_authorizations,
                 )
                 session.span_results.append(result)
+                if result.historical_authorization_validated:
+                    session.historical_authorizations_validated += 1
+                if result.captured_result_reused:
+                    session.captured_tool_results_reused += 1
+                if result.process_dispatched:
+                    session.process_dispatches += 1
                 if result.action == ReplaySpanAction.SUBSTITUTED:
                     session.substitutions.append(span.span_id)
                 intelligence_span = (
@@ -290,6 +320,11 @@ class ReplayEngine:
         *,
         request: ReplayRequest,
         inputs: ReplayInputCatalog,
+        captured_provider_response: bool = False,
+        historical_authorizations: Mapping[
+            str,
+            CapturedToolEnvelope,
+        ] | None = None,
     ) -> tuple[ReplaySpanResult, dict[str, Any] | None]:
         loaded_inputs = [_load_reference(inputs, item) for item in span.input_references]
         loaded_outputs = [
@@ -324,6 +359,19 @@ class ReplayEngine:
                 for reference in span.output_references
                 if reference.media_type == MODEL_ENVELOPE_MEDIA_TYPE
             ]
+            if (
+                span.span_type == TraceSpanType.PROVIDER_REQUEST
+                and not envelopes
+                and captured_provider_response
+            ):
+                return (
+                    _span_result(
+                        span,
+                        ReplaySpanAction.SUBSTITUTED,
+                        "Captured child provider response replaced the live request.",
+                    ),
+                    None,
+                )
             if not envelopes and span.attributes.get("provider") != "deterministic":
                 raise ReplayInputUnavailableError(
                     f"Provider span '{span.span_id}' has no captured envelope."
@@ -378,7 +426,12 @@ class ReplayEngine:
             )
         if span.span_type == TraceSpanType.TOOL_INVOCATION:
             return (
-                self._replay_tool(span, request, loaded_inputs),
+                self._replay_tool(
+                    span,
+                    request,
+                    loaded_inputs,
+                    historical_authorizations=historical_authorizations or {},
+                ),
                 None,
             )
         if span.span_type == TraceSpanType.VERIFIER:
@@ -487,23 +540,53 @@ class ReplayEngine:
         span: TraceSpan,
         request: ReplayRequest,
         loaded_inputs: list[Any],
+        *,
+        historical_authorizations: Mapping[
+            str,
+            CapturedToolEnvelope,
+        ],
     ) -> ReplaySpanResult:
         assessment = None
         strategy = request.tool_strategies.get(span.span_id)
-        if strategy is None and self.tool_replay_planner is not None:
-            references = [
-                reference
-                for reference in span.output_references
-                if reference.media_type == TOOL_ENVELOPE_MEDIA_TYPE
-            ]
-            if len(references) != 1:
-                raise ReplayInputUnavailableError(
-                    "Managed tool replay requires one captured tool envelope."
-                )
+        references = [
+            reference
+            for reference in span.output_references
+            if reference.media_type == TOOL_ENVELOPE_MEDIA_TYPE
+        ]
+        envelope = None
+        if len(references) == 1:
             envelope = load_tool_envelope(
                 self.store,
                 references[0].sha256,
             )
+        elif strategy == ToolReplayStrategy.RERUN_SANDBOX and references:
+            raise ReplayIncompatibleError(
+                "Sandbox rerun cannot use ambiguous captured tool envelopes."
+            )
+        protected_process = bool(
+            envelope is not None
+            and requires_authenticated_process_replay(envelope)
+        )
+        process_span = bool(
+            (
+                envelope is not None
+                and is_managed_process_invocation(envelope.invocation)
+            )
+            or span.attributes.get("tool_effect") == "process"
+        )
+        if protected_process and self.tool_replay_planner is None:
+            raise ReplayIncompatibleError(
+                "Historical process replay requires authenticated validation."
+            )
+        if (
+            (strategy is None or protected_process)
+            and self.tool_replay_planner is not None
+        ):
+            if len(references) != 1:
+                raise ReplayInputUnavailableError(
+                    "Managed tool replay requires one captured tool envelope."
+                )
+            assert envelope is not None
             descriptor = self.tool_descriptors.get(envelope.descriptor.name)
             if descriptor is None:
                 raise ReplayIncompatibleError(
@@ -517,10 +600,46 @@ class ReplayEngine:
                     request.isolated_workspace
                     or "[ISOLATED_REPLAY_WORKSPACE]"
                 ),
+                historical_authorization=(
+                    historical_authorizations.get(
+                        envelope.invocation.invocation_id
+                    )
+                ),
             )
+            if (
+                assessment.historical_authorization_validated
+                and envelope.result is None
+            ):
+                authenticated = historical_authorizations.get(
+                    envelope.invocation.invocation_id
+                )
+                approval_id = (
+                    authenticated.historical_execution.approval_id
+                    if authenticated is not None
+                    and authenticated.historical_execution is not None
+                    else None
+                )
+                if (
+                    approval_id is None
+                    or approval_id not in span.approval_references
+                ):
+                    raise ReplayIncompatibleError(
+                        "Historical approval transition is not bound to its trace span."
+                    )
+            if (
+                protected_process
+                and strategy == ToolReplayStrategy.REJECT
+            ):
+                raise ReplayIncompatibleError(
+                    "Historical process replay was explicitly rejected."
+                )
             strategy = assessment.strategy
         if strategy is None:
             strategy = _default_tool_strategy(span, request.mode)
+        if strategy == ToolReplayStrategy.RERUN_SANDBOX and process_span:
+            raise ReplayIncompatibleError(
+                "Offline replay never dispatches a historical process."
+            )
         drift = (
             [
                 reason
@@ -540,8 +659,37 @@ class ReplayEngine:
             return _span_result(
                 span,
                 ReplaySpanAction.REUSED,
-                "Captured bounded tool result reused.",
+                (
+                    "Historical executable authorization validated; captured "
+                    "result reused; process not dispatched."
+                    if assessment is not None
+                    and assessment.historical_authorization_validated
+                    and assessment.captured_result_reused
+                    else (
+                        "Historical approval transition validated and substituted; "
+                        "process not dispatched."
+                        if assessment is not None
+                        and assessment.historical_authorization_validated
+                        else "Captured bounded tool result reused."
+                    )
+                ),
                 drift=drift,
+                historical_authorization_validated=(
+                    assessment.historical_authorization_validated
+                    if assessment is not None
+                    else False
+                ),
+                historical_executable=(
+                    assessment.historical_executable
+                    if assessment is not None
+                    else None
+                ),
+                captured_result_reused=(
+                    assessment.captured_result_reused
+                    if assessment is not None
+                    else False
+                ),
+                process_dispatched=False,
             )
         if strategy == ToolReplayStrategy.SIMULATE_MUTATION:
             return _span_result(
@@ -804,6 +952,10 @@ def _span_result(
     *,
     payload: Any = None,
     drift: list[str] | None = None,
+    historical_authorization_validated: bool = False,
+    historical_executable: str | None = None,
+    captured_result_reused: bool = False,
+    process_dispatched: bool = False,
 ) -> ReplaySpanResult:
     output_sha256 = (
         hashlib.sha256(canonical_json_bytes(sanitize_document(payload).value)).hexdigest()
@@ -817,6 +969,12 @@ def _span_result(
         summary=summary,
         output_sha256=output_sha256,
         drift=drift or [],
+        historical_authorization_validated=(
+            historical_authorization_validated
+        ),
+        historical_executable=historical_executable,
+        captured_result_reused=captured_result_reused,
+        process_dispatched=process_dispatched,
     )
 
 

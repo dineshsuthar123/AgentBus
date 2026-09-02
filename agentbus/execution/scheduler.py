@@ -16,6 +16,7 @@ from agentbus.execution.integration import (
 from agentbus.execution.leases import LeaseService, LeaseUnavailableError
 from agentbus.execution.models import (
     ApprovalOutcome,
+    AttemptStatus,
     ExecutionReport,
     RiskLevel,
     RunStatus,
@@ -170,7 +171,7 @@ class ParallelExecutionScheduler:
                             task.task_id,
                             worker_id,
                             {"scheduler": "local-threadpool"},
-                            activate_task=True,
+                            activate_task=task.status != TaskStatus.RUNNING,
                         )
                     except LeaseUnavailableError:
                         continue
@@ -202,7 +203,7 @@ class ParallelExecutionScheduler:
                                 self.store.get_run(run_id),
                                 self.store.get_task(run_id, task.task_id),
                                 lease,
-                                base_commit,
+                                self._task_base_commit(task, base_commit),
                             ),
                         )
                     )
@@ -318,7 +319,20 @@ class ParallelExecutionScheduler:
         statuses = {task.task_id: task.status for task in tasks}
         by_id = {task.task_id: task for task in tasks}
         ready: list[TaskRecord] = []
-        approval_waiting = False
+        approval_waiting = any(
+            task.status == TaskStatus.WAITING_FOR_APPROVAL for task in tasks
+        )
+        for record in sorted(tasks, key=lambda item: item.task_id):
+            if record.status != TaskStatus.RUNNING:
+                continue
+            attempts = self.store.list_attempts(run_id, record.task_id)
+            latest = attempts[-1] if attempts else None
+            if (
+                latest is not None
+                and latest.status == AttemptStatus.RUNNING
+                and _attempt_continuation(latest) is not None
+            ):
+                ready.append(record)
         approvals = {
             task.task_id: self.store.latest_approval(run_id, task.task_id)
             for task in tasks
@@ -351,6 +365,20 @@ class ParallelExecutionScheduler:
             if record.status == TaskStatus.READY:
                 ready.append(record)
         return ready, approval_waiting
+
+    def _task_base_commit(self, task: TaskRecord, default: str) -> str:
+        if task.status != TaskStatus.RUNNING:
+            return default
+        worktrees = [
+            item
+            for item in self.store.list_worktrees(
+                task.run_id,
+                task_id=task.task_id,
+            )
+            if item.purpose == WorktreePurpose.TASK
+            and item.status.value != "removed"
+        ]
+        return worktrees[-1].base_commit if worktrees else default
 
     def _block_failed_dependencies(self, run_id, graph, statuses):
         for spec in graph.blocked_tasks(statuses):
@@ -435,10 +463,19 @@ class ParallelExecutionScheduler:
             ),
             cancellation_registry=self.cancellation_registry,
         )
-
     def _is_cancelled(self) -> bool:
         return self.cancellation.is_set()
 
     @staticmethod
     def _head(path: Path) -> str:
         return GitRepository(str(path)).head_commit(short=False)
+
+
+def _attempt_continuation(attempt) -> dict | None:
+    internal = attempt.metadata.get("_agentbus", {})
+    if not isinstance(internal, dict):
+        return None
+    continuation = internal.get("task_continuation")
+    if not isinstance(continuation, dict) or not continuation:
+        continuation = internal.get("loop_continuation")
+    return continuation if isinstance(continuation, dict) and continuation else None

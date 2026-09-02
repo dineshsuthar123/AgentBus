@@ -122,8 +122,17 @@ def test_replay_session_lifecycle_is_durable_bounded_and_path_safe(tmp_path) -> 
     with pytest.raises(ReplaySessionConflictError, match="cannot be rewritten"):
         store.record_replay_session(request, running)
 
-    terminal = _validated_session(
+    counted = _validated_session(
         drifted,
+        historical_authorizations_validated=2,
+        captured_tool_results_reused=1,
+    )
+    assert store.record_replay_session(request, counted) == counted
+    with pytest.raises(ReplaySessionConflictError, match="cannot decrease"):
+        store.record_replay_session(request, drifted)
+
+    terminal = _validated_session(
+        counted,
         status=ReplaySessionStatus.SUCCEEDED,
         completed_at=started_at + timedelta(seconds=1),
     )

@@ -519,6 +519,7 @@ def _doctor_command(arguments: list[str]) -> int:
         resolved = resolve_configuration(
             config_file=args.config,
             cli_overrides={"workspace_dir": args.workspace},
+            workspace=args.workspace,
         )
         report = run_doctor(
             resolved.config,
@@ -940,6 +941,11 @@ def _demo_command(arguments: list[str]) -> int:
     creating.add_argument("language", choices=DEMO_LANGUAGES)
     creating.add_argument("--output")
     creating.add_argument("--force", action="store_true")
+    creating.add_argument(
+        "--git",
+        action="store_true",
+        help="Initialize and commit a new isolated Git repository for AgentBus runs.",
+    )
     creating.add_argument("--json", action="store_true")
     running = commands.add_parser("run")
     running.add_argument("language", choices=DEMO_LANGUAGES)
@@ -963,7 +969,12 @@ def _demo_command(arguments: list[str]) -> int:
         try:
             if args.demo_command == "create":
                 output = args.output or f"agentbus-{args.language}-demo"
-                result = create_demo(args.language, output, force=args.force)
+                result = create_demo(
+                    args.language,
+                    output,
+                    force=args.force,
+                    initialize_git=args.git,
+                )
             else:
                 result = run_demo(
                     args.language,
@@ -1095,6 +1106,7 @@ def _logs_command(arguments: list[str]) -> int:
 
     parser = argparse.ArgumentParser(prog="agentbus logs")
     parser.add_argument("--config")
+    parser.add_argument("--workspace")
     parser.add_argument(
         "--tail",
         nargs="?",
@@ -1107,7 +1119,11 @@ def _logs_command(arguments: list[str]) -> int:
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(arguments)
     try:
-        config = resolve_configuration(config_file=args.config).config
+        config = resolve_configuration(
+            config_file=args.config,
+            cli_overrides={"workspace_dir": args.workspace},
+            workspace=args.workspace,
+        ).config
         entries = read_product_logs(config, tail=args.tail, run_id=args.run)
     except (OSError, ValueError) as exc:
         payload = {"ok": False, "error": str(exc), "network_used": False}

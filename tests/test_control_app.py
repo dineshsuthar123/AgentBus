@@ -18,10 +18,21 @@ from agentbus.control.models import (
     RunAcceptedResponse,
 )
 from agentbus.control.services import ControlQueryService
-from agentbus.execution.models import RunRecord, TaskSpec
+from agentbus.execution.models import (
+    AttemptStatus,
+    FailureCategory,
+    RunRecord,
+    TaskSpec,
+    TaskStatus,
+)
 from agentbus.execution.state_store import StateStore
 from agentbus.mcp import McpServerConfig, mcp_server_capabilities
-from agentbus.replay import ReplayMode, ReplaySession
+from agentbus.replay import (
+    ReplayMode,
+    ReplaySession,
+    ReplaySpanAction,
+    ReplaySpanResult,
+)
 from agentbus.sandbox.platform import ExecutableCatalog
 from agentbus.tools.protocol import ToolCapabilityName
 from agentbus.tools.runtime import build_managed_tool_runtime
@@ -136,8 +147,10 @@ def _record_control_trace(
     run_id: str = "run-1",
     marker: str = "primary",
     include_source_object: bool = False,
+    workspace: Path | None = None,
 ):
     query = client.app.state.query_service
+    trace_workspace = workspace or query.config.workspace_path
     if run_id != "run-1":
         query.store.create_run(
             RunRecord(
@@ -145,15 +158,18 @@ def _record_control_trace(
                 original_task="Compare me",
                 workflow_type="multi",
                 model="fake",
-                workspace=str(query.config.workspace_path),
+                workspace=str(trace_workspace),
                 graph_data={"version": 1, "tasks": []},
             )
         )
+    trace_config = query.config.with_overrides(
+        workspace_dir=str(trace_workspace)
+    )
     runtime = RuntimeTrace.open(
         query.store,
         run_id,
-        object_root=query.config.trace_store_path,
-        workspace=query.config.workspace_path,
+        object_root=trace_config.trace_store_path,
+        workspace=trace_workspace,
     )
     with runtime.scope(runtime.root_context):
         if include_source_object:
@@ -204,7 +220,7 @@ def _record_control_trace(
                 "marker": marker,
             },
             attributes={
-                "workspace": str(query.config.workspace_path),
+                "workspace": str(trace_workspace),
                 "authorization": "Bearer control-private-token",
             },
             capture="json",
@@ -524,6 +540,139 @@ def test_trace_inspection_is_authenticated_bounded_and_private(
     assert replayability.json()["truncated"] is True
 
 
+def test_attempt_history_is_bounded_redacted_and_excludes_raw_metadata(
+    tmp_path: Path,
+) -> None:
+    client, _ = _client(tmp_path)
+    store = client.app.state.query_service.store
+    store.update_task_status("run-1", "task-1", TaskStatus.READY)
+    store.update_task_status("run-1", "task-1", TaskStatus.RUNNING)
+    attempt = store.create_attempt("run-1", "task-1")
+    diagnostics = {
+        "kind": "reviewer",
+        "summary": "Reviewer rejected the non-idempotent confirmation path.",
+        "command": ["python", "unsafe-raw-argument"],
+        "exit_status": None,
+        "stdout": "raw stdout must stay private",
+        "stderr": "raw stderr must stay private",
+        "stdout_truncated": False,
+        "stderr_truncated": False,
+        "failing_tests": [],
+        "exception_details": [],
+        "reviewer_issues": ["Confirmation is not idempotent."],
+        "required_fixes": ["Use one atomic confirmation decision."],
+    }
+    diagnostics_sha256 = hashlib.sha256(
+        canonical_json_bytes(diagnostics)
+    ).hexdigest()
+    evidence_payload = {
+        "schema_version": 1,
+        "source_attempt_id": attempt.attempt_id,
+        "source_attempt_number": attempt.attempt_number,
+        "failure_category": "reviewer_rejection",
+        "candidate_identity_sha256": "a" * 64,
+        "candidate_tree_id": "b" * 40,
+        "candidate_source_sha256": "c" * 64,
+        "retained_changed_files": ["src/main/java/PaymentService.java"],
+        "diagnostics": diagnostics,
+        "diagnostics_sha256": diagnostics_sha256,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    evidence_payload["evidence_sha256"] = hashlib.sha256(
+        canonical_json_bytes(evidence_payload)
+    ).hexdigest()
+    store.complete_attempt(
+        attempt.attempt_id,
+        AttemptStatus.FAILED,
+        error_category=FailureCategory.REVIEWER_REJECTION,
+        error_message="Bearer attempt-private-token was rejected",
+        observation_summary="Reviewer requested one atomic decision.",
+        metadata={
+            "retry_evidence": evidence_payload,
+            "verifier": {"passed": True, "stdout": "must not escape"},
+            "task_review": {"approved": False},
+            "raw_prompt": "must not escape",
+        },
+    )
+
+    assert client.get("/api/v1/runs/run-1/attempts").status_code == 403
+    response = client.get(
+        "/api/v1/runs/run-1/attempts?limit=1",
+        headers=_auth(),
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 1
+    assert payload["truncated"] is False
+    summary = payload["attempts"][0]
+    assert summary["status"] == "failed"
+    assert summary["verifier_status"] == "passed"
+    assert summary["reviewer_status"] == "rejected"
+    assert summary["retry_evidence"]["evidence_sha256"]
+    assert summary["retry_evidence"]["diagnostics"]["reviewer_issues"] == [
+        "Confirmation is not idempotent."
+    ]
+    serialized = json.dumps(payload, sort_keys=True)
+    assert "attempt-private-token" not in serialized
+    assert "unsafe-raw-argument" not in serialized
+    assert "raw stdout" not in serialized
+    assert "raw_prompt" not in serialized
+
+
+def test_trace_verification_is_authenticated_and_providerless(tmp_path: Path) -> None:
+    client, _ = _client(tmp_path)
+    trace, manifest = _record_control_trace(client)
+
+    assert client.post("/api/v1/runs/run-1/trace/verify").status_code == 403
+    response = client.post(
+        "/api/v1/runs/run-1/trace/verify",
+        headers=_auth(),
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "trace_id": trace.trace_id,
+        "run_id": "run-1",
+        "provenance_root": manifest.integrity_root,
+        "object_count": sum(
+            entry.kind == "blob" for entry in manifest.integrity_entries
+        ),
+        "protocol_drift": [],
+        "valid": True,
+        "provider_calls": 0,
+        "network_calls": 0,
+    }
+
+
+def test_trace_verification_and_replayability_use_run_workspace_store(
+    tmp_path: Path,
+) -> None:
+    client, _ = _client(tmp_path / "control", seed_run=False)
+    external_workspace = tmp_path / "external-workspace"
+    external_workspace.mkdir()
+    trace, manifest = _record_control_trace(
+        client,
+        run_id="run-external",
+        workspace=external_workspace,
+    )
+
+    verified = client.post(
+        "/api/v1/runs/run-external/trace/verify",
+        headers=_auth(),
+    )
+    replayability = client.get(
+        "/api/v1/runs/run-external/replayability",
+        headers=_auth(),
+    )
+
+    assert verified.status_code == 200
+    assert verified.json()["trace_id"] == trace.trace_id
+    assert verified.json()["provenance_root"] == manifest.integrity_root
+    assert replayability.status_code == 200
+    assert replayability.json()["missing_input_hashes"] == []
+
+
 def test_trace_inspection_returns_safe_not_found_and_validates_page_bounds(
     tmp_path: Path,
 ) -> None:
@@ -608,12 +757,34 @@ def test_replay_response_exposes_isolation_scope_without_private_path(
             mode=ReplayMode.OFFLINE,
             isolated_workspace=str(tmp_path / "private-replay-worktree"),
             intelligence_drift=[IntelligenceDriftCategory.INDEX_SNAPSHOT],
+            span_results=[
+                ReplaySpanResult(
+                    span_id="tool-historical-process",
+                    action=ReplaySpanAction.REUSED,
+                    succeeded=True,
+                    summary="Historical executable result reused.",
+                    historical_authorization_validated=True,
+                    historical_executable="mvn",
+                    captured_result_reused=True,
+                    process_dispatched=False,
+                )
+            ],
+            historical_authorizations_validated=1,
+            captured_tool_results_reused=1,
+            process_dispatches=0,
         )
     )
 
     assert response.isolated is True
     assert response.isolation_scope == "daemon_managed_temporary_workspace"
     assert response.intelligence_drift == ["index_snapshot_drift"]
+    assert response.historical_authorizations_validated == 1
+    assert response.captured_tool_results_reused == 1
+    assert response.process_dispatches == 0
+    assert response.span_results[0].historical_executable == "mvn"
+    assert response.span_results[0].historical_authorization_validated is True
+    assert response.span_results[0].captured_result_reused is True
+    assert response.span_results[0].process_dispatched is False
     assert "isolated_workspace" not in response.model_dump(mode="json")
     assert str(tmp_path) not in response.model_dump_json()
 
@@ -1081,14 +1252,13 @@ def test_tool_approval_is_listed_decided_idempotently_and_cancellable(
     assert cancelled.status_code == 200
     assert cancelled.json()["run_cancellation_requested"] is True
     assert supervisor.cancelled == [("run-1", "Stop the pending tool")]
-    assert approved.status_code == 200
-    assert approved.json()["approval"]["state"] == "approved"
-    assert repeated.json()["idempotent"] is True
+    assert approved.status_code == 409
+    assert repeated.status_code == 409
     assert conflicting.status_code == 409
     assert target.exists()
     tool_report = report.json()["report"]["tool_runtime"]
     assert tool_report["status_counts"] == {"awaiting_approval": 1}
-    assert tool_report["approvals"]["states"] == {"approved": 1}
+    assert tool_report["approvals"]["states"] == {"pending": 1}
 
 
 def test_mcp_diagnostics_check_only_preconfigured_server_and_hide_command(

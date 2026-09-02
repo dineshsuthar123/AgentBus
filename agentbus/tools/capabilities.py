@@ -23,6 +23,31 @@ _PROCESS_CAPABILITIES = frozenset(
         ToolCapabilityName.TEST_EXECUTE,
     }
 )
+_BUILTIN_CAPABILITY_NAMES: dict[str, tuple[ToolCapabilityName, ...]] = {
+    "repository.scan": (ToolCapabilityName.FILESYSTEM_READ,),
+    "filesystem.read": (ToolCapabilityName.FILESYSTEM_READ,),
+    "filesystem.stat": (ToolCapabilityName.FILESYSTEM_READ,),
+    "filesystem.list": (ToolCapabilityName.FILESYSTEM_READ,),
+    "filesystem.create": (ToolCapabilityName.FILESYSTEM_CREATE,),
+    "filesystem.patch": (ToolCapabilityName.FILESYSTEM_WRITE,),
+    "filesystem.rename": (ToolCapabilityName.FILESYSTEM_RENAME,),
+    "filesystem.delete": (ToolCapabilityName.FILESYSTEM_DELETE,),
+    "git.status": (ToolCapabilityName.GIT_READ,),
+    "git.diff": (ToolCapabilityName.GIT_READ,),
+    "git.show": (ToolCapabilityName.GIT_READ,),
+    "git.log": (ToolCapabilityName.GIT_READ,),
+    "git.branches": (ToolCapabilityName.GIT_READ,),
+    "git.stage": (ToolCapabilityName.GIT_WRITE,),
+    "git.commit": (
+        ToolCapabilityName.GIT_WRITE,
+        ToolCapabilityName.GIT_COMMIT,
+    ),
+    "test.execute": (
+        ToolCapabilityName.TEST_EXECUTE,
+        ToolCapabilityName.PROCESS_EXECUTE,
+    ),
+    "process.execute": (ToolCapabilityName.PROCESS_EXECUTE,),
+}
 
 
 def derive_required_capabilities(
@@ -31,13 +56,50 @@ def derive_required_capabilities(
 ) -> tuple[ToolCapability, ...]:
     """Derive least-scope capabilities from arguments, never model claims."""
     validate_tool_arguments(invocation.arguments, descriptor)
+    return _derive_scoped_capabilities(
+        invocation,
+        descriptor,
+        _applicable_capabilities(invocation, descriptor),
+    )
+
+
+def derive_replay_required_capabilities(
+    invocation: ToolInvocation,
+    descriptor: ToolDescriptor,
+    *,
+    captured_descriptor: ToolDescriptor,
+    captured_capabilities: tuple[ToolCapability, ...],
+) -> tuple[ToolCapability, ...]:
+    """Re-derive scopes while preserving captured pre-execution applicability."""
+    validate_tool_arguments(invocation.arguments, descriptor)
+    if (
+        invocation.tool_name != descriptor.name
+        or invocation.tool_name != captured_descriptor.name
+    ):
+        raise ToolCapabilityEscalationError(
+            "Replay capability derivation requires matching tool descriptors."
+        )
+    applicable = _replay_applicable_capabilities(
+        invocation,
+        descriptor,
+        captured_descriptor=captured_descriptor,
+        captured_capabilities=captured_capabilities,
+    )
+    return _derive_scoped_capabilities(invocation, descriptor, applicable)
+
+
+def _derive_scoped_capabilities(
+    invocation: ToolInvocation,
+    descriptor: ToolDescriptor,
+    applicable: tuple[ToolCapability, ...],
+) -> tuple[ToolCapability, ...]:
     if invocation.tool_name.startswith("mcp."):
         return descriptor.capabilities
     affected_paths = _affected_paths(invocation.arguments)
     executable = invocation.arguments.get("executable")
     working_directory = _working_directory(invocation)
     required: list[ToolCapability] = []
-    for declared in descriptor.capabilities:
+    for declared in applicable:
         updates: dict[str, object] = {}
         if affected_paths:
             updates["affected_paths"] = affected_paths
@@ -58,6 +120,115 @@ def derive_required_capabilities(
             "Derived tool capabilities exceed the descriptor declaration."
         )
     return result
+
+
+def _replay_applicable_capabilities(
+    invocation: ToolInvocation,
+    descriptor: ToolDescriptor,
+    *,
+    captured_descriptor: ToolDescriptor,
+    captured_capabilities: tuple[ToolCapability, ...],
+) -> tuple[ToolCapability, ...]:
+    if invocation.tool_name != "filesystem.write":
+        return _applicable_capabilities(invocation, descriptor)
+
+    captured_descriptor_names = {
+        capability.name for capability in captured_descriptor.capabilities
+    }
+    captured_names = {capability.name for capability in captured_capabilities}
+    target_existed = (
+        ToolCapabilityName.FILESYSTEM_CREATE in captured_descriptor_names
+        and ToolCapabilityName.FILESYSTEM_CREATE not in captured_names
+    )
+    required_names = {ToolCapabilityName.FILESYSTEM_WRITE}
+    if not target_existed:
+        required_names.add(ToolCapabilityName.FILESYSTEM_CREATE)
+    return _declared_capabilities_for_names(
+        descriptor,
+        required_names,
+        allowed_additional_names=frozenset(
+            {ToolCapabilityName.FILESYSTEM_CREATE}
+        ),
+    )
+
+
+def _applicable_capabilities(
+    invocation: ToolInvocation,
+    descriptor: ToolDescriptor,
+) -> tuple[ToolCapability, ...]:
+    if invocation.tool_name.startswith("mcp."):
+        return descriptor.capabilities
+    if invocation.tool_name != "filesystem.write":
+        required_names = _BUILTIN_CAPABILITY_NAMES.get(invocation.tool_name)
+        if required_names is None:
+            return descriptor.capabilities
+        return _declared_capabilities_for_names(
+            descriptor,
+            set(required_names),
+        )
+
+    required_names = {ToolCapabilityName.FILESYSTEM_WRITE}
+
+    from agentbus.tools.filesystem_security import (
+        ContainedPathResolver,
+        FileSystemSecurityError,
+    )
+
+    path = invocation.arguments["path"]
+    try:
+        resolver = ContainedPathResolver(invocation.context.worktree_identity)
+        target = resolver.resolve(path, reject_any_link=True)
+    except FileSystemSecurityError:
+        # Derive the maximum mutation shape while preserving the later path denial.
+        required_names.add(ToolCapabilityName.FILESYSTEM_CREATE)
+    else:
+        if not target.exists:
+            required_names.add(ToolCapabilityName.FILESYSTEM_CREATE)
+    return _declared_capabilities_for_names(
+        descriptor,
+        required_names,
+        allowed_additional_names=frozenset(
+            {ToolCapabilityName.FILESYSTEM_CREATE}
+        ),
+    )
+
+
+def _declared_capabilities_for_names(
+    descriptor: ToolDescriptor,
+    required_names: set[ToolCapabilityName],
+    *,
+    allowed_additional_names: frozenset[ToolCapabilityName] = frozenset(),
+) -> tuple[ToolCapability, ...]:
+    declared_names = {
+        capability.name for capability in descriptor.capabilities
+    }
+    missing = required_names - declared_names
+    if missing:
+        names = ", ".join(sorted(name.value for name in missing))
+        raise ToolCapabilityEscalationError(
+            "Tool descriptor does not declare capabilities required by this "
+            f"invocation: {names}."
+        )
+    additional = (
+        declared_names - required_names - allowed_additional_names
+    )
+    if additional:
+        names = ", ".join(sorted(name.value for name in additional))
+        raise ToolCapabilityEscalationError(
+            "Tool descriptor declares capabilities unsupported by this tool's "
+            f"derivation contract: {names}."
+        )
+    selected = tuple(
+        capability
+        for capability in descriptor.capabilities
+        if capability.name in required_names
+    )
+    if len(selected) != len(required_names):
+        # ToolDescriptor validation normally prevents duplicate capability names.
+        raise ToolCapabilityEscalationError(
+            "Tool descriptor capability declaration is internally inconsistent."
+        )
+    return selected
 
 
 def require_expected_capabilities(

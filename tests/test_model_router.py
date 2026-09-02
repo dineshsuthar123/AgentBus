@@ -123,6 +123,53 @@ def test_role_routing_uses_specific_then_default_deployments():
     assert config.resolve_model("summarizer") == "default-deployment"
 
 
+def test_three_deployment_azure_configuration_routes_every_role_request():
+    config = azure_config(
+        azure_openai_default_deployment="agentbus-reviewer",
+        azure_openai_planner_deployment="agentbus-planner",
+        azure_openai_coder_deployment="agentbus-coder",
+        azure_openai_reviewer_deployment="agentbus-reviewer",
+        azure_openai_summarizer_deployment="agentbus-reviewer",
+        model_max_retries=0,
+    )
+    providers = {}
+
+    def builder(route):
+        provider = FakeProvider(
+            route.provider,
+            route.model,
+            [result(model=route.model, role=route.role)],
+        )
+        providers[route.role] = provider
+        return provider
+
+    router = ModelRouter(
+        config,
+        provider_factory=ModelProviderFactory(
+            config,
+            builders={"azure": builder},
+        ),
+    )
+
+    router.generate_json(ModelRole.PLANNER, "plan")
+    router.generate_json(ModelRole.CODER, "code")
+    router.generate_json(ModelRole.REVIEWER, "review")
+    router.generate_text(ModelRole.SUMMARIZER, "summarize")
+    router.generate_text(ModelRole.DEFAULT, "default")
+
+    expected = {
+        ModelRole.PLANNER: "agentbus-planner",
+        ModelRole.CODER: "agentbus-coder",
+        ModelRole.REVIEWER: "agentbus-reviewer",
+        ModelRole.SUMMARIZER: "agentbus-reviewer",
+        ModelRole.DEFAULT: "agentbus-reviewer",
+    }
+    assert {role: provider.model_name for role, provider in providers.items()} == (
+        expected
+    )
+    assert all(len(provider.calls) == 1 for provider in providers.values())
+
+
 def test_provider_protocol_declares_text_and_json_generation():
     assert hasattr(ModelProvider, "generate_text")
     assert hasattr(ModelProvider, "generate_json")

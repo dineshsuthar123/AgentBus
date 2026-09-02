@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from agentbus.agents.coder import CoderAgent
-from agentbus.agents.planner import PlannerAgent
+from agentbus.agents.planner import PlannerAgent, PlannerOutput
 from agentbus.agents.reviewer import ReviewerAgent
 from agentbus.config import AgentBusConfig
 from agentbus.execution.cancellation import CancellationRequested, CancellationToken
@@ -16,9 +16,19 @@ from agentbus.execution.cancellation_registry import CancellationRegistry
 from agentbus.execution.engine import DurableExecutionEngine
 from agentbus.execution.integration import IntegrationCoordinator
 from agentbus.execution.leases import LeaseService
-from agentbus.execution.models import ExecutionReport, RunStatus, TaskStatus
+from agentbus.execution.models import (
+    ExecutionReport,
+    RunStatus,
+    TaskExecutionKind,
+    TaskStatus,
+)
 from agentbus.execution.scheduler import ParallelExecutionScheduler
 from agentbus.execution.state_store import StateStore, StateStoreError
+from agentbus.execution.task_graph import (
+    PlanContractIssue,
+    PlanContractValidationError,
+    TaskGraph,
+)
 from agentbus.execution.worker import LocalTaskWorker
 from agentbus.git.branching import generate_branch_name
 from agentbus.git.commit_message import generate_commit_message
@@ -40,6 +50,7 @@ from agentbus.models.errors import ModelCancellationError
 from agentbus.repo.context_pack import ContextPackBuilder
 from agentbus.repo.scanner import RepoScanner
 from agentbus.repo.test_detection import TestCommandDetector
+from agentbus.security.redaction import sanitize_json
 from agentbus.runtime.durable_workflow import MultiAgentTaskExecutor
 from agentbus.runtime.intelligence import (
     PlannerIntelligenceContext,
@@ -131,7 +142,7 @@ class MultiAgentOrchestrator:
     ):
         self.config = config or AgentBusConfig.from_env()
         self.workspace = self.config.workspace_path
-        self.logger = logger or RunLogger(log_dir=self.config.runs_dir)
+        self.logger = logger or RunLogger(log_dir=self.config.runs_path)
         self.model_router = model_router or ModelRouter(
             self.config,
             logger=self.logger,
@@ -362,7 +373,7 @@ class MultiAgentOrchestrator:
         run_id = run_id or uuid.uuid4().hex
         cancellation = self._cancellation_for(run_id, prepare=True)
         self._bind_component_cancellation(cancellation)
-        self.logger = RunLogger(log_dir=self.config.runs_dir, run_id=run_id)
+        self.logger = RunLogger(log_dir=self.config.runs_path, run_id=run_id)
         self.model_router.set_logger(self.logger)
         self.logger.log(
             "run_started",
@@ -380,6 +391,16 @@ class MultiAgentOrchestrator:
         )
         snapshot = getattr(self.git_repository, "worktree_snapshot", None)
         workspace_baseline = snapshot() if snapshot is not None else {}
+        capture_review_baseline = getattr(
+            self.git_repository,
+            "capture_review_baseline",
+            None,
+        )
+        workspace_review_baseline = (
+            capture_review_baseline()
+            if capture_review_baseline is not None
+            else None
+        )
         git_branch = None if parallel_enabled else self._prepare_git_workflow(user_task)
         initial_head = None
         if self._git_workflow_requested() and self.git_repository.is_git_repo():
@@ -389,8 +410,12 @@ class MultiAgentOrchestrator:
         cancellation.checkpoint("orchestrator", stage="before-planner")
         self.logger.log("planner_started", {})
         with model_request_context(run_id=run_id, cancellation=cancellation):
-            plan = self.planner.plan(user_task, context_pack=context_pack)
-        plan = self._validate_planner_scope(plan, intelligence_context)
+            plan = self._plan_durable(
+                user_task,
+                context_pack,
+                intelligence_context,
+                cancellation,
+            )
         cancellation.checkpoint("orchestrator", stage="after-planner")
         self.logger.log("planner_output", _plan_log_metadata(plan))
         metadata = {
@@ -417,6 +442,7 @@ class MultiAgentOrchestrator:
             },
             "final_review": {"required": True, "status": "pending"},
             "workspace_baseline": workspace_baseline,
+            "workspace_review_baseline": workspace_review_baseline,
             "repository_revisions": {"base_commit": initial_head},
             "parallel_execution": {
                 "enabled": parallel_enabled,
@@ -515,6 +541,8 @@ class MultiAgentOrchestrator:
 
     def run_durable(self, run_id: str, *, resume: bool = False) -> ExecutionReport:
         """Execute or resume a persisted multi-agent run and finalize Git safely."""
+        self.logger = RunLogger(log_dir=self.config.runs_path, run_id=run_id)
+        self.model_router.set_logger(self.logger)
         if resume and self._explicit_cancellation is None:
             cancellation = self._cancellation_registry_for_use().recover(run_id)
         else:
@@ -594,7 +622,7 @@ class MultiAgentOrchestrator:
         executor: bool = True,
         attach_trace: bool = True,
     ) -> DurableExecutionEngine:
-        logger = RunLogger(log_dir=self.config.runs_dir, run_id=run_id)
+        logger = RunLogger(log_dir=self.config.runs_path, run_id=run_id)
         task_executor = None
         if executor:
             cancellation = self._cancellation_for(run_id)
@@ -703,7 +731,7 @@ class MultiAgentOrchestrator:
         config = self.config.with_overrides(
             workspace_dir=str(workspace), parallel_execution=False
         )
-        logger = RunLogger(log_dir=config.runs_dir)
+        logger = RunLogger(log_dir=self.config.runs_path, run_id=run_id)
         factory = ModelProviderFactory(
             config,
             builders=dict(self.model_router.provider_factory.builders),
@@ -969,27 +997,69 @@ class MultiAgentOrchestrator:
                 )
                 return self.get_durable_report(run_id)
 
-        verifier_result = self._trace_runtime_call(
-            run_id,
-            TraceSpanType.VERIFIER,
-            "final verifier",
-            lambda: self._verify_final(run_id),
-            capture="json",
-        )
+        if self._requires_final_verification(run_id):
+            verifier_result = self._trace_runtime_call(
+                run_id,
+                TraceSpanType.VERIFIER,
+                "final verifier",
+                lambda: self._verify_final(run_id),
+                capture="json",
+            )
+        else:
+            verifier_result = self._analysis_final_verifier_result()
+            self.state_store.record_event(
+                run_id,
+                "final_verification_not_applicable",
+                {"reason": "analysis_only"},
+            )
+            self.logger.log(
+                "final_verification_not_applicable",
+                {"run_id": run_id, "reason": "analysis_only"},
+            )
         cancellation.checkpoint(
             "final-review",
             stage="after-final-verification",
         )
-        self._checkpoint_final_verifier(run_id, verifier_result)
         baseline = run.metadata.get("workspace_baseline", {})
+        review_baseline = run.metadata.get("workspace_review_baseline")
+        changed_since_review_baseline = getattr(
+            self.git_repository,
+            "changed_files_since_review_baseline",
+            None,
+        )
         changed_since = getattr(self.git_repository, "changed_since", None)
         changed_files = (
-            changed_since(baseline)
-            if changed_since is not None and isinstance(baseline, dict)
-            else run.changed_files or self.git_repository.changed_files()
+            changed_since_review_baseline(review_baseline)
+            if (
+                changed_since_review_baseline is not None
+                and isinstance(review_baseline, dict)
+            )
+            else (
+                changed_since(baseline)
+                if changed_since is not None and isinstance(baseline, dict)
+                else run.changed_files or self.git_repository.changed_files()
+            )
         )
         changes = self._repository_changes(changed_files)
-        verifier_status = "passed" if verifier_result.get("passed") else "failed"
+        candidate = self._cumulative_review_candidate(
+            self.git_repository,
+            review_baseline,
+        )
+        source_evidence = self._final_review_evidence(
+            run_id,
+            review_baseline,
+            candidate,
+            changes,
+        )
+        self._checkpoint_final_verifier(
+            run_id,
+            verifier_result,
+            source_evidence=source_evidence,
+        )
+        verifier_status = str(
+            verifier_result.get("status")
+            or ("passed" if verifier_result.get("passed") else "failed")
+        )
         if not verifier_result.get("passed"):
             self.state_store.update_run_details(
                 run_id,
@@ -1026,12 +1096,40 @@ class MultiAgentOrchestrator:
             )
             return self.get_durable_report(run_id)
 
-        review_diff = getattr(self.git_repository, "review_diff", None)
-        git_diff = (
-            review_diff(max_chars=30_000, paths=changes.changed_files)
-            if review_diff is not None
-            else self._fallback_review_diff(changes)
+        cumulative_diff = getattr(
+            self.git_repository,
+            "review_diff_since_baseline",
+            None,
         )
+        if (
+            cumulative_diff is not None
+            and isinstance(review_baseline, dict)
+            and isinstance(candidate, dict)
+        ):
+            git_diff = cumulative_diff(
+                review_baseline,
+                max_chars=30_000,
+                paths=changes.review_files,
+                candidate=candidate,
+            )
+        else:
+            review_diff = getattr(self.git_repository, "review_diff", None)
+            git_diff = (
+                review_diff(max_chars=30_000, paths=changes.changed_files)
+                if review_diff is not None
+                else self._fallback_review_diff(changes)
+            )
+        if not self._cumulative_candidate_is_current(
+            self.git_repository,
+            review_baseline,
+            candidate,
+        ):
+            return self._fail_final_source_identity(
+                run_id,
+                changed_files,
+                changes,
+                stage="before_final_reviewer",
+            )
         cancellation.checkpoint(
             "final-review",
             stage="before-final-reviewer",
@@ -1048,6 +1146,8 @@ class MultiAgentOrchestrator:
                 git_diff=git_diff,
                 test_output=verifier_result.get("output"),
                 changes=changes,
+                analysis_artifacts=self._analysis_artifacts_for_review(run_id),
+                review_evidence=source_evidence,
             ),
             capture="json",
             attributes={"review_scope": "whole_run"},
@@ -1056,6 +1156,17 @@ class MultiAgentOrchestrator:
             "final-review",
             stage="after-final-reviewer",
         )
+        if not self._cumulative_candidate_is_current(
+            self.git_repository,
+            review_baseline,
+            candidate,
+        ):
+            return self._fail_final_source_identity(
+                run_id,
+                changed_files,
+                changes,
+                stage="after_final_reviewer",
+            )
         approved = bool(reviewer_result.get("approved"))
         self.state_store.update_run_details(
             run_id,
@@ -1086,6 +1197,7 @@ class MultiAgentOrchestrator:
                         "index_uncertainty",
                         [],
                     ),
+                    "review_evidence": source_evidence,
                 },
                 "final_reviewer_model_result": _last_model_result(self.reviewer),
             },
@@ -1207,14 +1319,27 @@ class MultiAgentOrchestrator:
             "final-review",
             stage="after-integration-verification",
         )
+        changed_files = repository.changed_files_between(base_commit)
+        changes = repository.change_set(changed_files)
+        integration_commit = repository.head_commit(short=False)
+        integration_state_sha256 = repository.repository_state_sha256()
+        source_evidence = {
+            "schema_version": 1,
+            "diff_scope": "cumulative_run",
+            "execution_mode": "parallel_integration",
+            "base_commit": base_commit,
+            "candidate_commit": integration_commit,
+            "candidate_state_sha256": integration_state_sha256,
+            "changed_files": changes.changed_files,
+            "review_files": changes.review_files,
+            "commit_eligible_files": changes.commit_files,
+        }
         self._checkpoint_final_verifier(
             run_id,
             verifier_result,
             integrated=True,
+            source_evidence=source_evidence,
         )
-        changed_files = repository.changed_files_between(base_commit)
-        changes = repository.change_set(changed_files)
-        integration_commit = repository.head_commit(short=False)
         parallel = {**parallel, "integration_commit": integration_commit}
         if not verifier_result.get("passed"):
             self.state_store.update_run_details(
@@ -1257,6 +1382,16 @@ class MultiAgentOrchestrator:
             "final-review",
             stage="before-integration-reviewer",
         )
+        if (
+            repository.head_commit(short=False) != integration_commit
+            or repository.repository_state_sha256() != integration_state_sha256
+        ):
+            return self._fail_final_source_identity(
+                run_id,
+                changed_files,
+                changes,
+                stage="before_parallel_final_reviewer",
+            )
         reviewer_result = self._trace_runtime_call(
             run_id,
             TraceSpanType.REVIEWER,
@@ -1270,6 +1405,7 @@ class MultiAgentOrchestrator:
                 test_output=verifier_result.get("output"),
                 changes=changes,
                 reviewer=reviewer,
+                review_evidence=source_evidence,
             ),
             capture="json",
             attributes={"review_scope": "integrated_run"},
@@ -1278,6 +1414,16 @@ class MultiAgentOrchestrator:
             "final-review",
             stage="after-integration-reviewer",
         )
+        if (
+            repository.head_commit(short=False) != integration_commit
+            or repository.repository_state_sha256() != integration_state_sha256
+        ):
+            return self._fail_final_source_identity(
+                run_id,
+                changed_files,
+                changes,
+                stage="after_parallel_final_reviewer",
+            )
         approved = bool(reviewer_result.get("approved"))
         self.state_store.update_run_details(
             run_id,
@@ -1309,6 +1455,7 @@ class MultiAgentOrchestrator:
                         "index_uncertainty",
                         [],
                     ),
+                    "review_evidence": source_evidence,
                 },
             },
             event_type="final_integration_review_completed",
@@ -1344,7 +1491,7 @@ class MultiAgentOrchestrator:
         router = ModelRouter(
             config,
             provider_factory=factory,
-            logger=RunLogger(log_dir=config.runs_dir),
+            logger=RunLogger(log_dir=self.config.runs_path, run_id=run_id),
             usage_ledger=self.model_router.usage_ledger,
             sleeper=self.model_router.sleeper,
             jitter=self.model_router.jitter,
@@ -1379,6 +1526,7 @@ class MultiAgentOrchestrator:
         result: dict[str, Any],
         *,
         integrated: bool = False,
+        source_evidence: dict[str, Any] | None = None,
     ) -> None:
         tasks = self.state_store.list_tasks(run_id)
         completed = sorted(
@@ -1398,6 +1546,16 @@ class MultiAgentOrchestrator:
                 "passed": bool(result.get("passed")),
                 "exit_code": result.get("exit_code"),
                 "integrated": integrated,
+                "candidate_identity_sha256": (
+                    source_evidence.get("candidate", {}).get("identity_sha256")
+                    if isinstance(source_evidence, dict)
+                    and isinstance(source_evidence.get("candidate"), dict)
+                    else (
+                        source_evidence.get("candidate_state_sha256")
+                        if isinstance(source_evidence, dict)
+                        else None
+                    )
+                ),
             },
         )
 
@@ -1436,6 +1594,8 @@ class MultiAgentOrchestrator:
         test_output: str | None,
         changes: RepositoryChangeSet,
         reviewer=None,
+        analysis_artifacts: list[dict[str, Any]] | None = None,
+        review_evidence: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         with model_request_context(
             run_id=run_id,
@@ -1448,6 +1608,8 @@ class MultiAgentOrchestrator:
                 test_output=test_output,
                 changes=changes,
                 reviewer=reviewer,
+                analysis_artifacts=analysis_artifacts,
+                review_evidence=review_evidence,
             )
 
     def _finalize_parallel_git(self, run_id: str) -> ExecutionReport:
@@ -1564,6 +1726,32 @@ class MultiAgentOrchestrator:
 
     def _verify_final(self, run_id: str) -> dict[str, Any]:
         verify = self.verifier.verify
+        task_id = self._final_tool_task_id(run_id)
+        invocation_key = "final-run"
+        expected_command_sha256 = None
+        evidence = self._latest_managed_verification_evidence(run_id)
+        if evidence is not None:
+            source_snapshot = getattr(
+                self.git_repository,
+                "review_source_snapshot",
+                None,
+            )
+            current_source = source_snapshot() if source_snapshot is not None else None
+            if current_source != evidence["source_snapshot"]:
+                return {
+                    "command": [],
+                    "exit_code": None,
+                    "passed": False,
+                    "output": "",
+                    "reason": (
+                        "Review-eligible source changed after the last successful "
+                        "managed verification."
+                    ),
+                    "status": "source_changed_after_verification",
+                }
+            task_id = evidence["task_id"]
+            invocation_key = evidence["invocation_key"]
+            expected_command_sha256 = evidence["command_sha256"]
         with build_managed_tool_runtime(
             workspace=self.workspace,
             state_store=self.state_store,
@@ -1579,12 +1767,101 @@ class MultiAgentOrchestrator:
                     "require_command": True,
                     "tool_runtime": tool_runtime,
                     "run_id": run_id,
-                    "task_id": self._final_tool_task_id(run_id),
-                    "invocation_key": "final-run",
+                    "task_id": task_id,
+                    "invocation_key": invocation_key,
                     "workspace_trusted": True,
                     "provider_consented": True,
+                    "expected_command_sha256": expected_command_sha256,
                 },
             )
+
+    def _latest_managed_verification_evidence(
+        self,
+        run_id: str,
+    ) -> dict[str, Any] | None:
+        for task in reversed(self.state_store.list_tasks(run_id)):
+            if (
+                task.status != TaskStatus.SUCCEEDED
+                or task.spec.execution_kind != TaskExecutionKind.IMPLEMENTATION
+            ):
+                continue
+            for attempt in reversed(
+                self.state_store.list_attempts(run_id, task.task_id)
+            ):
+                evidence = attempt.metadata.get("verification_evidence")
+                if not isinstance(evidence, dict) or evidence.get("status") != "passed":
+                    continue
+                task_id = evidence.get("task_id")
+                invocation_key = evidence.get("invocation_key")
+                command_sha256 = evidence.get("command_sha256")
+                source_snapshot = evidence.get("source_snapshot")
+                if (
+                    task_id == task.task_id
+                    and isinstance(invocation_key, str)
+                    and invocation_key
+                    and isinstance(command_sha256, str)
+                    and len(command_sha256) == 64
+                    and isinstance(source_snapshot, dict)
+                ):
+                    return {
+                        "task_id": task_id,
+                        "invocation_key": invocation_key,
+                        "command_sha256": command_sha256,
+                        "source_snapshot": {
+                            str(path): str(identity)
+                            for path, identity in source_snapshot.items()
+                        },
+                    }
+        return None
+
+    def _requires_final_verification(self, run_id: str) -> bool:
+        return any(
+            task.spec.execution_kind == TaskExecutionKind.IMPLEMENTATION
+            for task in self.state_store.list_tasks(run_id)
+        )
+
+    @staticmethod
+    def _analysis_final_verifier_result() -> dict[str, Any]:
+        return {
+            "command": [],
+            "exit_code": None,
+            "passed": True,
+            "output": None,
+            "reason": "All durable tasks are explicit analysis tasks.",
+            "status": "not_applicable",
+            "skipped": True,
+        }
+
+    def _analysis_artifacts_for_review(
+        self,
+        run_id: str,
+    ) -> list[dict[str, Any]]:
+        latest: dict[str, tuple[int, Any]] = {}
+        for artifact in self.state_store.load_snapshot(run_id).artifacts:
+            if artifact.artifact_type != "analysis_summary" or not artifact.task_id:
+                continue
+            attempt_number = int(artifact.metadata.get("attempt_number") or 0)
+            previous = latest.get(artifact.task_id)
+            if previous is None or attempt_number > previous[0]:
+                latest[artifact.task_id] = (attempt_number, artifact)
+
+        values: list[dict[str, Any]] = []
+        remaining_chars = 16_000
+        for task_id in sorted(latest)[:16]:
+            if remaining_chars <= 0:
+                break
+            artifact = latest[task_id][1]
+            summary = str(artifact.metadata.get("summary") or "")[:remaining_chars]
+            remaining_chars -= len(summary)
+            values.append(
+                {
+                    "task_id": task_id[:128],
+                    "identifier": artifact.identifier[:128],
+                    "summary": summary,
+                    "truncated": bool(artifact.metadata.get("truncated")),
+                }
+            )
+        return values
 
     def _final_tool_task_id(self, run_id: str) -> str:
         tasks = self.state_store.list_tasks(run_id)
@@ -1634,6 +1911,45 @@ class MultiAgentOrchestrator:
                     "are not both successful."
                 ),
                 event_type="git_finalization_blocked",
+            )
+            return self.get_durable_report(run_id)
+
+        final_review = run.metadata.get("final_review", {})
+        review_evidence = (
+            final_review.get("review_evidence", {})
+            if isinstance(final_review, dict)
+            else {}
+        )
+        expected_candidate = (
+            review_evidence.get("candidate")
+            if isinstance(review_evidence, dict)
+            else None
+        )
+        review_baseline = run.metadata.get("workspace_review_baseline")
+        if (
+            isinstance(expected_candidate, dict)
+            and not self._cumulative_candidate_is_current(
+                self.git_repository,
+                review_baseline,
+                expected_candidate,
+            )
+        ):
+            self.state_store.update_run_details(
+                run_id,
+                reviewer_status="invalidated",
+                finalization_error=(
+                    "Review-eligible source changed after final approval; commit and "
+                    "PR creation were blocked."
+                ),
+                metadata_updates={
+                    "git_finalization_source_identity": {
+                        "status": "mismatch",
+                        "candidate_identity_sha256": expected_candidate.get(
+                            "identity_sha256"
+                        ),
+                    }
+                },
+                event_type="git_finalization_source_identity_mismatch",
             )
             return self.get_durable_report(run_id)
 
@@ -1834,6 +2150,152 @@ class MultiAgentOrchestrator:
                 pass
         return self.git.git_diff()
 
+    @staticmethod
+    def _cumulative_review_candidate(
+        repository,
+        baseline: Any,
+    ) -> dict[str, Any] | None:
+        capture = getattr(repository, "review_candidate", None)
+        if capture is None or not isinstance(baseline, dict):
+            return None
+        candidate = capture(baseline)
+        if not isinstance(candidate, dict):
+            raise GitRepositoryError(
+                "Repository returned an invalid cumulative review candidate."
+            )
+        return candidate
+
+    @classmethod
+    def _cumulative_candidate_is_current(
+        cls,
+        repository,
+        baseline: Any,
+        expected: dict[str, Any] | None,
+    ) -> bool:
+        if expected is None:
+            return True
+        try:
+            current = cls._cumulative_review_candidate(repository, baseline)
+        except GitRepositoryError:
+            return False
+        return bool(
+            isinstance(current, dict)
+            and current.get("identity_sha256") == expected.get("identity_sha256")
+            and current.get("tree_id") == expected.get("tree_id")
+            and current.get("source_snapshot") == expected.get("source_snapshot")
+        )
+
+    def _final_review_evidence(
+        self,
+        run_id: str,
+        baseline: Any,
+        candidate: dict[str, Any] | None,
+        changes: RepositoryChangeSet,
+    ) -> dict[str, Any]:
+        task_baselines = []
+        for task in self.state_store.list_tasks(run_id):
+            attempts = self.state_store.list_attempts(run_id, task.task_id)
+            if not attempts:
+                continue
+            raw = attempts[-1].metadata.get("repository_baselines")
+            if not isinstance(raw, dict):
+                continue
+            task_baseline = raw.get("task", {})
+            attempt_baseline = raw.get("attempt", {})
+            task_baselines.append(
+                {
+                    "task_id": task.task_id,
+                    "attempt_number": attempts[-1].attempt_number,
+                    "task_baseline_identity_sha256": (
+                        task_baseline.get("identity_sha256")
+                        if isinstance(task_baseline, dict)
+                        else None
+                    ),
+                    "attempt_baseline_identity_sha256": (
+                        attempt_baseline.get("identity_sha256")
+                        if isinstance(attempt_baseline, dict)
+                        else None
+                    ),
+                    "retry_workspace": raw.get("retry_workspace"),
+                }
+            )
+        packet = {
+            "schema_version": 1,
+            "diff_scope": "cumulative_run",
+            "changed_files": changes.changed_files,
+            "review_files": changes.review_files,
+            "commit_eligible_files": changes.commit_files,
+            "run_baseline": (
+                {
+                    "identity_sha256": baseline.get("identity_sha256"),
+                    "state_sha256": baseline.get("state_sha256"),
+                    "head_commit": baseline.get("head_commit"),
+                    "tree_id": baseline.get("tree_id"),
+                }
+                if isinstance(baseline, dict)
+                else None
+            ),
+            "candidate": (
+                {
+                    "identity_sha256": candidate.get("identity_sha256"),
+                    "head_commit": candidate.get("head_commit"),
+                    "tree_id": candidate.get("tree_id"),
+                    "source_snapshot": candidate.get("source_snapshot", {}),
+                }
+                if isinstance(candidate, dict)
+                else None
+            ),
+            "task_baselines": task_baselines[:512],
+        }
+        safe = sanitize_json(packet, max_chars=20_000)
+        if not isinstance(safe, dict):
+            raise GitRepositoryError("Final review evidence could not be bounded safely.")
+        return safe
+
+    def _fail_final_source_identity(
+        self,
+        run_id: str,
+        changed_files: list[str],
+        changes: RepositoryChangeSet,
+        *,
+        stage: str,
+    ) -> ExecutionReport:
+        message = (
+            "Review-eligible source changed after final verification; final review "
+            "and Git finalization were blocked."
+        )
+        self.state_store.update_run_details(
+            run_id,
+            verifier_status="source_changed_after_verification",
+            reviewer_status="not_run",
+            changed_files=changed_files,
+            metadata_updates={
+                "artifact_hygiene": changes.to_metadata(),
+                "final_review": {
+                    "required": True,
+                    "status": "blocked_by_verification",
+                    "summary": message,
+                    "issues": [],
+                    "required_fixes": [
+                        "Re-run verification and review on one unchanged candidate state."
+                    ],
+                    "unplanned_affected_components": [],
+                    "missing_tests": [],
+                    "boundary_violations": [],
+                    "index_uncertainty": [],
+                    "source_identity_mismatch_stage": stage,
+                },
+            },
+            event_type="final_review_source_identity_mismatch",
+        )
+        self.state_store.update_run_status(
+            run_id,
+            RunStatus.FAILED,
+            failure_reason=message,
+            event_type="durable_run_final_source_identity_failed",
+        )
+        return self.get_durable_report(run_id)
+
     def _call_reviewer(
         self,
         *,
@@ -1845,6 +2307,8 @@ class MultiAgentOrchestrator:
         reviewer=None,
         intelligence_context: PlannerIntelligenceContext | None = None,
         task_id: str | None = None,
+        analysis_artifacts: list[dict[str, Any]] | None = None,
+        review_evidence: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         selected_reviewer = reviewer or self.reviewer
         if intelligence_context is None:
@@ -1870,6 +2334,8 @@ class MultiAgentOrchestrator:
             "ignored_files": changes.ignored_files,
             "tracked_generated_artifacts": changes.tracked_generated_files,
             "repository_intelligence": repository_intelligence,
+            "analysis_artifacts": analysis_artifacts,
+            "review_evidence": review_evidence,
         }
         parameters = inspect.signature(selected_reviewer.review).parameters.values()
         if not any(
@@ -2196,6 +2662,79 @@ class MultiAgentOrchestrator:
             },
         )
         return result.plan
+
+    def _plan_durable(
+        self,
+        user_task: str,
+        context_pack: str,
+        intelligence: PlannerIntelligenceContext | None,
+        cancellation: CancellationToken,
+    ) -> dict[str, Any]:
+        feedback: list[str] | None = None
+        for attempt in range(1, 3):
+            cancellation.checkpoint(
+                "orchestrator",
+                stage=f"before-planner-contract-attempt-{attempt}",
+            )
+            plan = self._call_with_supported_arguments(
+                self.planner.plan,
+                {
+                    "user_task": user_task,
+                    "context_pack": context_pack,
+                    "contract_feedback": feedback,
+                },
+            )
+            plan = PlannerOutput.model_validate(plan).model_dump(
+                mode="json",
+                exclude_none=True,
+            )
+            try:
+                # Validate model-authored structured paths before optional
+                # intelligence fields are filtered or normalized.
+                TaskGraph.from_planner_output(
+                    plan,
+                    workspace=self.workspace,
+                )
+                plan = self._validate_planner_scope(plan, intelligence)
+                graph = TaskGraph.from_planner_output(
+                    plan,
+                    workspace=self.workspace,
+                )
+                if self.config.parallel_execution:
+                    analysis_tasks = [
+                        task
+                        for task in graph.tasks
+                        if task.execution_kind.value == "analysis"
+                    ]
+                    if analysis_tasks:
+                        raise PlanContractValidationError(
+                            [
+                                PlanContractIssue(
+                                    "analysis_parallel_unsupported",
+                                    task.task_id,
+                                    "analysis tasks require sequential execution",
+                                )
+                                for task in analysis_tasks
+                            ]
+                        )
+            except PlanContractValidationError as exc:
+                self.logger.log(
+                    "planner_contract_rejected",
+                    {
+                        "attempt": attempt,
+                        **exc.safe_metadata(),
+                    },
+                )
+                if attempt == 2:
+                    raise
+                feedback = exc.feedback()
+                continue
+            cancellation.checkpoint(
+                "orchestrator",
+                stage=f"after-planner-contract-attempt-{attempt}",
+            )
+            return plan
+        raise AssertionError("bounded planner contract loop did not terminate")
 
     def _record_repository_intelligence_trace(
         self,

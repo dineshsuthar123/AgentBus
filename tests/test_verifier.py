@@ -1,8 +1,10 @@
+import pytest
+
 from agentbus.config import AgentBusConfig
 from agentbus.execution.cancellation_registry import CancellationRegistry
 from agentbus.execution.models import RunRecord, TaskSpec
 from agentbus.execution.state_store import StateStore
-from agentbus.runtime.verifier import Verifier
+from agentbus.runtime.verifier import Verifier, VerifierContinuationError
 from agentbus.tools.protocol import ToolInvocationStatus, ToolResourceBudget
 from agentbus.tools.runtime import build_managed_tool_runtime
 
@@ -94,3 +96,23 @@ def test_verifier_uses_shared_managed_supervisor_and_audit(tmp_path):
     assert store.list_tool_audits("run-1")[0].record.invocation_id == (
         records[0].invocation_id
     )
+
+
+def test_verifier_rejects_changed_command_before_execution(tmp_path):
+    class MustNotExecute:
+        def run_command_result(self, *args, **kwargs):
+            raise AssertionError("changed verifier command must not execute")
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    verifier = Verifier(
+        config=AgentBusConfig(workspace_dir=str(workspace)),
+        command=["python", "-m", "pytest"],
+        command_tools=MustNotExecute(),
+    )
+
+    with pytest.raises(
+        VerifierContinuationError,
+        match="Verifier command changed",
+    ):
+        verifier.verify(expected_command_sha256="0" * 64)

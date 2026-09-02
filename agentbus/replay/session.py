@@ -79,6 +79,10 @@ class ReplaySpanResult(TraceModel):
     summary: str = Field(min_length=1, max_length=4_000)
     output_sha256: Sha256Digest | None = None
     drift: list[str] = Field(default_factory=list, max_length=256)
+    historical_authorization_validated: bool = False
+    historical_executable: str | None = Field(default=None, max_length=1_024)
+    captured_result_reused: bool = False
+    process_dispatched: bool = False
 
     @field_validator("summary", "drift")
     @classmethod
@@ -89,6 +93,11 @@ class ReplaySpanResult(TraceModel):
                 for item in value
             ]
         return redact_diagnostic_text(value, max_chars=4_000) or "unspecified"
+
+    @field_validator("historical_executable")
+    @classmethod
+    def executable_is_safe(cls, value: str | None) -> str | None:
+        return redact_diagnostic_text(value, max_chars=1_024)
 
 
 class ReplaySession(TraceModel):
@@ -119,6 +128,9 @@ class ReplaySession(TraceModel):
     failure_message: str | None = Field(default=None, max_length=4_000)
     provider_calls: int = Field(default=0, ge=0)
     network_calls: int = Field(default=0, ge=0)
+    historical_authorizations_validated: int = Field(default=0, ge=0)
+    captured_tool_results_reused: int = Field(default=0, ge=0)
+    process_dispatches: int = Field(default=0, ge=0)
 
     @field_validator("failure_category", "failure_message")
     @classmethod

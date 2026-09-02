@@ -1,13 +1,24 @@
+import json
 from types import SimpleNamespace
 from typing import Literal
 
 import pytest
 from pydantic import BaseModel, ConfigDict
 
+from agentbus.agents.planner import PlannerOutput
+from agentbus.agents.reviewer import ReviewerOutput
+from agentbus.doctor import _DoctorSmoke
+from agentbus.main import ProviderSmokeOutput
 from agentbus.models.azure_openai import (
     AzureOpenAIProvider,
     map_azure_exception,
     normalize_azure_v1_endpoint,
+)
+from agentbus.models.azure_schema import (
+    AzureAgentActionWire,
+    AzureStructuredOutputSchemaError,
+    azure_structured_output_adapter,
+    validate_azure_structured_output_schema,
 )
 from agentbus.models.errors import (
     ModelAuthenticationError,
@@ -25,6 +36,8 @@ from agentbus.models.errors import (
     ModelTimeoutError,
     ModelTransportError,
 )
+from agentbus.models.types import ModelRole
+from agentbus.runtime.schemas import AgentAction
 
 
 class Detail(BaseModel):
@@ -92,6 +105,183 @@ def provider(client, **overrides):
     }
     values.update(overrides)
     return AzureOpenAIProvider(**values)
+
+
+def wire_tool_action(**overrides):
+    tool_call = {
+        "tool_name": "filesystem.write",
+        "arguments_json": '{"content":"VALUE = 1\\n","path":"result.py"}',
+        "expected_capabilities": [
+            "filesystem.write",
+            "filesystem.create",
+        ],
+        "timeout_seconds": None,
+        "invocation_revision": 1,
+        "idempotency_key": "create-result",
+    }
+    tool_call.update(overrides)
+    return {
+        "action": "tool_call",
+        "tool_call": tool_call,
+        "summary": None,
+    }
+
+
+def test_agent_action_schema_exposes_exact_azure_incompatibilities():
+    schema = AgentAction.model_json_schema()
+    tool_call = schema["$defs"]["ModelToolCall"]
+
+    assert tool_call["properties"]["arguments"]["additionalProperties"] is True
+    assert set(tool_call["required"]) == {
+        "tool_name",
+        "expected_capabilities",
+        "idempotency_key",
+    }
+
+    with pytest.raises(AzureStructuredOutputSchemaError) as captured:
+        validate_azure_structured_output_schema(schema)
+
+    issues = {(issue.path, issue.code) for issue in captured.value.issues}
+    assert ("$.required", "missing_required_fields") in issues
+    assert (
+        "$.$defs.ModelToolCall.properties.arguments.additionalProperties",
+        "open_object",
+    ) in issues
+    for path in (
+        "$.$defs.ModelToolCall.properties.tool_name.minLength",
+        "$.$defs.ModelToolCall.properties.tool_name.maxLength",
+        "$.$defs.ModelToolCall.properties.timeout_seconds.anyOf[0].exclusiveMinimum",
+        "$.$defs.ModelToolCall.properties.timeout_seconds.anyOf[0].maximum",
+        "$.$defs.ModelToolCall.properties.invocation_revision.minimum",
+        "$.$defs.ModelToolCall.properties.invocation_revision.default",
+        "$.$defs.ModelToolCall.properties.idempotency_key.minLength",
+        "$.$defs.ModelToolCall.properties.idempotency_key.maxLength",
+    ):
+        assert (path, "unsupported_keyword") in issues
+
+
+@pytest.mark.parametrize(
+    "model",
+    [PlannerOutput, AgentAction, ReviewerOutput, ProviderSmokeOutput, _DoctorSmoke],
+)
+def test_every_production_azure_wire_schema_uses_supported_subset(model):
+    adapter = azure_structured_output_adapter(model)
+
+    validate_azure_structured_output_schema(adapter.wire_model.model_json_schema())
+
+
+def test_agent_action_uses_explicit_wire_and_restores_tool_arguments():
+    parsed = wire_tool_action()
+    client = FakeClient(response(output_parsed=parsed))
+
+    result = provider(
+        client,
+        deployment="coder-deployment",
+        role=ModelRole.CODER,
+    ).generate_json("structured action", schema=AgentAction)
+
+    call = client.responses.parse.calls[0]
+    assert call["model"] == "coder-deployment"
+    assert call["text_format"] is AzureAgentActionWire
+    assert result.json_value()["tool_call"]["arguments"] == {
+        "content": "VALUE = 1\n",
+        "path": "result.py",
+    }
+
+
+def test_agent_action_wire_requires_nullable_fields_to_be_present():
+    schema = AzureAgentActionWire.model_json_schema()
+    tool_call_schema = schema["$defs"]["AzureModelToolCallWire"]
+
+    assert set(schema["required"]) == {"action", "tool_call", "summary"}
+    assert set(tool_call_schema["required"]) == {
+        "tool_name",
+        "arguments_json",
+        "expected_capabilities",
+        "timeout_seconds",
+        "invocation_revision",
+        "idempotency_key",
+    }
+    assert {item["type"] for item in schema["properties"]["summary"]["anyOf"]} == {
+        "string",
+        "null",
+    }
+    assert {
+        item["type"]
+        for item in tool_call_schema["properties"]["timeout_seconds"]["anyOf"]
+    } == {"number", "null"}
+
+
+def test_agent_action_wire_accepts_required_null_tool_call_for_finish():
+    parsed = {
+        "action": "finish",
+        "tool_call": None,
+        "summary": "Completed and verified the requested change.",
+    }
+
+    result = provider(FakeClient(response(output_parsed=parsed))).generate_json(
+        "finish action",
+        schema=AgentAction,
+    )
+
+    assert result.json_value() == parsed
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [
+        ("tool_name", ""),
+        ("tool_name", "t" * 129),
+        ("arguments_json", "{"),
+        ("arguments_json", "[]"),
+        ("arguments_json", '{"value":"' + ("x" * 1_048_576) + '"}'),
+        ("expected_capabilities", []),
+        ("expected_capabilities", ["filesystem.write", "filesystem.write"]),
+        ("timeout_seconds", 0),
+        ("timeout_seconds", 86_400.1),
+        ("invocation_revision", 0),
+        ("idempotency_key", ""),
+        ("idempotency_key", "i" * 257),
+    ],
+    ids=[
+        "empty-tool-name",
+        "oversized-tool-name",
+        "malformed-arguments-json",
+        "non-object-arguments-json",
+        "oversized-arguments-json",
+        "empty-capabilities",
+        "duplicate-capabilities",
+        "nonpositive-timeout",
+        "excessive-timeout",
+        "invalid-invocation-revision",
+        "empty-idempotency-key",
+        "oversized-idempotency-key",
+    ],
+)
+def test_agent_action_wire_preserves_authoritative_local_validation(
+    field,
+    invalid_value,
+):
+    parsed = wire_tool_action(**{field: invalid_value})
+
+    with pytest.raises(ModelSchemaValidationError):
+        provider(FakeClient(response(output_parsed=parsed))).generate_json(
+            "invalid structured action",
+            schema=AgentAction,
+        )
+
+
+@pytest.mark.parametrize("target", ["root", "tool_call"])
+def test_agent_action_wire_rejects_forbidden_extra_fields(target):
+    parsed = wire_tool_action()
+    selected = parsed if target == "root" else parsed["tool_call"]
+    selected["unexpected"] = True
+
+    with pytest.raises(ModelSchemaValidationError):
+        provider(FakeClient(response(output_parsed=parsed))).generate_json(
+            "extra structured field",
+            schema=AgentAction,
+        )
 
 
 @pytest.mark.parametrize(
@@ -236,6 +426,29 @@ def test_dictionary_schema_is_validated_locally():
         )
 
 
+def test_incompatible_dictionary_schema_fails_locally_before_transport():
+    client = FakeClient(response('{"name":"ok"}'))
+    schema = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "minLength": 1},
+        },
+        "required": ["name"],
+        "additionalProperties": False,
+    }
+
+    with pytest.raises(ModelConfigurationError) as captured:
+        provider(client).generate_json("schema", schema=schema)
+
+    assert client.responses.create.calls == []
+    assert client.responses.parse.calls == []
+    assert captured.value.metadata == {
+        "schema_issue_count": 1,
+        "schema_issue_codes": ["unsupported_keyword"],
+        "schema_issue_paths": ["$.properties.name.minLength"],
+    }
+
+
 def test_chat_completions_mode_uses_messages_and_usage_fields():
     chat_response = SimpleNamespace(
         choices=[
@@ -269,10 +482,22 @@ def test_chat_completions_mode_uses_messages_and_usage_fields():
 
 
 class FakeSdkError(Exception):
-    def __init__(self, message, status_code=None, headers=None):
+    def __init__(
+        self,
+        message,
+        status_code=None,
+        headers=None,
+        *,
+        body=None,
+        code=None,
+        param=None,
+    ):
         super().__init__(message)
         self.status_code = status_code
         self.request_id = "error-request"
+        self.body = body
+        self.code = code
+        self.param = param
         self.response = SimpleNamespace(
             status_code=status_code,
             headers=headers or {},
@@ -337,6 +562,61 @@ def test_retry_after_seconds_and_milliseconds_are_extracted():
 
     assert seconds.retry_after_seconds == 3
     assert milliseconds.retry_after_seconds == 0.25
+
+
+def test_bad_request_preserves_only_bounded_allowlisted_azure_diagnostics():
+    error = FakeSdkError(
+        "Azure request failed; api_key=must-not-persist",
+        400,
+        body={
+            "code": "invalid_request_error",
+            "param": "text.format.schema",
+            "message": (
+                "Invalid schema: additionalProperties must be false; "
+                "prompt=private-source; api_key=must-not-persist"
+            ),
+            "request": {"schema": "must-not-persist"},
+        },
+        code="invalid_request_error",
+        param="text.format.schema",
+    )
+
+    mapped = map_azure_exception(error, model="coder-deployment")
+    safe = mapped.safe_metadata()
+
+    assert isinstance(mapped, ModelBadRequestError)
+    assert mapped.retryable is False
+    assert safe["model"] == "coder-deployment"
+    assert safe["request_id"] == "error-request"
+    assert safe["http_status"] == 400
+    assert safe["metadata"] == {
+        "azure_error_code": "invalid_request_error",
+        "azure_error_param": "text.format.schema",
+        "azure_diagnostic": (
+            "Azure rejected an unsupported structured-output schema keyword."
+        ),
+    }
+    serialized = json.dumps(safe, sort_keys=True)
+    assert "must-not-persist" not in serialized
+    assert "private-source" not in serialized
+    assert '"request"' not in serialized
+
+
+def test_azure_diagnostics_reject_non_identifier_code_and_parameter_values():
+    mapped = map_azure_exception(
+        FakeSdkError(
+            "bad request",
+            400,
+            body={
+                "code": "api_key=must-not-persist",
+                "param": "prompt: private-source",
+                "message": "bad request",
+            },
+        ),
+        model="coder-deployment",
+    )
+
+    assert mapped.safe_metadata()["metadata"] == {}
 
 
 def test_unknown_client_error_is_not_misclassified_as_retryable_transport():

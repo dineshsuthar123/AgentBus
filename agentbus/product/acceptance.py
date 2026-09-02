@@ -691,7 +691,7 @@ class _CleanInstallRunner:
         )
         required = (
             "Status: succeeded",
-            "Reviewer: approved",
+            "Final reviewer: approved",
             "agentbus_result.py",
             "test_agentbus_result.py",
         )
@@ -1325,8 +1325,8 @@ def _offline_environment(
     environment.update(
         {
             "AGENTBUS_PROVIDER": "deterministic",
-            "AGENTBUS_STATE_DIR": str(root / "preflight-state"),
-            "AGENTBUS_RUNS_DIR": str(root / "preflight-runs"),
+            "AGENTBUS_STATE_DIR": str(root / ".agentbus"),
+            "AGENTBUS_RUNS_DIR": str(root / ".agentbus" / "runs"),
             "AGENTBUS_MODEL_MAX_RETRIES": "0",
             "AGENTBUS_KEEP_WORKTREES": "false",
             "AGENTBUS_ACCEPTANCE": "1",

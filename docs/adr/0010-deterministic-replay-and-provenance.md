@@ -102,6 +102,32 @@ Uncaptured external mutations are rejected.
 Replay cancellation is cooperative at span boundaries. Terminal sessions are
 durable and are not rerun after restart.
 
+### Authenticated historical execution envelopes
+
+Managed process capture uses tool-envelope version 2 with an independently
+versioned historical execution envelope. Canonical SHA-256 bindings cover the
+full historical descriptor, a normalized descriptor contract, invocation and
+arguments, capabilities, policy and policy context, resource budget, positive
+process-dispatch evidence, executable and dependency provenance, optional
+source/candidate identities, exact approval evidence, and the captured result.
+The content-addressed tool object is also covered by the sealed trace's
+provenance chain.
+
+This evidence proves only that the captured invocation passed the managed
+runtime chain represented by the trace. It is not proof that the process output
+was externally truthful, and it does not authorize another execution. Offline
+replay verifies provenance, schema and bindings, rederives capabilities,
+reevaluates current policy, validates an exact historical approval when
+required, and reuses the captured result without dispatching the process.
+Current executable discovery and `PATH` state are deliberately excluded from
+replay authorization.
+
+Malformed, tampered, ambiguous, or unsupported evidence fails closed. Older
+process traces without sufficient authenticated evidence remain incompatible;
+AgentBus does not infer authorization from command text or silently upgrade an
+old trace. Replayability classification remains conservative, so a successful
+captured-result replay can still be partially replayable.
+
 ### Checkpoint isolation
 
 Record versioned checkpoints after important durable transitions. Partial

@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from agentbus.replay import ReplayabilityClassifier, ReplayabilityLevel
+from agentbus.replay.substitutions import MODEL_ENVELOPE_MEDIA_TYPE
 from agentbus.trace import (
     REPOSITORY_INTELLIGENCE_COMPONENT,
     Trace,
@@ -72,6 +73,7 @@ def test_captured_provider_response_is_substitutable_offline() -> None:
                 name="structured response",
                 sha256=OUTPUT,
                 byte_length=10,
+                media_type=MODEL_ENVELOPE_MEDIA_TYPE,
             )
         ],
     )
@@ -84,6 +86,70 @@ def test_captured_provider_response_is_substitutable_offline() -> None:
     assert result.level == ReplayabilityLevel.DETERMINISTICALLY_SUBSTITUTABLE
     assert result.substitution_kinds == ["provider_response"]
     assert result.live_provider_consent_required is False
+
+
+def test_provider_request_uses_only_its_captured_child_response() -> None:
+    request = _span(
+        "provider-request",
+        TraceSpanType.PROVIDER_REQUEST,
+        2,
+        attributes={"provider": "azure"},
+    )
+    response = _span(
+        "provider-response",
+        TraceSpanType.PROVIDER_RESPONSE,
+        3,
+        parent=request.span_id,
+        attributes={"provider": "azure"},
+        outputs=[
+            TraceOutput(
+                reference_id="response-envelope",
+                name="structured response",
+                sha256=OUTPUT,
+                byte_length=10,
+                media_type=MODEL_ENVELOPE_MEDIA_TYPE,
+            )
+        ],
+    )
+    trace = Trace(
+        trace_id="trace-1",
+        run_id="run-1",
+        root_span_id="root",
+        status=TraceStatus.SUCCEEDED,
+        created_at=NOW,
+        completed_at=NOW,
+        spans=[_root(), request, response],
+    )
+
+    result = ReplayabilityClassifier().classify_trace(
+        trace,
+        available_object_hashes={OUTPUT},
+    )
+    request_result = next(
+        item for item in result.spans if item.span_id == request.span_id
+    )
+
+    assert result.replayable_offline is True
+    assert request_result.level == ReplayabilityLevel.DETERMINISTICALLY_SUBSTITUTABLE
+    assert request_result.substitution_kinds == ["provider_response"]
+    assert request_result.live_provider_consent_required is False
+
+
+def test_provider_request_without_captured_child_remains_non_replayable() -> None:
+    request = _span(
+        "provider-request",
+        TraceSpanType.PROVIDER_REQUEST,
+        2,
+        attributes={"provider": "azure"},
+    )
+
+    result = ReplayabilityClassifier().classify_span(
+        request,
+        available_object_hashes={OUTPUT},
+    )
+
+    assert result.level == ReplayabilityLevel.NON_REPLAYABLE
+    assert result.live_provider_consent_required is True
 
 
 def test_missing_required_input_is_non_replayable_and_explained() -> None:

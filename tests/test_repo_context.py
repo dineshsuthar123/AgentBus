@@ -100,6 +100,16 @@ def test_test_command_detector_picks_mvn_test(tmp_path):
     assert result["command"] == ["mvn", "test"]
 
 
+def test_test_command_detector_preserves_safe_maven_config_flags(tmp_path):
+    workspace = tmp_path / "workspace"
+    write(workspace / "pom.xml", "<project></project>")
+    write(workspace / ".mvn" / "maven.config", "--quiet\n--offline\n")
+
+    result = TestCommandDetector(str(workspace)).detect()
+
+    assert result["command"] == ["mvn", "-q", "-o", "test"]
+
+
 def test_context_pack_includes_stack_test_command_and_key_files(tmp_path):
     workspace = tmp_path / "workspace"
     write(workspace / "requirements.txt", "pytest")

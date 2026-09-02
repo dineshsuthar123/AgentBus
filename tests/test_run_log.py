@@ -1,7 +1,14 @@
 import json
 from datetime import datetime
 
+import pytest
+
 from agentbus.memory.run_log import RunLogger
+
+
+def test_run_logger_rejects_workspace_relative_default():
+    with pytest.raises(ValueError, match="absolute directory"):
+        RunLogger(log_dir="runs")
 
 
 def test_run_log_writes_valid_json_lines(tmp_path):

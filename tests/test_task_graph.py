@@ -1,7 +1,11 @@
 import pytest
 
 from agentbus.execution.models import TaskStatus
-from agentbus.execution.task_graph import TaskGraph, TaskGraphValidationError
+from agentbus.execution.task_graph import (
+    PlanContractValidationError,
+    TaskGraph,
+    TaskGraphValidationError,
+)
 
 
 def planner_output(steps):
@@ -19,6 +23,8 @@ def step(task_id, *, dependencies=None):
         "title": task_id,
         "description": f"Implement {task_id}",
         "risk": "low",
+        "execution_kind": "implementation",
+        "required_capabilities": ["filesystem.write"],
     }
     if dependencies is not None:
         value["dependencies"] = dependencies
@@ -128,6 +134,160 @@ def test_planner_capability_requirements_persist_in_task_metadata():
     assert restored.tasks[0].metadata["required_capabilities"] == [
         "filesystem.write",
         "filesystem.create",
+    ]
+    assert restored.tasks[0].metadata["execution_kind"] == "implementation"
+
+
+def test_read_only_implementation_step_is_rejected_before_persistence():
+    planned = step("inspect", dependencies=[])
+    planned["required_capabilities"] = ["filesystem.read"]
+
+    with pytest.raises(PlanContractValidationError) as captured:
+        TaskGraph.from_planner_output(planner_output([planned]))
+
+    assert {
+        (issue.task_id, issue.code) for issue in captured.value.issues
+    } == {("inspect", "implementation_without_mutation")}
+
+
+def test_analysis_step_cannot_mutate_or_authorize_a_downstream_task():
+    analysis = step("inspect", dependencies=[])
+    analysis.update(
+        {
+            "execution_kind": "analysis",
+            "required_capabilities": ["filesystem.read", "filesystem.write"],
+        }
+    )
+    implementation = step("implement", dependencies=["inspect"])
+
+    with pytest.raises(PlanContractValidationError) as captured:
+        TaskGraph.from_planner_output(
+            planner_output([analysis, implementation])
+        )
+
+    assert {
+        issue.code for issue in captured.value.issues
+    } == {"analysis_with_mutation", "analysis_prerequisite_unsupported"}
+
+
+def test_terminal_analysis_task_has_explicit_read_only_contract():
+    analysis = step("inspect", dependencies=[])
+    analysis.update(
+        {
+            "execution_kind": "analysis",
+            "required_capabilities": ["filesystem.read", "git.read"],
+        }
+    )
+
+    graph = TaskGraph.from_planner_output(planner_output([analysis]))
+
+    assert graph.tasks[0].execution_kind.value == "analysis"
+    assert graph.tasks[0].metadata["required_capabilities"] == [
+        "filesystem.read",
+        "git.read",
+    ]
+
+
+def test_analysis_task_rejects_indirect_side_effect_capabilities():
+    analysis = step("inspect", dependencies=[])
+    analysis.update(
+        {
+            "execution_kind": "analysis",
+            "required_capabilities": [
+                "filesystem.read",
+                "process.execute",
+            ],
+        }
+    )
+
+    with pytest.raises(PlanContractValidationError) as captured:
+        TaskGraph.from_planner_output(planner_output([analysis]))
+
+    assert {
+        issue.code for issue in captured.value.issues
+    } == {"analysis_with_side_effect_capability"}
+
+
+def test_genuine_multi_step_implementation_slices_remain_supported():
+    storage = step("storage", dependencies=[])
+    storage["expected_outputs"] = ["storage.py", "test_storage.py"]
+    webhook = step("webhook", dependencies=["storage"])
+    webhook["expected_outputs"] = ["webhook.py", "test_webhook.py"]
+
+    graph = TaskGraph.from_planner_output(
+        planner_output([storage, webhook])
+    )
+
+    assert [task.task_id for task in graph.tasks] == ["storage", "webhook"]
+    assert graph.get("webhook").dependency_ids == ["storage"]
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    ["expected_outputs", "targeted_files", "proposed_tests"],
+)
+def test_repository_contract_requires_create_for_missing_structured_path(
+    tmp_path,
+    field_name,
+):
+    planned = step("new-record", dependencies=[])
+    planned.update(
+        {
+            field_name: [
+                "src/main/java/com/example/payment/NewIdempotencyRecord.java"
+            ],
+            "done_criteria": ["The idempotency record is implemented"],
+        }
+    )
+
+    with pytest.raises(PlanContractValidationError) as captured:
+        TaskGraph.from_planner_output(
+            planner_output([planned]),
+            workspace=tmp_path,
+        )
+
+    assert {
+        (issue.task_id, issue.code) for issue in captured.value.issues
+    } == {("new-record", "missing_create_capability")}
+
+
+def test_repository_contract_does_not_require_create_for_existing_files(tmp_path):
+    service = tmp_path / "src/main/java/com/example/payment/PaymentService.java"
+    test = tmp_path / "src/test/java/com/example/payment/PaymentServiceTest.java"
+    service.parent.mkdir(parents=True)
+    test.parent.mkdir(parents=True)
+    service.write_text("class PaymentService {}\n", encoding="utf-8")
+    test.write_text("class PaymentServiceTest {}\n", encoding="utf-8")
+    planned = step("existing-payment-fix", dependencies=[])
+    planned.update(
+        {
+            "expected_outputs": [
+                "src/main/java/com/example/payment/PaymentService.java",
+            ],
+            "targeted_files": [
+                "src/main/java/com/example/payment/PaymentService.java",
+            ],
+            "proposed_tests": [
+                "src/test/java/com/example/payment/PaymentServiceTest.java",
+            ],
+            "done_criteria": ["Duplicate payment delivery is idempotent"],
+            "required_capabilities": [
+                "filesystem.read",
+                "filesystem.write",
+                "process.execute",
+                "test.execute",
+                "git.read",
+            ],
+        }
+    )
+
+    graph = TaskGraph.from_planner_output(
+        planner_output([planned]),
+        workspace=tmp_path,
+    )
+
+    assert "filesystem.create" not in graph.tasks[0].metadata[
+        "required_capabilities"
     ]
 
 

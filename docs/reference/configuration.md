@@ -47,6 +47,8 @@ Secrets must remain in the process environment or a secure store.
 | Field | Purpose |
 | --- | --- |
 | `workspace_dir` | Exact target repository root |
+| `state_dir` | Managed runtime root; relative values resolve from the workspace |
+| `runs_dir` | Run-log directory; relative values resolve inside `state_dir` |
 | `provider_name` | `deterministic`, `ollama`, or `azure` |
 | `durable_execution` | Persist resumable task graphs |
 | `parallel_execution` | Use isolated worktrees for independent tasks |

@@ -14,11 +14,13 @@ import pytest
 from agentbus.execution.engine import DurableExecutionEngine
 from agentbus.execution.leases import LeaseService
 from agentbus.execution.models import (
+    AttemptStatus,
     FailureCategory,
     RunStatus,
     TaskExecutionResult,
     TaskStatus,
 )
+from agentbus.execution.retry import TaskExecutionError
 from agentbus.execution.state_store import StateStore
 from agentbus.execution.worker import LocalTaskWorker, WorkerStatus
 from agentbus.worktrees.errors import (
@@ -247,6 +249,59 @@ def test_failure_and_cancellation_preserve_dirty_task_worktrees(
         manager.remove(cancelled_worktree.worktree_id)
     assert Path(cancelled_worktree.path).is_dir()
     _assert_repository_ok(source, base)
+
+
+def test_worker_persists_resumability_failure_without_retrying(tmp_path: Path) -> None:
+    source, base = _repository(tmp_path / "repo")
+    store = _state(tmp_path / "state.db", source, ["resumability-task"])
+    store.update_run_status("run-1", RunStatus.RUNNING)
+    store.update_task_status("run-1", "resumability-task", TaskStatus.READY)
+    manager = GitWorktreeManager(source, tmp_path / "worktrees", store)
+    leases = LeaseService(store)
+    lease = leases.acquire_lease(
+        "run-1",
+        "resumability-task",
+        "resumability-worker",
+        activate_task=True,
+    )
+
+    class Executor:
+        def __init__(self, workspace: Path):
+            self.workspace = workspace
+
+        def execute(self, _context):
+            (self.workspace / "preserved-side-effect.txt").write_text(
+                "preserve me\n",
+                encoding="utf-8",
+            )
+            raise TaskExecutionError(
+                "Persisted continuation is corrupt.",
+                category=FailureCategory.RESUMABILITY_FAILURE,
+                retryable=False,
+            )
+
+    result = LocalTaskWorker(
+        worker_id="resumability-worker",
+        store=store,
+        lease_service=leases,
+        worktree_manager=manager,
+        executor_factory=Executor,
+        heartbeat_seconds=60,
+    ).execute(
+        store.get_run("run-1"),
+        store.get_task("run-1", "resumability-task"),
+        lease,
+        base,
+    )
+    attempt = store.list_attempts("run-1", "resumability-task")[0]
+    worktree = store.list_worktrees("run-1", task_id="resumability-task")[0]
+
+    assert result.status == WorkerStatus.FAILED
+    assert attempt.status == AttemptStatus.FAILED
+    assert attempt.error_category == FailureCategory.RESUMABILITY_FAILURE
+    assert store.get_task("run-1", "resumability-task").status == TaskStatus.FAILED
+    assert store.get_task("run-1", "resumability-task").current_attempt_count == 1
+    assert (Path(worktree.path) / "preserved-side-effect.txt").is_file()
 
 
 def test_stale_record_cannot_remove_replacement_branch_worktree(

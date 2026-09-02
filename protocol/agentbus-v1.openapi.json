@@ -338,6 +338,164 @@
         "title": "ArchitectureBoundarySummary",
         "type": "object"
       },
+      "AttemptListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "attempts": {
+            "items": {
+              "$ref": "#/components/schemas/AttemptSummary"
+            },
+            "maxItems": 500,
+            "title": "Attempts",
+            "type": "array"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "run_id",
+          "attempts",
+          "total"
+        ],
+        "title": "AttemptListResponse",
+        "type": "object"
+      },
+      "AttemptSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "attempt_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Attempt Id",
+            "type": "string"
+          },
+          "attempt_number": {
+            "minimum": 1.0,
+            "title": "Attempt Number",
+            "type": "integer"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "failure_category": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Category"
+          },
+          "failure_message": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Message"
+          },
+          "observation_summary": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observation Summary"
+          },
+          "retry_evidence": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RetryEvidenceSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reviewer_status": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewer Status"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "status": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Status",
+            "type": "string"
+          },
+          "task_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Task Id",
+            "type": "string"
+          },
+          "verifier_status": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verifier Status"
+          }
+        },
+        "required": [
+          "attempt_id",
+          "task_id",
+          "attempt_number",
+          "status",
+          "started_at"
+        ],
+        "title": "AttemptSummary",
+        "type": "object"
+      },
       "CancelResponse": {
         "additionalProperties": false,
         "properties": {
@@ -1332,6 +1490,7 @@
             "default": "python-calculator",
             "enum": [
               "python-calculator",
+              "payment-safety",
               "cancellation-two-task",
               "tool-safe-read",
               "tool-atomic-write",
@@ -3375,6 +3534,12 @@
       "ReplayAcceptedResponse": {
         "additionalProperties": false,
         "properties": {
+          "captured_tool_results_reused": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Captured Tool Results Reused",
+            "type": "integer"
+          },
           "changed_input_names": {
             "items": {
               "type": "string"
@@ -3470,6 +3635,12 @@
             ],
             "title": "From Span Id"
           },
+          "historical_authorizations_validated": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Historical Authorizations Validated",
+            "type": "integer"
+          },
           "intelligence_drift": {
             "items": {
               "type": "string"
@@ -3522,6 +3693,12 @@
             "maxItems": 1024,
             "title": "Policy Drift",
             "type": "array"
+          },
+          "process_dispatches": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Process Dispatches",
+            "type": "integer"
           },
           "provider_calls": {
             "default": 0,
@@ -3742,6 +3919,12 @@
       "ReplaySessionResponse": {
         "additionalProperties": false,
         "properties": {
+          "captured_tool_results_reused": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Captured Tool Results Reused",
+            "type": "integer"
+          },
           "changed_input_names": {
             "items": {
               "type": "string"
@@ -3837,6 +4020,12 @@
             ],
             "title": "From Span Id"
           },
+          "historical_authorizations_validated": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Historical Authorizations Validated",
+            "type": "integer"
+          },
           "intelligence_drift": {
             "items": {
               "type": "string"
@@ -3889,6 +4078,12 @@
             "maxItems": 1024,
             "title": "Policy Drift",
             "type": "array"
+          },
+          "process_dispatches": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Process Dispatches",
+            "type": "integer"
           },
           "provider_calls": {
             "default": 0,
@@ -3986,6 +4181,11 @@
             "title": "Action",
             "type": "string"
           },
+          "captured_result_reused": {
+            "default": false,
+            "title": "Captured Result Reused",
+            "type": "boolean"
+          },
           "drift": {
             "items": {
               "type": "string"
@@ -3993,6 +4193,23 @@
             "maxItems": 256,
             "title": "Drift",
             "type": "array"
+          },
+          "historical_authorization_validated": {
+            "default": false,
+            "title": "Historical Authorization Validated",
+            "type": "boolean"
+          },
+          "historical_executable": {
+            "anyOf": [
+              {
+                "maxLength": 1024,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Historical Executable"
           },
           "output_sha256": {
             "anyOf": [
@@ -4005,6 +4222,11 @@
               }
             ],
             "title": "Output Sha256"
+          },
+          "process_dispatched": {
+            "default": false,
+            "title": "Process Dispatched",
+            "type": "boolean"
           },
           "span_id": {
             "maxLength": 128,
@@ -4197,6 +4419,154 @@
           "resumed"
         ],
         "title": "ResumeResponse",
+        "type": "object"
+      },
+      "RetryDiagnosticsSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "exception_details": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "title": "Exception Details",
+            "type": "array"
+          },
+          "failing_tests": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "title": "Failing Tests",
+            "type": "array"
+          },
+          "kind": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Kind",
+            "type": "string"
+          },
+          "required_fixes": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "title": "Required Fixes",
+            "type": "array"
+          },
+          "reviewer_issues": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "title": "Reviewer Issues",
+            "type": "array"
+          },
+          "summary": {
+            "default": "",
+            "maxLength": 4096,
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "RetryDiagnosticsSummary",
+        "type": "object"
+      },
+      "RetryEvidenceSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate_identity_sha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Candidate Identity Sha256",
+            "type": "string"
+          },
+          "candidate_tree_id": {
+            "anyOf": [
+              {
+                "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Candidate Tree Id"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "diagnostics": {
+            "$ref": "#/components/schemas/RetryDiagnosticsSummary"
+          },
+          "evidence_sha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Evidence Sha256",
+            "type": "string"
+          },
+          "failure_category": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Failure Category",
+            "type": "string"
+          },
+          "mutations_retained": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mutations Retained"
+          },
+          "retained_changed_files": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 512,
+            "title": "Retained Changed Files",
+            "type": "array"
+          },
+          "source_attempt_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Source Attempt Id",
+            "type": "string"
+          },
+          "source_attempt_number": {
+            "minimum": 1.0,
+            "title": "Source Attempt Number",
+            "type": "integer"
+          },
+          "source_disposition": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Disposition"
+          }
+        },
+        "required": [
+          "source_attempt_id",
+          "source_attempt_number",
+          "failure_category",
+          "candidate_identity_sha256",
+          "diagnostics",
+          "created_at",
+          "evidence_sha256"
+        ],
+        "title": "RetryEvidenceSummary",
         "type": "object"
       },
       "RoleModelOverrides": {
@@ -8090,6 +8460,66 @@
         "title": "TraceValueReferenceSummary",
         "type": "object"
       },
+      "TraceVerificationResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "network_calls": {
+            "const": 0,
+            "default": 0,
+            "title": "Network Calls",
+            "type": "integer"
+          },
+          "object_count": {
+            "minimum": 0.0,
+            "title": "Object Count",
+            "type": "integer"
+          },
+          "protocol_drift": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 256,
+            "title": "Protocol Drift",
+            "type": "array"
+          },
+          "provenance_root": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Provenance Root",
+            "type": "string"
+          },
+          "provider_calls": {
+            "const": 0,
+            "default": 0,
+            "title": "Provider Calls",
+            "type": "integer"
+          },
+          "run_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Run Id",
+            "type": "string"
+          },
+          "trace_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Trace Id",
+            "type": "string"
+          },
+          "valid": {
+            "default": true,
+            "title": "Valid",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "trace_id",
+          "run_id",
+          "provenance_root",
+          "object_count"
+        ],
+        "title": "TraceVerificationResponse",
+        "type": "object"
+      },
       "UsageResponse": {
         "additionalProperties": false,
         "properties": {
@@ -11036,6 +11466,117 @@
         "summary": "Reject"
       }
     },
+    "/api/v1/runs/{run_id}/attempts": {
+      "get": {
+        "operationId": "attempts_api_v1_runs__run_id__attempts_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttemptListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          }
+        },
+        "summary": "Attempts"
+      }
+    },
     "/api/v1/runs/{run_id}/cancel": {
       "post": {
         "operationId": "cancel_run_api_v1_runs__run_id__cancel_post",
@@ -13233,6 +13774,105 @@
           }
         },
         "summary": "Run Trace Span"
+      }
+    },
+    "/api/v1/runs/{run_id}/trace/verify": {
+      "post": {
+        "operationId": "verify_run_trace_api_v1_runs__run_id__trace_verify_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceVerificationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          }
+        },
+        "summary": "Verify Run Trace"
       }
     },
     "/api/v1/runs/{run_id}/usage": {

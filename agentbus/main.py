@@ -247,11 +247,10 @@ def main(argv: list[str] | None = None) -> int:
     print("---------------------")
 
     try:
-        base_config = (
-            AgentBusConfig.from_env()
-            if args.config is None
-            else resolve_configuration(config_file=args.config).config
-        )
+        base_config = resolve_configuration(
+            config_file=args.config,
+            workspace=args.workspace,
+        ).config
         config = base_config.with_overrides(
             model_name=args.model,
             workspace_dir=args.workspace,
@@ -481,7 +480,7 @@ def _handle_durable_operation(
         run_id, task_id = _parse_run_task(args.approve)
         engine = DurableExecutionEngine(
             store,
-            logger=RunLogger(log_dir=config.runs_dir, run_id=run_id),
+            logger=RunLogger(log_dir=config.runs_path, run_id=run_id),
         )
         report = engine.approve_task(run_id, task_id, args.reason)
         print(render_execution_report(report))
@@ -491,7 +490,7 @@ def _handle_durable_operation(
         run_id, task_id = _parse_run_task(args.reject)
         engine = DurableExecutionEngine(
             store,
-            logger=RunLogger(log_dir=config.runs_dir, run_id=run_id),
+            logger=RunLogger(log_dir=config.runs_path, run_id=run_id),
         )
         report = engine.reject_task(run_id, task_id, args.reason)
         print(render_execution_report(report))
@@ -500,7 +499,7 @@ def _handle_durable_operation(
     if args.cancel_run:
         engine = DurableExecutionEngine(
             store,
-            logger=RunLogger(log_dir=config.runs_dir, run_id=args.cancel_run),
+            logger=RunLogger(log_dir=config.runs_path, run_id=args.cancel_run),
         )
         report = engine.cancel_run(args.cancel_run, args.reason)
         print(render_execution_report(report))
@@ -779,6 +778,26 @@ def render_execution_report(report: ExecutionReport) -> str:
     ]
     if report.pending_approvals:
         lines.append("Pending approval: " + ", ".join(report.pending_approvals))
+    for approval in report.pending_approval_details:
+        if approval.get("approval_kind") == "tool":
+            capabilities = ", ".join(approval.get("capabilities", [])) or "[none]"
+            lines.append(
+                "Tool invocation approval pending: "
+                f"task={approval.get('task_id')} "
+                f"attempt={approval.get('attempt_number')} "
+                f"tool={approval.get('tool_name')} "
+                f"approval={approval.get('approval_id')} "
+                f"capabilities={capabilities}"
+            )
+        else:
+            lines.append(
+                "Task approval pending: "
+                f"task={approval.get('task_id')} "
+                f"approval={approval.get('approval_id')} "
+                f"risk={approval.get('risk')}"
+            )
+        if approval.get("safe_reason"):
+            lines.append(f"Approval reason: {approval['safe_reason']}")
     if report.failed_tasks:
         lines.append("Failed tasks: " + ", ".join(report.failed_tasks))
     if report.blocked_tasks:
@@ -786,18 +805,32 @@ def render_execution_report(report: ExecutionReport) -> str:
     if report.verifier_status:
         lines.append(f"Verifier: {report.verifier_status}")
     if report.reviewer_status:
-        lines.append(f"Reviewer: {report.reviewer_status}")
+        if report.reviewer_stage == "final":
+            lines.append(f"Final reviewer: {report.reviewer_status}")
+        elif report.reviewer_stage == "task":
+            lines.append(f"Task reviewer: {report.reviewer_status}")
+            lines.append("Final reviewer: not_run")
+        else:
+            lines.append(f"Reviewer: {report.reviewer_status}")
     lines.append(f"Workspace: {report.workspace or '[not recorded]'}")
     lines.append(
         f"Detected Git top-level: {report.git_top_level or '[not recorded]'}"
     )
+    reviewer_label = (
+        "Final reviewer"
+        if report.reviewer_stage == "final"
+        else "Task reviewer"
+        if report.reviewer_stage == "task"
+        else "Reviewer"
+    )
     if report.reviewer_summary:
-        lines.append(f"Reviewer summary: {report.reviewer_summary}")
+        lines.append(f"{reviewer_label} summary: {report.reviewer_summary}")
     for issue in report.reviewer_issues:
         severity = issue.get("severity", "unknown")
         location = f" ({issue['file']})" if issue.get("file") else ""
         lines.append(
-            f"Reviewer issue [{severity}]{location}: {issue.get('message', '')}"
+            f"{reviewer_label} issue [{severity}]{location}: "
+            f"{issue.get('message', '')}"
         )
     for required_fix in report.required_fixes:
         lines.append(f"Required fix: {required_fix}")

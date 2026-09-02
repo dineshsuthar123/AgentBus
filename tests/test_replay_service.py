@@ -6,14 +6,22 @@ import pytest
 from agentbus.config import AgentBusConfig
 from agentbus.execution.models import RunRecord, TaskSpec
 from agentbus.execution.state_store import StateStore
-from agentbus.policy import ToolPolicyEngine
+from agentbus.policy import (
+    ToolApprovalDisposition,
+    ToolPolicyEngine,
+    build_tool_approval_request,
+    decide_tool_approval,
+)
 from agentbus.replay import (
     ForkRequest,
     ReplayIncompatibleError,
+    ReplayabilityLevel,
     ReplayRequest,
     ReplaySessionStatus,
     ReplaySpanAction,
+    ToolReplayStrategy,
     ToolReplayPlanner,
+    capture_tool_envelope,
     load_tool_envelope,
 )
 from agentbus.replay.service import (
@@ -24,12 +32,15 @@ from agentbus.runtime.intelligence import PlannerIntelligenceContext
 from agentbus.sandbox.platform import ExecutableCatalog
 from agentbus.tools import builtin_tool_registry
 from agentbus.tools.capabilities import derive_required_capabilities
+from agentbus.tools.descriptors import descriptor_map
 from agentbus.tools.dispatcher import ToolDispatcher
 from agentbus.tools.protocol import (
     ToolCapabilityName,
     ToolInvocation,
     ToolInvocationContext,
+    ToolInvocationStatus,
     ToolPolicyOutcome,
+    ToolResult,
 )
 from agentbus.trace import (
     IntelligenceDriftCategory,
@@ -212,6 +223,233 @@ def _record_tool_run(
     return trace, config.workspace_path / "replay-created.txt"
 
 
+def _record_historical_process_run(
+    config: AgentBusConfig,
+    store: StateStore,
+    run_id: str,
+    *,
+    include_approval: bool = True,
+):
+    task_id = "task-historical-process"
+    store.create_run_with_tasks(
+        RunRecord(
+            run_id=run_id,
+            original_task="Replay one approved historical process",
+            model="deterministic",
+            workspace=str(config.workspace_path),
+            graph_data={"version": 1, "tasks": []},
+        ),
+        [
+            TaskSpec(
+                task_id=task_id,
+                title="Validate historical process replay",
+                description="Reuse one captured approved process result.",
+            )
+        ],
+    )
+    runtime = RuntimeTrace.open(
+        store,
+        run_id,
+        object_root=config.trace_store_path,
+        workspace=config.workspace_path,
+    )
+    descriptor = descriptor_map(
+        workspace=config.workspace_path,
+        process_executables=("mvn",),
+    )["test.execute"]
+    provisional = ToolInvocation(
+        invocation_id="tool-historical-process-service",
+        run_id=run_id,
+        task_id=task_id,
+        tool_name=descriptor.name,
+        tool_version=descriptor.version,
+        arguments={
+            "executable": "mvn",
+            "arguments": ["test"],
+            "working_directory": ".",
+        },
+        requested_capabilities=descriptor.capabilities,
+        context=ToolInvocationContext(
+            workspace_identity=str(config.workspace_path),
+            worktree_identity=str(config.workspace_path),
+            caller_role="verifier",
+            workspace_trusted=True,
+            provider_consented=True,
+            policy_context={"source_identity_sha256": "a" * 64},
+        ),
+    )
+    invocation = provisional.model_copy(
+        update={
+            "requested_capabilities": derive_required_capabilities(
+                provisional,
+                descriptor,
+            )
+        }
+    )
+    policy = ToolPolicyEngine()
+    pending_decision = policy.evaluate(invocation, descriptor)
+    approval_request = build_tool_approval_request(
+        invocation,
+        descriptor,
+        pending_decision,
+        approval_id="approval-historical-process-service",
+    )
+    approval = decide_tool_approval(
+        approval_request,
+        invocation,
+        disposition=ToolApprovalDisposition.APPROVED,
+    )
+    approved_decision = policy.evaluate(
+        invocation,
+        descriptor,
+        approval=approval,
+    )
+    result = ToolResult(
+        invocation_id=invocation.invocation_id,
+        invocation_revision=invocation.invocation_revision,
+        status=ToolInvocationStatus.SUCCEEDED,
+        structured_output={
+            "executable": "mvn",
+            "working_directory": str(config.workspace_path),
+            "pid": 4242,
+            "passed": True,
+        },
+        stdout="BUILD SUCCESS",
+        exit_code=0,
+        policy_decision=approved_decision,
+        approval_id=approval.approval_id,
+        safe_diagnostic_metadata={
+            "executable": {
+                "alias": "mvn",
+                "path": "C:/tools/mvn.cmd",
+                "sha256": "b" * 64,
+                "size_bytes": 123,
+            },
+            "working_directory": str(config.workspace_path),
+            "pid": 4242,
+            "shell": False,
+        },
+    )
+    with runtime.scope(runtime.root_context):
+        pending_span = runtime.start_span(
+            TraceSpanType.TOOL_INVOCATION,
+            descriptor.name,
+            task_id=task_id,
+            invocation_id=invocation.invocation_id,
+            attributes={
+                "tool_effect": "process",
+                "replay_strategy": "rerun_sandbox",
+                "awaiting_approval": True,
+            },
+        )
+        pending_policy_span = runtime.start_span(
+            TraceSpanType.TOOL_POLICY,
+            "historical process pending policy",
+            task_id=task_id,
+            invocation_id=invocation.invocation_id,
+            parent_span_id=pending_span.span_id,
+            attributes={
+                "invocation_revision": invocation.invocation_revision,
+            },
+        )
+        pending_policy_output = runtime.capture_json_output(
+            pending_policy_span,
+            "tool.policy-decision",
+            pending_decision.model_dump(mode="json"),
+        )
+        runtime.finish_span(
+            pending_policy_span,
+            output_references=[pending_policy_output],
+        )
+        pending_output = capture_tool_envelope(
+            runtime.object_store,
+            descriptor=descriptor,
+            invocation=invocation,
+            policy_decision=pending_decision,
+            producing_span_id=pending_span.span_id,
+            reference_id="historical-process-pending",
+        )
+        runtime.finish_span(
+            pending_span,
+            status=TraceStatus.INTERRUPTED,
+            output_references=[pending_output],
+            approval_references=[approval.approval_id],
+        )
+        wait_span = runtime.start_span(
+            TraceSpanType.APPROVAL_WAIT,
+            "historical process approval",
+            task_id=task_id,
+            invocation_id=invocation.invocation_id,
+            parent_span_id=pending_span.span_id,
+        )
+        wait_output = runtime.capture_json_output(
+            wait_span,
+            "tool.approval-request",
+            approval_request.model_dump(mode="json"),
+        )
+        runtime.finish_span(
+            wait_span,
+            output_references=[wait_output],
+            approval_references=[approval.approval_id],
+        )
+        completed_span = runtime.start_span(
+            TraceSpanType.TOOL_INVOCATION,
+            descriptor.name,
+            task_id=task_id,
+            invocation_id=invocation.invocation_id,
+            attributes={
+                "tool_effect": "process",
+                "replay_strategy": "rerun_sandbox",
+                "awaiting_approval": False,
+            },
+        )
+        completed_policy_span = runtime.start_span(
+            TraceSpanType.TOOL_POLICY,
+            "historical process approved policy",
+            task_id=task_id,
+            invocation_id=invocation.invocation_id,
+            parent_span_id=completed_span.span_id,
+            attributes={
+                "invocation_revision": invocation.invocation_revision,
+            },
+        )
+        completed_policy_output = runtime.capture_json_output(
+            completed_policy_span,
+            "tool.policy-decision",
+            approved_decision.model_dump(mode="json"),
+        )
+        runtime.finish_span(
+            completed_policy_span,
+            output_references=[completed_policy_output],
+        )
+        completed_output = capture_tool_envelope(
+            runtime.object_store,
+            descriptor=descriptor,
+            invocation=invocation,
+            policy_decision=approved_decision,
+            producing_span_id=completed_span.span_id,
+            reference_id="historical-process-completed",
+            result=result,
+            approval=approval if include_approval else None,
+        )
+        runtime.finish_span(
+            completed_span,
+            output_references=[completed_output],
+            approval_references=[approval.approval_id],
+        )
+    trace = runtime.finish(status=TraceStatus.SUCCEEDED)
+    assert trace is not None
+    seal_run_provenance(
+        trace,
+        state_store=store,
+        object_store=runtime.object_store,
+        configuration={"provider": "deterministic"},
+        task_graph={"version": 1, "tasks": []},
+        final_repository_tree_sha256="e" * 64,
+    )
+    return trace
+
+
 def test_service_verifies_replays_and_persists_terminal_session(
     tmp_path,
 ) -> None:
@@ -347,6 +585,155 @@ def test_service_replays_managed_tool_through_current_policy_once(
         for reference in source_by_id[policy_span.span_id].output_references
     }
     assert result.session.policy_drift == []
+
+
+def test_service_replays_approved_historical_process_without_dispatch(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    config, store, service = _service(tmp_path)
+    trace = _record_historical_process_run(
+        config,
+        store,
+        "run-historical-process-service",
+    )
+
+    def fail_on_process(*_args, **_kwargs):
+        raise AssertionError("offline replay must not dispatch a process")
+
+    monkeypatch.setattr(
+        "agentbus.sandbox.process.subprocess.Popen",
+        fail_on_process,
+    )
+    monkeypatch.setattr(
+        "agentbus.tools.runtime.shutil.which",
+        fail_on_process,
+    )
+    request = ReplayRequest(
+        replay_id="replay-historical-process-service",
+        source_trace_id=trace.trace_id,
+        source_run_id=trace.run_id,
+        mode=ReplayMode.OFFLINE,
+    )
+
+    replayability = service.replayability(trace.trace_id)
+    result = service.replay(trace.run_id, request)
+    repeated = service.replay(
+        trace.run_id,
+        request.model_copy(
+            update={"replay_id": "replay-historical-process-repeat"}
+        ),
+    )
+
+    process_results = [
+        item
+        for item in result.session.span_results
+        if item.historical_executable == "mvn"
+    ]
+    assert replayability.level == ReplayabilityLevel.PARTIALLY_REPLAYABLE
+    assert result.session.status == ReplaySessionStatus.SUCCEEDED
+    assert result.session.provider_calls == 0
+    assert result.session.network_calls == 0
+    assert result.session.process_dispatches == 0
+    assert result.session.historical_authorizations_validated == 2
+    assert result.session.captured_tool_results_reused == 1
+    assert [item.action for item in process_results] == [
+        ReplaySpanAction.REUSED,
+        ReplaySpanAction.REUSED,
+    ]
+    assert [item.captured_result_reused for item in process_results] == [
+        False,
+        True,
+    ]
+    assert all(item.process_dispatched is False for item in process_results)
+    assert "process not dispatched" in process_results[-1].summary.lower()
+    assert repeated.result_sha256 == result.result_sha256
+    assert repeated.session.process_dispatches == 0
+
+
+def test_explicit_rerun_cannot_dispatch_authenticated_historical_process(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    config, store, service = _service(tmp_path)
+    trace = _record_historical_process_run(
+        config,
+        store,
+        "run-historical-process-rerun-request",
+    )
+    completed_span = next(
+        span
+        for span in trace.spans
+        if span.span_type == TraceSpanType.TOOL_INVOCATION
+        and span.status == TraceStatus.SUCCEEDED
+    )
+
+    def fail_on_process(*_args, **_kwargs):
+        raise AssertionError("explicit replay strategy must not dispatch a process")
+
+    monkeypatch.setattr(
+        "agentbus.sandbox.process.subprocess.Popen",
+        fail_on_process,
+    )
+    result = service.replay(
+        trace.run_id,
+        ReplayRequest(
+            replay_id="replay-historical-process-rerun-request",
+            source_trace_id=trace.trace_id,
+            source_run_id=trace.run_id,
+            mode=ReplayMode.OFFLINE,
+            tool_strategies={
+                completed_span.span_id: ToolReplayStrategy.RERUN_SANDBOX,
+            },
+        ),
+    )
+
+    assert result.session.status == ReplaySessionStatus.SUCCEEDED
+    assert result.session.captured_tool_results_reused == 1
+    assert result.session.process_dispatches == 0
+    completed = next(
+        item
+        for item in result.session.span_results
+        if item.span_id == completed_span.span_id
+    )
+    assert completed.action == ReplaySpanAction.REUSED
+    assert completed.process_dispatched is False
+
+
+def test_service_rejects_historical_process_without_approval_evidence(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    config, store, service = _service(tmp_path)
+    trace = _record_historical_process_run(
+        config,
+        store,
+        "run-unapproved-historical-process",
+        include_approval=False,
+    )
+
+    def fail_on_process(*_args, **_kwargs):
+        raise AssertionError("incompatible replay must not dispatch a process")
+
+    monkeypatch.setattr(
+        "agentbus.sandbox.process.subprocess.Popen",
+        fail_on_process,
+    )
+    result = service.replay(
+        trace.run_id,
+        ReplayRequest(
+            replay_id="replay-unapproved-historical-process",
+            source_trace_id=trace.trace_id,
+            source_run_id=trace.run_id,
+            mode=ReplayMode.OFFLINE,
+        ),
+    )
+
+    assert result.session.status == ReplaySessionStatus.INCOMPATIBLE
+    assert result.session.process_dispatches == 0
+    assert result.session.provider_calls == 0
+    assert result.session.network_calls == 0
+    assert "evidence is missing" in result.session.failure_message
 
 
 def test_service_policy_cache_distinguishes_changed_envelopes(

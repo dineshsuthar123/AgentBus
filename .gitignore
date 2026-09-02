@@ -44,6 +44,10 @@ extensions/vscode/node_modules/
 extensions/vscode/out/
 extensions/vscode/.vscode-test/
 extensions/vscode/*.vsix
+studio/node_modules/
+studio/dist/
+studio/coverage/
+studio/*.tsbuildinfo
 
 # OS
 .DS_Store

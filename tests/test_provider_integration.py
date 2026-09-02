@@ -1,15 +1,26 @@
 from __future__ import annotations
 
+import json
 import subprocess
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 
 import pytest
 
 from agentbus.config import AgentBusConfig
 from agentbus.execution.engine import DurableExecutionEngine
-from agentbus.execution.models import RunStatus
+from agentbus.execution.models import FailureCategory, RunStatus
 from agentbus.execution.state_store import StateStore
+from agentbus.execution.task_graph import PlanContractValidationError
+from agentbus.models.azure_openai import AzureOpenAIProvider
+from agentbus.models.azure_schema import (
+    AzureAgentActionWire,
+    AzurePlannerOutputWire,
+    AzureReviewerOutputWire,
+    validate_azure_structured_output_schema,
+)
 from agentbus.models.errors import ModelServiceUnavailableError
 from agentbus.models.router import (
     ModelProviderFactory,
@@ -17,7 +28,16 @@ from agentbus.models.router import (
     model_request_context,
 )
 from agentbus.models.types import ModelResult, ModelUsage
+from agentbus.replay.service import TraceReplayService
+from agentbus.replay.session import (
+    ReplayRequest,
+    ReplaySessionStatus,
+    ReplaySpanAction,
+)
+from agentbus.runtime.loop import AgentLoop
 from agentbus.runtime.orchestrator import MultiAgentOrchestrator
+from agentbus.trace import ReplayMode, TraceSpanType
+from agentbus.tools.protocol import ToolInvocationStatus
 
 
 PLAN = {
@@ -28,9 +48,11 @@ PLAN = {
             "title": "Finish",
             "description": "Finish without changing files",
             "risk": "low",
+            "execution_kind": "analysis",
             "maximum_attempts": 2,
             "expected_outputs": [],
             "done_criteria": ["Agent finishes"],
+            "required_capabilities": [],
         }
     ],
     "test_strategy": "Use fake verifier",
@@ -85,6 +107,64 @@ class FakeVerifier:
             "output": "offline verification passed",
             "reason": "fake verifier",
         }
+
+
+class StrictAzureResponses:
+    """Offline Responses transport that enforces Azure's strict schema subset."""
+
+    def __init__(self, scripts):
+        self.scripts = {model: list(outcomes) for model, outcomes in scripts.items()}
+        self.parse_calls = []
+        self.create_calls = []
+
+    def parse(self, **kwargs):
+        text_format = kwargs["text_format"]
+        validate_azure_structured_output_schema(text_format.model_json_schema())
+        self.parse_calls.append(kwargs)
+        return self._response(kwargs["model"], parsed=True)
+
+    def create(self, **kwargs):
+        self.create_calls.append(kwargs)
+        return self._response(kwargs["model"], parsed=False)
+
+    def _response(self, model, *, parsed):
+        outcome = self.scripts[model].pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return SimpleNamespace(
+            output_text=(
+                json.dumps(outcome, ensure_ascii=True)
+                if isinstance(outcome, dict)
+                else str(outcome)
+            ),
+            output_parsed=outcome if parsed else None,
+            _request_id=f"strict-{model}",
+            status="completed",
+            usage=SimpleNamespace(
+                input_tokens=5,
+                output_tokens=2,
+                total_tokens=7,
+                input_tokens_details=SimpleNamespace(cached_tokens=0),
+            ),
+        )
+
+
+class StrictAzureClient:
+    def __init__(self, scripts):
+        self.responses = StrictAzureResponses(scripts)
+
+
+def approved_review(summary):
+    return {
+        "approved": True,
+        "issues": [],
+        "summary": summary,
+        "required_fixes": [],
+        "unplanned_affected_components": [],
+        "missing_tests": [],
+        "boundary_violations": [],
+        "index_uncertainty": [],
+    }
 
 
 def config(tmp_path, *, fallback=False):
@@ -147,6 +227,814 @@ def build_runner(tmp_path, scripts, *, fallback=False):
         model_router=router,
     )
     return runner, store, router, providers, verifier
+
+
+PAYMENT_SERVICE = "src/main/java/com/example/payment/PaymentService.java"
+PAYMENT_ENTITY = "src/main/java/com/example/payment/Payment.java"
+PAYMENT_REPOSITORY = "src/main/java/com/example/payment/PaymentRepository.java"
+PAYMENT_TEST = "src/test/java/com/example/payment/PaymentServiceTest.java"
+NEW_IDEMPOTENCY_RECORD = (
+    "src/main/java/com/example/payment/NewIdempotencyRecord.java"
+)
+
+
+def seed_payment_trial(runner):
+    workspace = runner.config.workspace_path
+    contents = {
+        PAYMENT_SERVICE: "class PaymentService { void process() {} }\n",
+        PAYMENT_ENTITY: "class Payment {}\n",
+        PAYMENT_REPOSITORY: "interface PaymentRepository {}\n",
+        PAYMENT_TEST: "class PaymentServiceTest {}\n",
+    }
+    for relative_path, content in contents.items():
+        target = workspace / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    subprocess.run(
+        ["git", "config", "user.name", "AgentBus Tests"],
+        cwd=workspace,
+        check=True,
+        capture_output=True,
+        text=True,
+        shell=False,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "tests@agentbus.invalid"],
+        cwd=workspace,
+        check=True,
+        capture_output=True,
+        text=True,
+        shell=False,
+    )
+    subprocess.run(
+        ["git", "add", *contents],
+        cwd=workspace,
+        check=True,
+        capture_output=True,
+        text=True,
+        shell=False,
+    )
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "payment fixture"],
+        cwd=workspace,
+        check=True,
+        capture_output=True,
+        text=True,
+        shell=False,
+    )
+
+
+def payment_plan(*, outputs, targets, capabilities, tests=None):
+    return {
+        "goal": "Make duplicate successful payment delivery idempotent",
+        "steps": [
+            {
+                "id": "step-1",
+                "title": "Make payment processing idempotent",
+                "description": (
+                    "Keep sequential and concurrent duplicate deliveries safe "
+                    "without blocking distinct payments."
+                ),
+                "risk": "medium",
+                "execution_kind": "implementation",
+                "dependencies": [],
+                "assigned_role": "coder",
+                "maximum_attempts": 1,
+                "expected_outputs": outputs,
+                "done_criteria": [
+                    "Sequential duplicates produce one stored payment",
+                    "Concurrent duplicates cannot duplicate side effects",
+                    "Distinct payments still succeed",
+                ],
+                "required_capabilities": capabilities,
+                "targeted_files": targets,
+                "proposed_tests": tests or [PAYMENT_TEST],
+            }
+        ],
+        "test_strategy": "Run the payment service regression tests",
+        "done_criteria": ["Payment delivery is idempotent and verified"],
+        "targeted_files": targets,
+        "proposed_tests": tests or [PAYMENT_TEST],
+    }
+
+
+def test_payment_plan_is_corrected_for_explicit_new_file_before_persistence(
+    tmp_path,
+):
+    capabilities = [
+        "filesystem.read",
+        "filesystem.write",
+        "process.execute",
+        "test.execute",
+        "git.read",
+    ]
+    incoherent = payment_plan(
+        outputs=[NEW_IDEMPOTENCY_RECORD],
+        targets=[PAYMENT_SERVICE, NEW_IDEMPOTENCY_RECORD],
+        capabilities=capabilities,
+    )
+    corrected = payment_plan(
+        outputs=[NEW_IDEMPOTENCY_RECORD],
+        targets=[PAYMENT_SERVICE, NEW_IDEMPOTENCY_RECORD],
+        capabilities=[*capabilities, "filesystem.create"],
+    )
+    scripts = {
+        ("azure", "planner"): [incoherent, corrected],
+        ("azure", "coder"): [
+            {
+                "action": "tool_call",
+                "tool_call": {
+                    "tool_name": "filesystem.create",
+                    "arguments": {
+                        "path": NEW_IDEMPOTENCY_RECORD,
+                        "content": "class NewIdempotencyRecord {}\n",
+                    },
+                    "expected_capabilities": ["filesystem.create"],
+                    "idempotency_key": "payment-idempotency-record",
+                },
+            },
+            {"action": "finish", "summary": "Added idempotency storage"},
+        ],
+        ("azure", "reviewer"): [
+            approved_review("Payment task approved"),
+            approved_review("Payment run approved"),
+        ],
+    }
+    runner, store, _, providers, _ = build_runner(tmp_path, scripts)
+    seed_payment_trial(runner)
+
+    run_id = runner.create_durable_run(
+        "Fix duplicate sequential and concurrent payment webhook delivery"
+    )
+    persisted = store.get_run(run_id)
+
+    assert len(providers[("azure", "planner")].calls) == 2
+    correction_prompt = providers[("azure", "planner")].calls[1]["prompt"]
+    assert "missing_create_capability" in correction_prompt
+    assert NEW_IDEMPOTENCY_RECORD in correction_prompt
+    assert "filesystem.create" in correction_prompt
+    expected_persisted = json.loads(json.dumps(corrected))
+    for scope in (expected_persisted, *expected_persisted["steps"]):
+        scope.pop("targeted_files", None)
+        scope.pop("proposed_tests", None)
+    assert persisted.planner_output == expected_persisted
+    assert store.get_task(run_id, "step-1").spec.metadata[
+        "required_capabilities"
+    ] == corrected["steps"][0]["required_capabilities"]
+
+    report = runner.run_durable(run_id)
+
+    assert report.status == RunStatus.SUCCEEDED
+    assert (runner.config.workspace_path / NEW_IDEMPOTENCY_RECORD).exists()
+    assert len(providers[("azure", "coder")].calls) == 2
+
+
+def test_payment_plan_existing_files_needs_no_create_capability(tmp_path):
+    capabilities = [
+        "filesystem.read",
+        "filesystem.write",
+        "process.execute",
+        "test.execute",
+        "git.read",
+    ]
+    plan = payment_plan(
+        outputs=[
+            PAYMENT_ENTITY,
+            PAYMENT_SERVICE,
+            PAYMENT_REPOSITORY,
+            PAYMENT_TEST,
+        ],
+        targets=[PAYMENT_ENTITY, PAYMENT_SERVICE, PAYMENT_REPOSITORY],
+        capabilities=capabilities,
+    )
+    updated_service = (
+        "class PaymentService { synchronized void processIdempotently() {} }\n"
+    )
+    scripts = {
+        ("azure", "planner"): [plan],
+        ("azure", "coder"): [
+            {
+                "action": "tool_call",
+                "tool_call": {
+                    "tool_name": "filesystem.write",
+                    "arguments": {
+                        "path": PAYMENT_SERVICE,
+                        "content": updated_service,
+                    },
+                    "expected_capabilities": ["filesystem.write"],
+                    "idempotency_key": "payment-existing-service-write",
+                },
+            },
+            {"action": "finish", "summary": "Updated existing payment service"},
+        ],
+        ("azure", "reviewer"): [
+            approved_review("Existing-file payment task approved"),
+            approved_review("Existing-file payment run approved"),
+        ],
+    }
+    runner, store, _, providers, _ = build_runner(tmp_path, scripts)
+    seed_payment_trial(runner)
+
+    run_id = runner.create_durable_run(
+        "Fix duplicate payments by editing the existing service"
+    )
+    persisted = store.get_run(run_id)
+    report = runner.run_durable(run_id)
+
+    assert report.status == RunStatus.SUCCEEDED
+    assert len(providers[("azure", "planner")].calls) == 1
+    assert "filesystem.create" not in persisted.planner_output["steps"][0][
+        "required_capabilities"
+    ]
+    assert (runner.config.workspace_path / PAYMENT_SERVICE).read_text(
+        encoding="utf-8"
+    ) == updated_service
+    invocation = store.list_tool_invocations(run_id)[0]
+    assert [
+        capability.name.value for capability in invocation.capabilities
+    ] == ["filesystem.write"]
+
+
+def test_strict_azure_schema_exercises_real_coder_loop_and_managed_write(tmp_path):
+    settings = config(tmp_path).with_overrides(max_steps=2)
+    client = StrictAzureClient(
+        {
+            "coder-deployment": [
+                {
+                    "action": "tool_call",
+                    "tool_call": {
+                        "tool_name": "filesystem.write",
+                        "arguments_json": json.dumps(
+                            {"path": "result.py", "content": "VALUE = 3\n"}
+                        ),
+                        "expected_capabilities": [
+                            "filesystem.write",
+                            "filesystem.create",
+                        ],
+                        "timeout_seconds": None,
+                        "invocation_revision": 1,
+                        "idempotency_key": "strict-azure-create-result",
+                    },
+                    "summary": None,
+                },
+                {
+                    "action": "finish",
+                    "tool_call": None,
+                    "summary": "strict Azure managed write complete",
+                },
+            ]
+        }
+    )
+
+    def builder(route):
+        return AzureOpenAIProvider(
+            endpoint=settings.azure_openai_endpoint,
+            api_key="offline",
+            deployment=route.model,
+            timeout_seconds=route.timeout_seconds,
+            role=route.role,
+            client=client,
+        )
+
+    router = ModelRouter(
+        settings,
+        provider_factory=ModelProviderFactory(
+            settings,
+            builders={"azure": builder},
+        ),
+        sleeper=lambda delay: None,
+        jitter=lambda: 0,
+    )
+    loop = AgentLoop(config=settings, model_router=router)
+
+    summary = loop.run("Create result.py through the managed runtime")
+
+    assert summary == "strict Azure managed write complete"
+    assert (settings.workspace_path / "result.py").read_text(encoding="utf-8") == (
+        "VALUE = 3\n"
+    )
+    assert client.responses.create_calls == []
+    assert len(client.responses.parse_calls) == 2
+    assert {
+        call["model"] for call in client.responses.parse_calls
+    } == {"coder-deployment"}
+    assert all(
+        call["text_format"] is AzureAgentActionWire
+        for call in client.responses.parse_calls
+    )
+    invocations = StateStore(settings.state_database_path).list_tool_invocations(
+        loop.run_id
+    )
+    assert len(invocations) == 1
+    assert invocations[0].status == ToolInvocationStatus.SUCCEEDED
+
+
+def test_read_only_prerequisite_is_rejected_before_durable_persistence(tmp_path):
+    workspace = tmp_path / "read-only-prerequisite"
+    workspace.mkdir()
+    calculator = workspace / "calculator.py"
+    calculator.write_text(
+        "def divide(a, b):\n"
+        "    return a / b\n",
+        encoding="utf-8",
+    )
+    (workspace / "test_calculator.py").write_text(
+        "from calculator import divide\n\n"
+        "def test_divide():\n"
+        "    assert divide(10, 2) == 5\n\n"
+        "def test_divide_by_zero():\n"
+        "    try:\n"
+        "        divide(10, 0)\n"
+        "        assert False\n"
+        "    except ValueError:\n"
+        "        pass\n",
+        encoding="utf-8",
+    )
+    for command in (
+        ["git", "init", "-q"],
+        ["git", "config", "user.name", "AgentBus Offline Test"],
+        ["git", "config", "user.email", "agentbus-offline@example.invalid"],
+        ["git", "add", "--", "calculator.py", "test_calculator.py"],
+        ["git", "commit", "-q", "-m", "test: failing calculator baseline"],
+    ):
+        subprocess.run(
+            command,
+            cwd=workspace,
+            check=True,
+            capture_output=True,
+            text=True,
+            shell=False,
+        )
+
+    plan = {
+        "goal": "Fix division by zero",
+        "steps": [
+            {
+                "id": "step-1",
+                "title": "Inspect calculator implementation",
+                "description": "Inspect divide and its tests.",
+                "risk": "low",
+                "execution_kind": "implementation",
+                "dependencies": [],
+                "assigned_role": "coder",
+                "maximum_attempts": 1,
+                "expected_outputs": [],
+                "done_criteria": ["The implementation problem is understood."],
+                "required_capabilities": ["filesystem.read"],
+                "targeted_files": ["calculator.py", "test_calculator.py"],
+                "targeted_symbols": None,
+                "expected_impacted_components": None,
+                "proposed_tests": ["test_calculator.py"],
+                "architecture_constraints": None,
+            },
+            {
+                "id": "step-2",
+                "title": "Fix division behavior",
+                "description": "Raise ValueError when the divisor is zero.",
+                "risk": "low",
+                "execution_kind": "implementation",
+                "dependencies": ["step-1"],
+                "assigned_role": "coder",
+                "maximum_attempts": 1,
+                "expected_outputs": ["calculator.py"],
+                "done_criteria": ["divide raises ValueError for zero."],
+                "required_capabilities": [
+                    "filesystem.read",
+                    "filesystem.write",
+                ],
+                "targeted_files": ["calculator.py"],
+                "targeted_symbols": None,
+                "expected_impacted_components": None,
+                "proposed_tests": ["test_calculator.py"],
+                "architecture_constraints": None,
+            },
+            {
+                "id": "step-3",
+                "title": "Verify behavior",
+                "description": "Run the existing calculator tests.",
+                "risk": "low",
+                "execution_kind": "implementation",
+                "dependencies": ["step-2"],
+                "assigned_role": "coder",
+                "maximum_attempts": 1,
+                "expected_outputs": [],
+                "done_criteria": ["The existing calculator tests pass."],
+                "required_capabilities": [
+                    "test.execute",
+                    "process.execute",
+                ],
+                "targeted_files": ["test_calculator.py"],
+                "targeted_symbols": None,
+                "expected_impacted_components": None,
+                "proposed_tests": ["test_calculator.py"],
+                "architecture_constraints": None,
+            },
+        ],
+        "test_strategy": "Run pytest.",
+        "done_criteria": ["Both calculator tests pass."],
+        "targeted_files": ["calculator.py", "test_calculator.py"],
+        "targeted_symbols": None,
+        "expected_impacted_components": None,
+        "proposed_tests": ["test_calculator.py"],
+        "architecture_constraints": None,
+        "intelligence_snapshot_id": None,
+        "intelligence_context_hash": None,
+        "intelligence_warnings": None,
+        "intelligence_scope_validated": None,
+    }
+    client = StrictAzureClient(
+        {
+            "agentbus-planner": [plan, plan],
+        }
+    )
+    settings = AgentBusConfig(
+        provider_name="azure",
+        workspace_dir=str(workspace),
+        runs_dir=str(tmp_path / "runs"),
+        state_dir=str(tmp_path / "state"),
+        max_steps=2,
+        model_max_retries=0,
+        azure_openai_endpoint="https://sample.openai.azure.com",
+        azure_openai_api_key="offline-fake-key",
+        azure_openai_default_deployment="agentbus-reviewer",
+        azure_openai_planner_deployment="agentbus-planner",
+        azure_openai_coder_deployment="agentbus-coder",
+        azure_openai_reviewer_deployment="agentbus-reviewer",
+        azure_openai_summarizer_deployment="agentbus-reviewer",
+    )
+
+    def builder(route):
+        return AzureOpenAIProvider(
+            endpoint=settings.azure_openai_endpoint,
+            api_key="offline",
+            deployment=route.model,
+            timeout_seconds=route.timeout_seconds,
+            role=route.role,
+            client=client,
+        )
+
+    store = StateStore(settings.state_database_path)
+    router = ModelRouter(
+        settings,
+        provider_factory=ModelProviderFactory(
+            settings,
+            builders={"azure": builder},
+        ),
+        sleeper=lambda delay: None,
+        jitter=lambda: 0,
+    )
+    runner = MultiAgentOrchestrator(
+        config=settings,
+        state_store=store,
+        model_router=router,
+    )
+    task = (
+        "Fix divide() so division by zero raises ValueError with a clear message. "
+        "Preserve normal division behavior. Make the existing tests pass. "
+        "Do not modify unrelated files."
+    )
+
+    with pytest.raises(PlanContractValidationError) as captured:
+        runner.create_durable_run(task)
+
+    assert {
+        (issue.task_id, issue.code) for issue in captured.value.issues
+    } == {
+        ("step-1", "implementation_without_mutation"),
+    }
+    assert calculator.read_text(encoding="utf-8") == (
+        "def divide(a, b):\n"
+        "    return a / b\n"
+    )
+    assert store.list_runs() == []
+    requests = client.responses.parse_calls
+    assert [call["model"] for call in requests] == [
+        "agentbus-planner",
+        "agentbus-planner",
+    ]
+    assert "previous durable plan was rejected" in requests[1]["input"]
+    assert "implementation_without_mutation" in requests[1]["input"]
+
+
+def test_strict_fake_azure_completes_durable_calculator_workflow(tmp_path):
+    workspace = tmp_path / "calculator-repository"
+    workspace.mkdir()
+    calculator = workspace / "calculator.py"
+    tests = workspace / "test_calculator.py"
+    calculator.write_text(
+        "def divide(a, b):\n"
+        "    return a / b\n",
+        encoding="utf-8",
+    )
+    initial_tests = (
+        "from calculator import divide\n\n"
+        "def test_divide():\n"
+        "    assert divide(10, 2) == 5\n\n"
+        "def test_divide_by_zero():\n"
+        "    try:\n"
+        "        divide(10, 0)\n"
+        "        assert False\n"
+        "    except ValueError:\n"
+        "        pass\n"
+    )
+    tests.write_text(initial_tests, encoding="utf-8")
+    for command in (
+        ["git", "init", "-q"],
+        ["git", "config", "user.name", "AgentBus Offline Test"],
+        ["git", "config", "user.email", "agentbus-offline@example.invalid"],
+        ["git", "add", "--", "calculator.py", "test_calculator.py"],
+        ["git", "commit", "-q", "-m", "test: failing calculator baseline"],
+    ):
+        subprocess.run(
+            command,
+            cwd=workspace,
+            check=True,
+            capture_output=True,
+            text=True,
+            shell=False,
+        )
+    baseline = subprocess.run(
+        [
+            sys.executable,
+            "-B",
+            "-m",
+            "pytest",
+            "-p",
+            "no:cacheprovider",
+            "-q",
+        ],
+        cwd=workspace,
+        check=False,
+        capture_output=True,
+        text=True,
+        shell=False,
+    )
+    assert baseline.returncode == 1
+    assert "1 failed" in baseline.stdout
+    assert "1 passed" in baseline.stdout
+
+    fixed_source = (
+        "def divide(a, b):\n"
+        "    if b == 0:\n"
+        "        raise ValueError(\"division by zero is not allowed\")\n"
+        "    return a / b\n"
+    )
+    plan = {
+        "goal": "Make divide reject division by zero without changing normal division",
+        "steps": [
+            {
+                "id": "step-1",
+                "title": "Fix divide",
+                "description": "Raise a clear ValueError when the divisor is zero.",
+                "risk": "low",
+                "execution_kind": "implementation",
+                "dependencies": None,
+                "assigned_role": "coder",
+                "maximum_attempts": 1,
+                "expected_outputs": ["calculator.py"],
+                "done_criteria": ["Both calculator tests pass"],
+                "required_capabilities": [
+                    "filesystem.write",
+                ],
+                "targeted_files": ["calculator.py"],
+                "targeted_symbols": None,
+                "expected_impacted_components": None,
+                "proposed_tests": ["test_calculator.py"],
+                "architecture_constraints": None,
+            }
+        ],
+        "test_strategy": "Run pytest and preserve the existing tests.",
+        "done_criteria": ["pytest reports two passing tests"],
+        "targeted_files": ["calculator.py"],
+        "targeted_symbols": None,
+        "expected_impacted_components": None,
+        "proposed_tests": ["test_calculator.py"],
+        "architecture_constraints": None,
+        "intelligence_snapshot_id": None,
+        "intelligence_context_hash": None,
+        "intelligence_warnings": None,
+        "intelligence_scope_validated": None,
+    }
+    client = StrictAzureClient(
+        {
+            "agentbus-planner": [plan],
+            "agentbus-coder": [
+                {
+                    "action": "tool_call",
+                    "tool_call": {
+                        "tool_name": "filesystem.write",
+                        "arguments_json": json.dumps(
+                            {"path": "calculator.py", "content": fixed_source}
+                        ),
+                        "expected_capabilities": [
+                            "filesystem.write",
+                        ],
+                        "timeout_seconds": None,
+                        "invocation_revision": 1,
+                        "idempotency_key": "fix-calculator-divide",
+                    },
+                    "summary": None,
+                },
+                {
+                    "action": "finish",
+                    "tool_call": None,
+                    "summary": "divide now raises a clear ValueError for zero",
+                },
+            ],
+            "agentbus-reviewer": [
+                approved_review("Current calculator task is complete."),
+                approved_review("The whole calculator run is approved."),
+            ],
+        }
+    )
+    settings = AgentBusConfig(
+        provider_name="azure",
+        workspace_dir=str(workspace),
+        runs_dir=str(tmp_path / "runs"),
+        state_dir=str(tmp_path / "state"),
+        max_steps=2,
+        model_max_retries=0,
+        azure_openai_endpoint="https://sample.openai.azure.com",
+        azure_openai_api_key="offline-fake-key",
+        azure_openai_default_deployment="agentbus-reviewer",
+        azure_openai_planner_deployment="agentbus-planner",
+        azure_openai_coder_deployment="agentbus-coder",
+        azure_openai_reviewer_deployment="agentbus-reviewer",
+        azure_openai_summarizer_deployment="agentbus-reviewer",
+    )
+
+    def builder(route):
+        return AzureOpenAIProvider(
+            endpoint=settings.azure_openai_endpoint,
+            api_key="offline",
+            deployment=route.model,
+            timeout_seconds=route.timeout_seconds,
+            role=route.role,
+            client=client,
+        )
+
+    store = StateStore(settings.state_database_path)
+    router = ModelRouter(
+        settings,
+        provider_factory=ModelProviderFactory(
+            settings,
+            builders={"azure": builder},
+        ),
+        sleeper=lambda delay: None,
+        jitter=lambda: 0,
+    )
+    runner = MultiAgentOrchestrator(
+        config=settings,
+        state_store=store,
+        model_router=router,
+    )
+    task = (
+        "Fix divide() so division by zero raises ValueError with a clear message. "
+        "Preserve normal division behavior. Make the existing tests pass. "
+        "Do not modify unrelated files."
+    )
+
+    run_id = runner.create_durable_run(task)
+    report = runner.run_durable(run_id)
+
+    assert report.status == RunStatus.SUCCEEDED
+    assert report.successful_tasks == ["step-1"]
+    assert report.failed_tasks == []
+    assert report.blocked_tasks == []
+    assert report.verifier_status == "passed"
+    assert report.reviewer_status == "approved"
+    assert report.changed_files == ["calculator.py"]
+    assert report.relevant_changed_files == ["calculator.py"]
+    assert report.commit_eligible_files == ["calculator.py"]
+    assert calculator.read_text(encoding="utf-8") == fixed_source
+    assert tests.read_text(encoding="utf-8") == initial_tests
+
+    final_tests = subprocess.run(
+        [
+            sys.executable,
+            "-B",
+            "-m",
+            "pytest",
+            "-p",
+            "no:cacheprovider",
+            "-q",
+        ],
+        cwd=workspace,
+        check=False,
+        capture_output=True,
+        text=True,
+        shell=False,
+    )
+    assert final_tests.returncode == 0
+    assert "2 passed" in final_tests.stdout
+    changed = subprocess.run(
+        ["git", "diff", "--name-only", "--", "."],
+        cwd=workspace,
+        check=True,
+        capture_output=True,
+        text=True,
+        shell=False,
+    )
+    assert changed.stdout.strip() == "calculator.py"
+
+    requests = client.responses.parse_calls
+    assert [call["model"] for call in requests] == [
+        "agentbus-planner",
+        "agentbus-coder",
+        "agentbus-coder",
+        "agentbus-reviewer",
+        "agentbus-reviewer",
+    ]
+    assert [call["text_format"] for call in requests] == [
+        AzurePlannerOutputWire,
+        AzureAgentActionWire,
+        AzureAgentActionWire,
+        AzureReviewerOutputWire,
+        AzureReviewerOutputWire,
+    ]
+    assert "Review only the current task" in requests[3]["input"]
+    assert "Planner output" in requests[4]["input"]
+    assert all(not outcomes for outcomes in client.responses.scripts.values())
+
+    attempt = store.list_attempts(run_id, "step-1")[0]
+    assert attempt.metadata["task_review"]["approved"] is True
+    assert attempt.metadata["task_contract"] == {
+        "execution_kind": "implementation",
+        "required_capabilities": [
+            "filesystem.write",
+        ],
+    }
+    persisted = store.get_run(run_id)
+    assert persisted.metadata["final_review"]["status"] == "approved"
+    write_invocations = [
+        invocation
+        for invocation in store.list_tool_invocations(run_id)
+        if invocation.tool_name == "filesystem.write"
+    ]
+    assert len(write_invocations) == 1
+    assert write_invocations[0].status == ToolInvocationStatus.SUCCEEDED
+
+    trace = store.get_run_trace(run_id)
+    final_verifier = next(
+        span for span in trace.spans if span.name == "final verifier"
+    )
+    final_reviewer = next(
+        span for span in trace.spans if span.name == "final reviewer"
+    )
+    task_span = next(
+        span for span in trace.spans if span.span_type == TraceSpanType.TASK
+    )
+    assert final_verifier.sequence < final_reviewer.sequence
+    assert final_reviewer.span_type == TraceSpanType.REVIEWER
+    replay_service = TraceReplayService(settings, state_store=store)
+    task_output = replay_service.object_store.get_json(
+        task_span.output_references[0].sha256
+    )
+    assert task_output["metadata"]["task_contract"] == attempt.metadata[
+        "task_contract"
+    ]
+    assert replay_service.verify(run_id).valid is True
+    replayability = replay_service.replayability(run_id)
+    assert replayability.replayable_offline is True, [
+        (span.span_type.value, span.level.value, span.reasons)
+        for span in replayability.spans
+        if span.level.value == "non_replayable"
+    ]
+    replay = replay_service.replay(
+        run_id,
+        ReplayRequest(
+            source_trace_id=trace.trace_id,
+            source_run_id=run_id,
+            mode=ReplayMode.OFFLINE,
+        ),
+    )
+    assert replay.session.status == ReplaySessionStatus.SUCCEEDED, (
+        replay.session.failure_category,
+        replay.session.failure_message,
+        replay.session.missing_inputs,
+        replay.session.policy_drift,
+        replay.session.substitutions,
+        [
+            (span.action.value, span.succeeded, span.summary)
+            for span in replay.session.span_results
+        ],
+    )
+    assert replay.session.provider_calls == 0
+    assert replay.session.network_calls == 0
+    assert replay.session.policy_drift == []
+    replayed_task = next(
+        result
+        for result in replay.session.span_results
+        if result.span_id == task_span.span_id
+    )
+    assert replayed_task.action == ReplaySpanAction.REPLAYED
+    assert replayed_task.succeeded is True
+    replayed_output = replay_service.object_store.get_json(
+        task_span.output_references[0].sha256
+    )
+    assert replayed_output["metadata"]["task_contract"] == attempt.metadata[
+        "task_contract"
+    ]
 
 
 @pytest.mark.parametrize("provider_name", ["azure", "ollama"])
@@ -284,7 +1172,8 @@ def test_offline_azure_durable_smoke_routes_roles_retries_and_persists_usage(
     attempt = store.list_attempts(run_id, "step-1")[0]
 
     assert report.status == RunStatus.SUCCEEDED
-    assert verifier.calls == 2
+    assert report.verifier_status == "not_applicable"
+    assert verifier.calls == 0
     assert len(providers[("azure", "coder")].calls) == 2
     assert attempt.metadata["model_requests"][0]["provider"] == "azure"
     assert attempt.metadata["model_requests"][0]["model"] == "coder-deployment"
@@ -303,6 +1192,254 @@ def test_offline_azure_durable_smoke_routes_roles_retries_and_persists_usage(
         for path in (tmp_path / "runs").glob("*.jsonl")
     )
     assert "integration-super-secret" not in combined_state + combined_logs
+
+
+def test_unplanned_payment_file_creation_stops_before_dispatch_and_verifier(
+    tmp_path,
+):
+    plan = payment_plan(
+        outputs=[PAYMENT_SERVICE],
+        targets=[PAYMENT_SERVICE],
+        capabilities=["filesystem.read", "filesystem.write"],
+    )
+    raw_secret = "raw-tool-argument-must-not-be-logged"
+    scripts = {
+        ("azure", "planner"): [plan],
+        ("azure", "coder"): [
+            {
+                "action": "tool_call",
+                "tool_call": {
+                    "tool_name": "filesystem.create",
+                    "arguments": {
+                        "path": "SomeNewFile.java",
+                        "content": f"VALUE = '{raw_secret}'\n",
+                    },
+                    "expected_capabilities": ["filesystem.create"],
+                    "idempotency_key": "planner-contract-mismatch",
+                },
+            }
+        ],
+        ("azure", "reviewer"): [],
+    }
+    runner, store, _, providers, verifier = build_runner(tmp_path, scripts)
+    seed_payment_trial(runner)
+
+    run_id = runner.create_durable_run(
+        "Fix duplicate payments by editing the existing service"
+    )
+    report = runner.run_durable(run_id)
+    attempt = store.list_attempts(run_id, "step-1")[0]
+
+    assert report.status == RunStatus.FAILED
+    assert report.failed_tasks == ["step-1"]
+    assert report.verifier_status == "not_run"
+    assert report.reviewer_status == "not_run"
+    assert report.changed_files == []
+    assert attempt.error_category == FailureCategory.PLAN_CAPABILITY_MISMATCH
+    assert attempt.metadata["plan_capability_mismatch"] == {
+        "task_id": "step-1",
+        "tool_name": "filesystem.create",
+        "requested_capabilities": ["filesystem.create"],
+        "declared_capabilities": ["filesystem.read", "filesystem.write"],
+        "undeclared_capabilities": ["filesystem.create"],
+    }
+    assert attempt.metadata["_agentbus"]["retryable_override"] is False
+    assert verifier.calls == 0
+    assert len(providers[("azure", "coder")].calls) == 1
+    assert ("azure", "reviewer") not in providers
+    assert store.list_tool_invocations(run_id) == []
+    assert not (runner.config.workspace_path / "SomeNewFile.java").exists()
+
+    logs = "".join(
+        path.read_text(encoding="utf-8")
+        for path in (tmp_path / "runs").glob("*.jsonl")
+    )
+    persisted = str(store.load_snapshot(run_id).model_dump(mode="json"))
+    assert "plan_capability_mismatch" in logs
+    assert "filesystem.create" in logs
+    assert raw_secret not in logs + persisted
+
+    calls_before_resume = len(providers[("azure", "coder")].calls)
+    declared_before_resume = store.get_task(run_id, "step-1").spec.metadata[
+        "required_capabilities"
+    ]
+    resumed = runner.resume_durable(run_id)
+    assert resumed.status == RunStatus.FAILED
+    assert len(providers[("azure", "coder")].calls) == calls_before_resume
+    assert len(store.list_attempts(run_id, "step-1")) == 1
+    assert store.get_task(run_id, "step-1").spec.metadata[
+        "required_capabilities"
+    ] == declared_before_resume == ["filesystem.read", "filesystem.write"]
+
+
+def test_reviewer_feedback_cannot_expand_retry_capabilities(tmp_path):
+    plan = {
+        "goal": "Inspect result handling without repository changes",
+        "steps": [
+            {
+                "id": "step-1",
+                "title": "Inspect result handling",
+                "description": "Produce a read-only result-handling analysis.",
+                "risk": "low",
+                "execution_kind": "analysis",
+                "dependencies": [],
+                "assigned_role": "coder",
+                "maximum_attempts": 2,
+                "expected_outputs": [],
+                "done_criteria": ["A result-handling analysis is available"],
+                "required_capabilities": ["filesystem.read"],
+            }
+        ],
+        "test_strategy": "No code verifier is applicable",
+        "done_criteria": ["A result-handling analysis is available"],
+    }
+    scripts = {
+        ("azure", "planner"): [plan],
+        ("azure", "coder"): [
+            {
+                "action": "finish",
+                "summary": "Read-only analysis completed without changes.",
+            },
+            {
+                "action": "tool_call",
+                "tool_call": {
+                    "tool_name": "filesystem.write",
+                    "arguments": {
+                        "path": "result.py",
+                        "content": "VALUE = 1\n",
+                    },
+                    "expected_capabilities": [
+                        "filesystem.write",
+                        "filesystem.create",
+                    ],
+                    "idempotency_key": "reviewer-requested-write",
+                },
+            },
+        ],
+        ("azure", "reviewer"): [
+            {
+                "approved": False,
+                "issues": [
+                    {
+                        "severity": "high",
+                        "message": "Create a result module.",
+                    }
+                ],
+                "summary": "A repository file is required.",
+                "required_fixes": [
+                    "Use filesystem.write to create result.py."
+                ],
+            }
+        ],
+    }
+    runner, store, _, providers, verifier = build_runner(tmp_path, scripts)
+
+    run_id = runner.create_durable_run(
+        "Inspect result handling, then create result.py if requested."
+    )
+    report = runner.run_durable(run_id)
+    attempts = store.list_attempts(run_id, "step-1")
+
+    assert report.status == RunStatus.FAILED
+    assert [attempt.error_category for attempt in attempts] == [
+        FailureCategory.REVIEWER_REJECTION,
+        FailureCategory.PLAN_CAPABILITY_MISMATCH,
+    ]
+    assert attempts[0].metadata["task_contract"] == {
+        "execution_kind": "analysis",
+        "required_capabilities": ["filesystem.read"],
+    }
+    assert attempts[1].metadata["task_contract"] == attempts[0].metadata[
+        "task_contract"
+    ]
+    assert attempts[1].metadata["plan_capability_mismatch"][
+        "declared_capabilities"
+    ] == ["filesystem.read"]
+    assert attempts[1].metadata["_agentbus"]["retryable_override"] is False
+    assert verifier.calls == 0
+    assert len(providers[("azure", "coder")].calls) == 2
+    assert len(providers[("azure", "reviewer")].calls) == 1
+    retry_prompt = providers[("azure", "coder")].calls[1]["prompt"]
+    assert "Use filesystem.write to create result.py." in retry_prompt
+    assert "Do not request capabilities beyond" in retry_prompt
+    assert store.list_tool_invocations(run_id) == []
+    assert not (runner.config.workspace_path / "result.py").exists()
+
+
+def test_downstream_capabilities_never_leak_into_current_task(tmp_path):
+    plan = {
+        "goal": "Update current behavior before removing a later artifact",
+        "steps": [
+            {
+                "id": "step-1",
+                "title": "Update current behavior",
+                "description": "Complete the first independently verifiable update.",
+                "risk": "low",
+                "execution_kind": "implementation",
+                "dependencies": [],
+                "assigned_role": "coder",
+                "maximum_attempts": 2,
+                "expected_outputs": [],
+                "done_criteria": ["The first update is complete"],
+                "required_capabilities": ["filesystem.write"],
+            },
+            {
+                "id": "step-2",
+                "title": "Remove later artifact",
+                "description": "Remove later.txt as an independent follow-up.",
+                "risk": "low",
+                "execution_kind": "implementation",
+                "dependencies": ["step-1"],
+                "assigned_role": "coder",
+                "maximum_attempts": 2,
+                "expected_outputs": [],
+                "done_criteria": ["The later artifact is removed"],
+                "required_capabilities": ["filesystem.delete"],
+            },
+        ],
+        "test_strategy": "Use the fake verifier after each implementation slice",
+        "done_criteria": ["Both implementation slices are complete"],
+    }
+    scripts = {
+        ("azure", "planner"): [plan],
+        ("azure", "coder"): [
+            {
+                "action": "tool_call",
+                "tool_call": {
+                    "tool_name": "filesystem.delete",
+                    "arguments": {"path": "later.txt"},
+                    "expected_capabilities": ["filesystem.delete"],
+                    "idempotency_key": "premature-downstream-delete",
+                },
+            }
+        ],
+    }
+    runner, store, _, providers, verifier = build_runner(tmp_path, scripts)
+    later = runner.config.workspace_path / "later.txt"
+    later.write_text("preserve until step-2\n", encoding="utf-8")
+
+    run_id = runner.create_durable_run(
+        "Update current behavior, then remove the later artifact."
+    )
+    report = runner.run_durable(run_id)
+    attempt = store.list_attempts(run_id, "step-1")[0]
+
+    assert report.status == RunStatus.FAILED
+    assert report.failed_tasks == ["step-1"]
+    assert report.blocked_tasks == ["step-2"]
+    assert attempt.error_category == FailureCategory.PLAN_CAPABILITY_MISMATCH
+    assert attempt.metadata["plan_capability_mismatch"][
+        "requested_capabilities"
+    ] == ["filesystem.delete"]
+    assert attempt.metadata["plan_capability_mismatch"][
+        "declared_capabilities"
+    ] == ["filesystem.write"]
+    assert verifier.calls == 0
+    assert store.list_tool_invocations(run_id) == []
+    assert later.read_text(encoding="utf-8") == "preserve until step-2\n"
+    coder_prompt = providers[("azure", "coder")].calls[0]["prompt"]
+    assert '"id": "step-1"' in coder_prompt
+    assert '"id": "step-2"' not in coder_prompt
 
 
 def test_offline_fallback_smoke_exhausts_azure_then_uses_ollama_and_gates(
@@ -349,9 +1486,10 @@ def test_offline_fallback_smoke_exhausts_azure_then_uses_ollama_and_gates(
     coder_result = attempt.metadata["model_requests"][0]
 
     assert report.status == RunStatus.SUCCEEDED
+    assert report.verifier_status == "not_applicable"
     assert len(providers[("azure", "coder")].calls) == 2
     assert len(providers[("ollama", "coder")].calls) == 1
-    assert verifier.calls == 2
+    assert verifier.calls == 0
     assert len(providers[("azure", "reviewer")].calls) == 2
     assert coder_result["provider"] == "ollama"
     assert coder_result["fallback_used"] is True

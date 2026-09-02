@@ -1,14 +1,20 @@
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 from agentbus.replay import (
+    ReplayIncompatibleError,
     ReplayMode,
+    ToolReplayAssessment,
     ToolReplayPlanner,
     ToolReplayStrategy,
     capture_tool_envelope,
     load_tool_envelope,
 )
 from agentbus.tools.capabilities import derive_required_capabilities
+from agentbus.tools.descriptors import descriptor_map
 from agentbus.tools.protocol import (
     CapabilityScope,
     ToolCapability,
@@ -16,8 +22,10 @@ from agentbus.tools.protocol import (
     ToolDescriptor,
     ToolInvocation,
     ToolInvocationContext,
+    ToolInvocationStatus,
     ToolPolicyDecision,
     ToolPolicyOutcome,
+    ToolResult,
     ToolSafetyClassification,
     ToolVersion,
     capability_fingerprint,
@@ -180,7 +188,8 @@ def test_current_policy_is_evaluated_and_safe_read_can_rerun() -> None:
 
 def test_providerless_offline_replay_simulates_stable_mutation() -> None:
     descriptor = _descriptor(
-        _capability(ToolCapabilityName.FILESYSTEM_WRITE)
+        _capability(ToolCapabilityName.FILESYSTEM_WRITE),
+        _capability(ToolCapabilityName.FILESYSTEM_CREATE),
     ).model_copy(
         update={
             "name": "filesystem.write",
@@ -203,6 +212,159 @@ def test_providerless_offline_replay_simulates_stable_mutation() -> None:
     )
 
     assert assessment.strategy == ToolReplayStrategy.SIMULATE_MUTATION
+
+
+def _captured_write_assessment(
+    tmp_path: Path,
+    *,
+    target_exists: bool,
+) -> tuple[ToolInvocation, ToolReplayAssessment]:
+    from agentbus.policy import ToolPolicyEngine
+
+    target = tmp_path / "PaymentService.java"
+    if target_exists:
+        target.write_text("class PaymentService {}\n", encoding="utf-8")
+    descriptor = descriptor_map(workspace=tmp_path)["filesystem.write"]
+    provisional = ToolInvocation(
+        invocation_id="tool-existing-write",
+        run_id="run-payment",
+        task_id="step-1",
+        tool_name=descriptor.name,
+        tool_version=descriptor.version,
+        arguments={
+            "path": "PaymentService.java",
+            "content": "class PaymentService { void process() {} }\n",
+        },
+        requested_capabilities=descriptor.capabilities,
+        context=ToolInvocationContext(
+            workspace_identity=str(tmp_path.resolve()),
+            worktree_identity=str(tmp_path.resolve()),
+            caller_role="coder",
+            workspace_trusted=True,
+            provider_consented=True,
+        ),
+        requested_at=NOW,
+    )
+    invocation = provisional.model_copy(
+        update={
+            "requested_capabilities": derive_required_capabilities(
+                provisional,
+                descriptor,
+            )
+        }
+    )
+    if not target_exists:
+        target.write_text(
+            "class PaymentService { void process() {} }\n",
+            encoding="utf-8",
+        )
+    object_store = ContentAddressedStore(
+        tmp_path / "objects",
+        private_roots=[str(tmp_path.resolve())],
+    )
+    reference = capture_tool_envelope(
+        object_store,
+        descriptor=descriptor,
+        invocation=invocation,
+        policy_decision=ToolPolicyEngine().evaluate(invocation, descriptor),
+        producing_span_id="tool-existing-write-span",
+        reference_id="tool-existing-write-envelope",
+    )
+    envelope = load_tool_envelope(object_store, reference.sha256)
+
+    assessment = ToolReplayPlanner().assess(
+        envelope,
+        descriptor,
+        mode=ReplayMode.OFFLINE,
+    )
+    return invocation, assessment
+
+
+def test_replay_preserves_existing_write_capability_identity(tmp_path: Path) -> None:
+    invocation, assessment = _captured_write_assessment(
+        tmp_path,
+        target_exists=True,
+    )
+
+    assert [
+        capability.name for capability in invocation.requested_capabilities
+    ] == [ToolCapabilityName.FILESYSTEM_WRITE]
+    assert assessment.capability_drift is False
+    assert assessment.fresh_authorization_required is False
+    assert assessment.strategy == ToolReplayStrategy.SIMULATE_MUTATION
+
+
+def test_replay_preserves_new_path_capabilities_after_file_is_created(
+    tmp_path: Path,
+) -> None:
+    invocation, assessment = _captured_write_assessment(
+        tmp_path,
+        target_exists=False,
+    )
+
+    assert [
+        capability.name for capability in invocation.requested_capabilities
+    ] == [
+        ToolCapabilityName.FILESYSTEM_WRITE,
+        ToolCapabilityName.FILESYSTEM_CREATE,
+    ]
+    assert assessment.capability_drift is False
+    assert assessment.policy_drift is False
+    assert assessment.fresh_authorization_required is False
+    assert assessment.strategy == ToolReplayStrategy.SIMULATE_MUTATION
+
+
+def test_replay_keeps_new_create_in_legacy_write_descriptor_fail_closed(
+    tmp_path: Path,
+) -> None:
+    from agentbus.policy import ToolPolicyEngine
+
+    target = tmp_path / "PaymentService.java"
+    target.write_text("class PaymentService {}\n", encoding="utf-8")
+    current = descriptor_map(workspace=tmp_path)["filesystem.write"]
+    historical = current.model_copy(
+        update={
+            "capabilities": tuple(
+                capability
+                for capability in current.capabilities
+                if capability.name == ToolCapabilityName.FILESYSTEM_WRITE
+            )
+        }
+    )
+    invocation = ToolInvocation(
+        invocation_id="tool-legacy-write",
+        run_id="run-payment",
+        task_id="step-1",
+        tool_name=historical.name,
+        tool_version=historical.version,
+        arguments={"path": "PaymentService.java", "content": "updated\n"},
+        requested_capabilities=historical.capabilities,
+        context=ToolInvocationContext(
+            workspace_identity=str(tmp_path.resolve()),
+            worktree_identity=str(tmp_path.resolve()),
+            caller_role="coder",
+            workspace_trusted=True,
+            provider_consented=True,
+        ),
+        requested_at=NOW,
+    )
+    from agentbus.replay.tools import CapturedToolEnvelope
+
+    envelope = CapturedToolEnvelope(
+        descriptor=historical,
+        invocation=invocation,
+        policy_decision=ToolPolicyEngine().evaluate(invocation, historical),
+    )
+
+    assessment = ToolReplayPlanner().assess(
+        envelope,
+        current,
+        mode=ReplayMode.OFFLINE,
+    )
+
+    assert assessment.capability_drift is True
+    assert assessment.fresh_authorization_required is True
+    assert assessment.strategy == ToolReplayStrategy.REJECT
 
 
 def test_expanded_capabilities_require_fresh_authorization() -> None:
@@ -256,3 +418,272 @@ def test_policy_drift_is_reported_and_new_denial_blocks_replay() -> None:
     assert assessment.policy_drift is True
     assert assessment.current_outcome == ToolPolicyOutcome.DENY
     assert assessment.strategy == ToolReplayStrategy.REJECT
+
+
+def test_approved_historical_process_reuses_result_without_current_allowlist(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    def fail_on_discovery(*_args, **_kwargs):
+        raise AssertionError("offline replay must not discover executables")
+
+    monkeypatch.setattr("agentbus.tools.runtime.shutil.which", fail_on_discovery)
+    store, reference, current = _historical_process_capture(tmp_path)
+    envelope = load_tool_envelope(store, reference.sha256)
+    assessment = ToolReplayPlanner().assess(
+        envelope,
+        current,
+        mode=ReplayMode.OFFLINE,
+    )
+
+    assert envelope.result is not None
+    assert envelope.result.stdout == "BUILD SUCCESS"
+    assert envelope.historical_execution is not None
+    assert envelope.historical_execution.executable == "mvn"
+    assert envelope.historical_execution.working_directory == "."
+    assert assessment.approval_compatible_for_substitution is True
+    assert assessment.historical_authorization_validated is True
+    assert assessment.historical_executable == "mvn"
+    assert assessment.captured_result_reused is True
+    assert assessment.process_dispatched is False
+    assert assessment.descriptor_drift is False
+    assert assessment.fresh_authorization_required is False
+    assert assessment.strategy == ToolReplayStrategy.REUSE_CAPTURED
+
+
+def _historical_process_capture(
+    tmp_path: Path,
+    *,
+    include_approval: bool = True,
+    include_dispatch_evidence: bool = True,
+):
+    from agentbus.policy import (
+        ToolApprovalDisposition,
+        ToolPolicyEngine,
+        build_tool_approval_request,
+        decide_tool_approval,
+    )
+
+    historical = descriptor_map(
+        workspace=tmp_path,
+        process_executables=("mvn",),
+    )["test.execute"]
+    current = descriptor_map(
+        workspace=tmp_path,
+        process_executables=("git", "pytest", "python"),
+    )["test.execute"]
+    provisional = ToolInvocation(
+        invocation_id="tool-historical-process",
+        run_id="run-historical-process",
+        task_id="step-1",
+        tool_name=historical.name,
+        tool_version=historical.version,
+        arguments={
+            "executable": "mvn",
+            "arguments": ["test"],
+            "working_directory": ".",
+        },
+        requested_capabilities=historical.capabilities,
+        context=ToolInvocationContext(
+            workspace_identity=str(tmp_path.resolve()),
+            worktree_identity=str(tmp_path.resolve()),
+            caller_role="verifier",
+            workspace_trusted=True,
+            provider_consented=True,
+            policy_context={
+                "source_identity_sha256": "a" * 64,
+                "candidate_identity_sha256": "c" * 64,
+            },
+        ),
+        requested_at=NOW,
+    )
+    invocation = provisional.model_copy(
+        update={
+            "requested_capabilities": derive_required_capabilities(
+                provisional,
+                historical,
+            )
+        }
+    )
+    policy = ToolPolicyEngine()
+    approval_required = policy.evaluate(invocation, historical)
+    request = build_tool_approval_request(
+        invocation,
+        historical,
+        approval_required,
+        approval_id="approval-historical-process",
+    )
+    approval = decide_tool_approval(
+        request,
+        invocation,
+        disposition=ToolApprovalDisposition.APPROVED,
+    )
+    approved = policy.evaluate(
+        invocation,
+        historical,
+        approval=approval,
+    )
+    result = ToolResult(
+        invocation_id=invocation.invocation_id,
+        invocation_revision=invocation.invocation_revision,
+        status=ToolInvocationStatus.SUCCEEDED,
+        structured_output={
+            "executable": "mvn",
+            "working_directory": str(tmp_path.resolve()),
+            "pid": 4242 if include_dispatch_evidence else None,
+            "passed": True,
+        },
+        stdout="BUILD SUCCESS\n",
+        exit_code=0,
+        policy_decision=approved,
+        approval_id=approval.approval_id,
+        safe_diagnostic_metadata={
+            "executable": {
+                "alias": "mvn",
+                "path": "C:/tools/mvn.cmd",
+                "sha256": "b" * 64,
+                "size_bytes": 123,
+            },
+            "working_directory": str(tmp_path.resolve()),
+            "pid": 4242 if include_dispatch_evidence else None,
+            "shell": False,
+        },
+    )
+    store = ContentAddressedStore(
+        tmp_path / "objects",
+        private_roots=[tmp_path],
+    )
+    reference = capture_tool_envelope(
+        store,
+        descriptor=historical,
+        invocation=invocation,
+        policy_decision=approved,
+        producing_span_id="tool-historical-process-span",
+        reference_id="tool-historical-process-envelope",
+        result=result,
+        approval=approval if include_approval else None,
+    )
+    return store, reference, current
+
+
+def test_historical_process_requires_positive_dispatch_evidence(
+    tmp_path: Path,
+) -> None:
+    store, reference, _ = _historical_process_capture(
+        tmp_path,
+        include_dispatch_evidence=False,
+    )
+
+    envelope = load_tool_envelope(store, reference.sha256)
+
+    assert envelope.result is not None
+    assert envelope.historical_execution is None
+
+
+def test_historical_process_missing_approval_fails_closed(tmp_path: Path) -> None:
+    store, reference, current = _historical_process_capture(
+        tmp_path,
+        include_approval=False,
+    )
+    envelope = load_tool_envelope(store, reference.sha256)
+    assessment = ToolReplayPlanner().assess(
+        envelope,
+        current,
+        mode=ReplayMode.OFFLINE,
+    )
+
+    assert envelope.historical_execution is None
+    assert assessment.historical_authorization_validated is False
+    assert assessment.strategy == ToolReplayStrategy.REJECT
+    assert "evidence is missing" in assessment.reasons[0]
+
+
+def test_legacy_process_envelope_remains_conservatively_incompatible(
+    tmp_path: Path,
+) -> None:
+    store, reference, current = _historical_process_capture(tmp_path)
+    payload = store.get_json(reference.sha256)
+    payload["envelope_version"] = 1
+    payload["historical_execution"] = None
+    metadata = store.put_json(
+        payload,
+        producing_span_id="legacy-process-span",
+        media_type=reference.media_type,
+    )
+
+    envelope = load_tool_envelope(store, metadata.sha256)
+    assessment = ToolReplayPlanner().assess(
+        envelope,
+        current,
+        mode=ReplayMode.OFFLINE,
+    )
+
+    assert envelope.envelope_version == 1
+    assert assessment.historical_authorization_validated is False
+    assert assessment.strategy == ToolReplayStrategy.REJECT
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "executable",
+        "arguments",
+        "working_directory",
+        "capability",
+        "approval_id",
+        "approval_digest",
+        "descriptor_fingerprint",
+        "tool_version",
+        "source_identity",
+        "candidate_identity",
+        "result",
+        "result_hash",
+    ],
+)
+def test_historical_execution_envelope_tampering_fails_closed(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    store, reference, _ = _historical_process_capture(tmp_path)
+    payload = deepcopy(store.get_json(reference.sha256))
+    if mutation == "executable":
+        payload["invocation"]["arguments"]["executable"] = "powershell"
+    elif mutation == "arguments":
+        payload["invocation"]["arguments"]["arguments"] = ["deploy"]
+    elif mutation == "working_directory":
+        payload["invocation"]["arguments"]["working_directory"] = "../outside"
+    elif mutation == "capability":
+        payload["invocation"]["requested_capabilities"][0]["scope"][
+            "executables"
+        ] = ["powershell"]
+    elif mutation == "approval_id":
+        payload["approval"]["approval_id"] = "approval-replaced"
+    elif mutation == "approval_digest":
+        payload["approval"]["binding_sha256"] = "d" * 64
+    elif mutation == "descriptor_fingerprint":
+        payload["historical_execution"]["descriptor_sha256"] = "d" * 64
+    elif mutation == "tool_version":
+        payload["descriptor"]["version"]["major"] = 2
+    elif mutation == "source_identity":
+        payload["invocation"]["context"]["policy_context"][
+            "source_identity_sha256"
+        ] = "d" * 64
+    elif mutation == "candidate_identity":
+        payload["invocation"]["context"]["policy_context"][
+            "candidate_identity_sha256"
+        ] = "d" * 64
+    elif mutation == "result":
+        payload["result"]["stdout"] = "TAMPERED"
+    elif mutation == "result_hash":
+        payload["historical_execution"]["result_sha256"] = "d" * 64
+    metadata = store.put_json(
+        payload,
+        producing_span_id=f"tampered-{mutation}",
+        media_type=reference.media_type,
+    )
+
+    with pytest.raises(
+        ReplayIncompatibleError,
+        match="invalid or incompatible",
+    ):
+        load_tool_envelope(store, metadata.sha256)
