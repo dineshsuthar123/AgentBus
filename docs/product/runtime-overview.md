@@ -1,7 +1,7 @@
 # The Solution
 
-AgentBus is a safety-oriented local execution runtime for autonomous software
-engineering. AgentBus Studio is its visual control plane.
+Syndra is a safety-oriented local execution runtime for autonomous software
+engineering. Syndra Studio is its visual control plane.
 
 The runtime separates planning, implementation, verification, and final review.
 Managed tools derive capabilities independently from model output, deterministic
@@ -21,4 +21,4 @@ Studio makes that system visible as an execution graph:
 7. verify the sealed trace and run an offline replay.
 
 Studio does not infer success or invent activity. Every state comes from the
-authenticated AgentBus control protocol.
+authenticated Syndra control protocol.

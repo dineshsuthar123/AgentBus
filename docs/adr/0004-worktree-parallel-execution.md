@@ -5,7 +5,7 @@
 
 ## Context
 
-AgentBus durable execution already persists validated task graphs, immutable attempts, approval decisions, scoped artifacts, final verification, and final review. Sequential execution is safe but cannot overlap independent graph tasks. Running multiple coders in one working tree would create ambiguous ownership, duplicate execution races, mixed diffs, unsafe commits, and non-deterministic integration.
+Syndra durable execution already persists validated task graphs, immutable attempts, approval decisions, scoped artifacts, final verification, and final review. Sequential execution is safe but cannot overlap independent graph tasks. Running multiple coders in one working tree would create ambiguous ownership, duplicate execution races, mixed diffs, unsafe commits, and non-deterministic integration.
 
 This milestone needs bounded local concurrency while preserving workspace-repository validation, generated-artifact filtering, `shell=False`, terminal task immutability, approval gates, final acceptance, and the user's existing checkout.
 
@@ -15,8 +15,8 @@ Parallel durable execution is explicit and remains disabled by default. A foregr
 
 Each parallel run captures an exact base commit and creates:
 
-- one AgentBus-owned integration branch and worktree;
-- one AgentBus-owned branch and worktree for each active task;
+- one Syndra-owned integration branch and worktree;
+- one Syndra-owned branch and worktree for each active task;
 - one persisted SQLite lease for each executing task;
 - one scoped task commit for each successful task;
 - persisted deterministic integration attempts.
@@ -27,7 +27,7 @@ Git worktrees provide independent filesystem and index state while sharing the t
 
 The manager validates both the worktree Git top-level and common Git directory. Worktrees live under a configured canonical root outside the target repository. Paths and refs are generated from sanitized components plus hashes. Existing, missing, dirty, mismatched, or unowned paths fail closed.
 
-The user's checked-out branch, index, uncommitted changes, and HEAD are not task or integration surfaces. AgentBus never automatically merges or checks out the integration result there.
+The user's checked-out branch, index, uncommitted changes, and HEAD are not task or integration surfaces. Syndra never automatically merges or checks out the integration result there.
 
 ## Why Sequential Remains Default
 
@@ -59,17 +59,17 @@ Determinism favors reproducibility and safe recovery over maximum throughput. Wo
 
 ## Conflict Policy
 
-Conflicts halt the run. AgentBus records bounded repository-relative conflict paths, aborts only the AgentBus-owned in-progress cherry-pick, verifies that the integration worktree returned to its persisted base, and retains task commits and worktrees. It never silently chooses content, invokes a model to resolve a conflict, force-checks out, resets, cleans, or modifies the user's branch.
+Conflicts halt the run. Syndra records bounded repository-relative conflict paths, aborts only the Syndra-owned in-progress cherry-pick, verifies that the integration worktree returned to its persisted base, and retains task commits and worktrees. It never silently chooses content, invokes a model to resolve a conflict, force-checks out, resets, cleans, or modifies the user's branch.
 
 ## Final Acceptance And Publication
 
 After all task commits integrate, full final verification and the mandatory whole-run reviewer operate on the integration worktree. Task history remains successful if later final acceptance fails. Verifier failure or reviewer rejection fails the run and prevents a user-facing branch, commit identifier, push, or PR.
 
-When explicitly requested and accepted, AgentBus creates a user-facing branch ref at the verified integration commit without checking it out. Push and PR creation remain separate explicit options.
+When explicitly requested and accepted, Syndra creates a user-facing branch ref at the verified integration commit without checking it out. Push and PR creation remain separate explicit options.
 
 ## Cleanup Safety
 
-Worktrees are retained by default for diagnostics. Cleanup is an explicit CLI operation over persisted AgentBus ownership records. A worktree must validate against the expected repository and configured root, be marked `cleanup_pending`, and be clean before normal `git worktree remove` is allowed. Dirty, unknown, orphaned, or mismatched paths are refused. No force removal or automatic destructive rollback is available.
+Worktrees are retained by default for diagnostics. Cleanup is an explicit CLI operation over persisted Syndra ownership records. A worktree must validate against the expected repository and configured root, be marked `cleanup_pending`, and be clean before normal `git worktree remove` is allowed. Dirty, unknown, orphaned, or mismatched paths are refused. No force removal or automatic destructive rollback is available.
 
 Internal refs may remain after worktree removal so task commits are not accidentally destroyed. Ref pruning is outside this milestone.
 

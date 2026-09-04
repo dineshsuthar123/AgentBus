@@ -6,9 +6,13 @@ The authoritative artifacts are:
 - `protocol/agentbus-v1.schema.json`
 - `extensions/vscode/src/generated/protocol.ts`
 
+The `agentbus-v1` filenames and namespaced protocol values are immutable v1
+compatibility identifiers. Syndra keeps them so existing clients, traces, and
+evidence hashes remain valid.
+
 They are generated from the FastAPI application and Pydantic models. Run
-`agentbus control-schema export` after model changes and
-`agentbus control-schema export --check` in verification.
+`syndra control-schema export` after model changes and
+`syndra control-schema export --check` in verification.
 
 All errors use `{ "error": { "code", "message", "retryable", "details" } }`.
 SSE event IDs are persisted monotonic SQLite IDs. Clients discard duplicate or
@@ -85,7 +89,7 @@ Older records without tool activity remain valid.
 
 ## MCP endpoint
 
-Authenticated `POST /mcp` exposes the constrained AgentBus MCP JSON-RPC server.
+Authenticated `POST /mcp` exposes the constrained Syndra MCP JSON-RPC server.
 It is not an arbitrary command endpoint and is not under `/api/v1` because MCP
 uses its own negotiated protocol versions. It shares the daemon's numeric
 loopback binding and opaque bearer authentication. See
@@ -108,5 +112,5 @@ operations.
 Replay session responses may include `intelligence_drift` with bounded stable
 category strings. This optional field preserves compatibility with clients that
 predate repository intelligence. Regenerate artifacts with
-`agentbus control-schema export`; CI and `npm run protocol:check` reject stale
+`syndra control-schema export`; CI and `npm run protocol:check` reject stale
 checked-in protocol files.

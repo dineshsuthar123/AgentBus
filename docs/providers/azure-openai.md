@@ -1,6 +1,6 @@
 # Azure OpenAI Provider
 
-AgentBus supports Azure OpenAI through the Azure OpenAI v1 interface and the official `openai` Python package. The adapter is isolated under `agentbus/models/azure_openai.py`; agents and durable execution use provider-neutral routes and results.
+Syndra supports Azure OpenAI through the Azure OpenAI v1 interface and the official `openai` Python package. The adapter is isolated under `agentbus/models/azure_openai.py`; agents and durable execution use provider-neutral routes and results.
 
 ## Prerequisites
 
@@ -12,20 +12,20 @@ You need:
 - An API key for this checkpoint.
 - The Azure deployment names. Deployment names are user-defined identifiers and may differ from public model family names.
 
-AgentBus does not create resources, deployments, keys, quota, or billing configuration.
+Syndra does not create resources, deployments, keys, quota, or billing configuration.
 
 ## Configuration
 
-AgentBus does not load `.env` files automatically. Export values in the launching process or use your normal secret manager. Never commit a populated `.env` file.
+Syndra does not load `.env` files automatically. Export values in the launching process or use your normal secret manager. Never commit a populated `.env` file.
 
 ```dotenv
-AGENTBUS_PROVIDER=azure
-AGENTBUS_FALLBACK_PROVIDER=ollama
-AGENTBUS_ENABLE_PROVIDER_FALLBACK=false
-AGENTBUS_MODEL_TIMEOUT_SECONDS=180
-AGENTBUS_MODEL_MAX_RETRIES=2
-AGENTBUS_MODEL_RETRY_BASE_SECONDS=0.5
-AGENTBUS_MODEL_RETRY_MAX_SECONDS=8
+SYNDRA_PROVIDER=azure
+SYNDRA_FALLBACK_PROVIDER=ollama
+SYNDRA_ENABLE_PROVIDER_FALLBACK=false
+SYNDRA_MODEL_TIMEOUT_SECONDS=180
+SYNDRA_MODEL_MAX_RETRIES=2
+SYNDRA_MODEL_RETRY_BASE_SECONDS=0.5
+SYNDRA_MODEL_RETRY_MAX_SECONDS=8
 
 AZURE_OPENAI_ENDPOINT=https://YOUR-RESOURCE.openai.azure.com
 AZURE_OPENAI_API_KEY=YOUR-KEY-FROM-A-SECRET-STORE
@@ -51,9 +51,9 @@ https://YOUR-RESOURCE.openai.azure.com
 https://YOUR-RESOURCE.openai.azure.com/openai/v1/
 ```
 
-Both normalize to the second form. AgentBus rejects HTTP endpoints, embedded credentials, query strings, fragments, deployment-specific paths, and duplicated v1 paths. The v1 interface does not use a dated `api-version` in AgentBus configuration.
+Both normalize to the second form. Syndra rejects HTTP endpoints, embedded credentials, query strings, fragments, deployment-specific paths, and duplicated v1 paths. The v1 interface does not use a dated `api-version` in Syndra configuration.
 
-`responses` is the default and recommended mode. Set `AZURE_OPENAI_API_MODE=chat_completions` only when that is the intended deployment capability. AgentBus does not silently fall back between API modes. Requests are stateless (`store=false`) and Azure response IDs are observational metadata, never durable workflow state.
+`responses` is the default and recommended mode. Set `AZURE_OPENAI_API_MODE=chat_completions` only when that is the intended deployment capability. Syndra does not silently fall back between API modes. Requests are stateless (`store=false`) and Azure response IDs are observational metadata, never durable workflow state.
 
 References:
 
@@ -84,9 +84,9 @@ Roles are `planner`, `coder`, `reviewer`, `summarizer`, and `default`. The deplo
 
 ## Structured Output
 
-Planner, reviewer, and coder/action calls provide Pydantic schemas. For Pydantic schemas, the SDK parse helper requests schema-constrained output. AgentBus then validates parsed output locally and returns plain JSON-compatible data. For raw JSON Schemas, AgentBus sends strict schema format and validates locally with `jsonschema`.
+Planner, reviewer, and coder/action calls provide Pydantic schemas. For Pydantic schemas, the SDK parse helper requests schema-constrained output. Syndra then validates parsed output locally and returns plain JSON-compatible data. For raw JSON Schemas, Syndra sends strict schema format and validates locally with `jsonschema`.
 
-AgentBus fails closed on:
+Syndra fails closed on:
 
 - Missing output.
 - Malformed JSON.
@@ -99,11 +99,11 @@ There is no silent downgrade to unconstrained text for structured agent actions.
 
 ## Retry And Fallback
 
-Provider-call retries happen inside one durable task attempt. Retryable categories are timeout, transport/connection, transient 429, and temporary 5xx/service failures. `Retry-After` is respected up to the configured maximum; otherwise AgentBus uses capped exponential backoff with jitter. The OpenAI SDK's own retry loop is disabled so AgentBus owns one observable retry budget.
+Provider-call retries happen inside one durable task attempt. Retryable categories are timeout, transport/connection, transient 429, and temporary 5xx/service failures. `Retry-After` is respected up to the configured maximum; otherwise Syndra uses capped exponential backoff with jitter. The OpenAI SDK's own retry loop is disabled so Syndra owns one observable retry budget.
 
 The following are not provider-retried: authentication, authorization, quota exhaustion, invalid configuration, deployment not found, bad request, unsupported structured output, content policy, malformed output, and local schema failure.
 
-Fallback is off by default. When both `AGENTBUS_ENABLE_PROVIDER_FALLBACK=true` and `AGENTBUS_FALLBACK_PROVIDER=ollama` are set, exhausted retryable Azure failures may use Ollama. No other automatic provider direction is supported.
+Fallback is off by default. When both `SYNDRA_ENABLE_PROVIDER_FALLBACK=true` and `SYNDRA_FALLBACK_PROVIDER=ollama` are set, exhausted retryable Azure failures may use Ollama. No other automatic provider direction is supported.
 
 Fallback never applies to auth/configuration/policy/output/safety/approval failures. The result and events retain original provider, safe error category, final provider, retry count, and fallback indication. Durable task retry limits remain a second finite outer budget.
 
@@ -112,9 +112,9 @@ Fallback never applies to auth/configuration/policy/output/safety/approval failu
 These commands do not contact Azure:
 
 ```bash
-python -m agentbus.main --list-providers
-python -m agentbus.main --show-model-config
-python -m agentbus.main --check-provider azure
+python -m syndra.main --list-providers
+python -m syndra.main --show-model-config
+python -m syndra.main --check-provider azure
 ```
 
 The check prints endpoint host, auth mode, API mode, selected deployment, readiness, and actionable missing-variable errors. It never prints the key.
@@ -122,7 +122,7 @@ The check prints endpoint host, auth mode, API mode, selected deployment, readin
 After setting real credentials, make the first explicit connectivity request with:
 
 ```bash
-python -m agentbus.main --check-provider azure --live
+python -m syndra.main --check-provider azure --live
 ```
 
 `--live` sends one tiny deterministic structured request, does not start a durable run, and does not modify the repository. It can incur a small Azure charge.
@@ -147,11 +147,11 @@ Confirm endpoint/resource pairing and exact deployment spelling. Public model na
 
 ### 429 Rate Limit
 
-AgentBus honors bounded retry guidance and then fails or uses explicitly enabled Ollama fallback. Reduce concurrency or request appropriate quota outside AgentBus.
+Syndra honors bounded retry guidance and then fails or uses explicitly enabled Ollama fallback. Reduce concurrency or request appropriate quota outside Syndra.
 
 ### Quota Exhaustion
 
-Quota exhaustion is classified separately from a transient rate limit and is not automatically retried/fallen back. Review Azure quota and billing outside AgentBus.
+Quota exhaustion is classified separately from a transient rate limit and is not automatically retried/fallen back. Review Azure quota and billing outside Syndra.
 
 ### Timeout Or Connection Failure
 
@@ -159,7 +159,7 @@ Check endpoint reachability and `AZURE_OPENAI_TIMEOUT_SECONDS`. Transient errors
 
 ### Structured Output Unsupported
 
-Not every deployment supports strict structured output or every API mode. Choose a compatible deployment or explicitly select a supported mode. AgentBus does not silently degrade structured actions to free text.
+Not every deployment supports strict structured output or every API mode. Choose a compatible deployment or explicitly select a supported mode. Syndra does not silently degrade structured actions to free text.
 
 ## Secret Handling
 

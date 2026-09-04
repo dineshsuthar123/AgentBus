@@ -1,6 +1,6 @@
-# Judging Points
+# Product Capabilities
 
-1. **Meaningful AI**: planner, coder, verifier, and reviewer have distinct,
+1. **Bounded execution roles**: planner, coder, verifier, and reviewer have distinct,
    schema-validated responsibilities.
 2. **Real autonomy**: the demo changes a real Git repository through managed
    tools rather than animating a scripted dashboard.
@@ -17,5 +17,5 @@
    important actions visible.
 9. **Honest replay**: captured, simulated, and dispatched behavior is labelled
    with provider/network/process counters.
-10. **Product quality**: Studio turns a complex runtime into a recognizable
+10. **Execution observatory**: Studio turns a complex runtime into a recognizable
     execution-centered developer experience.

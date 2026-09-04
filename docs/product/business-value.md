@@ -13,7 +13,7 @@
 ## High-Consequence Systems
 
 Payment and financial systems turn small concurrency mistakes into duplicate
-side effects, reconciliation work, and loss of trust. AgentBus does not claim to
+side effects, reconciliation work, and loss of trust. Syndra does not claim to
 prove a payment system correct. It demonstrates a safer engineering workflow:
 an autonomous repair is scoped, its Maven execution requires a human decision,
 sequential and concurrent behavior is tested, the final diff is reviewed, and

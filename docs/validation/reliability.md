@@ -5,9 +5,9 @@ bounded deterministic lifecycle soak. It reports inspectable evidence instead
 of collapsing results into an opaque numerical score.
 
 ```console
-agentbus validate reliability --json
-agentbus validate reliability --runs 10 --parallelism 2 --repository-files 20 --json
-agentbus validate reliability --repository C:\work\authorized-repository --json
+syndra validate reliability --json
+syndra validate reliability --runs 10 --parallelism 2 --repository-files 20 --json
+syndra validate reliability --repository C:\work\authorized-repository --json
 ```
 
 Each explicit local repository is canonically resolved and statically indexed
@@ -25,7 +25,7 @@ cursor recovery, lease release, and owned worktree cleanup.
 The scorecard reports:
 
 - completed repository and lifecycle scenarios with latency samples;
-- AgentBus-owned process and Git worktree leaks;
+- Syndra-owned process and Git worktree leaks;
 - durable-state and index SQLite quick-check, schema, and foreign-key results;
 - replay, cancellation, and restart attempts, passes, and failures;
 - event gaps, stale leases, cleanup failures, and failed lifecycle cycles;
@@ -53,7 +53,7 @@ parallelism one, and 20 generated files. It proves the release workflow is
 wired correctly; it does not replace the ten-minute manual RC soak:
 
 ```console
-agentbus soak --profile release-candidate --json
+syndra soak --profile release-candidate --json
 ```
 
 Longer durations are explicit manual evidence. They remain providerless and

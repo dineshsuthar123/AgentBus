@@ -1,6 +1,6 @@
-# AgentBus Studio
+# Syndra Studio
 
-AgentBus Studio is designed as an **Execution Graph OS**, not a chatbot or
+Syndra Studio is designed as an **Execution Graph OS**, not a chatbot or
 generic administration dashboard. The run is the center of the product.
 
 ## Product Routes

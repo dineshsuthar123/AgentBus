@@ -1,12 +1,12 @@
-# AgentBus documentation
+# Syndra documentation
 
-AgentBus is a local, safety-oriented software-engineering agent runtime. Start
+Syndra is a local, safety-oriented software-engineering agent runtime. Start
 with the deterministic provider, which follows the real planner, tool,
 verification, review, persistence, and replay paths without network access.
 
 ## Start here
 
-- [Install AgentBus](getting-started/install.md)
+- [Install Syndra](getting-started/install.md)
 - [Complete the five-minute quickstart](getting-started/quickstart.md)
 - [Use the VS Code extension](getting-started/vscode.md)
 
@@ -54,6 +54,13 @@ verification, review, persistence, and replay paths without network access.
 - [Local control plane](control-plane.md)
 - [Control protocol](protocol-v1.md)
 
-AgentBus does not provide a kernel sandbox, guarantee generated code is safe,
+## Product
+
+- [Syndra product overview](product/README.md)
+- [Syndra Studio](product/studio.md)
+- [Payment Safety Demo](product/payment-demo.md)
+- [Product screenshots](product/screenshots/README.md)
+
+Syndra does not provide a kernel sandbox, guarantee generated code is safe,
 or automatically roll back filesystem edits after a failed run. Review the
 reported diff and changed files before committing or publishing anything.

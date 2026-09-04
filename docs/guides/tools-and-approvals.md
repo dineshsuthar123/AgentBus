@@ -1,6 +1,6 @@
 # Managed tools and approvals
 
-Models do not execute arbitrary shell text. AgentBus validates structured tool
+Models do not execute arbitrary shell text. Syndra validates structured tool
 calls against a versioned registry, independently derives capabilities, applies
 deterministic policy, reserves bounded resources, dispatches an adapter, and
 records a sanitized immutable audit entry.
@@ -10,9 +10,9 @@ writes and tests run with constraints. Deletes and other high-risk operations
 require an exact, revision-bound approval.
 
 ```console
-agentbus show-run <run-id>
-agentbus approve <run-id>:<task-id> --reason "Reviewed exact deletion scope"
-agentbus resume <run-id>
+syndra show-run <run-id>
+syndra approve <run-id>:<task-id> --reason "Reviewed exact deletion scope"
+syndra resume <run-id>
 ```
 
 Approval covers only the recorded run, task, tool version, canonical arguments,
@@ -20,7 +20,7 @@ capabilities, workspace, budget, and cancellation revision. Any material change
 invalidates it. Rejection prevents the operation:
 
 ```console
-agentbus reject <run-id>:<task-id> --reason "Scope is broader than intended"
+syndra reject <run-id>:<task-id> --reason "Scope is broader than intended"
 ```
 
 Built-in subprocesses use an absolute executable identity, separate arguments,

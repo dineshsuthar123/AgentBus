@@ -1,6 +1,6 @@
 # Known Limitations
 
-- AgentBus is a public beta and not an unattended production service.
+- Syndra is a public beta and not an unattended production service.
 - Managed tools are hardened and bounded but do not provide VM/container-level
   isolation or a formal proof of generated-code safety.
 - Studio currently runs as a browser application; the optional Tauri desktop
@@ -15,9 +15,9 @@
 - Offline replay can reuse captured results or simulate mutations. It is not
   always exact process re-execution, and Studio reports the actual mode/counters.
 - Runtime filesystem edits are not automatically rolled back after a failed
-  run. AgentBus reports them for inspection and never resets or cleans user work.
-- No Razorpay Checkout, order API, payment signature, webhook, or real payment
-  credential integration is included. Razorpay is a problem-domain narrative,
-  not a partnership claim.
-- No live Azure, Ollama, Razorpay, or other paid/provider call is required for
-  the submission demo.
+  run. Syndra reports them for inspection and never resets or cleans user work.
+- No checkout API, payment signature, webhook, real credential, or payment
+  network integration is included. The fixture exercises local application
+  correctness only.
+- No live Azure, Ollama, payment-network, or other paid call is required for
+  the Payment Safety Demo.

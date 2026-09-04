@@ -1,6 +1,6 @@
 # Local Control Plane
 
-AgentBus v0.4 keeps a thin FastAPI adapter over the existing orchestrator,
+Syndra v0.4 keeps a thin FastAPI adapter over the existing orchestrator,
 StateStore, approval engine, lease service, worktree manager, and GitRepository.
 It does not implement a second scheduler or execution database.
 
@@ -15,7 +15,7 @@ endpoint. Events use persisted SQLite event IDs for ordered SSE replay and
 `Last-Event-ID` reconnection.
 
 Filesystem edits are not rolled back when a run fails. Reports list retained
-changes and cleanup recommendations; AgentBus never resets or cleans user work.
+changes and cleanup recommendations; Syndra never resets or cleans user work.
 
 ## Managed tools
 
@@ -72,7 +72,7 @@ closes the client and supervised stdio process before returning. Output shows
 safe aliases, endpoint hosts, negotiated versions, namespaced tool names, and
 cleanup status, never bearer tokens or environment values.
 
-Authenticated `POST /mcp` exposes AgentBus itself as a fixed, constrained MCP
+Authenticated `POST /mcp` exposes Syndra itself as a fixed, constrained MCP
 server. It shares daemon authentication and path validation but does not expose
 arbitrary files, process execution, SQLite, approval decisions, commit, push,
 PR creation, or live provider calls. See [MCP Integration](mcp-integration.md).
@@ -146,7 +146,7 @@ Reconnect with `Last-Event-ID` to replay without duplicate terminal events.
 
 Deterministic provider waits stop cooperatively. Azure OpenAI and Ollama check
 before and after their transport call, but an already active transport may not
-be interruptible. In that case AgentBus reports the completed-after-request
+be interruptible. In that case Syndra reports the completed-after-request
 operation truthfully and waits for a safe checkpoint.
 
 On restart, persisted cancellation is reloaded. Stale process-local operation
@@ -185,7 +185,7 @@ See [Repository Intelligence](repository-intelligence.md) and the generated
 Run:
 
 ```powershell
-.venv\Scripts\python.exe -m agentbus.control.acceptance
+.venv\Scripts\python.exe -m syndra.control.acceptance
 ```
 
 The acceptance launches a loopback daemon with a credential-stripped child

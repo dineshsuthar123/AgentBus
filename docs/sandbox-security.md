@@ -1,13 +1,13 @@
 # Sandbox Security
 
-AgentBus applies capability policy, path containment, executable identity,
+Syndra applies capability policy, path containment, executable identity,
 resource budgets, and process-tree supervision around local tools. These are
 defense-in-depth controls. They are not a VM, container, seccomp profile,
 restricted Windows token, or kernel security boundary, and they do not prove
 that generated or repository code is safe.
 
-Use AgentBus with a least-privilege OS account, no unnecessary credentials,
-and a disposable repository or AgentBus-owned worktree. Review retained
+Use Syndra with a least-privilege OS account, no unnecessary credentials,
+and a disposable repository or Syndra-owned worktree. Review retained
 changes before commit, push, deployment, or cleanup.
 
 ## Controlled process launch
@@ -30,7 +30,7 @@ is checked again at launch. Standard aliases are intentionally narrow and
 policy can still require approval or deny the request.
 
 Windows cannot execute `.cmd` or `.bat` files directly. For an explicitly
-catalogued batch file only, AgentBus resolves the trusted system `cmd.exe`,
+catalogued batch file only, Syndra resolves the trusted system `cmd.exe`,
 rejects command-language metacharacters, quotes every bounded token, disables
 AutoRun and delayed expansion, pins the `CreateProcess` application name, and
 still uses `shell=False`. Arbitrary shell interpreters and command strings
@@ -39,7 +39,7 @@ remain denied.
 ## Environment isolation
 
 Managed processes receive a minimal environment rather than `os.environ`.
-AgentBus keeps only bounded platform and locale fields, rejects sensitive
+Syndra keeps only bounded platform and locale fields, rejects sensitive
 override names, constructs a trusted `PATH`, and places `HOME`, `USERPROFILE`,
 `TEMP`, `TMP`, and `TMPDIR` under an invocation-specific temporary directory.
 Fixed values disable Python bytecode and interactive prompts where applicable.
@@ -75,7 +75,7 @@ attempts to assign the process to a Job Object. A successful Job Object:
 - enforces aggregate memory only when `memory_bytes` is configured;
 - enforces job user time only when `cpu_seconds` is configured.
 
-If Job Object creation or assignment fails, AgentBus reports the limitation and
+If Job Object creation or assignment fails, Syndra reports the limitation and
 uses the absolute system `taskkill.exe /T /F` as a bounded process-tree
 fallback. If both mechanisms are unavailable, only direct-process termination
 can be attempted and the result reports tree termination as unsupported.
@@ -85,7 +85,7 @@ Observed peak memory and exact descendant counts are not currently collected.
 
 ## POSIX process handling
 
-On Linux and other POSIX hosts, AgentBus starts a new session and process group.
+On Linux and other POSIX hosts, Syndra starts a new session and process group.
 Cancellation or timeout sends `SIGTERM` to the group, waits for a bounded grace
 period, then sends `SIGKILL`. The direct child is waited to avoid a zombie.
 
@@ -108,7 +108,7 @@ rejects:
 - mutation through any symlink or junction;
 - changes to the canonical root device/inode identity.
 
-Protected segments include `.agentbus`, `.aws`, `.azure`, `.codex`, `.docker`,
+Protected segments include `.syndra`, `.aws`, `.azure`, `.codex`, `.docker`,
 `.git`, `.kube`, and `.ssh`. Protected names and suffixes include `.env`, cloud
 and Git credentials, private keys, daemon registries, SQLite control state,
 `.npmrc`, and common secret files. Placeholder files such as `.env.example`
@@ -144,7 +144,7 @@ messages, and pathspecs are validated against option and control-character
 injection, and managed tools never mutate global configuration.
 
 The managed surface exposes read operations plus path-scoped stage and commit.
-Mutations require an explicitly AgentBus-owned worktree and task/invocation
+Mutations require an explicitly Syndra-owned worktree and task/invocation
 attribution. A commit may include only explicit changed, policy-eligible paths.
 Managed tools do not expose push, remote mutation, force operations,
 `reset --hard`, `clean`, arbitrary branch deletion, credential-helper changes,
@@ -163,7 +163,7 @@ classified for review and commit eligibility but are not deleted automatically.
 
 Failure, denial, cancellation, timeout, or reviewer rejection does not roll
 back completed filesystem, Git, process, MCP, or network side effects. Reports
-list retained files and safe cleanup guidance. AgentBus never runs automatic
+list retained files and safe cleanup guidance. Syndra never runs automatic
 `git reset`, `git clean`, recursive deletion, or destructive rollback.
 
 ## Static repository indexing

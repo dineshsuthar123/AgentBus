@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a reproducible AgentBus defect without private data.
+description: Report a reproducible Syndra defect without private data.
 title: "bug: "
 labels: [bug]
 body:
@@ -9,8 +9,8 @@ body:
   - type: input
     id: version
     attributes:
-      label: AgentBus version
-      description: Output of agentbus version --json.
+      label: Syndra version
+      description: Output of syndra version --json.
     validations:
       required: true
   - type: input
@@ -36,7 +36,7 @@ body:
     id: doctor
     attributes:
       label: Sanitized doctor output
-      description: Paste reviewed agentbus doctor --json output only.
+      description: Paste reviewed syndra doctor --json output only.
       render: json
   - type: textarea
     id: expected

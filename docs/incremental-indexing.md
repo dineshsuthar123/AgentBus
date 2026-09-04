@@ -1,6 +1,6 @@
 # Incremental Indexing
 
-AgentBus publishes immutable repository-index snapshots into a local SQLite
+Syndra publishes immutable repository-index snapshots into a local SQLite
 database. A snapshot identifies its repository and workspace, parser versions,
 project-map hash, source fingerprint, graph hash, completion state, counts, and
 bounded diagnostics. Readers use only a fully published snapshot; an interrupted
@@ -8,11 +8,11 @@ operation cannot expose a half-written graph as current.
 
 ## Build and update
 
-`agentbus index build` discovers the contained workspace, discovers projects,
+`syndra index build` discovers the contained workspace, discovers projects,
 extracts ownership and architecture evidence, parses supported files, resolves
 references, builds dependency edges, and atomically publishes a snapshot.
 
-`agentbus index update` compares the current inventory with the latest
+`syndra index update` compares the current inventory with the latest
 compatible snapshot. Unchanged files are reused when all of these remain
 compatible:
 
@@ -85,8 +85,8 @@ not delete repository files or automatically remove the previous snapshot.
   selected local index records, not repository content.
 
 Never commit `repository-index.sqlite3`, its WAL/SHM files, or local cache
-directories. The default database lives beside AgentBus state rather than in the
-repository. Failed AgentBus runs retain their filesystem edits for inspection;
+directories. The default database lives beside Syndra state rather than in the
+repository. Failed Syndra runs retain their filesystem edits for inspection;
 index recovery does not imply workspace rollback.
 
 See [Repository Intelligence](repository-intelligence.md) and

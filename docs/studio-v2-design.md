@@ -1,4 +1,4 @@
-# AgentBus Studio v2: Execution Observatory
+# Syndra Studio v2: Execution Observatory
 
 ## Purpose
 

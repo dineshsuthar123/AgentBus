@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title description">
-  <title id="title">AgentBus safety architecture</title>
-  <desc id="description">AgentBus Studio routes user intent through an authenticated control plane, planner, durable task engine, coder, managed tool runtime, and repository. Policy, approval, verifier, and reviewer gates constrain execution while trace evidence feeds provenance and offline replay.</desc>
+  <title id="title">Syndra safety architecture</title>
+  <desc id="description">Syndra Studio routes user intent through an authenticated control plane, planner, durable task engine, coder, managed tool runtime, and repository. Policy, approval, verifier, and reviewer gates constrain execution while trace evidence feeds provenance and offline replay.</desc>
   <defs>
     <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
       <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#15252b" stroke-width="1" opacity="0.42"/>
@@ -34,7 +34,7 @@
   <rect x="1" y="1" width="1598" height="898" fill="none" stroke="#20343c" stroke-width="2"/>
 
   <g class="sans">
-    <text x="42" y="45" class="eyebrow">AGENTBUS / TRUSTED EXECUTION PATH</text>
+    <text x="42" y="45" class="eyebrow">SYNDRA / TRUSTED EXECUTION PATH</text>
     <text x="42" y="78" class="heading">From model intent to repository evidence</text>
     <text x="42" y="102" class="subheading">Local, durable, workspace-scoped autonomous engineering.</text>
 
@@ -50,11 +50,11 @@
       <rect x="505" y="180" width="340" height="56" rx="4" fill="#0d1d22" stroke="#66d9e8" stroke-width="1.5"/>
       <circle cx="535" cy="208" r="13" fill="#10252b" stroke="#66d9e8"/>
       <text x="535" y="212" text-anchor="middle" class="mono" fill="#66d9e8" font-size="10">02</text>
-      <text x="563" y="204" class="node-title">AgentBus Studio</text>
+      <text x="563" y="204" class="node-title">Syndra Studio</text>
       <text x="563" y="222" class="node-meta mono">VISUAL CONTROL PLANE</text>
     </g>
 
-    <g aria-label="AgentBus local runtime boundary">
+    <g aria-label="Syndra local runtime boundary">
       <rect x="400" y="258" width="550" height="590" rx="6" fill="#091216" stroke="#29444e" stroke-width="1.5"/>
       <path d="M400 298 V264 Q400 258 406 258 H584" fill="none" stroke="#66d9e8" stroke-width="2"/>
       <rect x="418" y="247" width="232" height="22" fill="#070d10"/>

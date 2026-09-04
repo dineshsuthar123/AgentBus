@@ -1,6 +1,6 @@
 # Meaningful AI Features
 
-AgentBus uses model providers for bounded software-engineering roles rather than
+Syndra uses model providers for bounded software-engineering roles rather than
 placing an ungoverned chatbot in front of a shell.
 
 - The planner produces a validated task graph with dependencies, expected

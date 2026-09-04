@@ -1,6 +1,6 @@
 # Safety Model
 
-AgentBus applies multiple independent controls:
+Syndra applies multiple independent controls:
 
 - canonical workspace and exact Git-top-level validation;
 - versioned tools with independently derived capability scopes;
@@ -18,7 +18,7 @@ prompts, unrestricted tool arguments, raw stdout/stderr, or Azure response
 bodies. The browser never calls Azure directly.
 
 These controls are not complete OS sandbox isolation and do not make generated
-code intrinsically safe. Evaluate AgentBus with least-privilege credentials and
+code intrinsically safe. Evaluate Syndra with least-privilege credentials and
 disposable repositories. Filesystem edits are intentionally not rolled back
 automatically after failure; the failed report and source view retain them for
 human inspection.

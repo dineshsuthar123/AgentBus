@@ -1,6 +1,6 @@
 # Deterministic Replay
 
-AgentBus v0.4 can replay a recorded execution without calling Azure, Ollama,
+Syndra v0.4 can replay a recorded execution without calling Azure, Ollama,
 remote MCP servers, or another network service. Replay uses captured,
 sanitized objects to drive the normal structured parsing, policy, verifier,
 reviewer, and state-transition code paths where those paths are deterministic.
@@ -13,8 +13,8 @@ side effect can be reproduced exactly.
 Inspect replayability and verify provenance first:
 
 ```powershell
-agentbus trace inspect <run-or-trace-id> --json
-agentbus trace verify <run-or-trace-id> --json
+syndra trace inspect <run-or-trace-id> --json
+syndra trace verify <run-or-trace-id> --json
 ```
 
 The replayability result explains:
@@ -39,7 +39,7 @@ behavior, incompatible schemas, and policy drift that violates strict
 expectations stop the replay.
 
 ```powershell
-agentbus replay <run-or-trace-id> --mode strict --json
+syndra replay <run-or-trace-id> --mode strict --json
 ```
 
 ### Offline
@@ -60,7 +60,7 @@ a replay executor and isolated workspace are available. Offline mode never
 falls back to mutating the source repository.
 
 ```powershell
-agentbus replay <run-or-trace-id> --mode offline --json
+syndra replay <run-or-trace-id> --mode offline --json
 ```
 
 ### Verify
@@ -71,7 +71,7 @@ Verification cannot prove that an uncontrolled external service would return
 the same value today.
 
 ```powershell
-agentbus replay <run-or-trace-id> --mode verify --json
+syndra replay <run-or-trace-id> --mode verify --json
 ```
 
 ### Simulate
@@ -82,7 +82,7 @@ safely reproduced. Simulation is evidence about recorded control flow, not an
 execution of the original external side effects.
 
 ```powershell
-agentbus replay <run-or-trace-id> --mode simulate --json
+syndra replay <run-or-trace-id> --mode simulate --json
 ```
 
 ## Provider and model substitution
@@ -160,7 +160,7 @@ captured process result is safely reused.
 List checkpoints with trace inspection, then select one by ID:
 
 ```powershell
-agentbus replay <run-or-trace-id> --mode offline --from <checkpoint-id> --json
+syndra replay <run-or-trace-id> --mode offline --from <checkpoint-id> --json
 ```
 
 The CLI also accepts a span or task selector and the aliases `beginning`,
@@ -172,14 +172,14 @@ Partial replay:
 1. validates trace and checkpoint schema versions;
 2. validates checkpoint ancestry and dependencies;
 3. copies durable state to an isolated SQLite database;
-4. creates an AgentBus-owned replay worktree when a base commit is required;
+4. creates an Syndra-owned replay worktree when a base commit is required;
 5. starts from the selected deterministic sequence;
 6. keeps the source repository unchanged.
 
 The replay root is outside the source repository. Control-plane responses
 expose only `daemon_managed_temporary_workspace`, never its private absolute
-path. AgentBus does not perform automatic destructive cleanup; removal of
-AgentBus-owned replay state must be an explicit, separately reviewed action.
+path. Syndra does not perform automatic destructive cleanup; removal of
+Syndra-owned replay state must be an explicit, separately reviewed action.
 
 Partial replay of an imported archive is rejected unless a compatible
 repository has been reconstructed separately.
@@ -190,7 +190,7 @@ A fork derives a new run and trace while preserving a `forked_from` link to
 the source. The source trace and terminal attempt history remain immutable.
 
 ```powershell
-agentbus replay <run-or-trace-id> `
+syndra replay <run-or-trace-id> `
   --mode offline `
   --fork `
   --change 'resource_budgets={"invocations_per_run":64}' `
@@ -223,7 +223,7 @@ offline commands send `live_provider_consent=false`.
 Compare any persisted run or trace identifiers:
 
 ```powershell
-agentbus compare <left-run-or-trace> <right-run-or-trace> --json
+syndra compare <left-run-or-trace> <right-run-or-trace> --json
 ```
 
 Comparison uses semantic span identity and structured fields rather than a
@@ -237,8 +237,8 @@ bounded summaries.
 An imported archive is validated and stored but never executed automatically:
 
 ```powershell
-agentbus trace import run.agentbus-trace --json
-agentbus replay run.agentbus-trace --mode offline --json
+syndra trace import run.agentbus-trace --json
+syndra replay run.agentbus-trace --mode offline --json
 ```
 
 If the archive declares and actually contains source-like objects, both import
@@ -256,7 +256,7 @@ terminal successful source task.
 
 ## Nondeterminism limits
 
-AgentBus records whether wall clock, UUIDs, randomness, mapping or filesystem
+Syndra records whether wall clock, UUIDs, randomness, mapping or filesystem
 order, scheduling, environment, temporary paths, Git configuration, locale,
 line endings, providers, MCP, and tool output order were controlled, captured,
 substituted, observed, or unresolved.

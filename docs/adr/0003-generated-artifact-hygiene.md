@@ -10,7 +10,7 @@ Verifier commands can create bytecode, test caches, coverage output, and build d
 
 ## Decision
 
-AgentBus uses one repository-relative `GeneratedArtifactPolicy` and a structured Git change inventory.
+Syndra uses one repository-relative `GeneratedArtifactPolicy` and a structured Git change inventory.
 
 - Paths are canonicalized and traversal is rejected.
 - Raw run-attributed paths remain available for audit and failed-run reporting.

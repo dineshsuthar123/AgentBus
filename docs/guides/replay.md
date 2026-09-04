@@ -3,9 +3,9 @@
 Inspect and verify evidence before replaying:
 
 ```console
-agentbus trace inspect <run-id> --json
-agentbus trace verify <run-id> --json
-agentbus replay <run-id> --mode offline --json
+syndra trace inspect <run-id> --json
+syndra trace verify <run-id> --json
+syndra replay <run-id> --mode offline --json
 ```
 
 Offline replay substitutes captured provider and MCP envelopes, never contacts
@@ -18,9 +18,9 @@ Replay from a checkpoint or create an isolated fork without changing the
 original run:
 
 ```console
-agentbus replay <run-id> --mode offline --from pre-verifier --json
-agentbus replay <run-id> --mode offline --fork --change task_text='"Updated offline task"' --json
-agentbus compare <left-run-id> <right-run-id> --json
+syndra replay <run-id> --mode offline --from pre-verifier --json
+syndra replay <run-id> --mode offline --fork --change task_text='"Updated offline task"' --json
+syndra compare <left-run-id> <right-run-id> --json
 ```
 
 Do not use `--live-provider-consent` unless a live route is intentional and its

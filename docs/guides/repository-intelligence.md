@@ -6,12 +6,12 @@ managers, or uploading source. The normal scanner remains available if the
 index is absent.
 
 ```console
-agentbus index build --workspace . --json
-agentbus index status --workspace . --json
-agentbus search calculate_total --workspace . --evidence
-agentbus impact src/calculator.py --workspace .
-agentbus tests-for src/calculator.py --workspace .
-agentbus context-plan "Change calculator rounding" --role reviewer --workspace .
+syndra index build --workspace . --json
+syndra index status --workspace . --json
+syndra search calculate_total --workspace . --evidence
+syndra impact src/calculator.py --workspace .
+syndra tests-for src/calculator.py --workspace .
+syndra context-plan "Change calculator rounding" --role reviewer --workspace .
 ```
 
 Index results are advisory evidence, not authorization. Filesystem containment,

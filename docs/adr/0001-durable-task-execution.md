@@ -5,13 +5,13 @@
 
 ## Context
 
-AgentBus could execute one Planner -> Coder -> Verifier -> Reviewer workflow, but run state existed primarily in process memory and JSONL audit logs. A terminal closure, malformed task response, exhausted correction, or machine restart could lose the orchestration position and force a task to start over.
+Syndra could execute one Planner -> Coder -> Verifier -> Reviewer workflow, but run state existed primarily in process memory and JSONL audit logs. A terminal closure, malformed task response, exhausted correction, or machine restart could lose the orchestration position and force a task to start over.
 
 The next local-first milestone needs deterministic task dependencies, persisted attempts, explicit human approval for high-risk work, and safe resume behavior. It must preserve the current agents, workspace safety controls, `shell=False` command construction, optional Git automation, and offline tests.
 
 ## Decision
 
-AgentBus adds an opt-in durable execution package with five responsibilities:
+Syndra adds an opt-in durable execution package with five responsibilities:
 
 1. Typed run, task, attempt, artifact, approval, retry, and report models.
 2. A validated directed acyclic task graph derived from planner output.
@@ -25,7 +25,7 @@ Regular non-durable execution remains the default.
 
 ## Why SQLite
 
-SQLite fits this local-first checkpoint because it is included with Python, supports transactions and foreign keys, has no service dependency, and can be reopened by a new AgentBus process. The store uses parameterized SQL, short-lived connections, foreign-key enforcement, write-ahead logging, a busy timeout, and immediate write transactions. Status validation and its event are committed together where practical.
+SQLite fits this local-first checkpoint because it is included with Python, supports transactions and foreign keys, has no service dependency, and can be reopened by a new Syndra process. The store uses parameterized SQL, short-lived connections, foreign-key enforcement, write-ahead logging, a busy timeout, and immediate write transactions. Status validation and its event are committed together where practical.
 
 The schema has an explicit version row. A database newer than the running code, or an older database without a registered migration, fails with a domain error instead of being modified speculatively.
 
@@ -71,7 +71,7 @@ This policy does not claim exactly-once execution for arbitrary side effects. If
 
 ## Retry Workspace And Review Baselines
 
-Durable retries use retained cumulative workspace semantics. AgentBus does not automatically reset, clean, delete, or otherwise roll back files written by a rejected or failed attempt. A retry therefore starts from the candidate state left in its task workspace unless a separate explicit supported restore has already returned that workspace to the original task state.
+Durable retries use retained cumulative workspace semantics. Syndra does not automatically reset, clean, delete, or otherwise roll back files written by a rejected or failed attempt. A retry therefore starts from the candidate state left in its task workspace unless a separate explicit supported restore has already returned that workspace to the original task state.
 
 Each attempt checkpoints two distinct bounded source identities before model or tool execution:
 
@@ -80,7 +80,7 @@ Each attempt checkpoints two distinct bounded source identities before model or 
 
 For a retained retry, the task reviewer receives the exact cumulative diff from the task baseline to the current candidate, even when the retry made no additional edit. The verifier result and reviewer packet identify the same candidate tree; source drift between verification, review, and Git finalization fails closed. Attempt records preserve both baseline identities across approval continuation, process reconstruction, lease changes, and task-worktree recovery.
 
-If an explicit restore makes the retry candidate equal to the task baseline before the next attempt starts, an empty cumulative diff is legitimate and is recorded as `restored_to_task_baseline`. AgentBus never infers that a rollback occurred merely because a retry was created.
+If an explicit restore makes the retry candidate equal to the task baseline before the next attempt starts, an empty cumulative diff is legitimate and is recorded as `restored_to_task_baseline`. Syndra never infers that a rollback occurred merely because a retry was created.
 
 ## Corrective Retry Evidence
 
@@ -92,7 +92,7 @@ The coder receives this packet as untrusted corrective evidence together with th
 
 ## Action Step Budget
 
-`max_steps` bounds model action decisions, not approval process transitions. A tool action at the final permitted step may not leave its observation unread. AgentBus therefore permits exactly one additional terminal observation-consumption turn. That turn can return `finish`, but it cannot execute another tool. A tool request from the terminal turn stops explicitly with `step_budget_exhausted`, records the requested tool name without its unrestricted arguments, and preserves observed workspace side effects in the durable result.
+`max_steps` bounds model action decisions, not approval process transitions. A tool action at the final permitted step may not leave its observation unread. Syndra therefore permits exactly one additional terminal observation-consumption turn. That turn can return `finish`, but it cannot execute another tool. A tool request from the terminal turn stops explicitly with `step_budget_exhausted`, records the requested tool name without its unrestricted arguments, and preserves observed workspace side effects in the durable result.
 
 An exact approval suspension and resume remains the same logical action step. Pausing, approving, reconstructing a process, and executing the checkpointed invocation do not consume extra action steps. If the approved invocation was the final action, its observation is delivered to the same one-turn terminal consumer after resume. This rule adds no repair reserve and cannot create an unbounded tool loop.
 

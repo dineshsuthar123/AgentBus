@@ -5,7 +5,7 @@
 
 ## Context
 
-AgentBus already persisted durable runs, task graphs, attempts, approvals, tool
+Syndra already persisted durable runs, task graphs, attempts, approvals, tool
 audit records, cancellation state, events, worktrees, and final reports.
 Debugging still required correlating those records manually with logs,
 provider responses, repository patches, and host state. Existing evaluation
@@ -57,7 +57,7 @@ The object store:
 - lives beside the configured state database, not inside the source
   repository by default.
 
-AgentBus does not capture whole repository snapshots. It records selected
+Syndra does not capture whole repository snapshots. It records selected
 structured envelopes, patches, artifacts, and checkpoint state required for
 diagnostics or replay.
 
@@ -124,7 +124,7 @@ replay authorization.
 
 Malformed, tampered, ambiguous, or unsupported evidence fails closed. Older
 process traces without sufficient authenticated evidence remain incompatible;
-AgentBus does not infer authorization from command text or silently upgrade an
+Syndra does not infer authorization from command text or silently upgrade an
 old trace. Replayability classification remains conservative, so a successful
 captured-result replay can still be partially replayable.
 
@@ -132,7 +132,7 @@ captured-result replay can still be partially replayable.
 
 Record versioned checkpoints after important durable transitions. Partial
 replay validates ancestry and dependencies, copies SQLite state, and
-reconstructs an AgentBus-owned Git worktree outside the source repository when
+reconstructs an Syndra-owned Git worktree outside the source repository when
 a base commit is needed.
 
 Public APIs expose a stable isolation label, not a private absolute path.

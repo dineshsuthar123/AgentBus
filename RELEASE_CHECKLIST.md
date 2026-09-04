@@ -1,4 +1,4 @@
-# AgentBus public beta release checklist
+# Syndra public beta release checklist
 
 Use this checklist from a reviewed release branch at the intended commit. Record
 new evidence for every candidate; do not infer success from an earlier run.
@@ -20,25 +20,25 @@ live model provider.
 ## Python verification
 
 - [ ] Run `python -m pytest`.
-- [ ] Run `python -m compileall agentbus`.
-- [ ] Run `python -m agentbus.control.acceptance`.
-- [ ] Run `python -m agentbus.product_acceptance` on Windows and Ubuntu.
-- [ ] Run `python -m agentbus.beta_acceptance`.
-- [ ] Run `agentbus-eval run --suite release-offline --variant durable-parallel-fake`.
-- [ ] Run `agentbus-eval run --suite repository-intelligence --variant deterministic`.
-- [ ] Run `python -m agentbus.release_security`; inspect every tested boundary
+- [ ] Run `python -m compileall syndra agentbus`.
+- [ ] Run `python -m syndra.control.acceptance`.
+- [ ] Run `python -m syndra.product_acceptance` on Windows and Ubuntu.
+- [ ] Run `python -m syndra.beta_acceptance`.
+- [ ] Run `syndra-eval run --suite release-offline --variant durable-parallel-fake`.
+- [ ] Run `syndra-eval run --suite repository-intelligence --variant deterministic`.
+- [ ] Run `python -m syndra.release_security`; inspect every tested boundary
   and unresolved limitation in the local defensive-security scorecard.
-- [ ] Run `agentbus release-check --full` from a clean tracked worktree.
+- [ ] Run `syndra release-check --full` from a clean tracked worktree.
 - [ ] Run `git diff --check`.
 
 ## Distribution verification
 
 - [ ] Build wheel and source distribution twice with `python -m build --no-isolation`.
-- [ ] Run `python -m agentbus.release_packaging` against both build sets and
+- [ ] Run `python -m syndra.release_packaging` against both build sets and
   confirm semantic reproducibility.
 - [ ] Inspect metadata, entry points, extras, package data, licenses, and archive
   paths.
-- [ ] Confirm a fresh virtual environment imports AgentBus from the wheel, not
+- [ ] Confirm a fresh virtual environment imports Syndra from the wheel, not
   the source checkout or an editable install.
 - [ ] Confirm setup, doctor, daemon, indexing, deterministic task, final review,
   offline replay, cleanup, leak checks, and uninstall pass from the wheel.
@@ -69,7 +69,7 @@ From `extensions/vscode`:
   and memory leaks.
 - [ ] Review support-bundle entries and redaction evidence without attaching
   private source-derived data by default.
-- [ ] Confirm cleanup touched only marker-owned, inactive AgentBus state and did
+- [ ] Confirm cleanup touched only marker-owned, inactive Syndra state and did
   not reset or roll back repository files.
 - [ ] Confirm failed-run documentation still states that source edits remain for
   inspection and manual cleanup.

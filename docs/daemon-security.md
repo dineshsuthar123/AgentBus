@@ -21,7 +21,7 @@
 - Configured MCP diagnostics permit only managed stdio or numeric-loopback HTTP
   servers. They expose safe aliases and cleanup state, never commands,
   environment values, or bearer tokens.
-- Authenticated `POST /mcp` exposes a fixed AgentBus tool set. It has no
+- Authenticated `POST /mcp` exposes a fixed Syndra tool set. It has no
   arbitrary file, process, database, approval-decision, commit, push, PR, live
   provider, or server-configuration operation.
 - Daemon shutdown validates PID, process-start identity, and executable identity

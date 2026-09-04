@@ -1,6 +1,6 @@
 # Run Provenance
 
-Every sealed AgentBus v0.4 trace has a versioned provenance manifest. The
+Every sealed Syndra v0.4 trace has a versioned provenance manifest. The
 manifest ties execution structure, captured objects, policy and tool versions,
 approval and audit evidence, artifacts, and the final repository state to one
 tamper-evident root.
@@ -15,7 +15,7 @@ A `ProvenanceManifest` records:
 
 - provenance and trace schema versions;
 - run and trace IDs;
-- AgentBus, operating system, and Python versions;
+- Syndra, operating system, and Python versions;
 - Node and VS Code versions when known;
 - a sanitized configuration fingerprint;
 - provider, model, and deployment identifiers;
@@ -37,7 +37,7 @@ SDK objects are not provenance fields.
 
 The current algorithm is `sha256-chain-v1`.
 
-AgentBus creates canonical integrity entries for:
+Syndra creates canonical integrity entries for:
 
 - ordered trace spans and events;
 - referenced content-addressed blobs;
@@ -79,8 +79,8 @@ as verified provenance.
 Verify a run or trace locally:
 
 ```powershell
-agentbus trace verify <run-or-trace-id>
-agentbus trace verify <run-or-trace-id> --json
+syndra trace verify <run-or-trace-id>
+syndra trace verify <run-or-trace-id> --json
 ```
 
 Verification checks:
@@ -105,7 +105,7 @@ Responses are authenticated, loopback-only, bounded summaries. They include
 hashes and safe runtime labels, not unrestricted provenance objects or private
 blob access.
 
-VS Code's **AgentBus: Open Provenance Manifest** command combines provenance,
+VS Code's **Syndra: Open Provenance Manifest** command combines provenance,
 trace, replayability, and bounded run outcomes in a read-only Markdown
 document.
 
@@ -173,7 +173,7 @@ requires explicit consent and does not cause automatic execution.
 Provenance detects accidental or malicious modification of covered local
 records after capture. It does not protect against:
 
-- a compromised AgentBus process generating false evidence at capture time;
+- a compromised Syndra process generating false evidence at capture time;
 - a compromised operating system;
 - collision or preimage breaks in SHA-256;
 - deletion of all trace and provenance records;
@@ -193,7 +193,7 @@ candidate hashes before deletion, journal executed deletions, and can resume
 after interruption.
 
 Deleting an unreferenced retained trace object does not modify a source
-repository. AgentBus never resets or cleans repository state as part of
+repository. Syndra never resets or cleans repository state as part of
 provenance maintenance.
 
 ## Related documents

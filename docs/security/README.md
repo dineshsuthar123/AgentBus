@@ -11,7 +11,7 @@ vulnerability reporting.
 - [Trace archive validation](../trace-archives.md)
 - [Generated-artifact hygiene ADR](../adr/0003-generated-artifact-hygiene.md)
 
-AgentBus uses canonical workspace and Git boundaries, structured tools,
+Syndra uses canonical workspace and Git boundaries, structured tools,
 independent capability derivation, deterministic policy, exact approvals,
 bounded subprocesses with `shell=False`, redaction, and mandatory final review.
 These controls do not replace a VM, container, restricted OS account, network
@@ -19,7 +19,7 @@ policy, or human review.
 
 ## Defensive release scorecard
 
-`python -m agentbus.release_security` combines the tracked-file and release
+`python -m syndra.release_security` combines the tracked-file and release
 archive scan with controlled local validation of nine boundaries: filesystem
 containment, approval and capability scope, Git safety, malformed tool
 protocols, synthetic hostile MCP responses, trace archive integrity,

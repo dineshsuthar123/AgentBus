@@ -1,10 +1,10 @@
 # Changelog
 
-All notable AgentBus changes are documented here. The project follows semantic
+All notable Syndra changes are documented here. The project follows semantic
 versioning; Python prereleases use PEP 440 spelling (`0.6.0b1`) while user-facing
 release names use `0.6.0-beta.1`.
 
-AgentBus is pre-1.0. A minor version is a compatibility line, and a later minor
+Syndra is pre-1.0. A minor version is a compatibility line, and a later minor
 may include documented breaking changes. See the
 [compatibility policy](docs/reference/compatibility.md).
 
@@ -67,12 +67,12 @@ may include documented breaking changes. See the
 - Added the versioned `agentbus.tool` protocol, local capability derivation,
   deterministic policy, exact approvals, resource budgets, and immutable audit.
 - Added contained filesystem operations, supervised subprocesses, policy-aware
-  Git, managed MCP clients, and a constrained local AgentBus MCP server.
+  Git, managed MCP clients, and a constrained local Syndra MCP server.
 - Added cancellation and durable recovery across tool lifecycle states.
 
 ## [0.2.1] - Real local execution milestone
 
-- Replaced simulated control-plane execution with real durable AgentBus runs.
+- Replaced simulated control-plane execution with real durable Syndra runs.
 - Added cooperative cancellation through providers, workers, tools, and local
   subprocess trees.
 - Added real run, task, diff, report, and restart recovery flows in the native
@@ -87,7 +87,7 @@ may include documented breaking changes. See the
 
 ## [0.1.0-alpha.1] - Initial durable runner
 
-- Added installable `agentbus` and `agentbus-eval` entry points.
+- Added installable `syndra` and `syndra-eval` entry points.
 - Added Ollama-first routing, optional Azure OpenAI support, planner, coder,
   verifier, reviewer, durable task graphs, SQLite recovery, and approvals.
 - Added bounded parallel worktrees with leases, fencing, task commits,

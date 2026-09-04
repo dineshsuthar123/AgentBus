@@ -1,41 +1,45 @@
 # Configuration
 
-AgentBus resolves configuration in this order, from lowest to highest:
+Syndra resolves configuration in this order, from lowest to highest:
 
 1. safe built-in defaults;
 2. user configuration;
-3. workspace `.agentbus/config.toml`;
+3. workspace `.syndra/config.toml`;
 4. an explicitly named TOML or JSON config file;
 5. CLI overrides;
 6. process environment.
 
-AgentBus does not search parent directories for configuration or `.env` files
+Syndra does not search parent directories for configuration or `.env` files
 and does not load dotenv files automatically. An explicit `--workspace` selects
-that exact workspace's `.agentbus/config.toml`. Real `.env` files must remain
+that exact workspace's `.syndra/config.toml`. Real `.env` files must remain
 ignored; `.env.example` contains placeholders only.
 
 ## Config files
 
 ```toml
-[agentbus]
+[syndra]
 provider_name = "ollama"
 workspace_dir = "C:\\projects\\sample"
-state_dir = "C:\\agentbus-state"
+state_dir = "C:\\syndra-state"
 state_db = "state.db"
-runs_dir = "C:\\agentbus-state\\runs"
+runs_dir = "C:\\syndra-state\\runs"
 tool_resource_budget = { wall_clock_seconds = 60, invocations_per_task = 32, invocations_per_run = 256 }
 ```
 
-JSON may contain the same keys either at the root or below `agentbus`. Unknown
+JSON may contain the same keys either at the root or below `syndra`. Unknown
 keys are rejected. Relative `state_dir` values resolve from the canonical
 workspace, and relative `runs_dir` values resolve inside that state directory.
-The default is `<workspace>/.agentbus/runs`. Use an absolute path for external
-runtime storage; AgentBus refuses repository-local run logs outside `.agentbus`.
+The default is `<workspace>/.syndra/runs`. Use an absolute path for external
+runtime storage; Syndra refuses repository-local run logs outside `.syndra`.
+
+Legacy `[agentbus]`, `AGENTBUS_*`, and `.agentbus` values remain readable when
+their canonical Syndra equivalent is absent. Canonical values win
+deterministically; conflicting forms produce a warning.
 
 ```powershell
-agentbus config show --config .agentbus\config.toml
-agentbus config validate --config .agentbus\config.toml
-agentbus config paths --config .agentbus\config.toml --json
+syndra config show --config .syndra\config.toml
+syndra config validate --config .syndra\config.toml
+syndra config paths --config .syndra\config.toml --json
 ```
 
 `config show` reports each non-secret value and its source. Secret fields show
@@ -45,19 +49,19 @@ only whether a value is configured. Azure endpoints are reduced to their host.
 
 | Variable | Purpose |
 | --- | --- |
-| `AGENTBUS_WORKSPACE` | Exact target Git repository root |
-| `AGENTBUS_PROVIDER` | `ollama`, `azure`, or `deterministic` |
-| `AGENTBUS_MODEL` | Ollama model or active-provider CLI default |
-| `AGENTBUS_OLLAMA_URL` | Ollama HTTP endpoint |
-| `AGENTBUS_STATE_DIR` / `AGENTBUS_STATE_DB` | Durable SQLite location |
-| `AGENTBUS_RUNS_DIR` | JSONL audit log directory |
-| `AGENTBUS_PARALLEL_EXECUTION` | Explicit bounded parallel mode |
-| `AGENTBUS_MAX_WORKERS` | Local worker limit |
-| `AGENTBUS_WORKTREE_ROOT` | AgentBus-owned worktrees outside the repository |
-| `AGENTBUS_ENABLE_PROVIDER_FALLBACK` | Explicit Azure-to-Ollama fallback |
+| `SYNDRA_WORKSPACE` | Exact target Git repository root |
+| `SYNDRA_PROVIDER` | `ollama`, `azure`, or `deterministic` |
+| `SYNDRA_MODEL` | Ollama model or active-provider CLI default |
+| `SYNDRA_OLLAMA_URL` | Ollama HTTP endpoint |
+| `SYNDRA_STATE_DIR` / `SYNDRA_STATE_DB` | Durable SQLite location |
+| `SYNDRA_RUNS_DIR` | JSONL audit log directory |
+| `SYNDRA_PARALLEL_EXECUTION` | Explicit bounded parallel mode |
+| `SYNDRA_MAX_WORKERS` | Local worker limit |
+| `SYNDRA_WORKTREE_ROOT` | Syndra-owned worktrees outside the repository |
+| `SYNDRA_ENABLE_PROVIDER_FALLBACK` | Explicit Azure-to-Ollama fallback |
 
-Role model variables are `AGENTBUS_PLANNER_MODEL`, `AGENTBUS_CODER_MODEL`,
-`AGENTBUS_REVIEWER_MODEL`, and `AGENTBUS_SUMMARIZER_MODEL`.
+Role model variables are `SYNDRA_PLANNER_MODEL`, `SYNDRA_CODER_MODEL`,
+`SYNDRA_REVIEWER_MODEL`, and `SYNDRA_SUMMARIZER_MODEL`.
 
 ## Tool resource budget
 
@@ -111,9 +115,9 @@ as Ollama and Azure. It is intended for development, demos, CI, and acceptance,
 not general code generation.
 
 ```powershell
-$env:AGENTBUS_PROVIDER = "deterministic"
-$env:AGENTBUS_DETERMINISTIC_PROFILE = "python-calculator"
-python -m agentbus.main --provider deterministic --workflow multi --durable `
+$env:SYNDRA_PROVIDER = "deterministic"
+$env:SYNDRA_DETERMINISTIC_PROFILE = "python-calculator"
+python -m syndra.main --provider deterministic --workflow multi --durable `
   --parallel --max-workers 1 --workspace C:\path\to\isolated-repo `
   "Create and verify the deterministic calculator"
 ```
@@ -126,16 +130,16 @@ Profiles include `python-calculator`, `cancellation-two-task`,
 `tool-budget-exhaustion`, `tool-local-mcp`, `tool-loop-limit`, and
 `tool-control-acceptance`. They exercise the real managed runtime without a
 provider or public MCP call. Failure and latency injection use
-`AGENTBUS_DETERMINISTIC_LATENCY_SECONDS`,
-`AGENTBUS_DETERMINISTIC_LATENCY_ROLES`,
-`AGENTBUS_DETERMINISTIC_FAILURE_KIND`,
-`AGENTBUS_DETERMINISTIC_FAILURE_CALLS`, and
-`AGENTBUS_DETERMINISTIC_FAILURE_ROLES`.
+`SYNDRA_DETERMINISTIC_LATENCY_SECONDS`,
+`SYNDRA_DETERMINISTIC_LATENCY_ROLES`,
+`SYNDRA_DETERMINISTIC_FAILURE_KIND`,
+`SYNDRA_DETERMINISTIC_FAILURE_CALLS`, and
+`SYNDRA_DETERMINISTIC_FAILURE_ROLES`.
 
 ## Azure
 
 ```powershell
-$env:AGENTBUS_PROVIDER = "azure"
+$env:SYNDRA_PROVIDER = "azure"
 $env:AZURE_OPENAI_ENDPOINT = "https://YOUR-RESOURCE.openai.azure.com"
 $env:AZURE_OPENAI_API_KEY = "..."
 $env:AZURE_OPENAI_DEFAULT_DEPLOYMENT = "your-deployment"
@@ -149,23 +153,23 @@ print the key. Endpoint normalization permits only the resource root or
 
 ## Evaluation
 
-Evaluation uses `AGENTBUS_EVAL_RESULTS_DIR`,
-`AGENTBUS_EVAL_FIXTURE_ROOT`, `AGENTBUS_EVAL_PRESERVE_FIXTURES`,
-`AGENTBUS_EVAL_MAX_REQUESTS`, `AGENTBUS_EVAL_MAX_TOKENS`, and
-`AGENTBUS_EVAL_TIMEOUT_SECONDS`. Live access still requires `--live`; an
+Evaluation uses `SYNDRA_EVAL_RESULTS_DIR`,
+`SYNDRA_EVAL_FIXTURE_ROOT`, `SYNDRA_EVAL_PRESERVE_FIXTURES`,
+`SYNDRA_EVAL_MAX_REQUESTS`, `SYNDRA_EVAL_MAX_TOKENS`, and
+`SYNDRA_EVAL_TIMEOUT_SECONDS`. Live access still requires `--live`; an
 environment value cannot silently opt in.
 
 ## Repository intelligence
 
 Repository intelligence uses the resolved `workspace_dir` and stores
-`repository-index.sqlite3` beside the resolved AgentBus state database. The
+`repository-index.sqlite3` beside the resolved Syndra state database. The
 database is local runtime state and must not be committed. CLI commands accept
 explicit `--workspace`, `--index-db`, and portable `--repository-key` overrides:
 
 ```powershell
-agentbus index build --config .agentbus\config.toml
-agentbus index status --workspace C:\src\sample --json
-agentbus search calculate_total --workspace C:\src\sample
+syndra index build --config .syndra\config.toml
+syndra index status --workspace C:\src\sample --json
+syndra search calculate_total --workspace C:\src\sample
 ```
 
 An explicit workspace always wins for that command and is canonically contained
@@ -176,7 +180,7 @@ or parent repository.
 There are no Azure, Ollama, embedding, or network settings required for normal
 indexing. Optional semantic retrieval is a Python integration API, disabled by
 default. It requires an explicit local provider descriptor that declares source
-is not sent off-device. AgentBus does not download semantic models or silently
+is not sent off-device. Syndra does not download semantic models or silently
 enable remote embeddings.
 
 See [Repository Intelligence](repository-intelligence.md) and

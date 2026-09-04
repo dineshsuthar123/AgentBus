@@ -1,4 +1,4 @@
-# AgentBus Studio Demo Script (2:36)
+# Payment Safety Demo Walkthrough
 
 ## Recording Preparation
 
@@ -7,13 +7,13 @@ already be cached because the approved command is intentionally offline.
 
 ```powershell
 # Repository root, terminal 1
-.venv\Scripts\agentbus.exe demo create payment `
-  --output agentbus-payment-demo-recording `
+.venv\Scripts\syndra.exe demo create payment `
+  --output syndra-payment-demo-recording `
   --git `
   --json
 
-$demo = (Resolve-Path .\agentbus-payment-demo-recording).Path
-.venv\Scripts\agentbus.exe serve `
+$demo = (Resolve-Path .\syndra-payment-demo-recording).Path
+.venv\Scripts\syndra.exe serve `
   --host 127.0.0.1 `
   --port 8765 `
   --json-ready
@@ -40,7 +40,7 @@ resolution.
 **0:00-0:12 | First launch**
 
 Say: "Models can write code. The harder problem is safely letting them act on
-real repositories. AgentBus turns that action into a controlled, inspectable
+real repositories. Syndra turns that action into a controlled, inspectable
 workflow."
 
 Action: Connect to the authenticated local daemon. Keep the token out of frame.
@@ -54,12 +54,12 @@ Action: Point to Runtime pulse, the deterministic route, and Event stream live.
 
 **0:25-0:40 | Payment safety demo**
 
-Say: "For the Razorpay submission, we use a payment correctness failure where
-two retries can produce two successful confirmations. The safe result is
-exactly one business transition."
+Say: "This payment correctness fixture shows how two retries can produce two
+successful confirmations. The safe result is exactly one business transition."
 
-Action: Open **Payment demo** and point from Retry A and Retry B to one
-confirmation. Do not imply Razorpay uses or endorses AgentBus.
+Action: Open **Payment Safety Demo** and point from Retry A and Retry B to one
+confirmation. Describe it as a generic local fixture, not a payment-provider
+integration.
 
 **0:40-0:55 | Repository boundary and launch**
 
@@ -93,12 +93,12 @@ Say: "Repository tests are a mechanical gate. A failed attempt remains
 immutable, and only persisted RetryEvidence can feed a corrective attempt."
 
 Action: Show **Tools** and **Attempts**. If this fresh run succeeds in one
-attempt, do not claim it retried; use the prepared retry screenshot as a brief
-cutaway only if the submission video needs to explain recovery semantics.
+attempt, do not claim it retried; use authentic preserved retry evidence only
+when explaining recovery semantics.
 
 **1:48-2:03 | Mandatory review**
 
-Say: "Passing tests is not completion. AgentBus still requires a final
+Say: "Passing tests is not completion. Syndra still requires a final
 whole-run reviewer, and rejection blocks commit or pull-request creation."
 
 Action: Open **Review** and point to **Verified** and **Approved**.
@@ -121,7 +121,7 @@ Action: Open **Evidence**, select **Verify sealed trace**, and point to
 **2:28-2:36 | Providerless replay and close**
 
 Say: "Offline replay reuses captured deterministic results: zero provider
-calls, zero network calls, and zero historical process dispatches. AgentBus
+calls, zero network calls, and zero historical process dispatches. Syndra
 makes autonomous software engineering inspectable, recoverable, and safe to
 run."
 
@@ -131,7 +131,7 @@ Action: Select **Run offline replay** and hold on the four counters.
 
 - Record the real Studio and control plane, not mocked frontend state.
 - Do not show tokens, usernames, credentials, or machine-specific parent paths.
-- Do not call Azure, Ollama, Razorpay, or any paid provider.
+- Do not call Azure, Ollama, a payment network, or any paid provider.
 - Do not say Maven reran during replay when `Process dispatches` is `0`.
 - Do not claim automatic rollback: failed runs may leave reported file edits.
 - Use a new fixture directory or remove the prior disposable fixture manually
