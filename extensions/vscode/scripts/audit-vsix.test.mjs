@@ -9,7 +9,7 @@ import JSZip from "jszip";
 const auditScript = resolve("scripts/audit-vsix.mjs");
 
 test("VSIX audit accepts bounded runtime contents and rejects source", async () => {
-  const temporary = await mkdtemp(join(tmpdir(), "agentbus-vsix-audit-"));
+  const temporary = await mkdtemp(join(tmpdir(), "syndra-vsix-audit-"));
   try {
     const safe = join(temporary, "safe.vsix");
     await writeFile(safe, await fixture().generateAsync({ type: "nodebuffer" }));
@@ -46,16 +46,21 @@ function fixture() {
     '<PackageManifest><Identity Version="0.6.0-beta.1" /></PackageManifest>\n'
   );
   archive.file("extension/LICENSE.txt", "MIT\n");
-  archive.file("extension/readme.md", "# AgentBus\n");
-  archive.file("extension/media/agentbus.svg", "<svg />\n");
+  archive.file("extension/readme.md", "# Syndra\n");
+  archive.file("extension/media/syndra.svg", "<svg />\n");
   archive.file("extension/out/extension.js", '"use strict";\n');
   archive.file(
     "extension/package.json",
     JSON.stringify({
-      name: "agentbus-vscode",
+      name: "syndra-vscode",
       version: "0.6.0-beta.1",
       private: true,
       main: "./out/extension.js",
+      syndraCompatibility: {
+        python: ">=0.6.0b1,<0.7.0",
+        controlProtocol: "1.0",
+        stateSchema: 6
+      },
       agentbusCompatibility: {
         python: ">=0.6.0b1,<0.7.0",
         controlProtocol: "1.0",

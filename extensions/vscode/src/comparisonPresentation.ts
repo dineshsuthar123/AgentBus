@@ -79,7 +79,7 @@ export function formatComparisonDocument(
 ): string {
   const summary = comparison.summary;
   const lines = [
-    `# AgentBus Comparison ${markdown(comparison.comparison_id)}`,
+    `# Syndra Comparison ${markdown(comparison.comparison_id)}`,
     "",
     "## Summary",
     "",

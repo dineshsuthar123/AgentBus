@@ -11,7 +11,7 @@ import type {
   IntelligenceWorkspaceState,
   RepositoryIntelligenceState
 } from "./intelligenceState";
-import { AgentBusItem } from "./views";
+import { SyndraItem } from "./views";
 
 type IntelligenceViewKind = "repository" | "symbols" | "impact" | "context";
 
@@ -29,10 +29,10 @@ interface EntryValue {
 type IntelligenceTreeValue = WorkspaceValue | EntryValue;
 
 abstract class IntelligenceProvider
-  implements vscode.TreeDataProvider<AgentBusItem>, vscode.Disposable
+  implements vscode.TreeDataProvider<SyndraItem>, vscode.Disposable
 {
   private readonly changed = new vscode.EventEmitter<
-    AgentBusItem | undefined | void
+    SyndraItem | undefined | void
   >();
   private readonly stateSubscription: vscode.Disposable;
   public readonly onDidChangeTreeData = this.changed.event;
@@ -44,11 +44,11 @@ abstract class IntelligenceProvider
     this.stateSubscription = state.onDidChange(() => this.changed.fire());
   }
 
-  public getTreeItem(element: AgentBusItem): vscode.TreeItem {
+  public getTreeItem(element: SyndraItem): vscode.TreeItem {
     return element;
   }
 
-  public async getChildren(element?: AgentBusItem): Promise<AgentBusItem[]> {
+  public async getChildren(element?: SyndraItem): Promise<SyndraItem[]> {
     if (!element) {
       const workspaces = await this.state.workspaces();
       if (workspaces.length === 0) {
@@ -125,7 +125,7 @@ export class ContextPlanProvider extends IntelligenceProvider {
 
 export function targetFromTreeItem(value: unknown): IntelligenceTarget | undefined {
   if (isTarget(value)) return value;
-  if (value instanceof AgentBusItem) {
+  if (value instanceof SyndraItem) {
     const treeValue = value.value as IntelligenceTreeValue | undefined;
     return treeValue?.kind === "intelligence-entry"
       ? treeValue.entry.target
@@ -137,7 +137,7 @@ export function targetFromTreeItem(value: unknown): IntelligenceTarget | undefin
 export function workspaceFromTreeItem(
   value: unknown
 ): IntelligenceWorkspaceState | undefined {
-  if (!(value instanceof AgentBusItem)) return undefined;
+  if (!(value instanceof SyndraItem)) return undefined;
   const treeValue = value.value as IntelligenceTreeValue | undefined;
   return treeValue?.kind === "intelligence-workspace"
     ? treeValue.workspace
@@ -147,8 +147,8 @@ export function workspaceFromTreeItem(
 function workspaceItem(
   workspace: IntelligenceWorkspaceState,
   view: IntelligenceViewKind
-): AgentBusItem {
-  const item = new AgentBusItem(
+): SyndraItem {
+  const item = new SyndraItem(
     workspace.folder.name,
     vscode.TreeItemCollapsibleState.Expanded,
     { kind: "intelligence-workspace", workspace, view } satisfies WorkspaceValue
@@ -166,9 +166,9 @@ function workspaceItem(
   return item;
 }
 
-function entryItem(entry: IntelligenceTreeEntry): AgentBusItem {
+function entryItem(entry: IntelligenceTreeEntry): SyndraItem {
   const hasChildren = Boolean(entry.children?.length);
-  const item = new AgentBusItem(
+  const item = new SyndraItem(
     entry.label,
     hasChildren
       ? vscode.TreeItemCollapsibleState.Collapsed
@@ -198,8 +198,8 @@ function entryItem(entry: IntelligenceTreeEntry): AgentBusItem {
   return item;
 }
 
-function messageItem(message: string): AgentBusItem {
-  const item = new AgentBusItem(
+function messageItem(message: string): SyndraItem {
+  const item = new SyndraItem(
     message,
     vscode.TreeItemCollapsibleState.None
   );

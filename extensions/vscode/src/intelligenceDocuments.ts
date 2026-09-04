@@ -57,11 +57,11 @@ export class IntelligenceDocumentProvider
 
   public provideTextDocumentContent(uri: vscode.Uri): string {
     if (uri.scheme !== DOCUMENT_SCHEME) {
-      throw new Error("Unsafe AgentBus intelligence document scheme.");
+      throw new Error("Unsafe Syndra intelligence document scheme.");
     }
     const content = this.documents.get(uri.toString());
     if (content === undefined) {
-      throw new Error("AgentBus intelligence document is no longer available.");
+      throw new Error("Syndra intelligence document is no longer available.");
     }
     return content;
   }

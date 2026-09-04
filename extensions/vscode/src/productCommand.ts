@@ -40,10 +40,10 @@ export function buildProductCommandSpec(
   if (settings.pythonPath) {
     return {
       command: resolve(settings.pythonPath),
-      args: ["-m", "agentbus.cli", ...args]
+      args: ["-m", "syndra.cli", ...args]
     };
   }
-  return { command: "agentbus", args: [...args] };
+  return { command: "syndra", args: [...args] };
 }
 
 export function runProductCommand(
@@ -85,13 +85,13 @@ export function runProductCommand(
     const append = (target: Buffer[], chunk: Buffer): void => {
       outputBytes += chunk.length;
       if (outputBytes > outputLimit) {
-        finishError(new Error("AgentBus command output exceeded its safety limit."));
+        finishError(new Error("Syndra command output exceeded its safety limit."));
         return;
       }
       target.push(chunk);
     };
     const timer = setTimeout(
-      () => finishError(new Error("AgentBus command exceeded its time limit.")),
+      () => finishError(new Error("Syndra command exceeded its time limit.")),
       timeoutMs
     );
     child.stdout.on("data", (chunk: Buffer) => append(stdout, chunk));
@@ -117,13 +117,13 @@ function validateCommand(command: string): void {
     command.length > MAX_ARGUMENT_LENGTH ||
     command.includes("\0")
   ) {
-    throw new Error("AgentBus command executable is invalid.");
+    throw new Error("Syndra command executable is invalid.");
   }
 }
 
 function validateArguments(args: readonly string[]): void {
   if (args.length === 0 || args.length > MAX_ARGUMENTS) {
-    throw new Error("AgentBus command argument count is outside its safety limit.");
+    throw new Error("Syndra command argument count is outside its safety limit.");
   }
   let total = 0;
   for (const value of args) {
@@ -133,12 +133,12 @@ function validateArguments(args: readonly string[]): void {
       value.length > MAX_ARGUMENT_LENGTH ||
       value.includes("\0")
     ) {
-      throw new Error("AgentBus command contains an invalid argument.");
+      throw new Error("Syndra command contains an invalid argument.");
     }
     total += value.length;
   }
   if (total > MAX_TOTAL_ARGUMENT_LENGTH) {
-    throw new Error("AgentBus command arguments exceeded their safety limit.");
+    throw new Error("Syndra command arguments exceeded their safety limit.");
   }
 }
 
@@ -150,7 +150,7 @@ function boundedPositive(
 ): number {
   if (value === undefined) return fallback;
   if (!Number.isInteger(value) || value < minimum || value > maximum) {
-    throw new Error("AgentBus command limit is outside the supported range.");
+    throw new Error("Syndra command limit is outside the supported range.");
   }
   return value;
 }

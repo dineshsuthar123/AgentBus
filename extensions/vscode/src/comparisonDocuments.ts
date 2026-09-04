@@ -1,16 +1,16 @@
 import * as vscode from "vscode";
-import type { AgentBusClient } from "./apiClient";
+import type { SyndraClient } from "./apiClient";
 import {
   formatComparisonDocument,
   formatComparisonSide
 } from "./comparisonPresentation";
 import { isSafeControlId } from "./toolPresentation";
 
-export type ComparisonClientProvider = () => Promise<AgentBusClient>;
+export type ComparisonClientProvider = () => Promise<SyndraClient>;
 
 export function comparisonUri(comparisonId: string): vscode.Uri {
   if (!isSafeControlId(comparisonId)) {
-    throw new Error("AgentBus comparison requires a safe identifier.");
+    throw new Error("Syndra comparison requires a safe identifier.");
   }
   return vscode.Uri.from({
     scheme: "agentbus-comparison",
@@ -23,7 +23,7 @@ export function comparisonSideUri(
   side: "left" | "right"
 ): vscode.Uri {
   if (!isSafeControlId(comparisonId)) {
-    throw new Error("AgentBus comparison requires a safe identifier.");
+    throw new Error("Syndra comparison requires a safe identifier.");
   }
   return vscode.Uri.from({
     scheme: "agentbus-comparison-side",
@@ -42,7 +42,7 @@ export class ComparisonDocumentProvider
       uri.scheme !== "agentbus-comparison" ||
       !isSafeControlId(comparisonId)
     ) {
-      throw new Error("Unsafe AgentBus comparison document URI.");
+      throw new Error("Unsafe Syndra comparison document URI.");
     }
     return formatComparisonDocument(
       await (await this.client()).comparison(comparisonId, 0, 500)
@@ -73,7 +73,7 @@ export class ComparisonSideDocumentProvider
       !side ||
       !isSafeControlId(comparisonId)
     ) {
-      throw new Error("Unsafe AgentBus comparison-side document URI.");
+      throw new Error("Unsafe Syndra comparison-side document URI.");
     }
     return formatComparisonSide(
       await (await this.client()).comparison(comparisonId, 0, 500),

@@ -10,6 +10,11 @@ interface Setting {
 }
 
 interface ProductManifest {
+  name: string;
+  displayName: string;
+  publisher: string;
+  syndraCompatibility: Record<string, unknown>;
+  agentbusCompatibility: Record<string, unknown>;
   contributes: {
     commands: Array<{ command: string; title: string }>;
     configuration: { properties: Record<string, Setting> };
@@ -27,6 +32,19 @@ interface ProductManifest {
 const manifest = JSON.parse(
   readFileSync(join(__dirname, "..", "..", "package.json"), "utf8")
 ) as ProductManifest;
+
+test("manifest uses the Syndra product identity with mirrored legacy compatibility", () => {
+  assert.equal(manifest.name, "syndra-vscode");
+  assert.equal(manifest.displayName, "Syndra");
+  assert.equal(manifest.publisher, "syndra");
+  assert.deepEqual(manifest.agentbusCompatibility, manifest.syndraCompatibility);
+  assert.equal(
+    manifest.contributes.commands.every((command) =>
+      command.title.startsWith("Syndra:")
+    ),
+    true
+  );
+});
 
 test("product onboarding commands and native walkthrough are contributed", () => {
   const commands = new Set(
@@ -50,7 +68,7 @@ test("product onboarding commands and native walkthrough are contributed", () =>
   assert.equal(
     walkthrough.steps.every((step) =>
       step.description.includes("command:agentbus.") &&
-      step.media?.image === "media/agentbus.svg" &&
+      step.media?.image === "media/syndra.svg" &&
       Boolean(step.media.altText) &&
       (step.completionEvents?.length ?? 0) > 0
     ),

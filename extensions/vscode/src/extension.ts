@@ -5,7 +5,7 @@ import {
   ComparisonSideDocumentProvider
 } from "./comparisonDocuments";
 import { ComparisonStore } from "./comparisonStore";
-import type { AgentBusClient } from "./apiClient";
+import type { SyndraClient } from "./apiClient";
 import { DaemonManager } from "./daemonManager";
 import { IntelligenceCommandController } from "./intelligenceCommands";
 import { IntelligenceDocumentProvider } from "./intelligenceDocuments";
@@ -48,8 +48,8 @@ import {
   WorktreesProvider
 } from "./views";
 
-export interface AgentBusExtensionApi {
-  client(): Promise<AgentBusClient>;
+export interface SyndraExtensionApi {
+  client(): Promise<SyndraClient>;
   daemonId(): string | undefined;
   eventStreamConnected(): boolean;
   events(): readonly EventEnvelope[];
@@ -57,14 +57,14 @@ export interface AgentBusExtensionApi {
   runs(): RunSummary[];
 }
 
-export function activate(context: vscode.ExtensionContext): AgentBusExtensionApi {
-  const output = vscode.window.createOutputChannel("AgentBus", { log: true });
+export function activate(context: vscode.ExtensionContext): SyndraExtensionApi {
+  const output = vscode.window.createOutputChannel("Syndra", { log: true });
   const status = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Left,
     50
   );
   status.command = "agentbus.showRun";
-  status.text = "$(loading~spin) AgentBus";
+  status.text = "$(loading~spin) Syndra";
   status.show();
   const daemon = new DaemonManager(context, output);
   const store = new RunStore();

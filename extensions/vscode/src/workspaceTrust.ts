@@ -15,7 +15,7 @@ export async function requireWorkspaceTrust(
   }
 
   const choice = await host.showWarning(
-    `AgentBus ${operation} requires a trusted workspace. Read-only diagnostics remain available.`,
+    `Syndra ${operation} requires a trusted workspace. Read-only diagnostics remain available.`,
     MANAGE_TRUST
   );
   if (choice === MANAGE_TRUST) {

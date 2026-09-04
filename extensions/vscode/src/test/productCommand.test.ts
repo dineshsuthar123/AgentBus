@@ -8,11 +8,11 @@ import {
 
 test("product commands prefer explicit executable then Python without a shell", () => {
   const executable = buildProductCommandSpec(
-    { executablePath: "bin/agentbus", pythonPath: "bin/python" },
+    { executablePath: "bin/syndra", pythonPath: "bin/python" },
     ["version", "--json"]
   );
   assert.deepEqual(executable, {
-    command: resolve("bin/agentbus"),
+    command: resolve("bin/syndra"),
     args: ["version", "--json"]
   });
 
@@ -22,10 +22,10 @@ test("product commands prefer explicit executable then Python without a shell", 
   );
   assert.deepEqual(python, {
     command: resolve("bin/python"),
-    args: ["-m", "agentbus.cli", "doctor", "--json"]
+    args: ["-m", "syndra.cli", "doctor", "--json"]
   });
   assert.deepEqual(buildProductCommandSpec({}, ["quickstart", "--json"]), {
-    command: "agentbus",
+    command: "syndra",
     args: ["quickstart", "--json"]
   });
 });

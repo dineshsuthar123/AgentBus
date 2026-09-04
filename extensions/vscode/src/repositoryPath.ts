@@ -1,6 +1,7 @@
 const WINDOWS_DEVICE_NAME =
   /^(?:con|prn|aux|nul|clock\$|com[1-9]|lpt[1-9])(?:\..*)?$/i;
 const PROTECTED_PARTS = new Set([
+  ".syndra",
   ".agentbus",
   ".aws",
   ".azure",

@@ -1,12 +1,12 @@
 import * as vscode from "vscode";
-import type { AgentBusClient } from "./apiClient";
+import type { SyndraClient } from "./apiClient";
 import {
   validateToolArtifact,
   verifyToolArtifactContent
 } from "./artifactPresentation";
 import { isSafeControlId } from "./toolPresentation";
 
-type ClientProvider = () => Promise<AgentBusClient>;
+type ClientProvider = () => Promise<SyndraClient>;
 
 interface ArtifactDocumentIdentity {
   runId: string;
@@ -24,7 +24,7 @@ export function toolArtifactUri(
     !isSafeControlId(invocationId) ||
     !isSafeControlId(artifactId)
   ) {
-    throw new Error("Unsafe AgentBus tool artifact identity.");
+    throw new Error("Unsafe Syndra tool artifact identity.");
   }
   return vscode.Uri.from({
     scheme: "agentbus-artifact",
@@ -71,7 +71,7 @@ function parseArtifactUri(uri: vscode.Uri): ArtifactDocumentIdentity {
     !isSafeControlId(invocationId) ||
     !isSafeControlId(artifactId)
   ) {
-    throw new Error("Unsafe AgentBus tool artifact document identity.");
+    throw new Error("Unsafe Syndra tool artifact document identity.");
   }
   return { runId, invocationId, artifactId };
 }

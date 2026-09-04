@@ -1,13 +1,13 @@
 import * as vscode from "vscode";
-import type { AgentBusClient } from "./apiClient";
-import { AgentBusApiError } from "./apiClient";
+import type { SyndraClient } from "./apiClient";
+import { SyndraApiError } from "./apiClient";
 import { isSafeRepositoryPath } from "./repositoryPath";
 import { formatReport } from "./reportPresentation";
 import { isSafeControlId } from "./toolPresentation";
 
 export { formatReport } from "./reportPresentation";
 
-export type ClientProvider = () => Promise<AgentBusClient>;
+export type ClientProvider = () => Promise<SyndraClient>;
 
 export interface ChangeDocumentIdentity {
   runId: string;
@@ -22,7 +22,7 @@ export function changeUri(
     !isSafeRepositoryPath(identity.path) ||
     !isSafeControlId(identity.runId)
   ) {
-    throw new Error("Unsafe AgentBus change document identity.");
+    throw new Error("Unsafe Syndra change document identity.");
   }
   return vscode.Uri.from({
     scheme: `agentbus-${identity.revision}`,
@@ -49,7 +49,7 @@ export function parseChangeUri(uri: {
     !isSafeControlId(runId) ||
     !isSafeRepositoryPath(path)
   ) {
-    throw new Error("Unsafe AgentBus virtual document URI.");
+    throw new Error("Unsafe Syndra virtual document URI.");
   }
   return { runId, path, revision };
 }
@@ -72,7 +72,7 @@ export class ChangeDocumentProvider
     } catch (error) {
       if (
         identity.revision === "before" &&
-        error instanceof AgentBusApiError &&
+        error instanceof SyndraApiError &&
         error.status === 404
       ) {
         return "";
@@ -97,7 +97,7 @@ export class ReportDocumentProvider
   public async provideTextDocumentContent(uri: vscode.Uri): Promise<string> {
     const runId = decodeURIComponent(uri.path.replace(/^\//, ""));
     if (!isSafeControlId(runId)) {
-      throw new Error("AgentBus report URI is missing a run ID.");
+      throw new Error("Syndra report URI is missing a run ID.");
     }
     return formatReport(await (await this.client()).report(runId));
   }
@@ -105,7 +105,7 @@ export class ReportDocumentProvider
 
 export function reportUri(runId: string): vscode.Uri {
   if (!isSafeControlId(runId)) {
-    throw new Error("AgentBus report requires a run ID.");
+    throw new Error("Syndra report requires a run ID.");
   }
   return vscode.Uri.from({
     scheme: "agentbus-report",

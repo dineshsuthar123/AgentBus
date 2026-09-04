@@ -58,7 +58,7 @@ export function decodeRegressionFixtureArchive(
     response.trace_id !== expectedTraceId
   ) {
     throw new Error(
-      "AgentBus regression fixture identity did not match the request."
+      "Syndra regression fixture identity did not match the request."
     );
   }
   if (
@@ -66,7 +66,7 @@ export function decodeRegressionFixtureArchive(
     response.replay_started !== false
   ) {
     throw new Error(
-      "AgentBus regression fixture validation or no-replay confirmation failed."
+      "Syndra regression fixture validation or no-replay confirmation failed."
     );
   }
   if (
@@ -74,7 +74,7 @@ export function decodeRegressionFixtureArchive(
     !sourceContentConsented
   ) {
     throw new Error(
-      "AgentBus refused unexpected source content in a regression fixture."
+      "Syndra refused unexpected source content in a regression fixture."
     );
   }
   if (
@@ -82,7 +82,7 @@ export function decodeRegressionFixtureArchive(
     (!response.source_warning || !response.license_warning)
   ) {
     throw new Error(
-      "AgentBus regression fixture omitted required source-content warnings."
+      "Syndra regression fixture omitted required source-content warnings."
     );
   }
   return decodeTraceArchive(

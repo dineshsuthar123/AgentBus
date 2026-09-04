@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 const extensionRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = resolve(extensionRoot, "..", "..");
 const candidates = [
+  process.env.SYNDRA_PYTHON,
   process.env.AGENTBUS_PYTHON,
   resolve(repositoryRoot, ".venv", "Scripts", "python.exe"),
   resolve(repositoryRoot, ".venv", "bin", "python"),
@@ -15,11 +16,11 @@ const python = candidates.find((candidate) =>
   candidate.includes("/") || candidate.includes("\\") ? existsSync(candidate) : true
 );
 if (!python) {
-  throw new Error("Unable to locate Python for AgentBus protocol freshness check.");
+  throw new Error("Unable to locate Python for Syndra protocol freshness check.");
 }
 const result = spawnSync(
   python,
-  ["-m", "agentbus.cli", "control-schema", "export", "--check"],
+  ["-m", "syndra.cli", "control-schema", "export", "--check"],
   {
     cwd: repositoryRoot,
     encoding: "utf8",

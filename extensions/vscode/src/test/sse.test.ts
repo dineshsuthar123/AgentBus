@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { AgentBusClient } from "../apiClient";
+import { SyndraClient } from "../apiClient";
 import { ReconnectingSseClient, SseParser } from "../sse";
 
 const token = "sse-test-token-with-more-than-thirty-two-bytes";
@@ -33,7 +33,7 @@ test("SSE client exposes connection readiness and clears it on stop", async () =
       streamController = controller;
     }
   });
-  const client = new AgentBusClient("http://127.0.0.1:43123", token);
+  const client = new SyndraClient("http://127.0.0.1:43123", token);
   const stream = new ReconnectingSseClient(client, () => undefined, {
     fetcher: async () => new Response(body, { status: 200 })
   });

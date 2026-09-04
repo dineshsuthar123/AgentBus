@@ -5,6 +5,7 @@ import {
   buildLaunchSpec,
   buildStopSpec,
   daemonBaseUrl,
+  defaultRegistryPath,
   parseReadyHandshake,
   parseRegistry
 } from "../daemonProtocol";
@@ -75,19 +76,35 @@ test("registry parser rejects secret fields", () => {
   );
 });
 
+test("registry path is canonical for new installs and discovers legacy state", () => {
+  const home = resolve("C:/safe/home");
+  assert.equal(
+    defaultRegistryPath(home, () => false),
+    resolve(home, ".syndra", "daemons.json")
+  );
+  assert.equal(
+    defaultRegistryPath(home, (path) => path.includes(".agentbus")),
+    resolve(home, ".agentbus", "daemons.json")
+  );
+  assert.equal(
+    defaultRegistryPath(home, () => true),
+    resolve(home, ".syndra", "daemons.json")
+  );
+});
+
 test("launch and stop specs never put bearer tokens in arguments", () => {
   const settings = {
     pythonPath: "C:/Python/python.exe",
-    configPath: "C:/safe/agentbus.json",
+    configPath: "C:/safe/syndra.json",
     registryPath: "C:/safe/daemons.json",
     logLevel: "error" as const
   };
   const launch = buildLaunchSpec(settings);
   const stop = buildStopSpec(settings, "daemon-1");
 
-  assert.deepEqual(launch.args.slice(0, 3), ["-m", "agentbus.cli", "serve"]);
+  assert.deepEqual(launch.args.slice(0, 3), ["-m", "syndra.cli", "serve"]);
   assert.ok(launch.args.includes("--config"));
-  assert.ok(launch.args.includes(resolve("C:/safe/agentbus.json")));
+  assert.ok(launch.args.includes(resolve("C:/safe/syndra.json")));
   assert.ok(stop.args.includes("daemon-1"));
   assert.equal(stop.args.includes("--config"), false);
   assert.equal(JSON.stringify({ launch, stop }).includes(token), false);

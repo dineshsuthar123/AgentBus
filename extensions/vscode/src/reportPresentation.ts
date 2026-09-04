@@ -8,7 +8,7 @@ const MAX_REPORT_SECTION_CHARS = 100_000;
 export function formatReport(response: RunReportResponse): string {
   const report = response.report;
   const lines = [
-    `# AgentBus Run ${inline(response.run_id)}`,
+    `# Syndra Run ${inline(response.run_id)}`,
     "",
     `**Status:** ${inline(response.status)}`,
     "",

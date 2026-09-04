@@ -60,7 +60,7 @@ test("onboarding is concise and shown once per supported minor", () => {
       trusted: true,
       index: "not_built"
     }),
-    "AgentBus: installed (0.6.0b1). Daemon: no compatible daemon. Workspace: trusted. Repository index: not built."
+    "Syndra: installed (0.6.0b1). Daemon: no compatible daemon. Workspace: trusted. Repository index: not built."
   );
 });
 

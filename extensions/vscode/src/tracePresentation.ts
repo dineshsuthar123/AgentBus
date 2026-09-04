@@ -61,7 +61,7 @@ export function formatSpanDocument(span: TraceSpanDetailResponse): string {
   const hiddenAttributeCount =
     Object.keys(span.attributes ?? {}).length - safeAttributeKeys.length;
   const lines = [
-    `# AgentBus Span ${markdown(span.name)}`,
+    `# Syndra Span ${markdown(span.name)}`,
     "",
     `**Status:** ${markdown(span.status)}`,
     "",

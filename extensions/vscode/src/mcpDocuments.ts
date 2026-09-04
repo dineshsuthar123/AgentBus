@@ -1,13 +1,13 @@
 import * as vscode from "vscode";
-import type { AgentBusClient } from "./apiClient";
+import type { SyndraClient } from "./apiClient";
 import { formatMcpServer } from "./mcpPresentation";
 import { isSafeControlId } from "./toolPresentation";
 
-type ClientProvider = () => Promise<AgentBusClient>;
+type ClientProvider = () => Promise<SyndraClient>;
 
 export function mcpServerUri(serverId: string): vscode.Uri {
   if (!isSafeControlId(serverId)) {
-    throw new Error("Unsafe AgentBus MCP server identity.");
+    throw new Error("Unsafe Syndra MCP server identity.");
   }
   return vscode.Uri.from({
     scheme: "agentbus-mcp",
@@ -27,7 +27,7 @@ export class McpServerDocumentProvider
       (candidate) => candidate.server_id === serverId
     );
     if (!server) {
-      throw new Error("Configured AgentBus MCP server was not found.");
+      throw new Error("Configured Syndra MCP server was not found.");
     }
     return formatMcpServer(server);
   }
@@ -36,7 +36,7 @@ export class McpServerDocumentProvider
 function parseServerUri(uri: vscode.Uri): string {
   const serverId = decodeURIComponent(uri.path.replace(/^\//, ""));
   if (uri.scheme !== "agentbus-mcp" || !isSafeControlId(serverId)) {
-    throw new Error("Unsafe AgentBus MCP server document identity.");
+    throw new Error("Unsafe Syndra MCP server document identity.");
   }
   return serverId;
 }

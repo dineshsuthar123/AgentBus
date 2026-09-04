@@ -79,7 +79,7 @@ interface RequestOptions {
 
 const INDEX_OPERATION_TIMEOUT_MILLISECONDS = 15 * 60 * 1000;
 
-export class AgentBusApiError extends Error {
+export class SyndraApiError extends Error {
   public constructor(
     public readonly code: string,
     message: string,
@@ -87,11 +87,11 @@ export class AgentBusApiError extends Error {
     public readonly status: number
   ) {
     super(redactText(message));
-    this.name = "AgentBusApiError";
+    this.name = "SyndraApiError";
   }
 }
 
-export class AgentBusClient {
+export class SyndraClient {
   private readonly baseUrl: URL;
 
   public constructor(
@@ -101,7 +101,7 @@ export class AgentBusClient {
   ) {
     this.baseUrl = validateLoopbackBaseUrl(baseUrl);
     if (token.length < 32) {
-      throw new Error("AgentBus daemon token is invalid.");
+      throw new Error("Syndra daemon token is invalid.");
     }
   }
 
@@ -393,7 +393,7 @@ export class AgentBusClient {
   ): Promise<ReplayListResponse> {
     validatePage(0, limit);
     if (status && !REPLAY_STATUSES.has(status)) {
-      throw new Error("AgentBus replay status filter is invalid.");
+      throw new Error("Syndra replay status filter is invalid.");
     }
     const query = new URLSearchParams({ limit: String(limit) });
     if (sourceTraceId) query.set("source_trace_id", sourceTraceId);
@@ -669,12 +669,12 @@ export function validateLoopbackBaseUrl(value: string): URL {
     url.search ||
     url.hash
   ) {
-    throw new Error("AgentBus daemon URL must be an uncredentialed loopback HTTP URL.");
+    throw new Error("Syndra daemon URL must be an uncredentialed loopback HTTP URL.");
   }
   return new URL(url.origin);
 }
 
-async function mapError(response: Response): Promise<AgentBusApiError> {
+async function mapError(response: Response): Promise<SyndraApiError> {
   let body: Partial<ErrorResponse> = {};
   try {
     body = (await response.json()) as Partial<ErrorResponse>;
@@ -682,9 +682,9 @@ async function mapError(response: Response): Promise<AgentBusApiError> {
     // The stable fallback intentionally ignores untrusted raw response text.
   }
   const error = body.error;
-  return new AgentBusApiError(
+  return new SyndraApiError(
     error?.code ?? "http_error",
-    error?.message ?? `AgentBus request failed with HTTP ${response.status}.`,
+    error?.message ?? `Syndra request failed with HTTP ${response.status}.`,
     error?.retryable ?? false,
     response.status
   );
@@ -692,7 +692,7 @@ async function mapError(response: Response): Promise<AgentBusApiError> {
 
 function safeSegment(value: string): string {
   if (!value || value === "." || value === ".." || value.includes("\0")) {
-    throw new Error("Unsafe AgentBus protocol path segment.");
+    throw new Error("Unsafe Syndra protocol path segment.");
   }
   return encodeURIComponent(value);
 }
@@ -705,7 +705,7 @@ function validatePage(after: number, limit: number): void {
     limit < 1 ||
     limit > 500
   ) {
-    throw new Error("AgentBus pagination is outside the bounded range.");
+    throw new Error("Syndra pagination is outside the bounded range.");
   }
 }
 
@@ -721,7 +721,7 @@ function validateGraphPage(depth: number, offset: number, limit: number): void {
     limit < 1 ||
     limit > 500
   ) {
-    throw new Error("AgentBus graph pagination is outside the bounded range.");
+    throw new Error("Syndra graph pagination is outside the bounded range.");
   }
 }
 
@@ -734,7 +734,7 @@ function boundedSignal(
     timeoutMilliseconds < 1 ||
     timeoutMilliseconds > INDEX_OPERATION_TIMEOUT_MILLISECONDS
   ) {
-    throw new Error("AgentBus request timeout is outside the bounded range.");
+    throw new Error("Syndra request timeout is outside the bounded range.");
   }
   const controller = new AbortController();
   const abort = (): void => controller.abort(external?.reason);

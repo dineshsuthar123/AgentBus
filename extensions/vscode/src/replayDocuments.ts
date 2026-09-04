@@ -1,13 +1,13 @@
 import * as vscode from "vscode";
-import type { AgentBusClient } from "./apiClient";
+import type { SyndraClient } from "./apiClient";
 import { formatReplayDocument } from "./replayPresentation";
 import { isSafeControlId } from "./toolPresentation";
 
-export type ReplayClientProvider = () => Promise<AgentBusClient>;
+export type ReplayClientProvider = () => Promise<SyndraClient>;
 
 export function replayUri(replayId: string): vscode.Uri {
   if (!isSafeControlId(replayId)) {
-    throw new Error("AgentBus replay document requires a safe identifier.");
+    throw new Error("Syndra replay document requires a safe identifier.");
   }
   return vscode.Uri.from({
     scheme: "agentbus-replay",
@@ -23,7 +23,7 @@ export class ReplayDocumentProvider
   public async provideTextDocumentContent(uri: vscode.Uri): Promise<string> {
     const replayId = decodeURIComponent(uri.path.replace(/^\//, ""));
     if (uri.scheme !== "agentbus-replay" || !isSafeControlId(replayId)) {
-      throw new Error("Unsafe AgentBus replay document URI.");
+      throw new Error("Unsafe Syndra replay document URI.");
     }
     return formatReplayDocument(await (await this.client()).replay(replayId));
   }

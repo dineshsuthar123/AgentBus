@@ -152,7 +152,7 @@ export class IntelligenceCommandController implements vscode.Disposable {
       const result = await vscode.window.withProgress(
         {
           location: vscode.ProgressLocation.Notification,
-          title: `AgentBus: ${titleCase(operation)} Repository Index`,
+          title: `Syndra: ${titleCase(operation)} Repository Index`,
           cancellable: true
         },
         async (progress, token) =>

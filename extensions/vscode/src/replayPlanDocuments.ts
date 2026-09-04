@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import type { AgentBusClient } from "./apiClient";
+import type { SyndraClient } from "./apiClient";
 import { formatReplayabilityDocument } from "./replayPresentation";
 import { isSafeControlId } from "./toolPresentation";
 
@@ -11,14 +11,14 @@ const REPLAY_MODES = new Set<ReplayMode>([
   "simulate"
 ]);
 
-export type ReplayPlanClientProvider = () => Promise<AgentBusClient>;
+export type ReplayPlanClientProvider = () => Promise<SyndraClient>;
 
 export function replayPlanUri(
   runId: string,
   mode: ReplayMode
 ): vscode.Uri {
   if (!isSafeControlId(runId) || !REPLAY_MODES.has(mode)) {
-    throw new Error("AgentBus replay plan identity is invalid.");
+    throw new Error("Syndra replay plan identity is invalid.");
   }
   return vscode.Uri.from({
     scheme: "agentbus-replay-plan",
@@ -43,7 +43,7 @@ export class ReplayPlanDocumentProvider
       !mode ||
       !REPLAY_MODES.has(mode)
     ) {
-      throw new Error("Unsafe AgentBus replay plan URI.");
+      throw new Error("Unsafe Syndra replay plan URI.");
     }
     return formatReplayabilityDocument(
       await (await this.client()).replayability(runId, 0, 500),

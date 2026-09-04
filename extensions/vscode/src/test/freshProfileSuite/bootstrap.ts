@@ -7,7 +7,7 @@ export async function run(): Promise<void> {
   } catch (error) {
     const diagnostic = safeDiagnostic(error);
     process.stderr.write(`Fresh-profile bootstrap: ${diagnostic}\n`);
-    const handoffPath = process.env.AGENTBUS_FRESH_HANDOFF;
+    const handoffPath = process.env.SYNDRA_FRESH_HANDOFF;
     if (handoffPath) {
       await writeFile(`${handoffPath}.failure`, diagnostic, "utf8");
     }

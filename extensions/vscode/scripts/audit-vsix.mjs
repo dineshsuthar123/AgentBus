@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 import JSZip from "jszip";
 
-const input = resolve(process.argv[2] ?? "agentbus-vscode.vsix");
+const input = resolve(process.argv[2] ?? "syndra-vscode.vsix");
 const archive = await JSZip.loadAsync(await readFile(input));
 const names = Object.keys(archive.files).sort();
 const required = [
@@ -11,7 +11,7 @@ const required = [
   "extension.vsixmanifest",
   "extension/LICENSE.txt",
   "extension/readme.md",
-  "extension/media/agentbus.svg",
+  "extension/media/syndra.svg",
   "extension/out/extension.js",
   "extension/package.json"
 ];
@@ -20,13 +20,13 @@ const forbidden = [
   /(^|\/)\.env(?:\.|$)/i,
   /\.(?:db|log|pem|pfx|p12|sqlite|sqlite3|pyc|pyo|ts|map)$/i,
   /(^|\/)\.vscode-test\//i,
-  /(^|\/)(?:\.agentbus|\.venv|build|dist|runs|traces|worktrees|evaluation-output)\//i,
+  /(^|\/)(?:\.syndra|\.agentbus|\.venv|build|dist|runs|traces|worktrees|evaluation-output)\//i,
   /(^|\/)__pycache__\//i,
   /(^|\/)src\//i,
   /(^|\/)test(?:s)?\//i,
   /(^|\/).*profile.*\//i,
-  /(^|\/)agentbus-support-.*\.zip$/i,
-  /(^|\/)agentbus-vscode\.vsix$/i
+  /(^|\/)(?:syndra|agentbus)-support-.*\.zip$/i,
+  /(^|\/)(?:syndra|agentbus)-vscode\.vsix$/i
 ];
 const violations = [];
 let expandedBytes = 0;
@@ -94,7 +94,7 @@ for (const [name, item] of Object.entries(archive.files)) {
 const packageItem = archive.files["extension/package.json"];
 if (packageItem && !packageItem.dir) {
   const packageMetadata = JSON.parse(await packageItem.async("string"));
-  if (packageMetadata.name !== "agentbus-vscode") {
+  if (packageMetadata.name !== "syndra-vscode") {
     violations.push("extension/package.json (unexpected package name)");
   }
   if (packageMetadata.main !== "./out/extension.js") {
@@ -103,13 +103,17 @@ if (packageItem && !packageItem.dir) {
   if (packageMetadata.private !== true) {
     violations.push("extension/package.json (npm publication guard missing)");
   }
-  const compatibility = packageMetadata.agentbusCompatibility ?? {};
+  const compatibility = packageMetadata.syndraCompatibility ?? {};
   if (
     compatibility.python !== ">=0.6.0b1,<0.7.0" ||
     compatibility.controlProtocol !== "1.0" ||
     compatibility.stateSchema !== 6
   ) {
-    violations.push("extension/package.json (AgentBus compatibility metadata mismatch)");
+    violations.push("extension/package.json (Syndra compatibility metadata mismatch)");
+  }
+  const legacyCompatibility = packageMetadata.agentbusCompatibility ?? {};
+  if (JSON.stringify(legacyCompatibility) !== JSON.stringify(compatibility)) {
+    violations.push("extension/package.json (legacy compatibility metadata mismatch)");
   }
   const manifest = await archive.files["extension.vsixmanifest"]?.async("string");
   if (manifest && !manifest.includes(`Version="${packageMetadata.version}"`)) {
@@ -135,7 +139,7 @@ function isAllowed(name, directory) {
       "extension/LICENSE.txt",
       "extension/readme.md",
       "extension/package.json",
-      "extension/media/agentbus.svg"
+      "extension/media/syndra.svg"
     ].includes(name) || /^extension\/out\/[A-Za-z0-9._/-]+\.js$/u.test(name)
   );
 }
