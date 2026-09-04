@@ -67,6 +67,8 @@ syndra runs
 
 **Plan -> Execute -> Approve -> Verify -> Review -> Replay**
 
+![Syndra Studio showing verified execution evidence and an approved mandatory final review](docs/product/screenshots/07-verification-review.png)
+
 [Studio screenshot gallery](docs/product/screenshots/README.md)
 
 Syndra Studio is the execution observatory for durable runs. It exposes the

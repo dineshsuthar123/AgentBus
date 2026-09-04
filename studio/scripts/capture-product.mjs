@@ -34,7 +34,6 @@ const page = await context.newPage();
 try {
   await page.goto(studioUrl, { waitUntil: "networkidle" });
   await stabilize(page);
-  await capture(page, "01-first-launch.png");
 
   const rejectedSession = await context.newPage();
   await rejectedSession.goto(studioUrl, { waitUntil: "networkidle" });
@@ -45,17 +44,18 @@ try {
 
   await connect(page);
   await page.getByRole("heading", { name: "Execution, attention, integrity." }).waitFor();
-  await capture(page, "02-dashboard.png");
+  await page.getByText("Stream healthy", { exact: true }).waitFor({ timeout: 30_000 });
+  await capture(page, "01-dashboard.png");
 
   await go(page, "#/demo", "Payment confirmation, made retry-safe");
-  await capture(page, "04-payment-demo.png");
+  await capture(page, "03-payment-safety-demo.png");
 
   await go(page, "#/new?demo=payment", "Launch the idempotency repair");
   const workspaceInput = page.getByLabel("Absolute workspace");
   await workspaceInput.fill(workspace);
   await page.getByRole("button", { name: "Validate" }).click();
   await page.getByText("Repository boundary confirmed", { exact: true }).waitFor();
-  await capture(page, "03-new-task.png");
+  await capture(page, "02-new-run.png");
 
   let runId = environment("SYNDRA_RUN_ID", "AGENTBUS_RUN_ID");
   const launchedNewRun = !runId;
@@ -71,19 +71,19 @@ try {
 
   await page.locator(".run-observatory").waitFor({ timeout: 30_000 });
   await page.getByRole("region", { name: "Execution mesh" }).waitFor();
-  if (launchedNewRun) await capture(page, "05-active-run.png");
+  await selectLastMeshNode(page, ".mesh-node.kind-coder");
+  await capture(page, "04-active-execution.png");
   let completed = await api(`/api/v1/runs/${encodeURIComponent(runId)}`);
   if (!terminal(completed.status)) {
     await page.locator(".approval-gate").waitFor({ timeout: 180_000 });
+    await selectLastMeshNode(page, ".mesh-node.kind-approval");
     await frameApprovalTop(page);
-    await capture(page, "06-approval-gate.png");
+    await capture(page, "05-approval-gate.png");
     await frameApproval(page);
-    await capture(page, "06-approval-decision.png");
 
     await page.getByRole("button", { name: "Source", exact: true }).click();
     await page.getByRole("region", { name: "Source lens" }).waitFor();
     await waitForSource(page);
-    await capture(page, "11-source-lens-pending.png");
     await page.getByRole("button", { name: "Close source lens" }).click();
 
     if (!approve) {
@@ -97,80 +97,33 @@ try {
     throw new Error(`Payment run ended with ${completed.status}, not succeeded.`);
   }
 
+  await go(page, "#/", "Execution, attention, integrity.");
   await go(page, `#/runs/${encodeURIComponent(runId)}`, completed.original_task);
   await page.locator(".run-observatory").waitFor({ timeout: 30_000 });
   await page.getByRole("region", { name: "Execution mesh" }).waitFor();
   await selectLastMeshNode(page, ".mesh-node.kind-verifier");
-  await capture(page, "09-verification-passed.png");
   await page.getByRole("button", { name: "Review", exact: true }).click();
   await page.getByText("Mandatory final review", { exact: true }).waitFor();
-  await capture(page, "10-final-review.png");
-
-  await capture(page, "07-attempt-topology.png");
+  await capture(page, "07-verification-review.png");
 
   await page.getByRole("button", { name: "Source", exact: true }).click();
   await page.getByRole("region", { name: "Source lens" }).waitFor();
   await waitForSource(page);
-  await capture(page, "11-source-lens.png");
+  await capture(page, "06-source-lens.png");
 
   await page.getByRole("button", { name: "Evidence", exact: true }).click();
   await page.getByRole("button", { name: "Verify sealed trace" }).click();
   await page.getByText("Integrity verified", { exact: true }).waitFor({ timeout: 30_000 });
-  await capture(page, "12-evidence-trace.png");
+  await capture(page, "08-integrity-spine.png");
   const replayBefore = await latestReplay(runId);
   await page.getByRole("button", { name: "Run offline replay" }).click();
   const replay = await waitForReplay(runId, replayBefore?.replay_id, 60_000);
   await page.getByText("PROCESS NOT DISPATCHED", { exact: true }).waitFor({ timeout: 30_000 });
-  await capture(page, "13-offline-replay.png");
-
-  await page.getByRole("group", { name: "Timeline mode" }).getByRole("button", { name: "Replay" }).click();
-  await page.locator(".run-observatory.presentation-replay").waitFor();
-  await capture(page, "18-presentation-replay.png");
-  await page.getByRole("button", { name: "Events", exact: true }).click();
-  await page.getByText("Run event stream", { exact: true }).waitFor();
-  await capture(page, "19-runtime-events.png");
-
-  const retryRunId = environment("SYNDRA_RETRY_RUN_ID", "AGENTBUS_RETRY_RUN_ID");
-  if (retryRunId) {
-    await go(page, `#/runs/${encodeURIComponent(retryRunId)}`);
-    await page.locator(".run-observatory").waitFor({ timeout: 30_000 });
-    await page.getByText(retryRunId.slice(0, 8), { exact: false }).first().waitFor();
-    await page.getByRole("region", { name: "Execution mesh" }).waitFor();
-    const retryNode = page.locator(".mesh-node.kind-retry").first();
-    if (!(await retryNode.isVisible().catch(() => false))) {
-      throw new Error(`Run ${retryRunId} does not contain persisted retry evidence.`);
-    }
-    await retryNode.click();
-    await page.getByText("Immutable RetryEvidence", { exact: true }).waitFor();
-    await capture(page, "08-retry-evidence.png");
-  }
-
-  const failureRunId = environment("SYNDRA_FAILURE_RUN_ID", "AGENTBUS_FAILURE_RUN_ID");
-  if (failureRunId) {
-    await go(page, `#/runs/${encodeURIComponent(failureRunId)}`);
-    await page.locator(".run-observatory").waitFor({ timeout: 30_000 });
-    const failedVerifier = page.locator(".mesh-node.kind-verifier.tone-danger").first();
-    if (!(await failedVerifier.isVisible().catch(() => false))) {
-      throw new Error(`Run ${failureRunId} does not contain a persisted verifier failure.`);
-    }
-    await failedVerifier.click();
-    await capture(page, "08-verification-failure.png");
-  }
-
-  await go(page, "#/runtime", "Runtime health");
-  await capture(page, "14-runtime-health.png");
-  await go(page, "#/history", "Run history");
-  await capture(page, "15-run-history.png");
-
-  await go(page, "#/", "Execution, attention, integrity.");
-  await page.setViewportSize({ width: 1280, height: 800 });
-  await capture(page, "17-dashboard-1280.png");
-  await capture(page, "20-reduced-motion-dashboard.png");
-  await page.setViewportSize({ width: 1440, height: 900 });
+  await capture(page, "09-offline-replay.png");
 
   await page.getByRole("button", { name: "Disconnect Studio" }).click();
   await page.getByRole("heading", { name: "Connect to Syndra" }).waitFor();
-  await capture(page, "16-runtime-disconnected.png");
+  await capture(page, "10-runtime-disconnected.png");
 
   globalThis.console.log(`FINAL_STATUS=${completed.status}`);
   globalThis.console.log(`VERIFIER=${completed.verifier_status ?? "not-reported"}`);
@@ -264,8 +217,9 @@ async function waitForSource(targetPage) {
 
 async function selectLastMeshNode(targetPage, selector) {
   const nodes = targetPage.locator(selector);
+  await nodes.last().waitFor({ state: "visible", timeout: 30_000 });
   const count = await nodes.count();
-  if (count > 0) await nodes.nth(count - 1).click();
+  await nodes.nth(count - 1).click();
 }
 
 async function resumeThroughStudio(targetPage, runId) {
