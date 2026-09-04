@@ -220,7 +220,7 @@ class IntegrationCoordinator:
         result = self._run(path, ["cherry-pick", "--abort"])
         if result.returncode != 0:
             raise IntegrationError(
-                "Unable to abort AgentBus-owned cherry-pick state safely: "
+                "Unable to abort Syndra-owned cherry-pick state safely: "
                 + (result.stderr.strip() or result.stdout.strip())
             )
 

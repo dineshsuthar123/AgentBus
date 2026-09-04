@@ -191,7 +191,7 @@ class GitTools:
     def _require_owned_worktree(self) -> None:
         if not self.owned_worktree:
             raise GitToolAuthorizationError(
-                "Git mutation requires an explicitly owned AgentBus worktree."
+                "Git mutation requires an explicitly owned Syndra worktree."
             )
 
     @staticmethod

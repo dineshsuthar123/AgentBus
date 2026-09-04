@@ -89,7 +89,7 @@ def as_product_error(
     *,
     category: ProductErrorCategory = ProductErrorCategory.INTERNAL_ERROR,
     message: str | None = None,
-    likely_cause: str = "AgentBus could not complete the requested operation.",
+    likely_cause: str = "Syndra could not complete the requested operation.",
     recommended_action: str = "Run `syndra doctor` and retry the operation.",
     docs_topic: str | None = "troubleshooting",
     retryable: bool = False,
@@ -98,7 +98,7 @@ def as_product_error(
         return error
     return ProductError(
         category=category,
-        message=message or "AgentBus encountered an unexpected error.",
+        message=message or "Syndra encountered an unexpected error.",
         likely_cause=likely_cause,
         recommended_action=recommended_action,
         docs_topic=docs_topic,

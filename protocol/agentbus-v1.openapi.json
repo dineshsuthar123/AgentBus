@@ -9411,7 +9411,7 @@
     }
   },
   "info": {
-    "title": "AgentBus Control Protocol",
+    "title": "Syndra Control Protocol",
     "version": "1.0",
     "x-agentbus-protocol-version": "1.0"
   },

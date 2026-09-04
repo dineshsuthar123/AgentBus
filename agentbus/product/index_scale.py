@@ -194,7 +194,7 @@ def run_index_scale_benchmark(
     selected_count = _selected_file_count(profile, file_count)
     parent = _temporary_parent(temporary_parent)
     with tempfile.TemporaryDirectory(
-        prefix="agentbus-index-scale-",
+        prefix="syndra-index-scale-",
         dir=parent,
     ) as temporary:
         return _run_owned_benchmark(
@@ -668,7 +668,7 @@ def _delete_storm(repository: Path, relative_paths: Iterable[str]) -> None:
 def _write_configuration(repository: Path, *, version: str) -> None:
     (repository / "pyproject.toml").write_text(
         "[project]\n"
-        'name = "agentbus-index-scale"\n'
+        'name = "syndra-index-scale"\n'
         f'version = "{version}"\n',
         encoding="utf-8",
         newline="\n",

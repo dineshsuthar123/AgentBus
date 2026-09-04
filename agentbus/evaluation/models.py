@@ -485,7 +485,7 @@ class VariantComparisonReport(EvaluationModel):
     right: VariantSummary
     differences: dict[str, float]
     interpretation_note: str = (
-        "Differences are descriptive. AgentBus does not declare a best variant "
+        "Differences are descriptive. Syndra does not declare a best variant "
         "from a single run or small sample."
     )
 

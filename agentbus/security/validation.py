@@ -174,7 +174,7 @@ def run_defensive_security_validation(
     *,
     artifacts: Iterable[str | Path] = (),
 ) -> DefensiveSecurityScorecard:
-    """Exercise AgentBus-owned security boundaries without external targets."""
+    """Exercise Syndra-owned security boundaries without external targets."""
 
     repository = Path(root).expanduser().resolve()
     if not repository.is_dir():
@@ -218,7 +218,7 @@ def run_defensive_security_validation(
         ("vsix_contents", "VSIX contents", _probe_vsix_contents),
     )
     evidence: list[DefensiveSecurityEvidence] = []
-    with tempfile.TemporaryDirectory(prefix="agentbus-security-validation-") as value:
+    with tempfile.TemporaryDirectory(prefix="syndra-security-validation-") as value:
         temporary = Path(value).resolve()
         for boundary_id, title, probe in specifications:
             scratch = temporary / boundary_id
@@ -675,7 +675,7 @@ def _probe_diagnostic_privacy(
 ) -> DefensiveSecurityEvidence:
     log_path = context.scratch / "logs" / "product.log"
     secret = "sk-proj-" + "R7mN2xP9vT4kL8cD3sF6hJ1wB5zA0qE"
-    private_path = str(Path.home().resolve() / "private-agentbus-fixture")
+    private_path = str(Path.home().resolve() / "private-syndra-fixture")
     ProductLogWriter(log_path).write(
         level="warning",
         component="security-validation",

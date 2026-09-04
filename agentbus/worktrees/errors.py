@@ -1,5 +1,5 @@
 class WorktreeError(RuntimeError):
-    """Base error for safe AgentBus-owned Git worktree operations."""
+    """Base error for safe Syndra-owned Git worktree operations."""
 
 
 class WorktreeAlreadyExistsError(WorktreeError):

@@ -144,7 +144,7 @@ class LocalTaskWorker:
         heartbeat = threading.Thread(
             target=self._heartbeat,
             args=(lease, stop_heartbeat, lease_lost),
-            name=f"agentbus-heartbeat-{self.worker_id}",
+            name=f"syndra-heartbeat-{self.worker_id}",
             daemon=True,
         )
         heartbeat.start()

@@ -42,7 +42,7 @@ from agentbus.trace.storage import ContentAddressedStore
 BENCHMARK_SCHEMA_VERSION = 1
 BENCHMARK_GROUPS = ("startup", "index", "search", "control", "replay", "tools")
 _PERSISTENT_STORAGE_SCOPE = (
-    "AgentBus-owned benchmark persistence; generated repository bytes excluded."
+    "Syndra-owned benchmark persistence; generated repository bytes excluded."
 )
 _BASE_BUDGETS_MS = {
     "deterministic_run_startup": 5_000.0,
@@ -173,7 +173,7 @@ def run_benchmark(
     peak_memory_bytes = 0
     daemon_peak_memory_bytes: int | None = None
     persistent_storage_bytes = 0
-    with tempfile.TemporaryDirectory(prefix="agentbus-benchmark-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="syndra-benchmark-") as temporary:
         root = Path(temporary)
         workspace = root / "repository"
         needs_repository = bool(selected_groups & {"index", "search", "tools"})

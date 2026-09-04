@@ -1,4 +1,4 @@
-"""Versioned execution tracing primitives for AgentBus."""
+"""Versioned execution tracing primitives for Syndra."""
 
 from agentbus.trace.context import (
     TraceContext,

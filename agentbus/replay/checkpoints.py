@@ -318,7 +318,7 @@ class ReplayIsolationManager:
             ),
             cleanup_recommendation=(
                 "Inspect the replay result, then explicitly request cleanup of "
-                f"the AgentBus-owned replay '{replay_id}'."
+                f"the Syndra-owned replay '{replay_id}'."
             ),
         )
 

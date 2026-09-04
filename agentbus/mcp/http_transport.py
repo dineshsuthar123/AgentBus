@@ -147,7 +147,7 @@ class McpHttpTransport:
         worker = threading.Thread(
             target=self._post_worker,
             args=(encoded, effective_timeout, notification, results),
-            name=f"agentbus-mcp-http-{self.config.server_id}",
+            name=f"syndra-mcp-http-{self.config.server_id}",
             daemon=True,
         )
         worker.start()
@@ -299,7 +299,7 @@ def _require_httpx():
         import httpx
     except ImportError as exc:
         raise McpTransportError(
-            "Loopback HTTP MCP requires the AgentBus 'mcp' optional extra."
+            "Loopback HTTP MCP requires the Syndra 'mcp' optional extra."
         ) from exc
     return httpx
 

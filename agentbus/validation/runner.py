@@ -95,7 +95,7 @@ class ValidationRunner:
                     raise ResourceLimitExceeded(message)
 
             with tempfile.TemporaryDirectory(
-                prefix="agentbus-validation-"
+                prefix="syndra-validation-"
             ) as temporary:
                 database = Path(temporary) / "repository-index.sqlite3"
                 service = RepositoryIntelligenceService(root, database)

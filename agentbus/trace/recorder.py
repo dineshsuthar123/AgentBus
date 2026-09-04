@@ -154,7 +154,7 @@ class TraceRecorder:
     def start_trace(
         self,
         *,
-        name: str = "AgentBus run",
+        name: str = "Syndra run",
         attributes: dict[str, Any] | None = None,
     ) -> TraceContext:
         with self._lock:

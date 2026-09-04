@@ -14,12 +14,12 @@ from agentbus.validation.failures import RepositoryValidationError
 def test_adversarial_fixture_is_owned_descriptive_and_never_overwrites(tmp_path):
     fixture = generate_adversarial_repository(tmp_path / "hostile")
     marker = json.loads(
-        (fixture.root / ".agentbus-adversarial-fixture.json").read_text(
+        (fixture.root / ".syndra-adversarial-fixture.json").read_text(
             encoding="utf-8"
         )
     )
 
-    assert marker["owner"] == "agentbus-validation"
+    assert marker["owner"] == "syndra-validation"
     assert marker["schema_version"] == 1
     assert set(marker["created_features"]) == set(fixture.created_features)
     assert set(marker["unavailable_features"]) == set(fixture.unavailable_features)

@@ -89,7 +89,7 @@ class ModelProviderFactory:
             except ModuleNotFoundError as exc:
                 if exc.name == "openai":
                     raise ModelConfigurationError(
-                        "Azure support is not installed. Install AgentBus with the "
+                        "Azure support is not installed. Install Syndra with the "
                         "'azure' extra.",
                         provider="azure",
                         model=route.model,

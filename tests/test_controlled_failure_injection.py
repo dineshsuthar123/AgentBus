@@ -362,7 +362,7 @@ def test_daemon_termination_unwinds_owned_lifecycle_without_public_switch(
 
     monkeypatch.setattr(uvicorn, "Config", capture_uvicorn_config)
 
-    with pytest.raises(RuntimeError, match="Controlled AgentBus daemon termination"):
+    with pytest.raises(RuntimeError, match="Controlled Syndra daemon termination"):
         serve(
             config=config,
             port=0,
@@ -460,7 +460,7 @@ def test_trace_write_failure_cleans_unpublished_objects_and_is_store_local(
         store.put_text("safe local trace", producing_span_id="span-1")
 
     assert [path for path in root.rglob("*") if path.is_file()] == []
-    assert list(root.rglob(".agentbus-tmp-*")) == []
+    assert list(root.rglob(".syndra-tmp-*")) == []
     isolated = ContentAddressedStore(tmp_path / "isolated-trace")
     metadata = isolated.put_text("safe local trace", producing_span_id="span-2")
     assert isolated.get(metadata.sha256).data == b"safe local trace"

@@ -54,7 +54,7 @@ _Parameters = ParamSpec("_Parameters")
 def current_trace_context(*, required: bool = False) -> TraceContext | None:
     context = _TRACE_CONTEXT.get()
     if required and context is None:
-        raise RuntimeError("No AgentBus trace context is active.")
+        raise RuntimeError("No Syndra trace context is active.")
     return context
 
 

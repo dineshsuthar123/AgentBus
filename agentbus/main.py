@@ -27,7 +27,7 @@ from agentbus.worktrees.models import WorktreeStatus
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run AgentBus Local Runner.")
+    parser = argparse.ArgumentParser(description="Run Syndra Local Runner.")
     parser.add_argument("task", nargs="?", help="Task for the local runner.")
     parser.add_argument(
         "--config",
@@ -106,7 +106,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--worktree-root",
-        help="Canonical root for AgentBus-owned worktrees, outside the repository.",
+        help="Canonical root for Syndra-owned worktrees, outside the repository.",
     )
     parser.add_argument(
         "--keep-worktrees",
@@ -146,7 +146,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         nargs="?",
         const="*",
         metavar="RUN_ID",
-        help="List persisted AgentBus worktrees, optionally for one run.",
+        help="List persisted Syndra worktrees, optionally for one run.",
     )
     operations.add_argument(
         "--list-workers",
@@ -168,7 +168,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     operations.add_argument(
         "--cleanup-worktrees",
         metavar="RUN_ID",
-        help="Explicitly remove only clean, validated AgentBus worktrees.",
+        help="Explicitly remove only clean, validated Syndra worktrees.",
     )
     operations.add_argument(
         "--list-providers",
@@ -243,7 +243,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
 
-    print("AgentBus Local Runner")
+    print("Syndra Local Runner")
     print("---------------------")
 
     try:
@@ -431,7 +431,7 @@ def _handle_durable_operation(
         run_id = None if args.list_worktrees == "*" else args.list_worktrees
         worktrees = store.list_worktrees(run_id)
         if not worktrees:
-            print("No AgentBus worktrees found.")
+            print("No Syndra worktrees found.")
             return 0
         for item in worktrees:
             print(

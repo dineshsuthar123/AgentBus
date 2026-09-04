@@ -94,7 +94,7 @@ def test_submit_returns_immediately_and_fences_same_workspace(
     accepted = supervisor.submit(_request(workspace))
     assert backend.started.wait(timeout=2)
 
-    with pytest.raises(ControlPlaneConflictError, match="active AgentBus run"):
+    with pytest.raises(ControlPlaneConflictError, match="active Syndra run"):
         supervisor.submit(_request(workspace))
 
     assert accepted.run_id in backend.executions

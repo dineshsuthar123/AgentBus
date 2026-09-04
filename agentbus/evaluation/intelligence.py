@@ -636,7 +636,7 @@ def repository_intelligence_suite() -> EvaluationSuite:
     ]
     return EvaluationSuite(
         suite_id="repository-intelligence",
-        title="AgentBus repository intelligence offline evaluation",
+        title="Syndra repository intelligence offline evaluation",
         description=(
             "Providerless synthetic benchmarks for multilingual indexing, "
             "incremental reuse, retrieval, graph impact, and context budgets."

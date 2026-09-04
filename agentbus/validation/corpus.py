@@ -35,7 +35,7 @@ from agentbus.validation.runner import ValidationRunner
 CORPUS_SCHEMA_VERSION = 1
 MAXIMUM_MANIFEST_BYTES = 1_048_576
 _PUBLIC_GIT_HOSTS = frozenset({"github.com", "gitlab.com", "codeberg.org"})
-_GENERATED_MARKER = ".agentbus-validation-fixture.json"
+_GENERATED_MARKER = ".syndra-validation-fixture.json"
 
 
 class CorpusManifest(ValidationModel):
@@ -136,7 +136,7 @@ def generate_validation_repository(
         json.dumps(
             {
                 "schema": 1,
-                "owner": "agentbus-validation",
+                "owner": "syndra-validation",
                 "repository_id": repository_id,
             },
             indent=2,
@@ -152,7 +152,7 @@ def _python_library_fixture(root: Path) -> None:
         root,
         "pyproject.toml",
         "[project]\n"
-        "name = 'agentbus-validation-python'\n"
+        "name = 'syndra-validation-python'\n"
         "version = '0.1.0'\n",
     )
     _write(
@@ -176,7 +176,7 @@ def _mixed_monorepo_fixture(root: Path) -> None:
     _write(
         root,
         "pyproject.toml",
-        "[project]\nname = 'agentbus-mixed-fixture'\nversion = '0.1.0'\n",
+        "[project]\nname = 'syndra-mixed-fixture'\nversion = '0.1.0'\n",
     )
     _write(
         root,
@@ -239,7 +239,7 @@ def _deep_tree_fixture(root: Path) -> None:
     _write(
         root,
         "pyproject.toml",
-        "[project]\nname = 'agentbus-deep-fixture'\nversion = '0.1.0'\n",
+        "[project]\nname = 'syndra-deep-fixture'\nversion = '0.1.0'\n",
     )
     prefix = "/".join(f"level_{index:02d}" for index in range(32))
     _write(
@@ -346,7 +346,7 @@ def download_public_repository(
             "Public corpus destination must be empty; partial or user data is preserved."
         )
     root.parent.mkdir(parents=True, exist_ok=True)
-    disabled_hooks = root.parent / ".agentbus-disabled-hooks"
+    disabled_hooks = root.parent / ".syndra-disabled-hooks"
     disabled_hooks.mkdir(exist_ok=True)
     command = [
         git,
@@ -422,7 +422,7 @@ def run_validation_corpus(
     warnings: list[str] = []
     setup_failed = False
     network_used = False
-    with tempfile.TemporaryDirectory(prefix="agentbus-validation-corpus-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="syndra-validation-corpus-") as temporary:
         generated_root = Path(temporary)
         for repository in selected_repositories:
             try:

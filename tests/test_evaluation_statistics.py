@@ -160,7 +160,7 @@ def test_compare_variants_cli_exports_markdown(tmp_path, capsys):
     assert "Success rate" in rendered
     assert "Difference (right-left)" in rendered
     assert "declare a best variant" in rendered
-    assert "AgentBus variant comparison" in capsys.readouterr().out
+    assert "Syndra variant comparison" in capsys.readouterr().out
 
 
 def test_run_repeat_dispatches_to_repeated_runner(tmp_path, monkeypatch, capsys):

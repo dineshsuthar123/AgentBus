@@ -19,7 +19,7 @@ def apply_migrations(
     current = schema_version(connection)
     if current > LATEST_SCHEMA_VERSION:
         raise IndexSchemaError(
-            "Repository intelligence index was created by a newer AgentBus version "
+            "Repository intelligence index was created by a newer Syndra version "
             f"(database={current}, supported={LATEST_SCHEMA_VERSION})."
         )
     if current > target_version:

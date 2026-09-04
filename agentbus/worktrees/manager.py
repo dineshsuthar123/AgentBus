@@ -215,7 +215,7 @@ class GitWorktreeManager:
         path = Path(record.path).expanduser().resolve()
         if not self._is_within(path, self.worktree_root):
             raise WorktreeOwnershipError(
-                f"Worktree path is outside the AgentBus-owned root: {path}"
+                f"Worktree path is outside the Syndra-owned root: {path}"
             )
         if os.path.normcase(str(Path(record.repository_root).resolve())) != os.path.normcase(
             str(self.repository_root)
@@ -289,7 +289,7 @@ class GitWorktreeManager:
             record = self.store.get_worktree(worktree_id)
         except StateStoreError as exc:
             raise WorktreeOwnershipError(
-                "Refusing to remove an unknown or non-AgentBus worktree."
+                "Refusing to remove an unknown or non-Syndra worktree."
             ) from exc
         if record.status != WorktreeStatus.CLEANUP_PENDING:
             raise WorktreeRemovalUnsafeError(

@@ -10,7 +10,7 @@ from agentbus.validation.failures import RepositoryValidationError
 
 
 ADVERSARIAL_FIXTURE_SCHEMA_VERSION = 1
-_MARKER = ".agentbus-adversarial-fixture.json"
+_MARKER = ".syndra-adversarial-fixture.json"
 
 
 @dataclass(frozen=True)
@@ -153,7 +153,7 @@ def _write_marker(
 ) -> None:
     payload = {
         "schema_version": ADVERSARIAL_FIXTURE_SCHEMA_VERSION,
-        "owner": "agentbus-validation",
+        "owner": "syndra-validation",
         "created_features": sorted(created),
         "unavailable_features": sorted(unavailable),
     }

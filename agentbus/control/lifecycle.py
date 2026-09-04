@@ -40,7 +40,7 @@ class DaemonHeartbeat:
         self._stop = threading.Event()
         self._thread = threading.Thread(
             target=self._run,
-            name="agentbus-daemon-heartbeat",
+            name="syndra-daemon-heartbeat",
             daemon=True,
         )
 
@@ -77,7 +77,7 @@ class IdleShutdownMonitor:
         self._stop = threading.Event()
         self._thread = threading.Thread(
             target=self._run,
-            name="agentbus-daemon-idle-monitor",
+            name="syndra-daemon-idle-monitor",
             daemon=True,
         )
 

@@ -30,7 +30,7 @@ def test_trace_context_restores_after_failure() -> None:
         with trace_context(root):
             raise RuntimeError("boom")
 
-    with pytest.raises(RuntimeError, match="No AgentBus trace context"):
+    with pytest.raises(RuntimeError, match="No Syndra trace context"):
         current_trace_context(required=True)
 
 

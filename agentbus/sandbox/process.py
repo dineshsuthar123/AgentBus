@@ -190,7 +190,7 @@ class ControlledProcessSupervisor:
         )
         try:
             isolated_home_context = tempfile.TemporaryDirectory(
-                prefix="agentbus-tool-"
+                prefix="syndra-tool-"
             )
         except OSError as exc:
             raise ProcessSupervisionError(
@@ -434,13 +434,13 @@ def _start_pipe_readers(
     stdout = threading.Thread(
         target=_drain_pipe,
         args=(process.stdout, ToolOutputStream.STDOUT, capture),
-        name=f"agentbus-stdout-{process.pid}",
+        name=f"syndra-stdout-{process.pid}",
         daemon=True,
     )
     stderr = threading.Thread(
         target=_drain_pipe,
         args=(process.stderr, ToolOutputStream.STDERR, capture),
-        name=f"agentbus-stderr-{process.pid}",
+        name=f"syndra-stderr-{process.pid}",
         daemon=True,
     )
     stdout.start()
