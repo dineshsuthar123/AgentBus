@@ -3,14 +3,14 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 
-const studioUrl = process.env.AGENTBUS_STUDIO_URL ?? "http://127.0.0.1:5173";
-const controlUrl = process.env.AGENTBUS_CONTROL_URL ?? "http://127.0.0.1:8765";
-const token = required("AGENTBUS_STUDIO_TOKEN");
-const workspace = required("AGENTBUS_DEMO_WORKSPACE");
-const approve = process.env.AGENTBUS_SCREENSHOTS_APPROVE === "true";
+const studioUrl = environment("SYNDRA_STUDIO_URL", "AGENTBUS_STUDIO_URL") ?? "http://127.0.0.1:5173";
+const controlUrl = environment("SYNDRA_CONTROL_URL", "AGENTBUS_CONTROL_URL") ?? "http://127.0.0.1:8765";
+const token = required("SYNDRA_STUDIO_TOKEN", "AGENTBUS_STUDIO_TOKEN");
+const workspace = required("SYNDRA_DEMO_WORKSPACE", "AGENTBUS_DEMO_WORKSPACE");
+const approve = environment("SYNDRA_SCREENSHOTS_APPROVE", "AGENTBUS_SCREENSHOTS_APPROVE") === "true";
 const outputDirectory = path.resolve(
   process.cwd(),
-  process.env.AGENTBUS_SCREENSHOT_OUT ?? "../docs/submission/screenshots",
+  environment("SYNDRA_SCREENSHOT_OUT", "AGENTBUS_SCREENSHOT_OUT") ?? "../docs/product/screenshots",
 );
 const forbiddenPresentationValues = [
   token,
@@ -21,7 +21,7 @@ const forbiddenPresentationValues = [
 await mkdir(outputDirectory, { recursive: true });
 
 const browser = await chromium.launch({
-  channel: process.env.AGENTBUS_SCREENSHOT_BROWSER_CHANNEL ?? "chrome",
+  channel: environment("SYNDRA_SCREENSHOT_BROWSER_CHANNEL", "AGENTBUS_SCREENSHOT_BROWSER_CHANNEL") ?? "chrome",
   headless: true,
 });
 const context = await browser.newContext({
@@ -57,7 +57,7 @@ try {
   await page.getByText("Repository boundary confirmed", { exact: true }).waitFor();
   await capture(page, "03-new-task.png");
 
-  let runId = process.env.AGENTBUS_RUN_ID;
+  let runId = environment("SYNDRA_RUN_ID", "AGENTBUS_RUN_ID");
   const launchedNewRun = !runId;
   if (launchedNewRun) {
     await page.getByRole("button", { name: "Launch execution" }).click();
@@ -88,7 +88,7 @@ try {
 
     if (!approve) {
       throw new Error(
-        "Approval gate captured. Set AGENTBUS_SCREENSHOTS_APPROVE=true to explicitly approve and continue the real run.",
+        "Approval gate captured. Set SYNDRA_SCREENSHOTS_APPROVE=true to explicitly approve and continue the real run.",
       );
     }
     completed = await completeThroughStudio(page, runId, 180_000);
@@ -130,7 +130,7 @@ try {
   await page.getByText("Run event stream", { exact: true }).waitFor();
   await capture(page, "19-runtime-events.png");
 
-  const retryRunId = process.env.AGENTBUS_RETRY_RUN_ID;
+  const retryRunId = environment("SYNDRA_RETRY_RUN_ID", "AGENTBUS_RETRY_RUN_ID");
   if (retryRunId) {
     await go(page, `#/runs/${encodeURIComponent(retryRunId)}`);
     await page.locator(".run-observatory").waitFor({ timeout: 30_000 });
@@ -145,7 +145,7 @@ try {
     await capture(page, "08-retry-evidence.png");
   }
 
-  const failureRunId = process.env.AGENTBUS_FAILURE_RUN_ID;
+  const failureRunId = environment("SYNDRA_FAILURE_RUN_ID", "AGENTBUS_FAILURE_RUN_ID");
   if (failureRunId) {
     await go(page, `#/runs/${encodeURIComponent(failureRunId)}`);
     await page.locator(".run-observatory").waitFor({ timeout: 30_000 });
@@ -169,7 +169,7 @@ try {
   await page.setViewportSize({ width: 1440, height: 900 });
 
   await page.getByRole("button", { name: "Disconnect Studio" }).click();
-  await page.getByRole("heading", { name: "Connect to AgentBus" }).waitFor();
+  await page.getByRole("heading", { name: "Connect to Syndra" }).waitFor();
   await capture(page, "16-runtime-disconnected.png");
 
   globalThis.console.log(`FINAL_STATUS=${completed.status}`);
@@ -242,6 +242,11 @@ async function assertPublicSafe(targetPage, name) {
       throw new Error(`${name} contains a presentation-sensitive local value.`);
     }
   }
+  for (const forbidden of [/AgentBus/i, /Razorpay/i, /hackathon/i, /submission/i, /internship/i]) {
+    if (forbidden.test(presentation)) {
+      throw new Error(`${name} contains stale public product identity.`);
+    }
+  }
 }
 
 async function waitForSource(targetPage) {
@@ -290,7 +295,7 @@ async function completeThroughStudio(targetPage, runId, timeoutMs) {
       if (pending) {
         await targetPage.locator(".approval-gate").waitFor({ timeout: 30_000 });
         await targetPage.getByLabel(/Decision note/i).fill(
-          "Exact offline managed invocation reviewed for the submission demo.",
+          "Exact offline managed invocation reviewed for the Payment Safety Demo.",
         );
         await targetPage.getByRole("button", { name: /Approve & continue/i }).click();
         await waitForApprovalDecision(runId, pending.approval_id, 30_000);
@@ -343,8 +348,12 @@ function terminal(status) {
   );
 }
 
-function required(name) {
-  const value = process.env[name]?.trim();
-  if (!value) throw new Error(`${name} is required.`);
+function environment(canonicalName, legacyName) {
+  return process.env[canonicalName]?.trim() || process.env[legacyName]?.trim();
+}
+
+function required(canonicalName, legacyName) {
+  const value = environment(canonicalName, legacyName);
+  if (!value) throw new Error(`${canonicalName} is required.`);
   return value;
 }

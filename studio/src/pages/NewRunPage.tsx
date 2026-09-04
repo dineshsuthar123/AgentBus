@@ -52,7 +52,7 @@ export function NewRunPage({ demo, focus }: { demo: string | null; focus?: strin
     let checked = validation;
     if (!checked || checked.workspace !== workspace.trim()) checked = await validate();
     if (!checked?.valid) {
-      setError(checked?.message ?? "AgentBus requires an isolated Git repository workspace.");
+      setError(checked?.message ?? "Syndra requires an isolated Git repository workspace.");
       return;
     }
     setBusy("launch");
@@ -69,15 +69,15 @@ export function NewRunPage({ demo, focus }: { demo: string | null; focus?: strin
       live_provider_consent: provider === "deterministic" ? false : liveConsent,
       commit_changes: commitChanges,
       create_pr: createPr,
-      tags: paymentPreset ? ["studio", "payment-safety", "razorpay-demo"] : ["studio"],
-      metadata: { entrypoint: "agentbus-studio", demo: paymentPreset ? "payment-safety" : undefined },
+      tags: paymentPreset ? ["studio", "payment-safety", "payment-demo"] : ["studio"],
+      metadata: { entrypoint: "syndra-studio", demo: paymentPreset ? "payment-safety" : undefined },
       ...(provider === "deterministic" && paymentPreset ? { deterministic: { profile: "payment-safety" } } : {})
     };
     try {
       const accepted = await client.createRun(body);
       window.location.hash = `#/runs/${encodeURIComponent(accepted.run_id)}`;
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "AgentBus rejected the run request.");
+      setError(reason instanceof Error ? reason.message : "Syndra rejected the run request.");
       setBusy(undefined);
     }
   }
@@ -90,7 +90,7 @@ export function NewRunPage({ demo, focus }: { demo: string | null; focus?: strin
   return (
     <div className="page new-run-page">
       <PageIntro eyebrow={paymentPreset ? "Payment safety scenario" : "Durable execution"} title={paymentPreset ? "Launch the idempotency repair" : "Launch a bounded run"}>
-        {paymentPreset ? "A real deterministic AgentBus workflow over a local Java repository, with Maven execution held behind policy approval." : "Validate the target repository, choose a configured route, and persist an inspectable execution graph."}
+        {paymentPreset ? "A real deterministic Syndra workflow over a local Java repository, with Maven execution held behind policy approval." : "Validate the target repository, choose a configured route, and persist an inspectable execution graph."}
       </PageIntro>
 
       {paymentPreset && <div className="demo-callout"><span>DEMO 01</span><div><strong>No simulated dashboard state</strong><p>The deterministic provider emits a real plan and tool requests. Repository edits, policy decisions, tests, review, and evidence come from the control plane.</p></div></div>}
@@ -100,7 +100,7 @@ export function NewRunPage({ demo, focus }: { demo: string | null; focus?: strin
         <section className="composer-main">
           <fieldset className="form-section">
             <legend><span>01</span><div>Objective<small>Original task context</small></div></legend>
-            <label className="field-label"><span>What should AgentBus change?</span><textarea value={task} onChange={(event) => setTask(event.target.value)} placeholder="Describe the behavior, safety boundaries, and proof you expect." maxLength={20_000} rows={6} required /></label>
+            <label className="field-label"><span>What should Syndra change?</span><textarea value={task} onChange={(event) => setTask(event.target.value)} placeholder="Describe the behavior, safety boundaries, and proof you expect." maxLength={20_000} rows={6} required /></label>
           </fieldset>
 
           <fieldset className="form-section">
@@ -114,7 +114,7 @@ export function NewRunPage({ demo, focus }: { demo: string | null; focus?: strin
             </div>}
             {validation && <div className={`workspace-verdict ${validation.valid ? "is-valid" : "is-invalid"}`}>
               {validation.valid ? <CheckCircle2 size={18} /> : <LockKeyhole size={18} />}
-              <div><strong>{validation.valid ? "Repository boundary confirmed" : "Workspace rejected"}</strong><p>{validation.message ?? "AgentBus inspected the canonical repository boundary."}</p><code>{validation.git_top_level ? displayWorkspace(validation.git_top_level) : "No Git top-level detected"}</code></div>
+              <div><strong>{validation.valid ? "Repository boundary confirmed" : "Workspace rejected"}</strong><p>{validation.message ?? "Syndra inspected the canonical repository boundary."}</p><code>{validation.git_top_level ? displayWorkspace(validation.git_top_level) : "No Git top-level detected"}</code></div>
             </div>}
           </fieldset>
 

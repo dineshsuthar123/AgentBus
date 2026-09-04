@@ -120,7 +120,7 @@ function ToolInspector({ invocation }: { invocation: NonNullable<RunBundle["invo
     <CapabilityScope capabilities={invocation.capabilities} approvalRequired={invocation.status === "awaiting_approval"} />
     {invocation.error_message && <Callout tone="danger" title={invocation.error_category ?? "Tool failure"}>{invocation.error_message}</Callout>}
     <TraceIdentity label="Invocation" value={invocation.invocation_id} />
-    <p className="inspector-footnote">Invocation arguments are not displayed. AgentBus exposes only bounded summaries at approval time.</p>
+    <p className="inspector-footnote">Invocation arguments are not displayed. Syndra exposes only bounded summaries at approval time.</p>
   </div>;
 }
 

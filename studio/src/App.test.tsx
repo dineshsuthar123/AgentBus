@@ -4,14 +4,14 @@ import { App, connectionDestination, StudioAnnouncements } from "./App";
 import { decodeHashSegment } from "./lib/routing";
 import { StudioProvider } from "./state/StudioContext";
 
-describe("AgentBus Studio connection", () => {
+describe("Syndra Studio connection", () => {
   it("explains the authenticated memory-only loopback session before connecting", () => {
     render(<StudioProvider><App /></StudioProvider>);
 
     expect(screen.getByRole("heading", { name: /see the agent/i })).toBeInTheDocument();
     expect(screen.getByLabelText("Session token")).toHaveAttribute("type", "password");
     expect(screen.getByText(/token stays in browser memory/i)).toBeInTheDocument();
-    expect(screen.getByText(/agentbus serve --port 8765 --json-ready/i)).toBeInTheDocument();
+    expect(screen.getByText(/syndra serve --port 8765 --json-ready/i)).toBeInTheDocument();
   });
 
   it("preserves a durable deep link across reauthentication", () => {

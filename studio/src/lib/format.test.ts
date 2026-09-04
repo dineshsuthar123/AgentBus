@@ -4,7 +4,7 @@ import { displayCommand, displayPath, displayWorkspace, sanitizeDisplayText } fr
 describe("public-safe presentation formatting", () => {
   it("shows only the repository identity for canonical local paths", () => {
     expect(displayWorkspace("C:\\Users\\Demo User\\projects\\payment-demo")).toBe("payment-demo/");
-    expect(displayWorkspace("/home/demo/projects/AgentBus/")).toBe("AgentBus/");
+    expect(displayWorkspace("/home/demo/projects/Syndra/")).toBe("Syndra/");
   });
 
   it("renders exact bounded commands without losing spaced arguments", () => {

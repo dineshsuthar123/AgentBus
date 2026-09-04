@@ -4,7 +4,9 @@ import { defineConfig } from "vitest/config";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "..");
 const controlTarget = validateControlTarget(
-  process.env.AGENTBUS_STUDIO_TARGET ?? "http://127.0.0.1:8765"
+  process.env.SYNDRA_STUDIO_TARGET
+    ?? process.env.AGENTBUS_STUDIO_TARGET
+    ?? "http://127.0.0.1:8765"
 );
 
 export function validateControlTarget(value: string): string {
@@ -19,7 +21,7 @@ export function validateControlTarget(value: string): string {
     !rootOnly
   ) {
     throw new Error(
-      "AGENTBUS_STUDIO_TARGET must be a credential-free numeric loopback HTTP origin."
+      "SYNDRA_STUDIO_TARGET must be a credential-free numeric loopback HTTP origin."
     );
   }
   return target.origin;
@@ -30,7 +32,7 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "src"),
-      "@agentbus/protocol": path.resolve(
+      "@syndra/protocol": path.resolve(
         repositoryRoot,
         "extensions/vscode/src/generated/protocol.ts"
       )

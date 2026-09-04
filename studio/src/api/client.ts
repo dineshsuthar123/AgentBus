@@ -82,7 +82,7 @@ export class StudioClient {
     fetcher?: FetchLike
   ) {
     if (token.trim().length < 32) {
-      throw new Error("The AgentBus session token must contain at least 32 characters.");
+      throw new Error("The Syndra session token must contain at least 32 characters.");
     }
     this.origin = validateStudioOrigin(origin);
     this.fetcher = fetcher ?? bindBrowserFetch();
@@ -107,7 +107,7 @@ export class StudioClient {
   }
   public file(runId: string, path: string, revision: "before" | "after", options?: ReadRequestOptions) {
     const safePath = path.split(/[\\/]/).filter(Boolean).map(segment).join("/");
-    if (!safePath) throw new Error("Unsafe AgentBus path.");
+    if (!safePath) throw new Error("Unsafe Syndra path.");
     return this.read<FileContentResponse>(
       `/api/v1/runs/${segment(runId)}/changes/${safePath}?revision=${revision}`,
       options
@@ -313,7 +313,7 @@ export class StudioClient {
         try { payload = await response.json() as ControlErrorBody; } catch { /* bounded fallback */ }
         throw new StudioApiError(
           payload.error?.code ?? "http_error",
-          payload.error?.message ?? `AgentBus request failed with HTTP ${response.status}.`,
+          payload.error?.message ?? `Syndra request failed with HTTP ${response.status}.`,
           response.status,
           payload.error?.retryable ?? response.status >= 500
         );
@@ -334,14 +334,14 @@ export function validateStudioOrigin(value: string): URL {
   const url = new URL(value);
   const host = url.hostname.replace(/^\[|\]$/g, "");
   if (url.protocol !== "http:" || !["127.0.0.1", "::1"].includes(host)) {
-    throw new Error("AgentBus Studio must run from a numeric loopback HTTP origin.");
+    throw new Error("Syndra Studio must run from a numeric loopback HTTP origin.");
   }
   return new URL(url.origin);
 }
 
 function segment(value: string): string {
   if (!value || value === "." || value === ".." || value.includes("\0")) {
-    throw new Error("Unsafe AgentBus identifier.");
+    throw new Error("Unsafe Syndra identifier.");
   }
   return encodeURIComponent(value);
 }
@@ -351,7 +351,7 @@ function abortedOrValue<T>(value: T, signal?: AbortSignal): Promise<T> {
 }
 
 function abortError(): DOMException {
-  return new DOMException("AgentBus request was cancelled.", "AbortError");
+  return new DOMException("Syndra request was cancelled.", "AbortError");
 }
 
 function isRetryableReadError(error: unknown): boolean {

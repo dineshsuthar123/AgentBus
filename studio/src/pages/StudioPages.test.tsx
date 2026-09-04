@@ -104,7 +104,7 @@ describe("Studio pages", () => {
 
   it("launches the payment preset only after repository validation", async () => {
     const user = userEvent.setup();
-    const workspace = "C:\\work\\agentbus-payment-demo";
+    const workspace = "C:\\work\\syndra-payment-demo";
     const validateWorkspace = vi.fn().mockResolvedValue({
       valid: true,
       workspace,
@@ -130,7 +130,7 @@ describe("Studio pages", () => {
     await user.type(screen.getByLabelText("Absolute workspace"), workspace);
     await user.click(screen.getByRole("button", { name: "Validate" }));
     expect(await screen.findByText("Repository boundary confirmed")).toBeInTheDocument();
-    expect(screen.getAllByText("agentbus-payment-demo/")).toHaveLength(3);
+    expect(screen.getAllByText("syndra-payment-demo/")).toHaveLength(3);
     const manifest = screen.getByRole("region", { name: /pre-launch execution scope/i });
     expect(manifest).toHaveTextContent("BranchNot exposed by validation API");
     expect(manifest).toHaveTextContent("Git statusRepository boundary valid; status not reported");
@@ -151,8 +151,8 @@ describe("Studio pages", () => {
       commit_changes: false,
       create_pr: false,
       deterministic: { profile: "payment-safety" },
-      tags: ["studio", "payment-safety", "razorpay-demo"],
-      metadata: { entrypoint: "agentbus-studio", demo: "payment-safety" }
+      tags: ["studio", "payment-safety", "payment-demo"],
+      metadata: { entrypoint: "syndra-studio", demo: "payment-safety" }
     }));
     expect(window.location.hash).toBe("#/runs/run-payment-safe-004");
   });
@@ -167,7 +167,7 @@ describe("Studio pages", () => {
 
     const workspace = screen.getByLabelText("Absolute workspace");
     await waitFor(() => expect(workspace).toHaveFocus());
-    await user.type(screen.getByLabelText(/what should agentbus change/i), "Repair bounded behavior");
+    await user.type(screen.getByLabelText(/what should syndra change/i), "Repair bounded behavior");
     await user.type(workspace, "C:\\work\\bounded-repo");
     expect(screen.getByRole("button", { name: "Launch execution" })).toBeDisabled();
     expect(screen.getByText(/live provider consent is required/i)).toBeInTheDocument();

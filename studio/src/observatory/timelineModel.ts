@@ -127,7 +127,7 @@ function nodeForSpan(bundle: RunBundle, spanType: string, taskId?: string | null
 }
 
 function actorFromType(eventType: string): string {
-  return humanize(eventType.split(/[.:]/, 1)[0] || "AgentBus");
+  return humanize(eventType.split(/[.:]/, 1)[0] || "Syndra");
 }
 
 function payloadStatus(payload?: Record<string, unknown>): string | undefined {

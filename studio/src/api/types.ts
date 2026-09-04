@@ -1,1 +1,1 @@
-export type * from "@agentbus/protocol";
+export type * from "@syndra/protocol";
