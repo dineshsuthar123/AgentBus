@@ -41,7 +41,7 @@ def test_public_issue_forms_cover_required_support_routes() -> None:
     ):
         assert (templates / name).is_file()
     bug = (templates / "bug.yml").read_text(encoding="utf-8")
-    for field in ("AgentBus version", "Operating system", "Python version"):
+    for field in ("Syndra version", "Operating system", "Python version"):
         assert field in bug
     assert "Never include API keys" in bug
     config = (templates / "config.yml").read_text(encoding="utf-8")
@@ -63,11 +63,11 @@ def test_security_and_pull_request_guidance_forbid_sensitive_artifacts() -> None
 def test_release_checklist_matches_executable_public_beta_gates() -> None:
     checklist = (ROOT / "RELEASE_CHECKLIST.md").read_text(encoding="utf-8")
     for command in (
-        "python -m agentbus.product_acceptance",
-        "python -m agentbus.beta_acceptance",
-        "python -m agentbus.control.acceptance",
-        "python -m agentbus.release_security",
-        "agentbus release-check --full",
+        "python -m syndra.product_acceptance",
+        "python -m syndra.beta_acceptance",
+        "python -m syndra.control.acceptance",
+        "python -m syndra.release_security",
+        "syndra release-check --full",
         "npm run test:product",
         "npm run package:audit",
     ):
@@ -102,21 +102,21 @@ def test_v07_rc_checklist_covers_evidence_and_publication_hold() -> None:
 
     for command in (
         "python -m pytest",
-        "python -m compileall agentbus",
-        "python -m agentbus.rc_acceptance",
-        "python -m agentbus.eval run --suite release-offline",
+        "python -m compileall syndra agentbus",
+        "python -m syndra.rc_acceptance",
+        "python -m syndra.eval run --suite release-offline",
         "npm run protocol:check",
         "npm run test:integration",
         "npm run package:audit",
-        "agentbus migrate verify",
-        "agentbus upgrade-check --json",
-        "python -m agentbus.release_packaging",
-        "python -m agentbus.release_security",
-        "agentbus validate reliability --json",
-        "agentbus benchmark all",
-        "agentbus benchmark index-scale",
-        "agentbus support-bundle",
-        "agentbus release-check --full",
+        "syndra migrate verify",
+        "syndra upgrade-check --json",
+        "python -m syndra.release_packaging",
+        "python -m syndra.release_security",
+        "syndra validate reliability --json",
+        "syndra benchmark all",
+        "syndra benchmark index-scale",
+        "syndra support-bundle",
+        "syndra release-check --full",
     ):
         assert command in checklist
 

@@ -9,8 +9,8 @@ permissions:
   contents: read
 
 env:
-  AGENTBUS_PROVIDER: deterministic
-  AGENTBUS_ENABLE_PROVIDER_FALLBACK: "false"
+  SYNDRA_PROVIDER: deterministic
+  SYNDRA_ENABLE_PROVIDER_FALLBACK: "false"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
 jobs:
@@ -40,7 +40,7 @@ jobs:
       - name: Install development dependencies
         run: python -m pip install -e ".[dev,ide]"
       - name: Compile package
-        run: python -m compileall -q agentbus
+        run: python -m compileall -q syndra agentbus
       - name: Run full test suite
         run: python -m pytest
       - name: Check patch whitespace
@@ -60,9 +60,9 @@ jobs:
       - name: Install development dependencies
         run: python -m pip install -e ".[dev,ide]"
       - name: Compile package
-        run: python -m compileall -q agentbus
+        run: python -m compileall -q syndra agentbus
       - name: Run deterministic core evaluation
-        run: python -m agentbus.eval run --suite core-offline --variant durable-parallel-fake
+        run: python -m syndra.eval run --suite core-offline --variant durable-parallel-fake
       - name: Check patch whitespace
         run: git diff --check
 
@@ -84,12 +84,12 @@ jobs:
       - name: Install development dependencies
         run: python -m pip install -e ".[dev,ide]"
       - name: Compile package
-        run: python -m compileall -q agentbus
+        run: python -m compileall -q syndra agentbus
       - name: Run full test suite
         run: python -m pytest
       - name: Run deterministic core evaluation
         if: matrix.python == '3.12'
-        run: python -m agentbus.eval run --suite core-offline --variant durable-parallel-fake
+        run: python -m syndra.eval run --suite core-offline --variant durable-parallel-fake
       - name: Check patch whitespace
         run: git diff --check
 
@@ -112,7 +112,7 @@ jobs:
           python -m build --no-isolation --outdir dist-two
       - name: Audit package contents and reproducibility
         run: >-
-          python -m agentbus.release_packaging
+          python -m syndra.release_packaging
           dist-one/*.whl dist-one/*.tar.gz
           --root . --compare-dir dist-two
       - name: Verify distribution smoke contract
@@ -142,7 +142,7 @@ jobs:
       - name: Install offline acceptance prerequisites
         run: python -m pip install -e ".[dev,ide,mcp]"
       - name: Run wheel-installed product acceptance
-        run: python -m agentbus.product_acceptance --repeat 2
+        run: python -m syndra.product_acceptance --repeat 2
       - name: Check patch whitespace
         run: git diff --check
 
@@ -160,7 +160,7 @@ jobs:
       - name: Install offline RC prerequisites
         run: python -m pip install -e ".[dev,ide,mcp]"
       - name: Run local release-candidate acceptance
-        run: python -m agentbus.rc_acceptance
+        run: python -m syndra.rc_acceptance
       - name: Check patch whitespace
         run: git diff --check
 
@@ -186,7 +186,7 @@ jobs:
       - name: Install control-plane dependencies
         run: python -m pip install -e ".[dev,ide,mcp]"
       - name: Run true-offline control lifecycle
-        run: python -m agentbus.control.acceptance
+        run: python -m syndra.control.acceptance
       - name: Check patch whitespace
         run: git diff --check
 
@@ -239,7 +239,7 @@ jobs:
           tests/test_runtime_intelligence.py
       - name: Run deterministic intelligence evaluation
         run: >-
-          python -m agentbus.eval run
+          python -m syndra.eval run
           --suite repository-intelligence
           --variant deterministic
       - name: Check patch whitespace
@@ -481,7 +481,7 @@ jobs:
           tests/test_worktree_stress.py
       - name: Run medium synthetic repository benchmark
         run: >-
-          python -m agentbus.cli benchmark index-scale
+          python -m syndra.cli benchmark index-scale
           --size medium --iterations 1 --json
       - name: Check patch whitespace
         run: git diff --check
@@ -505,7 +505,7 @@ jobs:
           tests/test_defensive_security_scorecard.py
           tests/test_release_security.py
       - name: Audit release inputs and controlled local boundaries
-        run: python -m agentbus.release_security
+        run: python -m syndra.release_security
       - name: Check patch whitespace
         run: git diff --check
 
@@ -529,14 +529,14 @@ jobs:
           tests/test_performance_scorecard.py
       - name: Capture local performance baseline
         run: >-
-          python -m agentbus.cli benchmark all
+          python -m syndra.cli benchmark all
           --files 20 --iterations 1
-          --output "${{ runner.temp }}/agentbus-performance-baseline.json" --json
+          --output "${{ runner.temp }}/syndra-performance-baseline.json" --json
       - name: Compare local performance smoke
         run: >-
-          python -m agentbus.cli benchmark all
+          python -m syndra.cli benchmark all
           --files 20 --iterations 1
-          --baseline "${{ runner.temp }}/agentbus-performance-baseline.json" --json
+          --baseline "${{ runner.temp }}/syndra-performance-baseline.json" --json
       - name: Check patch whitespace
         run: git diff --check
 
@@ -714,8 +714,8 @@ jobs:
         working-directory: extensions/vscode
         run: npm ci
       - name: Run complete public beta acceptance
-        run: python -m agentbus.beta_acceptance
+        run: python -m syndra.beta_acceptance
       - name: Run non-publishing release readiness checks
-        run: python -m agentbus.cli release-check --fast
+        run: python -m syndra.cli release-check --fast
       - name: Check patch whitespace
         run: git diff --check
