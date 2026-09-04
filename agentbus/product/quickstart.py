@@ -25,10 +25,10 @@ from agentbus.runtime.verifier import Verifier
 from agentbus.security.redaction import redact_text
 
 
-_OWNER_FILE = ".agentbus-quickstart-owner.json"
-_TEMP_PREFIX = "agentbus-quickstart-"
-_TASK = "Create and verify the deterministic AgentBus calculator."
-_EXPECTED_FILES = ("agentbus_result.py", "test_agentbus_result.py")
+_OWNER_FILE = ".syndra-quickstart-owner.json"
+_TEMP_PREFIX = "syndra-quickstart-"
+_TASK = "Create and verify the deterministic Syndra calculator."
+_EXPECTED_FILES = ("syndra_result.py", "test_syndra_result.py")
 
 
 @dataclass(frozen=True)
@@ -153,11 +153,11 @@ def run_quickstart(
         product_error = as_product_error(
             exc,
             category=_failure_category(steps),
-            message="AgentBus quickstart did not complete.",
+            message="Syndra quickstart did not complete.",
             likely_cause="A required local quickstart step failed.",
             recommended_action=(
-                "Run `agentbus doctor`, address the reported local issue, and retry "
-                "`agentbus quickstart`."
+                "Run `syndra doctor`, address the reported local issue, and retry "
+                "`syndra quickstart`."
             ),
             docs_topic="getting-started/quickstart",
         )
@@ -201,7 +201,7 @@ def run_quickstart(
                             "temporary directory."
                         ),
                         recommended_action=(
-                            "Inspect the reported demo path. AgentBus intentionally left it "
+                            "Inspect the reported demo path. Syndra intentionally left it "
                             "in place rather than deleting an uncertain target."
                         ),
                         docs_topic="getting-started/quickstart",
@@ -267,9 +267,9 @@ def _run_step(
 
 def _validate_environment() -> str:
     if sys.version_info < (3, 11):
-        raise RuntimeError("AgentBus quickstart requires Python 3.11 or newer.")
+        raise RuntimeError("Syndra quickstart requires Python 3.11 or newer.")
     if shutil.which("git") is None:
-        raise RuntimeError("Git is required for the AgentBus quickstart.")
+        raise RuntimeError("Git is required for the Syndra quickstart.")
     version = _git(["--version"], Path.cwd())
     return f"Python {sys.version_info.major}.{sys.version_info.minor}; {version}."
 
@@ -287,7 +287,7 @@ def _create_repository(parent: Path, owner_token: str) -> Path:
     ).resolve()
     marker = {
         "schema": 1,
-        "owner": "agentbus-quickstart",
+        "owner": "syndra-quickstart",
         "token": owner_token,
         "root": str(container),
     }
@@ -307,7 +307,7 @@ def _create_repository(parent: Path, owner_token: str) -> Path:
         newline="\n",
     )
     (repository / "README.md").write_text(
-        "# AgentBus Quickstart\n\nA temporary offline demonstration repository.\n",
+        "# Syndra Quickstart\n\nA temporary offline demonstration repository.\n",
         encoding="utf-8",
         newline="\n",
     )
@@ -341,13 +341,13 @@ def _create_repository(parent: Path, owner_token: str) -> Path:
             "-c",
             "commit.gpgSign=false",
             "-c",
-            "user.name=AgentBus Quickstart",
+            "user.name=Syndra Quickstart",
             "-c",
-            "user.email=quickstart@agentbus.invalid",
+            "user.email=quickstart@syndra.invalid",
             "commit",
             "-q",
             "-m",
-            "chore: initialize AgentBus quickstart",
+            "chore: initialize Syndra quickstart",
         ],
         repository,
     )
@@ -448,7 +448,7 @@ def _remove_owned_container(
     marker = json.loads(marker_path.read_text(encoding="utf-8"))
     if marker != {
         "schema": 1,
-        "owner": "agentbus-quickstart",
+        "owner": "syndra-quickstart",
         "token": owner_token,
         "root": str(resolved),
     }:

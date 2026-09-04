@@ -173,9 +173,9 @@ class AgentBusMcpServer:
                 "protocolVersion": negotiated,
                 "capabilities": {"tools": {"listChanged": False}},
                 "serverInfo": {
-                    "name": "agentbus-control",
+                    "name": "syndra-control",
                     "version": "0.3",
-                    "description": "Constrained authenticated AgentBus control tools.",
+                    "description": "Constrained authenticated Syndra control tools.",
                 },
             },
         )
@@ -194,7 +194,7 @@ class AgentBusMcpServer:
             return _result(
                 request_id,
                 _tool_result(
-                    {"error": "The requested AgentBus MCP tool is not exposed."},
+                    {"error": "The requested Syndra MCP tool is not exposed."},
                     is_error=True,
                 ),
             )
@@ -211,7 +211,7 @@ class AgentBusMcpServer:
             message = (
                 exc.safe_message
                 if isinstance(exc, ControlPlaneError)
-                else "The AgentBus control operation failed safely."
+                else "The Syndra control operation failed safely."
             )
             result = _tool_result(
                 {"error": message},
@@ -219,7 +219,7 @@ class AgentBusMcpServer:
             )
         if _encoded_size(result) > MAX_AGENTBUS_MCP_RESPONSE_BYTES:
             result = _tool_result(
-                {"error": "The AgentBus MCP tool result exceeded its output limit."},
+                {"error": "The Syndra MCP tool result exceeded its output limit."},
                 is_error=True,
             )
         return _result(request_id, result)
@@ -232,7 +232,7 @@ class AgentBusMcpServer:
         return {
             "agentbus.run.inspect": _ServerTool(
                 "agentbus.run.inspect",
-                "Inspect bounded metadata for one AgentBus run.",
+                "Inspect bounded metadata for one Syndra run.",
                 run_schema,
                 lambda value: self.query.run_summary(
                     self.query.get_run(value["run_id"])
@@ -241,14 +241,14 @@ class AgentBusMcpServer:
             ),
             "agentbus.run.tasks": _ServerTool(
                 "agentbus.run.tasks",
-                "List bounded task metadata for one AgentBus run.",
+                "List bounded task metadata for one Syndra run.",
                 run_schema,
                 lambda value: self.query.tasks(value["run_id"]).model_dump(mode="json"),
                 True,
             ),
             "agentbus.run.report": _ServerTool(
                 "agentbus.run.report",
-                "Read the safe bounded durable report for one AgentBus run.",
+                "Read the safe bounded durable report for one Syndra run.",
                 run_schema,
                 lambda value: self.query.report(value["run_id"]).model_dump(mode="json"),
                 True,
@@ -300,7 +300,7 @@ class AgentBusMcpServer:
             ),
             "agentbus.run.cancel": _ServerTool(
                 "agentbus.run.cancel",
-                "Request cooperative cancellation for one AgentBus run.",
+                "Request cooperative cancellation for one Syndra run.",
                 _object_schema(
                     {
                         "run_id": {
@@ -396,9 +396,9 @@ def _tool_result(payload: Any, *, is_error: bool) -> dict[str, Any]:
             {
                 "type": "text",
                 "text": (
-                    "AgentBus operation failed safely."
+                    "Syndra operation failed safely."
                     if is_error
-                    else "AgentBus operation completed."
+                    else "Syndra operation completed."
                 ),
             }
         ],

@@ -65,7 +65,7 @@ def start_daemon(
         return DaemonStartResult(compatible[-1], started=False, log_path=log_path)
     if active:
         raise RuntimeError(
-            "Another active AgentBus daemon is registered for different state or protocol. "
+            "Another active Syndra daemon is registered for different state or protocol. "
             "Stop it explicitly before starting a replacement."
         )
     timeout = config.daemon_idle_timeout_seconds if idle_timeout is None else idle_timeout
@@ -81,7 +81,7 @@ def start_daemon(
     command = [
         sys.executable,
         "-m",
-        "agentbus.cli",
+        "syndra.cli",
         "serve",
         "--json-ready",
         "--registry-path",
@@ -102,7 +102,7 @@ def start_daemon(
     diagnostic = tempfile.TemporaryFile(mode="w+b")
     try:
         child_environment = os.environ.copy()
-        child_environment["AGENTBUS_DAEMON_STARTUP_DIAGNOSTICS"] = "1"
+        child_environment["SYNDRA_DAEMON_STARTUP_DIAGNOSTICS"] = "1"
         process = subprocess.Popen(
             command,
             cwd=config.workspace_path,
@@ -145,7 +145,7 @@ def start_daemon(
             detail = _read_startup_diagnostic(diagnostic)
             _append_lifecycle_log(log_path, "start_failed", pid=process.pid)
             message = (
-                "AgentBus daemon did not become ready. Run `agentbus doctor` "
+                "Syndra daemon did not become ready. Run `syndra doctor` "
                 "and verify the ide extra."
             )
             if detail:
@@ -194,7 +194,7 @@ def stop_daemon(
         timeout_seconds=timeout,
     )
     if not exited:
-        raise RuntimeError("Owned AgentBus daemon did not exit before the timeout.")
+        raise RuntimeError("Owned Syndra daemon did not exit before the timeout.")
     log_path = Path(entry.log_path) if entry.log_path else Path(entry.state_database).parent / "logs" / "daemon.log"
     _append_lifecycle_log(log_path, "stopped", daemon_id=daemon_id, pid=entry.pid)
     return daemon_id

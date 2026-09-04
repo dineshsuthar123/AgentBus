@@ -878,11 +878,13 @@ def _write_distribution_pair(
     include_runtime: bool = False,
 ) -> tuple[Path, Path]:
     root.mkdir(parents=True)
-    wheel = root / f"agentbus-{__version__}-py3-none-any.whl"
-    sdist = root / f"agentbus-{__version__}.tar.gz"
-    dist_info = f"agentbus-{__version__}.dist-info"
+    wheel = root / f"syndra-{__version__}-py3-none-any.whl"
+    sdist = root / f"syndra-{__version__}.tar.gz"
+    dist_info = f"syndra-{__version__}.dist-info"
     metadata = _package_metadata()
     entries = {
+        "syndra/__init__.py": f'__version__ = "{__version__}"\n'.encode(),
+        "syndra/py.typed": b"",
         "agentbus/__init__.py": f'__version__ = "{__version__}"\n'.encode(),
         "agentbus/py.typed": b"",
         f"{dist_info}/METADATA": metadata,
@@ -890,6 +892,8 @@ def _write_distribution_pair(
         f"{dist_info}/licenses/LICENSE": b"MIT\n",
         f"{dist_info}/entry_points.txt": (
             b"[console_scripts]\n"
+            b"syndra = syndra.cli:main\n"
+            b"syndra-eval = syndra.eval:main\n"
             b"agentbus = agentbus.cli:main\n"
             b"agentbus-eval = agentbus.eval:main\n"
         ),
@@ -902,15 +906,17 @@ def _write_distribution_pair(
         for name, content in entries.items():
             archive.writestr(name, content)
 
-    source_root = f"agentbus-{__version__}"
+    source_root = f"syndra-{__version__}"
     source_entries = {
         f"{source_root}/LICENSE": b"MIT\n",
         f"{source_root}/MANIFEST.in": b"include LICENSE\n",
         f"{source_root}/PKG-INFO": metadata,
-        f"{source_root}/README.md": b"# AgentBus\n",
+        f"{source_root}/README.md": b"# Syndra\n",
+        f"{source_root}/syndra/__init__.py": entries["syndra/__init__.py"],
+        f"{source_root}/syndra/py.typed": b"",
         f"{source_root}/agentbus/__init__.py": entries["agentbus/__init__.py"],
         f"{source_root}/agentbus/py.typed": b"",
-        f"{source_root}/pyproject.toml": b"[project]\nname='agentbus'\n",
+        f"{source_root}/pyproject.toml": b"[project]\nname='syndra'\n",
     }
     if include_runtime:
         source_entries[f"{source_root}/agentbus/runtime.db"] = entries[
@@ -928,7 +934,7 @@ def _write_distribution_pair(
 def _package_metadata() -> bytes:
     lines = [
         "Metadata-Version: 2.4",
-        "Name: agentbus",
+        "Name: syndra",
         f"Version: {__version__}",
         "Requires-Python: >=3.11",
         *(
@@ -959,7 +965,7 @@ _VSIX_REQUIRED = frozenset(
         "extension.vsixmanifest",
         "extension/LICENSE.txt",
         "extension/readme.md",
-        "extension/media/agentbus.svg",
+        "extension/media/syndra.svg",
         "extension/out/extension.js",
         "extension/package.json",
     }
@@ -978,13 +984,13 @@ _VSIX_FORBIDDEN = tuple(
         r"(^|/)\.env(?:\.|$)",
         r"\.(?:db|log|pem|pfx|p12|sqlite|sqlite3|pyc|pyo|ts|map)$",
         r"(^|/)\.vscode-test/",
-        r"(^|/)(?:\.agentbus|\.venv|build|dist|runs|traces|worktrees|evaluation-output)/",
+        r"(^|/)(?:\.syndra|\.agentbus|\.venv|build|dist|runs|traces|worktrees|evaluation-output)/",
         r"(^|/)__pycache__/",
         r"(^|/)src/",
         r"(^|/)tests?/",
         r"(^|/).*profile.*/",
-        r"(^|/)agentbus-support-.*\.zip$",
-        r"(^|/)agentbus-vscode\.vsix$",
+        r"(^|/)(?:syndra|agentbus)-support-.*\.zip$",
+        r"(^|/)(?:syndra|agentbus)-vscode\.vsix$",
     )
 )
 _VSIX_SECRET_PATTERNS = (
@@ -998,11 +1004,11 @@ _VSIX_SECRET_PATTERNS = (
 
 def _write_vsix(path: Path, *, include_source: bool = False) -> None:
     package = {
-        "name": "agentbus-vscode",
+        "name": "syndra-vscode",
         "version": "0.6.0-beta.1",
         "private": True,
         "main": "./out/extension.js",
-        "agentbusCompatibility": {
+        "syndraCompatibility": {
             "python": ">=0.6.0b1,<0.7.0",
             "controlProtocol": "1.0",
             "stateSchema": 6,
@@ -1012,8 +1018,8 @@ def _write_vsix(path: Path, *, include_source: bool = False) -> None:
         "[Content_Types].xml": "<Types />\n",
         "extension.vsixmanifest": '<PackageManifest Version="0.6.0-beta.1" />\n',
         "extension/LICENSE.txt": "MIT\n",
-        "extension/readme.md": "# AgentBus\n",
-        "extension/media/agentbus.svg": "<svg />\n",
+        "extension/readme.md": "# Syndra\n",
+        "extension/media/syndra.svg": "<svg />\n",
         "extension/out/extension.js": "exports.activate = () => {};\n",
         "extension/package.json": json.dumps(package, sort_keys=True),
     }
@@ -1092,13 +1098,13 @@ def _audit_vsix(path: Path) -> tuple[str, ...]:
             if not isinstance(package, dict):
                 findings.append("invalid VSIX package metadata")
             else:
-                if package.get("name") != "agentbus-vscode":
+                if package.get("name") != "syndra-vscode":
                     findings.append("unexpected VSIX package name")
                 if package.get("main") != "./out/extension.js":
                     findings.append("unsafe VSIX entry point")
                 if package.get("private") is not True:
                     findings.append("VSIX publication guard missing")
-                compatibility = package.get("agentbusCompatibility")
+                compatibility = package.get("syndraCompatibility")
                 if compatibility != {
                     "python": ">=0.6.0b1,<0.7.0",
                     "controlProtocol": "1.0",

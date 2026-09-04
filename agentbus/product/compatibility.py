@@ -37,7 +37,7 @@ class CompatibilityManifest:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "package": "agentbus",
+            "package": "syndra",
             "version": self.package_version,
             "protocols": {
                 "control": self.control_protocol,
@@ -73,9 +73,11 @@ def extension_package_metadata(path: str | Path) -> dict[str, Any]:
         raise ValueError(f"Unable to read VS Code extension metadata: {package_path}") from exc
     if not isinstance(document, dict):
         raise ValueError("VS Code extension metadata must be a JSON object")
-    compatibility = document.get("agentbusCompatibility")
+    compatibility = document.get("syndraCompatibility")
     if not isinstance(compatibility, dict):
-        raise ValueError("VS Code extension metadata is missing agentbusCompatibility")
+        compatibility = document.get("agentbusCompatibility")
+    if not isinstance(compatibility, dict):
+        raise ValueError("VS Code extension metadata is missing syndraCompatibility")
     return {
         "version": str(document.get("version", "")),
         "python": str(compatibility.get("python", "")),

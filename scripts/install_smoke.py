@@ -22,50 +22,65 @@ def main() -> int:
     args = parser.parse_args()
     wheel = Path(args.wheel).expanduser().resolve(strict=True)
     if wheel.is_dir():
-        candidates = sorted(wheel.glob("agentbus-*.whl"))
+        candidates = sorted(wheel.glob("syndra-*.whl"))
         if len(candidates) != 1:
-            parser.error("wheel directory must contain exactly one AgentBus wheel")
+            parser.error("wheel directory must contain exactly one Syndra wheel")
         wheel = candidates[0]
     try:
-        with tempfile.TemporaryDirectory(prefix="agentbus-install-smoke-") as raw_root:
+        with tempfile.TemporaryDirectory(prefix="syndra-install-smoke-") as raw_root:
             root = Path(raw_root)
             environment = root / "venv"
             venv.EnvBuilder(with_pip=True).create(environment)
             python = _venv_executable(environment, "python")
+            syndra = _venv_executable(environment, "syndra")
+            syndra_evaluation = _venv_executable(environment, "syndra-eval")
             agentbus = _venv_executable(environment, "agentbus")
-            evaluation = _venv_executable(environment, "agentbus-eval")
+            legacy_evaluation = _venv_executable(environment, "agentbus-eval")
             _run([str(python), "-m", "pip", "install", str(wheel)], cwd=root)
             imported = _run(
                 [
                     str(python),
                     "-c",
-                    "import agentbus; print(agentbus.__version__)",
+                    "import agentbus, syndra; "
+                    "assert agentbus.__version__ == syndra.__version__; "
+                    "print(syndra.__version__)",
                 ],
                 cwd=root,
             ).strip()
             if imported != __version__:
                 raise RuntimeError("Installed package version did not match the wheel build.")
+            _run([str(syndra), "--version"], cwd=root, contains=__version__)
+            _run([str(syndra), "--help"], cwd=root, contains="release-report")
             _run([str(agentbus), "--version"], cwd=root, contains=__version__)
-            _run([str(agentbus), "--help"], cwd=root, contains="release-report")
+            _run([str(agentbus), "--help"], cwd=root, contains="Syndra")
             repository = root / "repository"
             repository.mkdir()
             (repository / "README.md").write_text("# install smoke\n", encoding="utf-8")
             _git(repository, "init", "-q")
-            _git(repository, "config", "user.name", "AgentBus Install Smoke")
-            _git(repository, "config", "user.email", "smoke@agentbus.invalid")
+            _git(repository, "config", "user.name", "Syndra Install Smoke")
+            _git(repository, "config", "user.email", "smoke@syndra.invalid")
             _git(repository, "add", "README.md")
             _git(repository, "commit", "-q", "-m", "baseline")
             _run(
-                [str(agentbus), "doctor", "--workspace", str(repository), "--json"],
+                [str(syndra), "doctor", "--workspace", str(repository), "--json"],
                 cwd=root,
                 contains='"network_used": false',
             )
-            _run([str(evaluation), "list", "--json"], cwd=root, contains="release-offline")
+            _run(
+                [str(syndra_evaluation), "list", "--json"],
+                cwd=root,
+                contains="release-offline",
+            )
+            _run(
+                [str(legacy_evaluation), "list", "--json"],
+                cwd=root,
+                contains="release-offline",
+            )
             evaluation_summary = "skipped by explicit flag"
             if not args.skip_evaluation:
                 output = _run(
                     [
-                        str(evaluation),
+                        str(syndra_evaluation),
                         "--results-dir",
                         str(root / "evaluation-results"),
                         "run",

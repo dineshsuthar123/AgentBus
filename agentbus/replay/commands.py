@@ -24,7 +24,7 @@ from agentbus.trace.retention import TraceRetentionPolicy
 
 
 def trace_command(arguments: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="agentbus trace")
+    parser = argparse.ArgumentParser(prog="syndra trace")
     commands = parser.add_subparsers(dest="trace_command", required=True)
 
     listing = commands.add_parser("list", help="List persisted traces.")
@@ -140,7 +140,7 @@ def trace_command(arguments: list[str]) -> int:
 
 
 def replay_command(arguments: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="agentbus replay")
+    parser = argparse.ArgumentParser(prog="syndra replay")
     parser.add_argument("target", help="Run ID, trace ID, or .agentbus-trace archive.")
     parser.add_argument(
         "--mode",
@@ -240,7 +240,7 @@ def replay_command(arguments: list[str]) -> int:
 
 
 def compare_command(arguments: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="agentbus compare")
+    parser = argparse.ArgumentParser(prog="syndra compare")
     parser.add_argument("left", help="Left run ID or trace ID.")
     parser.add_argument("right", help="Right run ID or trace ID.")
     _common(parser)

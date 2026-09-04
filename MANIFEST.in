@@ -9,6 +9,7 @@ include SUPPORT.md
 recursive-include docs *.md
 recursive-include examples *.md *.py .gitignore
 recursive-exclude * __pycache__ *.py[cod]
+prune .syndra
 prune .agentbus
 prune .git
 prune .pytest_cache

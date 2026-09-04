@@ -194,6 +194,7 @@ _SECRET_NAMES = {
 }
 _SECRET_SUFFIXES = {".key", ".pem", ".p12", ".pfx", ".jks", ".keystore"}
 _FORBIDDEN_PARTS = {
+    ".syndra",
     ".agentbus",
     ".aws",
     ".azure",

@@ -40,6 +40,7 @@ class GeneratedArtifactPolicy:
         "target",
         "build",
         ".gradle",
+        ".syndra",
         ".agentbus",
         "runs",
     }

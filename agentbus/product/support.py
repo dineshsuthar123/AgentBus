@@ -244,7 +244,7 @@ def _index_diagnostics(config: AgentBusConfig) -> dict[str, Any]:
 def _destination(value: str | Path | None) -> Path:
     if value is None:
         timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-        candidate = Path.cwd() / f"agentbus-support-{timestamp}.zip"
+        candidate = Path.cwd() / f"syndra-support-{timestamp}.zip"
     else:
         candidate = Path(value).expanduser()
     candidate = candidate.absolute()

@@ -13,17 +13,17 @@ __version__ = runpy.run_path(str(ROOT / "agentbus" / "_version.py"))["__version_
 
 
 FORBIDDEN = re.compile(
-    r"(^|/)(\.env|\.agentbus|runs|__pycache__)(/|$)|"
+    r"(^|/)(\.env|\.syndra|\.agentbus|runs|__pycache__)(/|$)|"
     r"\.(db|sqlite3?|jsonl|pyc)$",
     re.IGNORECASE,
 )
 
 
 def audit(dist_dir: Path) -> dict:
-    wheels = sorted(dist_dir.glob("agentbus-*.whl"))
-    sdists = sorted(dist_dir.glob("agentbus-*.tar.gz"))
+    wheels = sorted(dist_dir.glob("syndra-*.whl"))
+    sdists = sorted(dist_dir.glob("syndra-*.tar.gz"))
     if len(wheels) != 1 or len(sdists) != 1:
-        raise ValueError("Expected exactly one AgentBus wheel and one sdist.")
+        raise ValueError("Expected exactly one Syndra wheel and one sdist.")
     wheel = wheels[0]
     sdist = sdists[0]
     with ZipFile(wheel) as archive:
@@ -48,18 +48,27 @@ def audit(dist_dir: Path) -> dict:
             "Runtime or sensitive artifacts found in distribution: "
             + ", ".join(forbidden[:20])
         )
+    if "Name: syndra" not in metadata:
+        raise ValueError("Wheel metadata package name is not syndra.")
     if f"Version: {__version__}" not in metadata:
-        raise ValueError("Wheel metadata version does not match AgentBus runtime.")
-    if "agentbus = agentbus.cli:main" not in entry_points:
-        raise ValueError("Wheel is missing the agentbus console entry point.")
-    if "agentbus-eval = agentbus.eval:main" not in entry_points:
-        raise ValueError("Wheel is missing the agentbus-eval console entry point.")
+        raise ValueError("Wheel metadata version does not match Syndra runtime.")
+    for entry_point in (
+        "syndra = syndra.cli:main",
+        "syndra-eval = syndra.eval:main",
+        "agentbus = agentbus.cli:main",
+        "agentbus-eval = agentbus.eval:main",
+    ):
+        if entry_point not in entry_points:
+            raise ValueError(f"Wheel is missing console entry point: {entry_point}")
     if any(
         line.lower().startswith("requires-dist: openai") and "extra ==" not in line
         for line in metadata.splitlines()
     ):
         raise ValueError("Azure SDK must not be a mandatory core dependency.")
     required_wheel_files = {
+        "syndra/__init__.py",
+        "syndra/py.typed",
+        "agentbus/__init__.py",
         "agentbus/evaluation/real_repositories.json",
         "agentbus/evaluation/fixtures_data/python-feature/calculator.py",
     }

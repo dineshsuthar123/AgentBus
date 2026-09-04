@@ -85,7 +85,7 @@ def test_config_file_unknown_values_are_rejected(tmp_path):
     config_file = tmp_path / "config.toml"
     config_file.write_text("[agentbus]\nunknown_option = true\n", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="Unknown AgentBus config"):
+    with pytest.raises(ValueError, match="Unknown Syndra config"):
         resolve_configuration(config_file=config_file, environ={})
 
 

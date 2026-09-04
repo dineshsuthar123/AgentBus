@@ -264,7 +264,7 @@ def capture_regression_fixture(
             + "; ".join(failures)
         )
     replay_command = (
-        "agentbus replay <archive> --mode offline"
+        "syndra replay <archive> --mode offline"
         + (" --allow-source-content" if include_source_content else "")
     )
     spec = RegressionFixtureSpec(

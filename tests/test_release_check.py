@@ -168,7 +168,7 @@ def test_release_check_environment_strips_credentials_and_blocks_remote_network(
     assert "AZURE_OPENAI_API_KEY" not in environment
     assert "GITHUB_TOKEN" not in environment
     assert environment["GIT_CONFIG_KEY_0"] == "safe.directory"
-    assert environment["AGENTBUS_PROVIDER"] == "deterministic"
+    assert environment["SYNDRA_PROVIDER"] == "deterministic"
     assert environment["HTTPS_PROXY"] == "http://127.0.0.1:9"
     assert "localhost" in environment["NO_PROXY"]
 
@@ -178,7 +178,7 @@ def _release_repository(root: Path) -> Path:
         "CHANGELOG.md": "# Changelog\n\n## 0.6\n",
         "CONTRIBUTING.md": "# Contributing\n",
         "LICENSE": "MIT\n",
-        "README.md": "# AgentBus\n\n[Install](docs/getting-started/install.md)\n",
+        "README.md": "# Syndra\n\n[Install](docs/getting-started/install.md)\n",
         "RELEASE_CHECKLIST.md": "# Release checklist\n",
         "SECURITY.md": "# Security\n",
         "docs/getting-started/install.md": "# Install\n",
@@ -196,7 +196,7 @@ def _release_repository(root: Path) -> Path:
         json.dumps(
             {
                 "version": "0.6.0-beta.1",
-                "agentbusCompatibility": {
+                "syndraCompatibility": {
                     "python": ">=0.6.0b1,<0.7.0",
                     "controlProtocol": "1.0",
                     "stateSchema": 6,

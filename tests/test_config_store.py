@@ -86,7 +86,7 @@ def test_toml_renderer_round_trips_nested_product_values():
 
     rendered = render_toml(document)
 
-    assert tomllib.loads(rendered)["agentbus"] == document
+    assert tomllib.loads(rendered)["syndra"] == document
 
 
 def test_config_target_paths_are_scope_specific(tmp_path):
@@ -100,12 +100,12 @@ def test_config_target_paths_are_scope_specific(tmp_path):
     workspace = config_target_path(ConfigScope.WORKSPACE, workspace=tmp_path)
 
     expected_user = (
-        tmp_path / "roaming" / "AgentBus" / "config.toml"
+        tmp_path / "roaming" / "Syndra" / "config.toml"
         if os.name == "nt"
-        else tmp_path / "xdg" / "agentbus" / "config.toml"
+        else tmp_path / "xdg" / "syndra" / "config.toml"
     )
     assert user == expected_user
-    assert workspace == tmp_path / ".agentbus" / "config.toml"
+    assert workspace == tmp_path / ".syndra" / "config.toml"
 
 
 def test_workspace_config_target_rejects_external_directory_link(tmp_path):
@@ -114,13 +114,13 @@ def test_workspace_config_target_rejects_external_directory_link(tmp_path):
     workspace.mkdir()
     outside.mkdir()
     try:
-        (workspace / ".agentbus").symlink_to(outside, target_is_directory=True)
+        (workspace / ".syndra").symlink_to(outside, target_is_directory=True)
     except OSError:
         pytest.skip("directory symlinks are unavailable on this platform")
 
     with pytest.raises(ValueError, match="outside the workspace"):
         ensure_safe_config_target(
-            workspace / ".agentbus" / "config.toml",
+            workspace / ".syndra" / "config.toml",
             workspace=workspace,
         )
 
@@ -130,5 +130,5 @@ def test_json_configuration_is_preserved_as_json(tmp_path):
     set_config_value(path, "max_steps", 8)
 
     assert json.loads(path.read_text(encoding="utf-8")) == {
-        "agentbus": {"max_steps": 8}
+        "syndra": {"max_steps": 8}
     }

@@ -76,13 +76,13 @@ def test_deterministic_coder_sequence_is_scoped_and_repeatable():
 
     assert first.request_id == "det-coder-0001"
     assert first.json_value()["tool_call"]["arguments"]["path"] == (
-        "agentbus_result.py"
+        "syndra_result.py"
     )
     assert second.json_value()["tool_call"]["arguments"]["path"] == (
-        "test_agentbus_result.py"
+        "test_syndra_result.py"
     )
     assert other_task.json_value()["tool_call"]["arguments"]["path"] == (
-        "agentbus_secondary.py"
+        "syndra_secondary.py"
     )
     assert first.usage.total_tokens == (
         first.usage.input_tokens + first.usage.output_tokens

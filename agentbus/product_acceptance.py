@@ -15,8 +15,8 @@ from agentbus.product.acceptance import (
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="python -m agentbus.product_acceptance",
-        description="Run the offline AgentBus clean-install product acceptance.",
+        prog="python -m syndra.product_acceptance",
+        description="Run the offline Syndra clean-install product acceptance.",
     )
     parser.add_argument("--root", default=".")
     parser.add_argument("--repeat", type=int, default=1)
@@ -48,7 +48,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(payload, indent=2, sort_keys=True))
         else:
             print(
-                "AgentBus repeated clean-install product acceptance: "
+                "Syndra repeated clean-install product acceptance: "
                 + ("PASS" if repeated.ok else "FAIL")
             )
             for index, report in enumerate(repeated.reports, start=1):
@@ -75,7 +75,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         print(
-            "AgentBus clean-install product acceptance: "
+            "Syndra clean-install product acceptance: "
             + ("PASS" if report.ok else "FAIL")
         )
         for step in report.steps:

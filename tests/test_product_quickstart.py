@@ -20,11 +20,11 @@ def test_quickstart_runs_complete_offline_product_path(tmp_path):
     assert result.verifier_passed is True
     assert result.reviewer_approved is True
     assert result.changed_files == (
-        "agentbus_result.py",
-        "test_agentbus_result.py",
+        "syndra_result.py",
+        "test_syndra_result.py",
     )
-    assert (result.workspace / "agentbus_result.py").is_file()
-    assert (result.workspace / "test_agentbus_result.py").is_file()
+    assert (result.workspace / "syndra_result.py").is_file()
+    assert (result.workspace / "test_syndra_result.py").is_file()
     assert result.to_dict()["network_used"] is False
     statuses = {step.name: step.status for step in result.steps}
     assert statuses == {
@@ -53,7 +53,7 @@ def test_quickstart_removes_only_its_owned_temporary_container(tmp_path):
     assert result.cleaned is True
     assert result.workspace is not None and not result.workspace.exists()
     assert unrelated.read_text(encoding="utf-8") == "preserve me\n"
-    assert list(tmp_path.glob("agentbus-quickstart-*")) == []
+    assert list(tmp_path.glob("syndra-quickstart-*")) == []
 
 
 def test_quickstart_failure_is_sanitized_and_cleans_owned_state(tmp_path, monkeypatch):
@@ -73,7 +73,7 @@ def test_quickstart_failure_is_sanitized_and_cleans_owned_state(tmp_path, monkey
     assert result.error["category"] == "INDEX_ERROR"
     assert "secret-value" not in str(result.to_dict())
     assert unrelated.read_text(encoding="utf-8") == "preserve me\n"
-    assert list(tmp_path.glob("agentbus-quickstart-*")) == []
+    assert list(tmp_path.glob("syndra-quickstart-*")) == []
 
 
 def test_quickstart_cli_json_reports_success_and_cleanup(tmp_path, monkeypatch, capsys):
@@ -88,7 +88,7 @@ def test_quickstart_cli_json_reports_success_and_cleanup(tmp_path, monkeypatch, 
     assert payload["cleaned"] is True
     assert payload["network_used"] is False
     assert payload["changed_files"] == [
-        "agentbus_result.py",
-        "test_agentbus_result.py",
+        "syndra_result.py",
+        "test_syndra_result.py",
     ]
-    assert list(tmp_path.glob("agentbus-quickstart-*")) == []
+    assert list(tmp_path.glob("syndra-quickstart-*")) == []

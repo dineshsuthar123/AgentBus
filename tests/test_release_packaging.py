@@ -15,12 +15,14 @@ def test_pyproject_metadata_version_and_entry_points_are_release_ready():
     metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     project = metadata["project"]
 
-    assert project["name"] == "agentbus"
+    assert project["name"] == "syndra"
     assert project["dynamic"] == ["version"]
     assert metadata["tool"]["setuptools"]["dynamic"]["version"] == {
-        "attr": "agentbus.__version__"
+        "attr": "syndra.__version__"
     }
     assert project["scripts"] == {
+        "syndra": "syndra.cli:main",
+        "syndra-eval": "syndra.eval:main",
         "agentbus": "agentbus.cli:main",
         "agentbus-eval": "agentbus.eval:main",
     }
@@ -109,7 +111,7 @@ def test_package_data_contains_offline_fixtures_and_manifest():
 def test_distribution_manifest_excludes_runtime_artifacts():
     manifest = (ROOT / "MANIFEST.in").read_text(encoding="utf-8")
 
-    for path in (".agentbus", ".git", ".venv", "build", "dist", "runs"):
+    for path in (".syndra", ".agentbus", ".git", ".venv", "build", "dist", "runs"):
         assert f"prune {path}" in manifest
     assert "recursive-exclude * __pycache__ *.py[cod]" in manifest
 

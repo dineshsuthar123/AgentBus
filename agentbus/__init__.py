@@ -1,4 +1,4 @@
-"""AgentBus public package metadata."""
+"""Legacy AgentBus package compatibility for the Syndra runtime."""
 
 from agentbus._version import __version__
 

@@ -65,7 +65,7 @@ def run_upgrade_check(
         UpgradeCheck(
             name="package",
             status=UpgradeCheckStatus.OK,
-            message=f"AgentBus package {manifest.package_version} is installed.",
+            message=f"Syndra package {manifest.package_version} is installed.",
         )
     ]
     if current_python_supported():
@@ -89,13 +89,13 @@ def run_upgrade_check(
     for target in migration.targets:
         if target.state == MigrationState.NEWER:
             status = UpgradeCheckStatus.ERROR
-            action = "Use an AgentBus release compatible with this database."
+            action = "Use a Syndra release compatible with this database."
         elif target.state == MigrationState.INVALID:
             status = UpgradeCheckStatus.ERROR
-            action = "Restore the database or run `agentbus doctor`."
+            action = "Restore the database or run `syndra doctor`."
         elif target.state == MigrationState.REQUIRED:
             status = UpgradeCheckStatus.WARNING
-            action = "Review `agentbus migrate plan`, then run `agentbus migrate apply`."
+            action = "Review `syndra migrate plan`, then run `syndra migrate apply`."
         elif target.state == MigrationState.ABSENT:
             status = UpgradeCheckStatus.OPTIONAL
             action = None
@@ -128,16 +128,16 @@ def run_upgrade_check(
                 message=(
                     "; ".join(issues)
                     if issues
-                    else "VS Code extension metadata is compatible with AgentBus."
+                    else "VS Code extension metadata is compatible with Syndra."
                 ),
-                action="Install matching AgentBus Python and extension versions." if issues else None,
+                action="Install matching Syndra Python and extension versions." if issues else None,
             )
         )
     checks.append(
         UpgradeCheck(
             name="configuration",
             status=UpgradeCheckStatus.OK,
-            message="The resolved configuration is valid for this AgentBus version.",
+            message="The resolved configuration is valid for this Syndra version.",
         )
     )
     return UpgradeReport(checks=tuple(checks))

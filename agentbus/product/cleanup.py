@@ -11,6 +11,7 @@ from agentbus.config import AgentBusConfig
 from agentbus.control.registry import DaemonRegistry, process_matches
 from agentbus.execution.models import RunStatus
 from agentbus.execution.state_store import StateStore
+from agentbus.identity import discover_compatible_path
 from agentbus.intelligence.service import RepositoryIntelligenceService
 from agentbus.replay.service import TraceReplayService
 from agentbus.replay.session import ReplaySessionStatus
@@ -149,9 +150,9 @@ class RuntimeCleanup:
                 "user-created demo repositories",
             ),
             recommendations=(
-                "Use `agentbus cleanup --stale` to include terminal run logs, "
+                "Use `syndra cleanup --stale` to include terminal run logs, "
                 "stale worktrees, and terminal replay workspaces.",
-                "Use `agentbus cleanup --all-runtime-state --yes` only when you "
+                "Use `syndra cleanup --all-runtime-state --yes` only when you "
                 "intend to remove all safely identified terminal runtime artifacts.",
                 "Package uninstall does not remove local configuration or runtime state.",
             ),
@@ -375,7 +376,7 @@ class RuntimeCleanup:
                         identifier=record.worktree_id,
                         location=str(path),
                         status="protected",
-                        reason="Persisted worktree is outside the configured AgentBus root.",
+                        reason="Persisted worktree is outside the configured Syndra root.",
                     )
                 )
                 continue
@@ -423,7 +424,7 @@ class RuntimeCleanup:
                         identifier=record.worktree_id,
                         location=str(path),
                         status="removed",
-                        reason="Removed a clean, validated AgentBus worktree.",
+                        reason="Removed a clean, validated Syndra worktree.",
                     )
                 )
             except WorktreeError as exc:
@@ -450,8 +451,9 @@ class RuntimeCleanup:
             workspace = Path(run.workspace).expanduser().resolve()
             if not workspace.is_dir():
                 continue
-            replay_root = (
-                workspace.parent / ".agentbus-replays" / workspace.name
+            replay_root = discover_compatible_path(
+                workspace.parent / ".syndra-replays" / workspace.name,
+                workspace.parent / ".agentbus-replays" / workspace.name,
             ).resolve()
             component = _safe_replay_component(session.replay_id)
             candidate = (replay_root / component).resolve()
@@ -591,7 +593,7 @@ def _safe_replay_component(value: str) -> str:
 
 def _known_replay_shape(candidate: Path, replay_root: Path) -> tuple[bool, str]:
     if not _is_strict_child(candidate, replay_root):
-        return False, "Replay workspace escaped its derived AgentBus root."
+        return False, "Replay workspace escaped its derived Syndra root."
     if candidate.is_symlink() or not candidate.is_dir():
         return False, "Replay workspace is a link or is not a directory."
     allowed = {"state.db", "state.db-shm", "state.db-wal"}

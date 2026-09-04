@@ -130,13 +130,13 @@ def detect_setup_environment(
         SetupDetection(
             "ide-extra",
             importlib.util.find_spec("fastapi") is not None,
-            "IDE dependencies available." if importlib.util.find_spec("fastapi") else "Install agentbus[ide] for the control plane.",
+            "IDE dependencies available." if importlib.util.find_spec("fastapi") else "Install syndra[ide] for the control plane.",
             optional=True,
         ),
         SetupDetection(
             "mcp-extra",
             importlib.util.find_spec("httpx") is not None,
-            "MCP HTTP support available." if importlib.util.find_spec("httpx") else "Install agentbus[mcp] for HTTP MCP clients.",
+            "MCP HTTP support available." if importlib.util.find_spec("httpx") else "Install syndra[mcp] for HTTP MCP clients.",
             optional=True,
         ),
         SetupDetection(
@@ -169,11 +169,11 @@ def run_setup(
     environ: Mapping[str, str] | None = None,
 ) -> SetupResult:
     if provider not in SUPPORTED_PROVIDERS:
-        raise ValueError("Unsupported AgentBus provider: " + provider)
+        raise ValueError("Unsupported Syndra provider: " + provider)
     selected_scope = ConfigScope(scope)
     workspace_path = Path(workspace).expanduser().resolve(strict=True)
     if not workspace_path.is_dir():
-        raise ValueError("AgentBus setup workspace must be a directory")
+        raise ValueError("Syndra setup workspace must be a directory")
     target = (
         Path(config_root).expanduser().resolve() / "config.toml"
         if config_root is not None

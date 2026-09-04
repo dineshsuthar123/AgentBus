@@ -79,7 +79,7 @@ def generate_synthetic_repository(
         newline="\n",
     )
     (root / ".gitignore").write_text(
-        "__pycache__/\n*.py[cod]\n.agentbus/\n",
+        "__pycache__/\n*.py[cod]\n.syndra/\n.agentbus/\n",
         encoding="utf-8",
         newline="\n",
     )

@@ -54,7 +54,7 @@ def test_config_cli_workspace_scope_stays_in_workspace(tmp_path, capsys):
     ) == 0
     payload = json.loads(capsys.readouterr().out)
 
-    assert payload["path"] == str((workspace / ".agentbus" / "config.toml").resolve())
+    assert payload["path"] == str((workspace / ".syndra" / "config.toml").resolve())
     assert resolve_configuration(
         workspace=workspace,
         user_config_file=tmp_path / "missing.toml",
@@ -80,7 +80,7 @@ def test_config_cli_path_reports_selected_and_layer_paths(tmp_path, capsys):
     payload = json.loads(capsys.readouterr().out)
 
     assert payload["selected_scope"] == "workspace"
-    assert payload["selected_path"] == str(workspace / ".agentbus" / "config.toml")
+    assert payload["selected_path"] == str(workspace / ".syndra" / "config.toml")
     assert payload["dotenv_search"] == "disabled"
 
 

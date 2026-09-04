@@ -90,7 +90,7 @@ def as_product_error(
     category: ProductErrorCategory = ProductErrorCategory.INTERNAL_ERROR,
     message: str | None = None,
     likely_cause: str = "AgentBus could not complete the requested operation.",
-    recommended_action: str = "Run `agentbus doctor` and retry the operation.",
+    recommended_action: str = "Run `syndra doctor` and retry the operation.",
     docs_topic: str | None = "troubleshooting",
     retryable: bool = False,
 ) -> ProductError:

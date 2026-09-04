@@ -49,7 +49,7 @@ def build_json_schema() -> dict[str, Any]:
     models = sorted(_protocol_models(), key=lambda model: model.__name__)
     _, schema = models_json_schema(
         [(model, "validation") for model in models],
-        title="AgentBus Control Protocol v1",
+        title="Syndra Control Protocol v1",
     )
     schema["$id"] = "https://agentbus.invalid/protocol/agentbus-v1.schema.json"
     schema["x-agentbus-protocol-version"] = CONTROL_PROTOCOL_VERSION
@@ -179,7 +179,7 @@ def _json_text(value: dict[str, Any]) -> str:
 
 
 def _protocol_readme() -> str:
-    return """# AgentBus Control Protocol v1
+    return """# Syndra Control Protocol v1
 
 This directory is generated from the Python control-plane application and
 Pydantic transport models.
@@ -188,8 +188,8 @@ Pydantic transport models.
 - `agentbus-v1.schema.json` contains the shared transport model definitions.
 - `../extensions/vscode/src/generated/protocol.ts` is generated from the JSON Schema.
 
-Run `agentbus control-schema export` after changing protocol models. Run
-`agentbus control-schema export --check` in CI to detect stale artifacts.
+Run `syndra control-schema export` after changing protocol models. Run
+`syndra control-schema export --check` in CI to detect stale artifacts.
 
 The health endpoint is unauthenticated. Every `/api/v1` endpoint uses an opaque
 bearer token delivered once through the daemon parent-process handshake.

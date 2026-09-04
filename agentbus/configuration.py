@@ -3,11 +3,19 @@ from __future__ import annotations
 import json
 import os
 import tomllib
+import warnings
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping
 
 from agentbus.config import AgentBusConfig
+from agentbus.identity import (
+    LegacyConfigurationWarning,
+    canonical_workspace_state_path,
+    discover_compatible_path,
+    environment_value,
+    legacy_workspace_state_path,
+)
 from agentbus.security.redaction import is_sensitive_key, safe_endpoint_host
 
 if TYPE_CHECKING:
@@ -15,7 +23,7 @@ if TYPE_CHECKING:
     from agentbus.tools.protocol import ToolResourceBudget
 
 
-ENVIRONMENT_FIELDS: dict[str, str] = {
+LEGACY_ENVIRONMENT_FIELDS: dict[str, str] = {
     "AGENTBUS_MODEL": "model_name",
     "AGENTBUS_OLLAMA_URL": "ollama_url",
     "AGENTBUS_WORKSPACE": "workspace_dir",
@@ -63,6 +71,14 @@ ENVIRONMENT_FIELDS: dict[str, str] = {
     "AZURE_OPENAI_SUMMARIZER_DEPLOYMENT": "azure_openai_summarizer_deployment",
     "AZURE_OPENAI_TIMEOUT_SECONDS": "azure_openai_timeout_seconds",
     "AZURE_OPENAI_MAX_RETRIES": "azure_openai_max_retries",
+}
+ENVIRONMENT_FIELDS: dict[str, str] = {
+    (
+        variable.replace("AGENTBUS_", "SYNDRA_", 1)
+        if variable.startswith("AGENTBUS_")
+        else variable
+    ): field_name
+    for variable, field_name in LEGACY_ENVIRONMENT_FIELDS.items()
 }
 
 _BOOLEAN_FIELDS = {
@@ -173,7 +189,7 @@ def resolve_configuration(
         workspace_path = (
             Path(workspace_config_file).expanduser()
             if workspace_config_file is not None
-            else discovery_root / ".agentbus" / "config.toml"
+            else _discovered_workspace_config_path(discovery_root)
         )
         for layer, path in (("user", user_path), ("workspace", workspace_path)):
             if not path.exists():
@@ -203,16 +219,32 @@ def resolve_configuration(
         if value is None:
             continue
         if name not in values:
-            raise ValueError(f"Unknown AgentBus configuration option: {name}")
+            raise ValueError(f"Unknown Syndra configuration option: {name}")
         values[name] = value
         sources[name] = "cli"
 
     for variable, field_name in ENVIRONMENT_FIELDS.items():
-        raw = environment.get(variable)
-        if raw is None or not str(raw).strip():
+        if variable.startswith("SYNDRA_"):
+            raw, source = environment_value(variable, environment)
+        else:
+            raw = environment.get(variable)
+            source = variable if raw is not None and str(raw).strip() else None
+        if raw is None:
             continue
-        values[field_name] = _parse_environment_value(variable, field_name, str(raw))
-        sources[field_name] = f"environment:{variable}"
+        values[field_name] = _parse_environment_value(
+            source or variable,
+            field_name,
+            str(raw),
+        )
+        sources[field_name] = f"environment:{source or variable}"
+
+    if sources["state_dir"] == "default":
+        workspace_path = Path(values["workspace_dir"]).expanduser().resolve()
+        canonical_state = canonical_workspace_state_path(workspace_path)
+        legacy_state = legacy_workspace_state_path(workspace_path)
+        if legacy_state.exists() and not canonical_state.exists():
+            values["state_dir"] = str(legacy_state)
+            sources["state_dir"] = f"legacy-state:{legacy_state}"
 
     values["mcp_server_configs"] = _coerce_mcp_server_configs(
         values["mcp_server_configs"]
@@ -250,46 +282,100 @@ def _load_file(path: Path) -> dict[str, Any]:
         try:
             document = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
-            raise ValueError(f"Unable to read AgentBus JSON config: {path}") from exc
+            raise ValueError(f"Unable to read Syndra JSON config: {path}") from exc
     elif path.suffix.lower() == ".toml":
         try:
             with path.open("rb") as handle:
                 document = tomllib.load(handle)
         except (OSError, tomllib.TOMLDecodeError) as exc:
-            raise ValueError(f"Unable to read AgentBus TOML config: {path}") from exc
+            raise ValueError(f"Unable to read Syndra TOML config: {path}") from exc
     else:
-        raise ValueError("AgentBus config files must use .toml or .json")
+        raise ValueError("Syndra config files must use .toml or .json")
     if not isinstance(document, dict):
-        raise ValueError("AgentBus config must contain an object/table")
-    raw = document.get("agentbus", document)
+        raise ValueError("Syndra config must contain an object/table")
+    raw = configuration_table(document)
     if not isinstance(raw, dict):
-        raise ValueError("The 'agentbus' config section must be a table/object")
+        raise ValueError("The 'syndra' config section must be a table/object")
     allowed = {field.name for field in fields(AgentBusConfig)}
     unknown = sorted(set(raw) - allowed)
     if unknown:
-        raise ValueError("Unknown AgentBus config option(s): " + ", ".join(unknown))
+        raise ValueError("Unknown Syndra config option(s): " + ", ".join(unknown))
     sensitive = sorted(name for name in raw if is_sensitive_key(name))
     if sensitive:
         raise ValueError(
-            "AgentBus config files cannot contain credentials: "
+            "Syndra config files cannot contain credentials: "
             + ", ".join(sensitive)
         )
     return dict(raw)
 
 
+def configuration_table(document: Mapping[str, Any]) -> Mapping[str, Any]:
+    canonical = document.get("syndra")
+    legacy = document.get("agentbus")
+    if canonical is None and legacy is None:
+        return document
+    if canonical is not None and not isinstance(canonical, dict):
+        raise ValueError("The 'syndra' config section must be a table/object")
+    if legacy is not None and not isinstance(legacy, dict):
+        raise ValueError("The legacy 'agentbus' config section must be a table/object")
+    if canonical is None:
+        return legacy or {}
+    if legacy is None:
+        return canonical
+    conflicting = sorted(
+        key
+        for key in canonical.keys() & legacy.keys()
+        if canonical[key] != legacy[key]
+    )
+    if conflicting:
+        warnings.warn(
+            "Conflicting [syndra] and legacy [agentbus] values for "
+            + ", ".join(conflicting)
+            + "; [syndra] takes precedence.",
+            LegacyConfigurationWarning,
+            stacklevel=2,
+        )
+    return {**legacy, **canonical}
+
+
 def default_user_config_path(environ: Mapping[str, str] | None = None) -> Path:
+    canonical, legacy = user_config_paths(environ)
+    return discover_compatible_path(canonical, legacy)
+
+
+def canonical_user_config_path(environ: Mapping[str, str] | None = None) -> Path:
+    return user_config_paths(environ)[0]
+
+
+def user_config_paths(
+    environ: Mapping[str, str] | None = None,
+) -> tuple[Path, Path]:
     environment = os.environ if environ is None else environ
     if os.name == "nt":
         base = environment.get("APPDATA")
         root = Path(base).expanduser() if base else Path.home() / "AppData" / "Roaming"
-        return root / "AgentBus" / "config.toml"
+        return (
+            root / "Syndra" / "config.toml",
+            root / "AgentBus" / "config.toml",
+        )
     base = environment.get("XDG_CONFIG_HOME")
     root = Path(base).expanduser() if base else Path.home() / ".config"
-    return root / "agentbus" / "config.toml"
+    return (
+        root / "syndra" / "config.toml",
+        root / "agentbus" / "config.toml",
+    )
 
 
 def default_workspace_config_path(workspace: str | Path) -> Path:
-    return Path(workspace).expanduser().resolve() / ".agentbus" / "config.toml"
+    return Path(workspace).expanduser().resolve() / ".syndra" / "config.toml"
+
+
+def _discovered_workspace_config_path(workspace: str | Path) -> Path:
+    root = Path(workspace).expanduser().resolve()
+    return discover_compatible_path(
+        root / ".syndra" / "config.toml",
+        root / ".agentbus" / "config.toml",
+    )
 
 
 def _workspace_discovery_root(
@@ -300,7 +386,7 @@ def _workspace_discovery_root(
 ) -> Path:
     selected = workspace or cli_overrides.get("workspace_dir")
     if selected is None:
-        selected = environ.get("AGENTBUS_WORKSPACE")
+        selected = environment_value("SYNDRA_WORKSPACE", environ)[0]
     return Path(selected or Path.cwd()).expanduser().resolve()
 
 
@@ -312,9 +398,9 @@ def _canonical_config_path(
     try:
         canonical = path.resolve(strict=True)
     except OSError as exc:
-        raise ValueError(f"Unable to resolve AgentBus config file: {path}") from exc
+        raise ValueError(f"Unable to resolve Syndra config file: {path}") from exc
     if not canonical.is_file():
-        raise ValueError(f"AgentBus config path is not a file: {path}")
+        raise ValueError(f"Syndra config path is not a file: {path}")
     if workspace_root is not None:
         root = workspace_root.resolve()
         if not canonical.is_relative_to(root):

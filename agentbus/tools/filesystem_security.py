@@ -21,6 +21,7 @@ _WINDOWS_DEVICE_NAMES = re.compile(
 _WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT = 0x400
 _PROTECTED_SEGMENTS = frozenset(
     {
+        ".syndra",
         ".agentbus",
         ".aws",
         ".azure",

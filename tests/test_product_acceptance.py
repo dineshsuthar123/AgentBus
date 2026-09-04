@@ -58,7 +58,7 @@ def test_clean_install_environment_is_offline_and_credential_bounded(
 
     environment = _offline_environment(tmp_path)
 
-    assert environment["AGENTBUS_PROVIDER"] == "deterministic"
+    assert environment["SYNDRA_PROVIDER"] == "deterministic"
     assert environment["PIP_NO_INDEX"] == "1"
     assert environment["HTTPS_PROXY"] == "http://127.0.0.1:9"
     assert "localhost" in environment["NO_PROXY"]
@@ -69,24 +69,24 @@ def test_clean_install_environment_is_offline_and_credential_bounded(
     assert Path(environment["HOME"]).is_relative_to(tmp_path)
     config = AgentBusConfig(
         workspace_dir=str(tmp_path),
-        state_dir=environment["AGENTBUS_STATE_DIR"],
-        runs_dir=environment["AGENTBUS_RUNS_DIR"],
+        state_dir=environment["SYNDRA_STATE_DIR"],
+        runs_dir=environment["SYNDRA_RUNS_DIR"],
     )
-    assert config.state_directory_path == tmp_path / ".agentbus"
-    assert config.runs_path == tmp_path / ".agentbus" / "runs"
+    assert config.state_directory_path == tmp_path / ".syndra"
+    assert config.runs_path == tmp_path / ".syndra" / "runs"
 
 
 def test_wheel_install_is_never_editable_or_network_resolved(tmp_path: Path) -> None:
     arguments = install_arguments(
         tmp_path / "venv" / "python",
-        str(tmp_path / "agentbus.whl") + "[ide,mcp]",
+        str(tmp_path / "syndra.whl") + "[ide,mcp]",
     )
 
     assert "--no-index" in arguments
     assert "--no-deps" in arguments
     assert "-e" not in arguments
     assert "--editable" not in arguments
-    assert arguments[-1].endswith("agentbus.whl[ide,mcp]")
+    assert arguments[-1].endswith("syndra.whl[ide,mcp]")
 
 
 def test_product_acceptance_entrypoint_renders_machine_readable_report(

@@ -11,6 +11,7 @@ from agentbus.bootstrap import BootstrapError, initialize
 from agentbus.config import SUPPORTED_PROVIDERS
 from agentbus.configuration import configuration_paths, resolve_configuration
 from agentbus.doctor import CheckStatus, render_doctor, run_doctor
+from agentbus.identity import environment_value
 from agentbus.security.redaction import redact_diagnostic_text
 
 
@@ -66,7 +67,7 @@ def main(argv: list[str] | None = None) -> int:
         _root_parser().print_help()
         return 0
     if arguments in (["--version"], ["-V"]):
-        print(f"agentbus {__version__}")
+        print(f"syndra {__version__}")
         return 0
     if arguments[0] in {"--help", "-h"}:
         _root_parser().print_help()
@@ -168,17 +169,17 @@ def main(argv: list[str] | None = None) -> int:
 
 def _root_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="agentbus",
+        prog="syndra",
         description="Safety-oriented local agent execution and evaluation.",
         epilog=(
             "Existing option-oriented invocations remain supported. Use "
-            "'agentbus <command> --help' for command details."
+            "'syndra <command> --help' for command details."
         ),
     )
-    parser.add_argument("--version", action="version", version=f"agentbus {__version__}")
+    parser.add_argument("--version", action="version", version=f"syndra {__version__}")
     commands = parser.add_subparsers(dest="command", metavar="COMMAND")
     help_text = {
-        "run": "Run a task using the existing AgentBus runner.",
+        "run": "Run a task using the Syndra runtime.",
         "resume": "Resume a durable run.",
         "runs": "List durable runs.",
         "show-run": "Inspect a durable run.",
@@ -189,8 +190,8 @@ def _root_parser() -> argparse.ArgumentParser:
         "init": "Create safe first-run configuration and state.",
         "setup": "Guide first-run product configuration with an offline default.",
         "quickstart": "Complete a temporary deterministic first task offline.",
-        "demo": "List, create, or preflight compact AgentBus demo repositories.",
-        "cleanup": "Remove only proven AgentBus-owned stale runtime artifacts.",
+        "demo": "List, create, or preflight compact Syndra demo repositories.",
+        "cleanup": "Remove only proven Syndra-owned stale runtime artifacts.",
         "logs": "Inspect bounded redacted product and run logs.",
         "support-bundle": "Create a sanitized local diagnostic ZIP.",
         "validate": "Validate repositories, corpus fixtures, and reliability.",
@@ -231,7 +232,7 @@ def _legacy(arguments: list[str]) -> int:
 
 
 def _single_id_operation(name: str, legacy_flag: str, arguments: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog=f"agentbus {name}")
+    parser = argparse.ArgumentParser(prog=f"syndra {name}")
     parser.add_argument("run_id")
     parser.add_argument("--config")
     args = parser.parse_args(arguments)
@@ -242,7 +243,7 @@ def _single_id_operation(name: str, legacy_flag: str, arguments: list[str]) -> i
 
 
 def _no_id_operation(name: str, legacy_flag: str, arguments: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog=f"agentbus {name}")
+    parser = argparse.ArgumentParser(prog=f"syndra {name}")
     parser.add_argument("--config")
     args = parser.parse_args(arguments)
     forwarded = [legacy_flag]
@@ -252,7 +253,7 @@ def _no_id_operation(name: str, legacy_flag: str, arguments: list[str]) -> int:
 
 
 def _decision_operation(command: str, arguments: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog=f"agentbus {command}")
+    parser = argparse.ArgumentParser(prog=f"syndra {command}")
     parser.add_argument("target", help="RUN_ID:TASK_ID")
     parser.add_argument("--reason")
     parser.add_argument("--config")
@@ -266,7 +267,7 @@ def _decision_operation(command: str, arguments: list[str]) -> int:
 
 
 def _providers_command(arguments: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="agentbus providers")
+    parser = argparse.ArgumentParser(prog="syndra providers")
     commands = parser.add_subparsers(dest="provider_command")
     commands.add_parser("list", help="List supported providers.")
     show = commands.add_parser("show", help="Show redacted routing configuration.")
@@ -290,7 +291,7 @@ def _providers_command(arguments: list[str]) -> int:
 
 
 def _worktrees_command(arguments: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="agentbus worktrees")
+    parser = argparse.ArgumentParser(prog="syndra worktrees")
     commands = parser.add_subparsers(dest="worktree_command", required=True)
     listing = commands.add_parser("list")
     listing.add_argument("run_id", nargs="?")
@@ -311,7 +312,7 @@ def _worktrees_command(arguments: list[str]) -> int:
 
 
 def _config_command(arguments: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="agentbus config")
+    parser = argparse.ArgumentParser(prog="syndra config")
     commands = parser.add_subparsers(dest="config_command", required=True)
     for name in ("show", "validate", "path", "paths"):
         command = commands.add_parser(name)
@@ -403,7 +404,7 @@ def _config_command(arguments: list[str]) -> int:
         elif args.config_command in {"get", "explain"}:
             values = resolved.safe_values()
             if args.key not in values:
-                raise ValueError(f"Unsupported AgentBus configuration key: {args.key}")
+                raise ValueError(f"Unsupported Syndra configuration key: {args.key}")
             item = values[args.key]
             payload = {
                 "key": args.key,
@@ -449,7 +450,7 @@ def _config_command(arguments: list[str]) -> int:
 
 
 def _init_command(arguments: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="agentbus init")
+    parser = argparse.ArgumentParser(prog="syndra init")
     parser.add_argument("--local", action="store_true")
     parser.add_argument(
         "--provider",
@@ -492,7 +493,7 @@ def _init_command(arguments: list[str]) -> int:
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         action = "Would create" if result.dry_run else "Initialized"
-        print(f"{action} AgentBus configuration at {result.root}")
+        print(f"{action} Syndra configuration at {result.root}")
         for path in result.planned if result.dry_run else result.created:
             print(f"  {path}")
         print("No credentials or provider requests were created.")
@@ -505,7 +506,7 @@ def _init_command(arguments: list[str]) -> int:
 
 
 def _doctor_command(arguments: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="agentbus doctor")
+    parser = argparse.ArgumentParser(prog="syndra doctor")
     parser.add_argument("--config")
     parser.add_argument("--workspace")
     parser.add_argument("--live-provider", choices=SUPPORTED_PROVIDERS)
@@ -541,7 +542,7 @@ def _doctor_command(arguments: list[str]) -> int:
 
 
 def _migration_command(arguments: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="agentbus migrate")
+    parser = argparse.ArgumentParser(prog="syndra migrate")
     commands = parser.add_subparsers(dest="migration_command", required=True)
     for name in ("status", "plan", "verify"):
         command = commands.add_parser(name)
@@ -607,7 +608,7 @@ def _migration_command(arguments: list[str]) -> int:
 
 
 def _upgrade_check_command(arguments: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="agentbus upgrade-check")
+    parser = argparse.ArgumentParser(prog="syndra upgrade-check")
     parser.add_argument("--config")
     parser.add_argument("--workspace")
     parser.add_argument("--extension-package")
@@ -633,7 +634,7 @@ def _upgrade_check_command(arguments: list[str]) -> int:
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
-        print(f"AgentBus upgrade check: {'OK' if report.ok else 'FAILED'}")
+        print(f"Syndra upgrade check: {'OK' if report.ok else 'FAILED'}")
         for check in report.checks:
             print(f"  [{check.status.value}] {check.name}: {check.message}")
             if check.action:
@@ -642,7 +643,7 @@ def _upgrade_check_command(arguments: list[str]) -> int:
 
 
 def _serve_command(arguments: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="agentbus serve")
+    parser = argparse.ArgumentParser(prog="syndra serve")
     parser.add_argument("--config")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=0)
@@ -687,12 +688,12 @@ def _serve_command(arguments: list[str]) -> int:
 def _daemon_startup_stage(stage: str) -> None:
     import os
 
-    if os.environ.get("AGENTBUS_DAEMON_STARTUP_DIAGNOSTICS") == "1":
-        print(f"agentbus-daemon-stage:{stage}", file=sys.stderr, flush=True)
+    if environment_value("SYNDRA_DAEMON_STARTUP_DIAGNOSTICS")[0] == "1":
+        print(f"syndra-daemon-stage:{stage}", file=sys.stderr, flush=True)
 
 
 def _daemon_command(arguments: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="agentbus daemon")
+    parser = argparse.ArgumentParser(prog="syndra daemon")
     parser.add_argument("--registry-path")
     parser.add_argument("--json", action="store_true")
     commands = parser.add_subparsers(dest="daemon_command", required=True)
@@ -835,7 +836,7 @@ def _daemon_command(arguments: list[str]) -> int:
 
 
 def _control_schema_command(arguments: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="agentbus control-schema")
+    parser = argparse.ArgumentParser(prog="syndra control-schema")
     commands = parser.add_subparsers(dest="schema_command", required=True)
     export = commands.add_parser("export")
     export.add_argument("--output-dir", default="protocol")
@@ -856,7 +857,7 @@ def _control_schema_command(arguments: list[str]) -> int:
 
 
 def _version_command(arguments: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="agentbus version")
+    parser = argparse.ArgumentParser(prog="syndra version")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(arguments)
     from agentbus.product.compatibility import compatibility_manifest
@@ -865,7 +866,7 @@ def _version_command(arguments: list[str]) -> int:
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
-        print(f"agentbus {payload['version']}")
+        print(f"syndra {payload['version']}")
         print("Supported Python: " + ", ".join(payload["supported_python"]))
         print(f"Control protocol: {payload['protocols']['control']}")
         print(f"Tool protocol: {payload['protocols']['tool']}")
@@ -876,7 +877,7 @@ def _version_command(arguments: list[str]) -> int:
 
 
 def _setup_command(arguments: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="agentbus setup")
+    parser = argparse.ArgumentParser(prog="syndra setup")
     parser.add_argument("--workspace", default=".")
     parser.add_argument("--provider", choices=SUPPORTED_PROVIDERS)
     parser.add_argument("--scope", choices=("user", "workspace"), default="user")
@@ -926,14 +927,14 @@ def _setup_command(arguments: list[str]) -> int:
         for detection in result.detections:
             label = "OK" if detection.available else ("OPTIONAL" if detection.optional else "MISSING")
             print(f"  [{label}] {detection.name}: {detection.detail}")
-        print("Next: run `agentbus doctor`, then `agentbus quickstart`.")
+        print("Next: run `syndra doctor`, then `syndra quickstart`.")
     return 0
 
 
 def _demo_command(arguments: list[str]) -> int:
     from agentbus.product.demos import DEMO_LANGUAGES, create_demo, demo_definitions, run_demo
 
-    parser = argparse.ArgumentParser(prog="agentbus demo")
+    parser = argparse.ArgumentParser(prog="syndra demo")
     commands = parser.add_subparsers(dest="demo_command", required=True)
     listing = commands.add_parser("list")
     listing.add_argument("--json", action="store_true")
@@ -944,7 +945,7 @@ def _demo_command(arguments: list[str]) -> int:
     creating.add_argument(
         "--git",
         action="store_true",
-        help="Initialize and commit a new isolated Git repository for AgentBus runs.",
+        help="Initialize and commit a new isolated Git repository for Syndra runs.",
     )
     creating.add_argument("--json", action="store_true")
     running = commands.add_parser("run")
@@ -968,7 +969,7 @@ def _demo_command(arguments: list[str]) -> int:
     else:
         try:
             if args.demo_command == "create":
-                output = args.output or f"agentbus-{args.language}-demo"
+                output = args.output or f"syndra-{args.language}-demo"
                 result = create_demo(
                     args.language,
                     output,
@@ -1002,7 +1003,7 @@ def _demo_command(arguments: list[str]) -> int:
 def _quickstart_command(arguments: list[str]) -> int:
     from agentbus.product.quickstart import run_quickstart
 
-    parser = argparse.ArgumentParser(prog="agentbus quickstart")
+    parser = argparse.ArgumentParser(prog="syndra quickstart")
     parser.add_argument(
         "--keep-demo",
         action="store_true",
@@ -1015,7 +1016,7 @@ def _quickstart_command(arguments: list[str]) -> int:
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
-        print("AgentBus deterministic quickstart")
+        print("Syndra deterministic quickstart")
         for step in result.steps:
             label = {
                 "passed": "OK",
@@ -1040,7 +1041,7 @@ def _quickstart_command(arguments: list[str]) -> int:
 def _cleanup_command(arguments: list[str]) -> int:
     from agentbus.product.cleanup import CleanupMode, RuntimeCleanup
 
-    parser = argparse.ArgumentParser(prog="agentbus cleanup")
+    parser = argparse.ArgumentParser(prog="syndra cleanup")
     parser.add_argument("--config")
     parser.add_argument("--registry-path")
     parser.add_argument("--dry-run", action="store_true")
@@ -1090,7 +1091,7 @@ def _cleanup_command(arguments: list[str]) -> int:
         operation = "Cleanup plan" if result.dry_run else "Cleanup result"
         print(f"{operation} ({result.mode.value})")
         if not result.items:
-            print("  No eligible AgentBus runtime artifacts found.")
+            print("  No eligible Syndra runtime artifacts found.")
         for item in result.items:
             location = f" at {item.location}" if item.location else ""
             print(
@@ -1104,7 +1105,7 @@ def _cleanup_command(arguments: list[str]) -> int:
 def _logs_command(arguments: list[str]) -> int:
     from agentbus.product.logging import read_product_logs
 
-    parser = argparse.ArgumentParser(prog="agentbus logs")
+    parser = argparse.ArgumentParser(prog="syndra logs")
     parser.add_argument("--config")
     parser.add_argument("--workspace")
     parser.add_argument(
@@ -1140,7 +1141,7 @@ def _logs_command(arguments: list[str]) -> int:
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))
     elif not entries:
-        print("No matching AgentBus logs found.")
+        print("No matching Syndra logs found.")
     else:
         for entry in entries:
             identifiers = "/".join(
@@ -1160,7 +1161,7 @@ def _logs_command(arguments: list[str]) -> int:
 def _support_bundle_command(arguments: list[str]) -> int:
     from agentbus.product.support import create_support_bundle
 
-    parser = argparse.ArgumentParser(prog="agentbus support-bundle")
+    parser = argparse.ArgumentParser(prog="syndra support-bundle")
     parser.add_argument("--config")
     parser.add_argument("--output")
     parser.add_argument("--registry-path")
@@ -1223,7 +1224,7 @@ def _benchmark_command(arguments: list[str]) -> int:
     )
     from agentbus.product.synthetic import SYNTHETIC_SIZES
 
-    parser = argparse.ArgumentParser(prog="agentbus benchmark")
+    parser = argparse.ArgumentParser(prog="syndra benchmark")
     parser.add_argument(
         "group",
         nargs="?",
@@ -1313,7 +1314,7 @@ def _benchmark_command(arguments: list[str]) -> int:
     elif args.group == INDEX_SCALE_GROUP:
         repository = payload["repository"]
         print(
-            "AgentBus index scale benchmark "
+            "Syndra index scale benchmark "
             f"({repository['profile']}, {repository['file_count']} generated files)"
         )
         for operation in report.operations:
@@ -1339,7 +1340,7 @@ def _benchmark_command(arguments: list[str]) -> int:
     else:
         repository = payload["repository"]
         print(
-            "AgentBus benchmark "
+            "Syndra benchmark "
             f"({args.group}, {repository['file_count']} generated files)"
         )
         for operation in report.operations:
@@ -1392,7 +1393,7 @@ def _benchmark_command(arguments: list[str]) -> int:
 def _soak_command(arguments: list[str]) -> int:
     from agentbus.product.soak import SOAK_PROFILE_NAMES, run_soak
 
-    parser = argparse.ArgumentParser(prog="agentbus soak")
+    parser = argparse.ArgumentParser(prog="syndra soak")
     parser.add_argument(
         "--profile",
         choices=SOAK_PROFILE_NAMES,
@@ -1427,7 +1428,7 @@ def _soak_command(arguments: list[str]) -> int:
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         print(
-            f"AgentBus offline soak ({report.profile}): "
+            f"Syndra offline soak ({report.profile}): "
             f"{report.completed_runs}/{report.requested_runs} cycles in "
             f"{report.duration_seconds:.3f}s"
         )
@@ -1467,7 +1468,7 @@ def _soak_command(arguments: list[str]) -> int:
 def _release_check_command(arguments: list[str]) -> int:
     from agentbus.product.release_check import run_release_check
 
-    parser = argparse.ArgumentParser(prog="agentbus release-check")
+    parser = argparse.ArgumentParser(prog="syndra release-check")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--fast", action="store_true")
     mode.add_argument("--full", action="store_true")
@@ -1488,7 +1489,7 @@ def _release_check_command(arguments: list[str]) -> int:
         print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
     else:
         _print_console_safe(
-            f"AgentBus {report.version} release-check ({report.mode}): "
+            f"Syndra {report.version} release-check ({report.mode}): "
             f"{'PASS' if report.ok else 'FAIL'}"
         )
         for gate in report.gates:

@@ -12,7 +12,9 @@ from typing import Any
 
 
 DEMO_LANGUAGES = ("python", "java", "typescript", "go", "payment")
-_MARKER = ".agentbus-demo.json"
+_MARKER = ".syndra-demo.json"
+_LEGACY_MARKER = ".agentbus-demo.json"
+_TASK_FILE = "SYNDRA_TASK.md"
 _WINDOWS_BATCH_UNSAFE = re.compile(r'[\x00-\x1f"%!&|<>^()]')
 
 
@@ -79,7 +81,7 @@ def demo_definitions() -> dict[str, DemoDefinition]:
                 "pom.xml": (
                     "<project xmlns=\"http://maven.apache.org/POM/4.0.0\">\n"
                     "  <modelVersion>4.0.0</modelVersion>\n"
-                    "  <groupId>dev.agentbus.demo</groupId><artifactId>orders</artifactId><version>1</version>\n"
+                    "  <groupId>dev.syndra.demo</groupId><artifactId>orders</artifactId><version>1</version>\n"
                     "  <properties><maven.compiler.release>17</maven.compiler.release>"
                     "<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>"
                     "<junit.version>5.10.2</junit.version></properties>\n"
@@ -107,18 +109,18 @@ def demo_definitions() -> dict[str, DemoDefinition]:
         ),
         "payment": DemoDefinition(
             language="payment",
-            title="Concurrent payment confirmation",
+            title="Payment Safety Demo",
             task=(
                 "Make payment confirmation idempotent under concurrent retries, "
                 "preserve the public API, and prove the behavior with repository tests."
             ),
             files={
-                ".gitignore": ".agentbus/\ntarget/\n",
+                ".gitignore": ".syndra/\n.agentbus/\ntarget/\n",
                 ".mvn/maven.config": "-q\n-o\n",
                 "pom.xml": (
                     "<project xmlns=\"http://maven.apache.org/POM/4.0.0\">\n"
                     "  <modelVersion>4.0.0</modelVersion>\n"
-                    "  <groupId>dev.agentbus.demo</groupId>\n"
+                    "  <groupId>dev.syndra.demo</groupId>\n"
                     "  <artifactId>payment-safety</artifactId>\n"
                     "  <version>1.0.0</version>\n"
                     "  <properties>\n"
@@ -148,8 +150,8 @@ def demo_definitions() -> dict[str, DemoDefinition]:
                     "  </plugins></build>\n"
                     "</project>\n"
                 ),
-                "src/main/java/com/agentbus/demo/PaymentService.java": (
-                    "package com.agentbus.demo;\n\n"
+                "src/main/java/com/syndra/demo/PaymentService.java": (
+                    "package com.syndra.demo;\n\n"
                     "import java.util.Objects;\n"
                     "import java.util.Set;\n"
                     "import java.util.concurrent.ConcurrentHashMap;\n\n"
@@ -163,8 +165,8 @@ def demo_definitions() -> dict[str, DemoDefinition]:
                     "    }\n"
                     "}\n"
                 ),
-                "src/test/java/com/agentbus/demo/PaymentServiceTest.java": (
-                    "package com.agentbus.demo;\n\n"
+                "src/test/java/com/syndra/demo/PaymentServiceTest.java": (
+                    "package com.syndra.demo;\n\n"
                     "import static org.junit.jupiter.api.Assertions.assertEquals;\n\n"
                     "import java.util.ArrayList;\n"
                     "import java.util.concurrent.CountDownLatch;\n"
@@ -214,7 +216,7 @@ def demo_definitions() -> dict[str, DemoDefinition]:
             files={
                 "package.json": json.dumps(
                     {
-                        "name": "agentbus-typescript-demo",
+                        "name": "syndra-typescript-demo",
                         "private": True,
                         "type": "module",
                         "scripts": {"test": "node --test test/*.test.js"},
@@ -236,7 +238,7 @@ def demo_definitions() -> dict[str, DemoDefinition]:
             title="Go counter",
             task="Fix Add so the Go test passes.",
             files={
-                "go.mod": "module example.invalid/agentbus-demo\n\ngo 1.22\n",
+                "go.mod": "module example.invalid/syndra-demo\n\ngo 1.22\n",
                 "counter.go": "package counter\n\nfunc Add(left, right int) int { return left - right }\n",
                 "counter_test.go": (
                     "package counter\n\nimport \"testing\"\n\n"
@@ -258,7 +260,7 @@ def create_demo(
 ) -> DemoResult:
     definition = _definition(language)
     root = Path(destination).expanduser().resolve()
-    marker = root / _MARKER
+    marker = _existing_marker(root) or root / _MARKER
     if root.exists() and not root.is_dir():
         raise ValueError("Demo destination must be a directory")
     fresh_destination = not root.exists() or not any(root.iterdir())
@@ -267,23 +269,23 @@ def create_demo(
     if root.exists() and any(root.iterdir()):
         if not force or not marker.is_file():
             raise ValueError(
-                "Demo destination is not empty or is not owned by AgentBus; choose another path."
+                "Demo destination is not empty or is not owned by Syndra; choose another path."
             )
         try:
             ownership = json.loads(marker.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
-            raise ValueError("AgentBus demo ownership marker is invalid") from exc
+            raise ValueError("Syndra demo ownership marker is invalid") from exc
         if ownership.get("language") != definition.language:
-            raise ValueError("AgentBus demo language does not match the existing marker")
+            raise ValueError("Syndra demo language does not match the existing marker")
     root.mkdir(parents=True, exist_ok=True)
     files = {
         **definition.files,
-        "AGENTBUS_TASK.md": f"# {definition.title}\n\n{definition.task}\n",
-        _MARKER: json.dumps(
+        _TASK_FILE: f"# {definition.title}\n\n{definition.task}\n",
+        marker.name: json.dumps(
             {
                 "schema": 1,
                 "language": definition.language,
-                "managed_files": sorted((*definition.files, "AGENTBUS_TASK.md", _MARKER)),
+                "managed_files": sorted((*definition.files, _TASK_FILE, marker.name)),
             },
             indent=2,
             sort_keys=True,
@@ -316,14 +318,15 @@ def run_demo(
         raise ValueError("Demo timeout must be between 0 and 600 seconds")
     definition = _definition(language)
     if workspace is None:
-        temporary = Path(tempfile.mkdtemp(prefix=f"agentbus-demo-{language}-"))
+        temporary = Path(tempfile.mkdtemp(prefix=f"syndra-demo-{language}-"))
         created = create_demo(language, temporary)
     else:
         root = Path(workspace).expanduser().resolve()
-        if not (root / _MARKER).is_file():
+        marker_path = _existing_marker(root)
+        if marker_path is None:
             created = create_demo(language, root)
         else:
-            marker = json.loads((root / _MARKER).read_text(encoding="utf-8"))
+            marker = json.loads(marker_path.read_text(encoding="utf-8"))
             if marker.get("language") != language:
                 raise ValueError("Demo workspace language does not match")
             created = DemoResult(
@@ -367,14 +370,22 @@ def _definition(language: str) -> DemoDefinition:
         ) from exc
 
 
+def _existing_marker(root: Path) -> Path | None:
+    canonical = root / _MARKER
+    if canonical.is_file():
+        return canonical
+    legacy = root / _LEGACY_MARKER
+    return legacy if legacy.is_file() else None
+
+
 def _initialize_git_repository(root: Path, managed_files: tuple[str, ...]) -> None:
     git = shutil.which("git")
     if git is None:
         raise ValueError("Git is required for --git demo initialization")
     commands = [
         [git, "init"],
-        [git, "config", "--local", "user.name", "AgentBus Demo"],
-        [git, "config", "--local", "user.email", "agentbus-demo@example.invalid"],
+        [git, "config", "--local", "user.name", "Syndra Demo"],
+        [git, "config", "--local", "user.email", "syndra-demo@example.invalid"],
         [git, "add", "--", *managed_files],
         [
             git,
@@ -383,7 +394,7 @@ def _initialize_git_repository(root: Path, managed_files: tuple[str, ...]) -> No
             "commit",
             "--no-verify",
             "-m",
-            "chore: seed AgentBus demo",
+            "chore: seed Syndra demo",
         ],
     ]
     for command in commands:

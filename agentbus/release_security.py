@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, Iterable
 
-from agentbus import __version__
+from syndra import __version__
 
 if TYPE_CHECKING:
     from agentbus.security.validation import DefensiveSecurityScorecard
@@ -24,6 +24,7 @@ _MAX_TEXT_BYTES = 16 * 1024 * 1024
 _MAX_ARCHIVE_ENTRIES = 50_000
 _MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
 _FORBIDDEN_COMPONENTS = {
+    ".syndra",
     ".agentbus",
     ".pytest_cache",
     ".venv",
@@ -217,8 +218,8 @@ def audit_release_security(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="python -m agentbus.release_security",
-        description="Audit local AgentBus release inputs without network access.",
+        prog="python -m syndra.release_security",
+        description="Audit local Syndra release inputs without network access.",
     )
     parser.add_argument("--root", default=".")
     parser.add_argument("--artifact", action="append", default=None)
@@ -253,14 +254,14 @@ def main(argv: list[str] | None = None) -> int:
                 else "static_only"
             )
             print(
-                "AgentBus release security audit passed: "
+                "Syndra release security audit passed: "
                 f"{report.scanned_files} tracked files, "
                 f"{len(report.scanned_artifacts)} artifact(s), "
                 f"defensive_validation={classification}."
             )
         else:
             print(
-                "AgentBus release security audit failed: "
+                "Syndra release security audit failed: "
                 f"{len(report.findings)} static finding(s)."
             )
             for finding in report.findings:
@@ -340,7 +341,10 @@ def _audit_path(
     findings: list[SecurityFinding] = []
     runtime_directory = any(
         part in {"runs", "worktrees"}
-        and (index == 0 or lowered_parts[index - 1] != "agentbus")
+        and (
+            index == 0
+            or lowered_parts[index - 1] not in {"agentbus", "syndra"}
+        )
         for index, part in enumerate(lowered_parts)
     )
     if any(part in _FORBIDDEN_COMPONENTS for part in lowered_parts) or runtime_directory:
@@ -369,7 +373,7 @@ def _audit_path(
                 "Runtime databases, logs, bytecode, and private-key containers are forbidden.",
             )
         )
-    if name.startswith("agentbus-support-") and name.endswith(".zip"):
+    if name.startswith(("syndra-support-", "agentbus-support-")) and name.endswith(".zip"):
         findings.append(
             SecurityFinding(
                 "SUPPORT_BUNDLE",
@@ -474,8 +478,8 @@ def _looks_like_secret(value: str) -> bool:
 
 def _default_artifacts(root: Path) -> tuple[Path, ...]:
     candidates = [
-        *sorted((root / "dist").glob(f"agentbus-{__version__}*.whl")),
-        *sorted((root / "dist").glob(f"agentbus-{__version__}*.tar.gz")),
+        *sorted((root / "dist").glob(f"syndra-{__version__}*.whl")),
+        *sorted((root / "dist").glob(f"syndra-{__version__}*.tar.gz")),
         *sorted((root / "extensions" / "vscode").glob("*.vsix")),
     ]
     return tuple(path.resolve() for path in candidates if path.is_file())

@@ -82,7 +82,7 @@ class ProductLogWriter:
     ) -> None:
         selected_level = level.lower()
         if selected_level not in LOG_LEVELS:
-            raise ValueError("Unsupported AgentBus log level.")
+            raise ValueError("Unsupported Syndra log level.")
         payload = {
             "timestamp": datetime.now(UTC).isoformat(),
             "level": selected_level,
@@ -118,7 +118,7 @@ class ProductLogWriter:
                     handle.write(encoded)
         except OSError as exc:
             raise ProductLogError(
-                "Unable to write the AgentBus product log; verify the log directory "
+                "Unable to write the Syndra product log; verify the log directory "
                 "is writable and has available disk space."
             ) from exc
 
@@ -258,7 +258,7 @@ def _safe_component(value: str) -> str:
         character if character.isalnum() or character in "._-" else "-"
         for character in value.strip().lower()
     ).strip("-.")
-    return normalized[:128] or "agentbus"
+    return normalized[:128] or "syndra"
 
 
 def _safe_identifier(value: Any) -> str | None:
