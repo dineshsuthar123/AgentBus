@@ -8,7 +8,7 @@ import tarfile
 import zipfile
 from pathlib import Path
 
-from agentbus import __version__
+from syndra import __version__
 from agentbus.release_packaging import (
     audit_distributions,
     compare_distribution_sets,
@@ -48,7 +48,7 @@ def test_distribution_comparison_ignores_archive_timestamps(tmp_path):
     assert compare_distribution_sets(first_set, second_set) == ()
 
     with zipfile.ZipFile(second_set[0], "a") as archive:
-        archive.writestr("agentbus/changed.py", "CHANGED = True\n")
+        archive.writestr("syndra/changed.py", "CHANGED = True\n")
     findings = compare_distribution_sets(first_set, second_set)
     assert findings[0].code == "NON_REPRODUCIBLE_CONTENT"
 
@@ -59,11 +59,13 @@ def _distributions(
     include_runtime: bool = False,
     tamper_record: bool = False,
 ) -> tuple[Path, Path]:
-    wheel = root / f"agentbus-{__version__}-py3-none-any.whl"
-    sdist = root / f"agentbus-{__version__}.tar.gz"
-    dist_info = f"agentbus-{__version__}.dist-info"
+    wheel = root / f"syndra-{__version__}-py3-none-any.whl"
+    sdist = root / f"syndra-{__version__}.tar.gz"
+    dist_info = f"syndra-{__version__}.dist-info"
     metadata = _metadata()
     entries = {
+        "syndra/__init__.py": f'__version__ = "{__version__}"\n'.encode(),
+        "syndra/py.typed": b"",
         "agentbus/__init__.py": f'__version__ = "{__version__}"\n'.encode(),
         "agentbus/py.typed": b"",
         f"{dist_info}/METADATA": metadata,
@@ -71,31 +73,35 @@ def _distributions(
         f"{dist_info}/licenses/LICENSE": b"MIT\n",
         f"{dist_info}/entry_points.txt": (
             b"[console_scripts]\n"
+            b"syndra = syndra.cli:main\n"
+            b"syndra-eval = syndra.eval:main\n"
             b"agentbus = agentbus.cli:main\n"
             b"agentbus-eval = agentbus.eval:main\n"
         ),
     }
     if include_runtime:
-        entries["agentbus/runtime.db"] = b"SQLite format 3\x00"
+        entries["syndra/runtime.db"] = b"SQLite format 3\x00"
     record_name = f"{dist_info}/RECORD"
     entries[record_name] = _record(entries, record_name, tamper=tamper_record)
     with zipfile.ZipFile(wheel, "w") as archive:
         for name, content in entries.items():
             archive.writestr(name, content)
 
-    source_root = f"agentbus-{__version__}"
+    source_root = f"syndra-{__version__}"
     source_entries = {
         f"{source_root}/LICENSE": b"MIT\n",
         f"{source_root}/MANIFEST.in": b"include LICENSE\n",
         f"{source_root}/PKG-INFO": metadata,
-        f"{source_root}/README.md": b"# AgentBus\n",
+        f"{source_root}/README.md": b"# Syndra\n",
+        f"{source_root}/syndra/__init__.py": entries["syndra/__init__.py"],
+        f"{source_root}/syndra/py.typed": b"",
         f"{source_root}/agentbus/__init__.py": entries["agentbus/__init__.py"],
         f"{source_root}/agentbus/py.typed": b"",
-        f"{source_root}/pyproject.toml": b"[project]\nname='agentbus'\n",
+        f"{source_root}/pyproject.toml": b"[project]\nname='syndra'\n",
     }
     if include_runtime:
-        source_entries[f"{source_root}/agentbus/runtime.db"] = entries[
-            "agentbus/runtime.db"
+        source_entries[f"{source_root}/syndra/runtime.db"] = entries[
+            "syndra/runtime.db"
         ]
     with tarfile.open(sdist, "w:gz") as archive:
         for name, content in source_entries.items():
@@ -109,7 +115,7 @@ def _distributions(
 def _metadata() -> bytes:
     lines = [
         "Metadata-Version: 2.4",
-        "Name: agentbus",
+        "Name: syndra",
         f"Version: {__version__}",
         "Requires-Python: >=3.11",
         *(f"Provides-Extra: {extra}" for extra in ("all", "azure", "dev", "entra", "ide", "mcp")),
@@ -125,7 +131,7 @@ def _record(entries: dict[str, bytes], record_name: str, *, tamper: bool) -> byt
     writer = csv.writer(output, lineterminator="\n")
     for name, content in entries.items():
         digest = base64.urlsafe_b64encode(hashlib.sha256(content).digest()).rstrip(b"=").decode()
-        if tamper and name == "agentbus/__init__.py":
+        if tamper and name == "syndra/__init__.py":
             digest = "invalid"
         writer.writerow((name, f"sha256={digest}", len(content)))
     writer.writerow((record_name, "", ""))

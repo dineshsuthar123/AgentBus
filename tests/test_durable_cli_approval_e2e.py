@@ -173,7 +173,7 @@ def test_payment_demo_runs_one_verifier_gate_then_review_and_trace(
     store = StateStore(workspace / ".agentbus" / "state.db")
     pending = store.list_tool_approvals(run_id)
     source_path = (
-        workspace / "src/main/java/com/agentbus/demo/PaymentService.java"
+        workspace / "src/main/java/com/syndra/demo/PaymentService.java"
     )
 
     assert started.returncode == 0, started.stdout + started.stderr
@@ -232,7 +232,7 @@ def test_payment_demo_runs_one_verifier_gate_then_review_and_trace(
     assert persisted.metadata["execution_trace"]["status"] == "sealed"
     assert not (workspace / "runs").exists()
     assert _git(workspace, "status", "--short") == (
-        " M src/main/java/com/agentbus/demo/PaymentService.java"
+        " M src/main/java/com/syndra/demo/PaymentService.java"
     )
 
 

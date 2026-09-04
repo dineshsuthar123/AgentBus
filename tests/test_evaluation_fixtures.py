@@ -37,7 +37,7 @@ def test_fixture_manager_creates_fresh_isolated_git_repository_per_run(tmp_path)
     second_runner = EvaluationRunner(results_dir=tmp_path / "results-two")
 
     os_temp = Path(tempfile.gettempdir()).resolve()
-    expected_owned_root = (os_temp / "agentbus-eval-fixtures").resolve()
+    expected_owned_root = (os_temp / "syndra-eval-fixtures").resolve()
     assert Path(tempfile.tempdir).resolve() == os_temp
     assert ".pytest_tmp" not in os_temp.parts
     assert first_runner.fixture_manager.owned_root == expected_owned_root
