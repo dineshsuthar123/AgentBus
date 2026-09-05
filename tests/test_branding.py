@@ -42,16 +42,17 @@ def test_compatibility_policy_may_name_legacy_product(tmp_path: Path) -> None:
 
 
 def test_canonical_cli_help_and_protocol_metadata_use_syndra() -> None:
-    completed = subprocess.run(
-        [sys.executable, "-m", "syndra", "--help"],
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-        shell=False,
-    )
-    assert "Syndra" in completed.stdout
-    assert "AgentBus" not in completed.stdout
+    for module in ("syndra", "syndra.cli"):
+        completed = subprocess.run(
+            [sys.executable, "-m", module, "--help"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+            shell=False,
+        )
+        assert "Syndra" in completed.stdout
+        assert "AgentBus" not in completed.stdout
 
     openapi = json.loads(
         (ROOT / "protocol" / "agentbus-v1.openapi.json").read_text(encoding="utf-8")
