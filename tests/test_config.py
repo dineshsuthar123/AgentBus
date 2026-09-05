@@ -267,6 +267,8 @@ def test_invalid_numeric_ranges_are_rejected(monkeypatch, name, value):
 
 
 def test_invalid_provider_and_unsafe_fallback_policy_are_rejected(monkeypatch):
+    monkeypatch.delenv("SYNDRA_PROVIDER", raising=False)
+    monkeypatch.delenv("SYNDRA_ENABLE_PROVIDER_FALLBACK", raising=False)
     monkeypatch.setenv("AGENTBUS_PROVIDER", "unknown")
     with pytest.raises(ValueError, match="SYNDRA_PROVIDER"):
         AgentBusConfig.from_env()
