@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-import os
 import math
 from dataclasses import dataclass
+
+from agentbus.identity import environment_value
 
 
 @dataclass(frozen=True)
 class EvaluationConfig:
-    results_dir: str = ".agentbus/evaluations"
+    results_dir: str = ".syndra/evaluations"
     fixture_root: str | None = None
     preserve_fixtures: bool = False
     max_requests: int = 100
@@ -17,26 +18,25 @@ class EvaluationConfig:
     @classmethod
     def from_env(cls) -> "EvaluationConfig":
         return cls(
-            results_dir=os.getenv("AGENTBUS_EVAL_RESULTS_DIR", cls.results_dir),
-            fixture_root=_text("AGENTBUS_EVAL_FIXTURE_ROOT"),
+            results_dir=_text("SYNDRA_EVAL_RESULTS_DIR") or cls.results_dir,
+            fixture_root=_text("SYNDRA_EVAL_FIXTURE_ROOT"),
             preserve_fixtures=_boolean(
-                "AGENTBUS_EVAL_PRESERVE_FIXTURES", cls.preserve_fixtures
+                "SYNDRA_EVAL_PRESERVE_FIXTURES", cls.preserve_fixtures
             ),
             max_requests=_integer(
-                "AGENTBUS_EVAL_MAX_REQUESTS", cls.max_requests, minimum=1
+                "SYNDRA_EVAL_MAX_REQUESTS", cls.max_requests, minimum=1
             ),
             max_tokens=_integer(
-                "AGENTBUS_EVAL_MAX_TOKENS", cls.max_tokens, minimum=1
+                "SYNDRA_EVAL_MAX_TOKENS", cls.max_tokens, minimum=1
             ),
             timeout_seconds=_number(
-                "AGENTBUS_EVAL_TIMEOUT_SECONDS", cls.timeout_seconds, minimum=0.001
+                "SYNDRA_EVAL_TIMEOUT_SECONDS", cls.timeout_seconds, minimum=0.001
             ),
         )
 
 
 def _text(name: str) -> str | None:
-    value = os.getenv(name)
-    return value.strip() if value and value.strip() else None
+    return environment_value(name)[0]
 
 
 def _boolean(name: str, default: bool) -> bool:

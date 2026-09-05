@@ -101,6 +101,31 @@ def test_release_security_distinguishes_package_worktrees_from_runtime_data(tmp_
     assert report.ok is True
 
 
+def test_release_security_accepts_canonical_package_worktrees(tmp_path):
+    archive = tmp_path / "safe.whl"
+    with zipfile.ZipFile(archive, "w") as output:
+        output.writestr("syndra/worktrees/manager.py", "SAFE = True\n")
+
+    report = audit_release_security(
+        tmp_path,
+        tracked_paths=(),
+        artifacts=(archive,),
+    )
+
+    assert report.ok is True
+
+
+def test_release_security_rejects_both_runtime_state_names(tmp_path):
+    report = audit_release_security(
+        tmp_path,
+        tracked_paths=(".syndra/state.db", ".agentbus/state.db"),
+        artifacts=(),
+    )
+
+    locations = {finding.location for finding in report.findings}
+    assert {".syndra/state.db", ".agentbus/state.db"} <= locations
+
+
 def test_release_security_cli_is_machine_readable(tmp_path, capsys):
     (tmp_path / "safe.txt").write_text("safe\n", encoding="utf-8")
 

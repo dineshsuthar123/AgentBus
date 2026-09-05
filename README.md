@@ -1,37 +1,37 @@
-# AgentBus
+# Syndra
 
-AgentBus is a safety-oriented local runtime for software-engineering agents. It
-plans repository tasks, executes versioned workspace-scoped tools, verifies the
-result, requires a final review, records durable evidence, and supports offline
-replay. Use it from the CLI or the native VS Code extension with a built-in
-deterministic provider, local Ollama, or an explicitly configured Azure OpenAI
-deployment.
+**Safe execution infrastructure for autonomous software engineering.**
 
-AgentBus `0.6.0b1` is a public beta. It is suitable for controlled local
+Syndra is a local execution runtime for software-engineering agents. It plans
+repository tasks, executes capability-bound tools, pauses consequential actions
+at exact approval gates, verifies changes, requires final review, records
+durable evidence, and supports offline replay.
+
+Syndra `0.6.0b1` is a public beta. It is suitable for controlled local
 evaluation and offline CI, not an unattended production service. It does not
 provide complete sandbox isolation or automatically roll back file edits.
 
 ## Install
 
-AgentBus supports Python 3.11 through 3.14 on the tested Windows and Linux
+Syndra supports Python 3.11 through 3.14 on the tested Windows and Linux
 paths. From a source checkout:
 
 ```powershell
 python -m venv .venv
 .venv\Scripts\python.exe -m pip install -e ".[ide]"
-.venv\Scripts\agentbus.exe version --json
+.venv\Scripts\syndra.exe version --json
 ```
 
 ```bash
 python -m venv .venv
 .venv/bin/python -m pip install -e '.[ide]'
-.venv/bin/agentbus version --json
+.venv/bin/syndra version --json
 ```
 
 The core package includes the CLI, deterministic and Ollama providers, durable
 runtime, managed tools, replay, and repository intelligence. Add `ide` for the
 control plane and VS Code, `azure` for Azure OpenAI, `mcp` for HTTP MCP, or
-`all` for all runtime integrations. AgentBus never installs Git, Ollama, model
+`all` for all runtime integrations. Syndra never installs Git, Ollama, model
 weights, VS Code, or system packages.
 
 [Installation guide](docs/getting-started/install.md)
@@ -41,7 +41,7 @@ weights, VS Code, or system packages.
 Prove the full local workflow without credentials or network access:
 
 ```console
-agentbus quickstart --json
+syndra quickstart --json
 ```
 
 The quickstart creates a temporary Git repository, builds a local index, runs
@@ -51,36 +51,38 @@ reviews the change, reports artifacts, and removes its owned temporary state.
 For a disposable repository of your own:
 
 ```console
-agentbus setup --workspace . --provider deterministic --scope workspace --non-interactive --dry-run
-agentbus setup --workspace . --provider deterministic --scope workspace --non-interactive
-agentbus doctor --workspace . --provider deterministic --json
-agentbus index build --workspace . --json
-agentbus run --workspace . --provider deterministic --workflow multi --durable "Create and verify a small calculator"
-agentbus runs
+syndra setup --workspace . --provider deterministic --scope workspace --non-interactive --dry-run
+syndra setup --workspace . --provider deterministic --scope workspace --non-interactive
+syndra doctor --workspace . --provider deterministic --json
+syndra index build --workspace . --json
+syndra run --workspace . --provider deterministic --workflow multi --durable "Create and verify a small calculator"
+syndra runs
 ```
 
 [Quickstart guide](docs/getting-started/quickstart.md) | [VS Code onboarding](docs/getting-started/vscode.md)
 
-## AgentBus Studio
+## Syndra Studio
 
-**A visual control plane for safe autonomous software engineering.**
+**See autonomous software engineering as it happens.**
 
 **Plan -> Execute -> Approve -> Verify -> Review -> Replay**
 
-![AgentBus Studio live durable run](docs/submission/screenshots/05-active-run.png)
+![Syndra Studio showing verified execution evidence and an approved mandatory final review](docs/product/screenshots/07-verification-review.png)
 
-AgentBus Studio is the local visual control plane for durable runs. It exposes
-the real task graph, managed-tool timeline, exact approval gates, attempts,
+[Studio screenshot gallery](docs/product/screenshots/README.md)
+
+Syndra Studio is the execution observatory for durable runs. It exposes the
+real execution mesh, managed-tool timeline, exact approval gates, attempts,
 review, scoped Git diff, trace provenance, integrity verification, and offline
 replay. The browser never calls a model provider and keeps the one-time daemon
 token in memory only.
 
 ```powershell
 # Create the isolated payment fixture once.
-.venv\Scripts\agentbus.exe demo create payment --output agentbus-payment-demo --git --json
+.venv\Scripts\syndra.exe demo create payment --output syndra-payment-demo --git --json
 
 # Terminal 1: start the authenticated loopback daemon.
-.venv\Scripts\agentbus.exe serve --host 127.0.0.1 --port 8765 --json-ready
+.venv\Scripts\syndra.exe serve --host 127.0.0.1 --port 8765 --json-ready
 
 # Terminal 2: start Studio and open http://127.0.0.1:5173.
 cd studio
@@ -89,12 +91,12 @@ npm run dev
 ```
 
 Paste the `bearer_token` from the ready handshake into Studio, open **Payment
-demo**, and use the absolute demo repository path. The `payment-safety`
+Safety Demo**, and use the absolute demo repository path. The `payment-safety`
 deterministic profile makes a real Java patch and pauses the real `mvn -q -o
-test` invocation for exact approval. [Submission overview](docs/submission/product.md)
-| [2:36 demo script](docs/submission/demo-script.md) | [Judging summary](docs/submission/judging-summary.md)
+test` invocation for exact approval. [Product overview](docs/product/product-overview.md)
+| [Demo walkthrough](docs/product/payment-demo.md) | [Screenshots](docs/product/screenshots/README.md)
 
-## Why AgentBus
+## Why Syndra
 
 - Durable SQLite-backed task graphs can resume without rerunning terminal
   successful tasks.
@@ -150,7 +152,7 @@ local code, and reviewer rejection prevents commit and pull-request creation.
 | `ollama` | Local model execution | Configured local URL | None by default |
 | `azure` | Explicit Azure OpenAI deployment | Azure endpoint | Required via environment/secure store |
 
-Provider checks are local unless `--live` is supplied. AgentBus never silently
+Provider checks are local unless `--live` is supplied. Syndra never silently
 switches to a live provider, and normal CI does not require Azure or Ollama.
 
 [Provider guide](docs/guides/providers.md) | [Azure OpenAI](docs/providers/azure-openai.md)
@@ -163,14 +165,14 @@ parsers understand Python, TypeScript/JavaScript, Java, and Go. Unknown file
 types remain available to bounded scanning but do not receive invented symbol
 or dependency claims.
 
-Indexing is static and local: AgentBus does not import repository modules,
+Indexing is static and local: Syndra does not import repository modules,
 execute setup files, invoke builds or package managers, or upload source.
 
 [Repository-intelligence guide](docs/guides/repository-intelligence.md)
 
 ## Safety Model
 
-AgentBus applies defense in depth:
+Syndra applies defense in depth:
 
 - canonical workspace and exact Git top-level validation;
 - path traversal, credential path, unsafe link, Windows device, and alternate
@@ -184,7 +186,7 @@ AgentBus applies defense in depth:
 - no automatic reset, clean, destructive rollback, push, or PR by default.
 
 These controls are not a VM, container, firewall, restricted OS token, seccomp
-profile, or proof that generated code is safe. Run AgentBus with least-privilege
+profile, or proof that generated code is safe. Run Syndra with least-privilege
 OS and provider credentials, use disposable repositories while evaluating it,
 and review diffs before commit or execution.
 
@@ -194,22 +196,22 @@ and review diffs before commit or execution.
 
 ```console
 # Inspect effective configuration without revealing credentials
-agentbus config show --workspace . --json
+syndra config show --workspace . --json
 
 # Query local code evidence
-agentbus search calculate_total --workspace . --evidence
-agentbus impact src/calculator.py --workspace .
-agentbus tests-for src/calculator.py --workspace .
+syndra search calculate_total --workspace . --evidence
+syndra impact src/calculator.py --workspace .
+syndra tests-for src/calculator.py --workspace .
 
 # Inspect and replay a run without providers
-agentbus show-run <run-id>
-agentbus replay <run-id> --mode offline --json
+syndra show-run <run-id>
+syndra replay <run-id> --mode offline --json
 
 # Preview safe cleanup
-agentbus cleanup --dry-run --stale --json
+syndra cleanup --dry-run --stale --json
 
 # Run local non-publishing beta gates
-agentbus release-check
+syndra release-check
 ```
 
 [Practical workflows](docs/guides/workflows.md) | [CLI reference](docs/reference/cli.md)
@@ -250,8 +252,8 @@ The deterministic provider supports a fully offline contributor loop:
 ```console
 python -m pip install -e ".[dev,ide]"
 python -m pytest
-python -m compileall agentbus
-python -m agentbus.eval run --suite core-offline --variant durable-parallel-fake
+python -m compileall syndra agentbus
+python -m syndra.eval run --suite core-offline --variant durable-parallel-fake
 git diff --check
 ```
 
@@ -260,4 +262,4 @@ plane, repository-intelligence, and VS Code commands.
 
 ## License
 
-AgentBus is licensed under the [MIT License](LICENSE).
+Syndra is licensed under the [MIT License](LICENSE).

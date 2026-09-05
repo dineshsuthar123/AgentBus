@@ -122,7 +122,7 @@ class GitRepository:
             raise WorkspaceRepositoryMismatch(
                 "Configured workspace is not the Git repository root. "
                 f"Workspace: {self.workspace}. Detected Git top-level: {top_level}. "
-                "Git would walk into a parent repository, so AgentBus refused the "
+                "Git would walk into a parent repository, so Syndra refused the "
                 "operation. Initialize or select an isolated target repository."
             )
 
@@ -794,7 +794,7 @@ class GitRepository:
         paths: Iterable[str],
     ) -> str:
         selected = self._normalize_paths(paths)
-        with tempfile.TemporaryDirectory(prefix="agentbus-git-index-") as temporary:
+        with tempfile.TemporaryDirectory(prefix="syndra-git-index-") as temporary:
             index_path = Path(temporary) / "index"
             environment = {"GIT_INDEX_FILE": str(index_path.resolve())}
             self._run(

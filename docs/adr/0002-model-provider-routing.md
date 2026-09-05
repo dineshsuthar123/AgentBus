@@ -5,17 +5,17 @@
 
 ## Context
 
-AgentBus began as a local Ollama runtime. Planner, coder, and reviewer behavior should not depend on one network SDK, while users need an Azure OpenAI option with role-specific deployments, structured output, bounded retries, safe diagnostics, and durable metadata. Cloud support must not weaken local/offline operation, tool controls, approvals, verification, review, or durable execution.
+Syndra began as a local Ollama runtime. Planner, coder, and reviewer behavior should not depend on one network SDK, while users need an Azure OpenAI option with role-specific deployments, structured output, bounded retries, safe diagnostics, and durable metadata. Cloud support must not weaken local/offline operation, tool controls, approvals, verification, review, or durable execution.
 
 ## Decision
 
-AgentBus uses a provider-neutral `ModelProvider` contract and normalized `ModelResult`/error types. Agents bind to role-specific `RoutedModel` facades. A central router resolves provider, model/deployment, role, timeout, retry budget, and explicit fallback. Provider adapters contain SDK and transport details.
+Syndra uses a provider-neutral `ModelProvider` contract and normalized `ModelResult`/error types. Agents bind to role-specific `RoutedModel` facades. A central router resolves provider, model/deployment, role, timeout, retry budget, and explicit fallback. Provider adapters contain SDK and transport details.
 
 Ollama remains supported and is the default. Existing dictionary/string call sites use a compatibility facade while normalized results remain available for logging, usage aggregation, and durable attempt metadata.
 
 Azure uses the official OpenAI Python SDK with an Azure OpenAI v1 base URL. Responses API is primary; chat completions is an explicit mode. Deployment names are kept distinct from public model identifiers. Client construction and SDK import are lazy, SDK retries are disabled, and the adapter owns exception normalization.
 
-Planner, coder/action, and reviewer calls provide Pydantic schemas. Providers request schema-constrained output where supported, and AgentBus always validates locally. Raw dictionary schemas receive local JSON Schema validation. There is no implicit downgrade from structured output to unconstrained text.
+Planner, coder/action, and reviewer calls provide Pydantic schemas. Providers request schema-constrained output where supported, and Syndra always validates locally. Raw dictionary schemas receive local JSON Schema validation. There is no implicit downgrade from structured output to unconstrained text.
 
 Role resolution supports `default`, `planner`, `coder`, `reviewer`, and `summarizer`. Azure chooses a role deployment and then the Azure default deployment. Safe provider/deployment identifiers and usage are persisted; SDK clients and response objects are not.
 
@@ -40,14 +40,14 @@ Tradeoffs:
 
 - Configuration has more provider and role fields.
 - Provider retries plus durable retries can repeat calls, although both budgets are finite.
-- Capability differences remain deployment-specific; AgentBus cannot guarantee every Azure deployment supports Responses or strict structured outputs.
+- Capability differences remain deployment-specific; Syndra cannot guarantee every Azure deployment supports Responses or strict structured outputs.
 - Usage is persisted as event/attempt JSON rather than a query-optimized database table.
 
 ## Alternatives Considered
 
 Direct Azure conditionals in agents were rejected because they couple workflow behavior to SDK details and duplicate routing/error logic.
 
-Replacing Ollama with Azure was rejected because AgentBus is local-first and requires an offline/default provider.
+Replacing Ollama with Azure was rejected because Syndra is local-first and requires an offline/default provider.
 
 SDK-managed retries were rejected because combined hidden and durable retries would be difficult to bound or observe.
 

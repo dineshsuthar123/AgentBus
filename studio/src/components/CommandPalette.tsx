@@ -77,7 +77,7 @@ export function CommandPalette({ currentRun }: { currentRun?: RunSummary }) {
 function createCommands(currentRun: RunSummary | undefined, close: () => void): PaletteCommand[] {
   const navigate = (hash: string) => () => { window.location.hash = hash; close(); };
   const dispatch = (id: string) => () => {
-    window.dispatchEvent(new CustomEvent("agentbus:studio-command", { detail: id }));
+    window.dispatchEvent(new CustomEvent("syndra:studio-command", { detail: id }));
     close();
   };
   return [

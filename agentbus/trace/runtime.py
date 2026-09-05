@@ -84,7 +84,7 @@ class RuntimeTrace:
         if existing is None:
             recorder = TraceRecorder(run_id, sink=sink)
             recorder.start_trace(
-                name="AgentBus durable run",
+                name="Syndra durable run",
                 attributes=_safe_mapping(root_attributes, private_roots) or {},
             )
         elif existing.status == TraceStatus.RUNNING:

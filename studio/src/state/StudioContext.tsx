@@ -70,7 +70,7 @@ export function StudioProvider({ children }: { children: ReactNode }) {
       setConnection("connected");
     } catch (error) {
       setConnection("error");
-      setConnectionMessage(error instanceof Error ? error.message : "AgentBus Studio could not connect.");
+      setConnectionMessage(error instanceof Error ? error.message : "Syndra Studio could not connect.");
       throw error;
     }
   }

@@ -64,7 +64,7 @@ class ReviewerAgent(BaseAgent):
         review_evidence: dict[str, Any] | None = None,
     ) -> dict:
         prompt = f"""
-You are the AgentBus Reviewer Agent.
+You are the Syndra Reviewer Agent.
 Return ONLY valid JSON with this shape:
 {{
   "approved": true,
@@ -133,7 +133,7 @@ do not reject solely because a candidate is listed without corroborating evidenc
         changed_files: list[str] | None = None,
     ) -> dict:
         prompt = f"""
-You are the AgentBus task-level Reviewer Agent.
+You are the Syndra task-level Reviewer Agent.
 Return ONLY valid JSON with this shape:
 {{
   "approved": true,

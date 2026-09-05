@@ -1,12 +1,12 @@
 import * as vscode from "vscode";
-import type { AgentBusClient } from "./apiClient";
+import type { SyndraClient } from "./apiClient";
 import {
   formatToolInvocation,
   formatToolPolicy,
   isSafeControlId
 } from "./toolPresentation";
 
-type ClientProvider = () => Promise<AgentBusClient>;
+type ClientProvider = () => Promise<SyndraClient>;
 
 interface ToolDocumentIdentity {
   runId: string;
@@ -18,7 +18,7 @@ export function toolInvocationUri(
   invocationId: string
 ): vscode.Uri {
   if (!isSafeControlId(runId) || !isSafeControlId(invocationId)) {
-    throw new Error("Unsafe AgentBus tool invocation identity.");
+    throw new Error("Unsafe Syndra tool invocation identity.");
   }
   return vscode.Uri.from({
     scheme: "agentbus-tool",
@@ -54,7 +54,7 @@ export class ToolPolicyDocumentProvider
 
   public async provideTextDocumentContent(uri: vscode.Uri): Promise<string> {
     if (uri.scheme !== "agentbus-policy" || uri.path !== "/default") {
-      throw new Error("Unsafe AgentBus tool policy document identity.");
+      throw new Error("Unsafe Syndra tool policy document identity.");
     }
     return formatToolPolicy(await (await this.client()).toolPolicy());
   }
@@ -68,7 +68,7 @@ function parseToolInvocationUri(uri: vscode.Uri): ToolDocumentIdentity {
     !isSafeControlId(runId) ||
     !isSafeControlId(invocationId)
   ) {
-    throw new Error("Unsafe AgentBus tool invocation document identity.");
+    throw new Error("Unsafe Syndra tool invocation document identity.");
   }
   return { runId, invocationId };
 }

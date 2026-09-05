@@ -33,7 +33,7 @@ export function EmptyState({ title, children, action }: { title: string; childre
   return <div className="empty-state"><span className="empty-glyph"><span /><span /><span /></span><h2>{title}</h2><p>{children}</p>{action}</div>;
 }
 
-export function LoadingState({ label = "Reading AgentBus state" }: { label?: string }) {
+export function LoadingState({ label = "Reading Syndra state" }: { label?: string }) {
   return <div className="loading-state"><LoaderCircle className="spin" size={18} /><span>{label}</span></div>;
 }
 

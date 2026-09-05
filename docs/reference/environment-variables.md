@@ -1,35 +1,38 @@
 # Environment variables
 
-Environment variables override config files and CLI values. AgentBus does not
+Environment variables override config files and CLI values. Syndra does not
 load `.env`; set variables in the process that launches the CLI or daemon.
+
+Canonical `SYNDRA_*` names take precedence over legacy `AGENTBUS_*` aliases.
+When both forms differ, Syndra emits a deterministic conflict warning.
 
 ## Runtime and storage
 
-`AGENTBUS_WORKSPACE`, `AGENTBUS_RUNS_DIR`, `AGENTBUS_STATE_DIR`,
-`AGENTBUS_STATE_DB`, `AGENTBUS_WORKTREE_ROOT`, `AGENTBUS_KEEP_WORKTREES`,
-`AGENTBUS_MAX_STEPS`, `AGENTBUS_COMMAND_TIMEOUT`,
-`AGENTBUS_MAX_HISTORY_CHARS`, `AGENTBUS_DURABLE_EXECUTION`,
-`AGENTBUS_PARALLEL_EXECUTION`, `AGENTBUS_MAX_WORKERS`,
-`AGENTBUS_WORKER_LEASE_SECONDS`, `AGENTBUS_WORKER_HEARTBEAT_SECONDS`, and
-`AGENTBUS_INTEGRATION_STRATEGY` control local execution.
+`SYNDRA_WORKSPACE`, `SYNDRA_RUNS_DIR`, `SYNDRA_STATE_DIR`,
+`SYNDRA_STATE_DB`, `SYNDRA_WORKTREE_ROOT`, `SYNDRA_KEEP_WORKTREES`,
+`SYNDRA_MAX_STEPS`, `SYNDRA_COMMAND_TIMEOUT`,
+`SYNDRA_MAX_HISTORY_CHARS`, `SYNDRA_DURABLE_EXECUTION`,
+`SYNDRA_PARALLEL_EXECUTION`, `SYNDRA_MAX_WORKERS`,
+`SYNDRA_WORKER_LEASE_SECONDS`, `SYNDRA_WORKER_HEARTBEAT_SECONDS`, and
+`SYNDRA_INTEGRATION_STRATEGY` control local execution.
 
 ## Safety, index, daemon, and logs
 
-`AGENTBUS_POLICY_MODE` must remain `enforce` during the public beta.
-`AGENTBUS_REPOSITORY_INTELLIGENCE`, `AGENTBUS_SEMANTIC_RETRIEVAL`,
-`AGENTBUS_TRACE_RETENTION_DAYS`, `AGENTBUS_DAEMON_AUTO_START`,
-`AGENTBUS_DAEMON_IDLE_TIMEOUT_SECONDS`, `AGENTBUS_LOG_LEVEL`, and
-`AGENTBUS_LOG_RETENTION_FILES` control optional local services and retention.
+`SYNDRA_POLICY_MODE` must remain `enforce` during the public beta.
+`SYNDRA_REPOSITORY_INTELLIGENCE`, `SYNDRA_SEMANTIC_RETRIEVAL`,
+`SYNDRA_TRACE_RETENTION_DAYS`, `SYNDRA_DAEMON_AUTO_START`,
+`SYNDRA_DAEMON_IDLE_TIMEOUT_SECONDS`, `SYNDRA_LOG_LEVEL`, and
+`SYNDRA_LOG_RETENTION_FILES` control optional local services and retention.
 
 ## Provider routing
 
-`AGENTBUS_PROVIDER`, `AGENTBUS_FALLBACK_PROVIDER`,
-`AGENTBUS_ENABLE_PROVIDER_FALLBACK`, `AGENTBUS_MODEL`,
-`AGENTBUS_OLLAMA_URL`, `AGENTBUS_PLANNER_MODEL`, `AGENTBUS_CODER_MODEL`,
-`AGENTBUS_REVIEWER_MODEL`, `AGENTBUS_SUMMARIZER_MODEL`,
-`AGENTBUS_MODEL_TIMEOUT_SECONDS`, `AGENTBUS_MODEL_MAX_RETRIES`,
-`AGENTBUS_MODEL_RETRY_BASE_SECONDS`, and
-`AGENTBUS_MODEL_RETRY_MAX_SECONDS` configure normalized routing.
+`SYNDRA_PROVIDER`, `SYNDRA_FALLBACK_PROVIDER`,
+`SYNDRA_ENABLE_PROVIDER_FALLBACK`, `SYNDRA_MODEL`,
+`SYNDRA_OLLAMA_URL`, `SYNDRA_PLANNER_MODEL`, `SYNDRA_CODER_MODEL`,
+`SYNDRA_REVIEWER_MODEL`, `SYNDRA_SUMMARIZER_MODEL`,
+`SYNDRA_MODEL_TIMEOUT_SECONDS`, `SYNDRA_MODEL_MAX_RETRIES`,
+`SYNDRA_MODEL_RETRY_BASE_SECONDS`, and
+`SYNDRA_MODEL_RETRY_MAX_SECONDS` configure normalized routing.
 
 ## Azure OpenAI
 
@@ -45,12 +48,12 @@ files, command arguments, issue reports, support bundles, or screenshots.
 
 ## Deterministic development and evaluation
 
-`AGENTBUS_DETERMINISTIC_PROFILE` selects a built-in offline profile. Latency and
+`SYNDRA_DETERMINISTIC_PROFILE` selects a built-in offline profile. Latency and
 failure variables are intended for bounded tests, not normal user setup.
-Evaluation-specific limits use `AGENTBUS_EVAL_MAX_REQUESTS`,
-`AGENTBUS_EVAL_MAX_TOKENS`, `AGENTBUS_EVAL_TIMEOUT_SECONDS`,
-`AGENTBUS_EVAL_RESULTS_DIR`, `AGENTBUS_EVAL_FIXTURE_ROOT`, and
-`AGENTBUS_EVAL_PRESERVE_FIXTURES`.
+Evaluation-specific limits use `SYNDRA_EVAL_MAX_REQUESTS`,
+`SYNDRA_EVAL_MAX_TOKENS`, `SYNDRA_EVAL_TIMEOUT_SECONDS`,
+`SYNDRA_EVAL_RESULTS_DIR`, `SYNDRA_EVAL_FIXTURE_ROOT`, and
+`SYNDRA_EVAL_PRESERVE_FIXTURES`.
 
-Use `.env.example` only as a placeholder reference. AgentBus intentionally does
+Use `.env.example` only as a placeholder reference. Syndra intentionally does
 not load it.

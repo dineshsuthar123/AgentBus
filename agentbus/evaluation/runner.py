@@ -24,6 +24,7 @@ from agentbus.evaluation.errors import (
 )
 from agentbus.evaluation.fingerprint import agentbus_commit_sha, configuration_fingerprint
 from agentbus.evaluation.fixtures import FixtureRepositoryManager, FixtureWorkspace
+from agentbus.identity import environment_value
 from agentbus.evaluation.models import (
     EvaluationArtifact,
     EvaluationCase,
@@ -89,7 +90,7 @@ class EvaluationRunner:
     def __init__(
         self,
         *,
-        results_dir: str | Path = ".agentbus/evaluations",
+        results_dir: str | Path = ".syndra/evaluations",
         fixture_root: str | Path | None = None,
         owned_fixture_root: str | Path | None = None,
         storage: EvaluationStorage | None = None,
@@ -102,8 +103,8 @@ class EvaluationRunner:
         self.fixture_manager = FixtureRepositoryManager(
             fixture_root or Path(__file__).with_name("fixtures_data"),
             owned_fixture_root
-            or os.getenv("AGENTBUS_EVAL_FIXTURE_ROOT")
-            or Path(tempfile.gettempdir()) / "agentbus-eval-fixtures",
+            or environment_value("SYNDRA_EVAL_FIXTURE_ROOT")[0]
+            or Path(tempfile.gettempdir()) / "syndra-eval-fixtures",
         )
         self.suites = suites or builtin_suites()
         self.variants = variants or builtin_variants()

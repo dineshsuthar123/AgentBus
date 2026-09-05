@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { AgentBusClient } from "../apiClient";
+import { SyndraClient } from "../apiClient";
 import {
   ComparisonStore,
   type ComparisonPersistence
@@ -47,7 +47,7 @@ test("comparison history persists IDs only and removes missing records", async (
     "missing",
     "../unsafe"
   ]);
-  const client = new AgentBusClient(
+  const client = new SyndraClient(
     "http://127.0.0.1:43123",
     token,
     async (input) => {
@@ -94,7 +94,7 @@ test("comparison history persists IDs only and removes missing records", async (
 test("new comparison does not hide history before the first view load", async () => {
   const persistence = new MemoryPersistence();
   persistence.values.set("agentbus.comparisonIds", ["comparison-1"]);
-  const client = new AgentBusClient(
+  const client = new SyndraClient(
     "http://127.0.0.1:43123",
     token,
     async (input) => {

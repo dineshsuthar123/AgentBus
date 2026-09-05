@@ -206,8 +206,8 @@ def compare_distribution_sets(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="python -m agentbus.release_packaging",
-        description="Audit local AgentBus wheel and sdist contents without publishing.",
+        prog="python -m syndra.release_packaging",
+        description="Audit local Syndra wheel and sdist contents without publishing.",
     )
     parser.add_argument("artifacts", nargs="*")
     parser.add_argument("--root", default=".")
@@ -243,11 +243,11 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(payload, indent=2, sort_keys=True))
     elif payload["ok"]:
         print(
-            "AgentBus package audit passed: "
+            "Syndra package audit passed: "
             f"{len(report.artifacts)} artifact(s), reproducible={not reproducibility}."
         )
     else:
-        print("AgentBus package audit failed.")
+        print("Syndra package audit failed.")
         for finding in (*report.findings, *reproducibility):
             print(f"  [{finding.code}] {finding.artifact}: {finding.detail}")
     return 0 if payload["ok"] else 1
@@ -332,6 +332,8 @@ def _audit_wheel(
         ]
     metadata_root = dist_info[0]
     required = {
+        "syndra/__init__.py",
+        "syndra/py.typed",
         "agentbus/__init__.py",
         "agentbus/py.typed",
         f"{metadata_root}/METADATA",
@@ -365,7 +367,7 @@ def _audit_wheel(
     unexpected = sorted(
         name
         for name in entries
-        if not name.startswith("agentbus/")
+        if not name.startswith(("syndra/", "agentbus/"))
         and not name.startswith(f"{metadata_root}/")
     )
     if unexpected:
@@ -379,8 +381,8 @@ def _audit_wheel(
     metadata_bytes = entries.get(f"{metadata_root}/METADATA")
     if metadata_bytes is not None:
         metadata = Parser().parsestr(metadata_bytes.decode("utf-8", errors="replace"))
-        if metadata.get("Name", "").casefold() != "agentbus":
-            findings.append(PackageFinding("METADATA_NAME", path.name, "Package name is not agentbus."))
+        if metadata.get("Name", "").casefold() != "syndra":
+            findings.append(PackageFinding("METADATA_NAME", path.name, "Package name is not syndra."))
         if metadata.get("Version") != expected_version:
             findings.append(
                 PackageFinding(
@@ -421,6 +423,8 @@ def _audit_wheel(
         errors="replace",
     )
     for expected in (
+        "syndra = syndra.cli:main",
+        "syndra-eval = syndra.eval:main",
         "agentbus = agentbus.cli:main",
         "agentbus-eval = agentbus.eval:main",
     ):
@@ -502,6 +506,8 @@ def _audit_sdist(
         f"{root}/MANIFEST.in",
         f"{root}/PKG-INFO",
         f"{root}/README.md",
+        f"{root}/syndra/__init__.py",
+        f"{root}/syndra/py.typed",
         f"{root}/agentbus/__init__.py",
         f"{root}/agentbus/py.typed",
         f"{root}/pyproject.toml",
@@ -518,8 +524,8 @@ def _audit_sdist(
     metadata_bytes = entries.get(f"{root}/PKG-INFO")
     if metadata_bytes is not None:
         metadata = Parser().parsestr(metadata_bytes.decode("utf-8", errors="replace"))
-        if metadata.get("Name", "").casefold() != "agentbus":
-            findings.append(PackageFinding("SDIST_NAME", path.name, "Package name is not agentbus."))
+        if metadata.get("Name", "").casefold() != "syndra":
+            findings.append(PackageFinding("SDIST_NAME", path.name, "Package name is not syndra."))
         if metadata.get("Version") != expected_version:
             findings.append(
                 PackageFinding(
@@ -543,7 +549,7 @@ def _compare_wheel_and_sdist(
     root = next(iter(roots))
     findings: list[PackageFinding] = []
     for name, content in wheel_entries.items():
-        if not name.startswith("agentbus/"):
+        if not name.startswith(("syndra/", "agentbus/")):
             continue
         source_name = f"{root}/{name}"
         if source_name not in sdist_entries:
@@ -608,8 +614,8 @@ def _default_artifacts(root: Path) -> tuple[Path, ...]:
     return tuple(
         path
         for pattern in (
-            f"agentbus-{__version__}*.whl",
-            f"agentbus-{__version__}*.tar.gz",
+            f"syndra-{__version__}*.whl",
+            f"syndra-{__version__}*.tar.gz",
         )
         for path in sorted(directory.glob(pattern))
     )

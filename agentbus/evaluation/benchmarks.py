@@ -23,7 +23,7 @@ from agentbus.security.redaction import safe_child_environment
 APPROVED_LICENSES = {"MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause"}
 _COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 _SAFE_ID = re.compile(r"^[a-z0-9][a-z0-9-]{1,79}$")
-_OWNER_MARKER = ".agentbus-real-repository-owned.json"
+_OWNER_MARKER = ".syndra-real-repository-owned.json"
 
 
 class BenchmarkModel(BaseModel):
@@ -147,7 +147,7 @@ class RealRepositoryManager:
     """Explicitly clone immutable sources into marker-owned temporary storage."""
 
     def __init__(self, root: str | Path | None = None, *, timeout_seconds: float = 180):
-        parent = Path(root or Path(tempfile.gettempdir()) / "agentbus-real-repositories")
+        parent = Path(root or Path(tempfile.gettempdir()) / "syndra-real-repositories")
         self.parent = parent.expanduser().resolve()
         self.session_root = (self.parent / uuid.uuid4().hex).resolve()
         self.timeout_seconds = timeout_seconds

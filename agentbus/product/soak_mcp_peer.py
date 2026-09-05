@@ -46,7 +46,7 @@ def _result(request: dict[str, Any]) -> dict[str, Any]:
         return {
             "protocolVersion": version,
             "capabilities": {"tools": {"listChanged": False}},
-            "serverInfo": {"name": "agentbus-soak-peer", "version": "1.0.0"},
+            "serverInfo": {"name": "syndra-soak-peer", "version": "1.0.0"},
         }
     if method == "ping":
         return {}

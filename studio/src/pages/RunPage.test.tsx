@@ -26,7 +26,7 @@ const run: RunSummary = {
   completed_at: "2026-08-30T10:02:00Z",
   verifier_status: "passed",
   reviewer_status: "approved",
-  changed_files: ["src/main/java/com/agentbus/demo/PaymentService.java"],
+  changed_files: ["src/main/java/com/syndra/demo/PaymentService.java"],
   version: 6
 };
 

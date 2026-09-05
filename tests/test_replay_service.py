@@ -807,7 +807,7 @@ def test_service_partial_replay_uses_owned_isolation_and_persists_it(
     assert persisted == result.session
     replay_root = (
         config.workspace_path.parent
-        / ".agentbus-replays"
+        / ".syndra-replays"
         / config.workspace_path.name
         / request.replay_id
     )

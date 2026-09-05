@@ -198,7 +198,7 @@ def test_interrupted_trace_metadata_removes_uncommitted_blob(
     assert [
         path for path in store.metadata_directory.rglob("*") if path.is_file()
     ] == []
-    assert list(root.rglob(".agentbus-tmp-*")) == []
+    assert list(root.rglob(".syndra-tmp-*")) == []
     assert state.get_run(expected.run_id) == expected
 
 

@@ -22,8 +22,8 @@ from agentbus.evaluation.suites import builtin_suites, builtin_variants
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="python -m agentbus.eval",
-        description="Run deterministic AgentBus evaluations and regression gates.",
+        prog="python -m syndra.eval",
+        description="Run deterministic Syndra evaluations and regression gates.",
     )
     parser.add_argument("--results-dir", help="Override evaluation result storage.")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -422,7 +422,7 @@ def render_run(run: EvaluationRun) -> str:
             lines.append(f"  Retained fixture: {case.retained_fixture_path}")
         if case.runtime_run_id:
             lines.append(
-                "  Runtime debug: python -m agentbus.main --show-run "
+                "  Runtime debug: python -m syndra --show-run "
                 f"{case.runtime_run_id} --workspace <retained-fixture-repo>"
             )
     if run.suite_id == "repository-intelligence":
@@ -491,7 +491,7 @@ def render_variant_comparison(
         return report.model_dump_json(indent=2)
     if output_format == "markdown":
         lines = [
-            "# AgentBus variant comparison",
+            "# Syndra variant comparison",
             "",
             f"| Metric | {report.left.variant_id} | {report.right.variant_id} | Difference (right-left) |",
             "| --- | ---: | ---: | ---: |",

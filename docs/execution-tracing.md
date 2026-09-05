@@ -1,6 +1,6 @@
 # Execution Tracing
 
-AgentBus v0.4 records a bounded, hierarchical execution trace for durable
+Syndra v0.4 records a bounded, hierarchical execution trace for durable
 runs. A trace is diagnostic evidence for inspection, replay, comparison, and
 provenance verification. It is not execution truth: the durable SQLite run,
 task, attempt, approval, tool, and event records remain authoritative.
@@ -44,7 +44,7 @@ forked-from without rewriting the source trace.
 
 ## What is captured
 
-AgentBus captures only material needed for bounded diagnostics or replay:
+Syndra captures only material needed for bounded diagnostics or replay:
 
 - sanitized structured model envelopes and parsed values;
 - policy decisions, capability facts, and approval references;
@@ -155,9 +155,9 @@ Examples:
 Use the CLI without executing a replay:
 
 ```powershell
-agentbus trace list --json
-agentbus trace inspect <run-or-trace-id> --json
-agentbus trace verify <run-or-trace-id> --json
+syndra trace list --json
+syndra trace inspect <run-or-trace-id> --json
+syndra trace verify <run-or-trace-id> --json
 ```
 
 The authenticated loopback control plane exposes bounded trace summaries,
@@ -170,16 +170,16 @@ Virtual documents show safe metadata and hashes, not captured payload values.
 ## Failure and cleanup
 
 A failed, rejected, or cancelled run can still have useful trace and artifact
-records. AgentBus does not reset, clean, delete, or roll back source workspace
+records. Syndra does not reset, clean, delete, or roll back source workspace
 files after failure. Trace replay also does not roll back prior external side
 effects.
 
 Trace garbage collection is plan-first:
 
 ```powershell
-agentbus trace gc --json
-agentbus trace gc --execute --json
-agentbus trace gc --resume --json
+syndra trace gc --json
+syndra trace gc --execute --json
+syndra trace gc --resume --json
 ```
 
 The default policy keeps failures, the 100 most recent traces, and referenced

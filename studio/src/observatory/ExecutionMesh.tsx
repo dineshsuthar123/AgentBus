@@ -100,7 +100,7 @@ export function ExecutionMesh({ focusRequest = 0, highlightTaskId, model, onSele
   }
 
   if (!model.nodes.length) {
-    return <div className="mesh-empty"><Route size={20} /><strong>No persisted topology</strong><span>The execution mesh appears when AgentBus persists a run graph.</span></div>;
+    return <div className="mesh-empty"><Route size={20} /><strong>No persisted topology</strong><span>The execution mesh appears when Syndra persists a run graph.</span></div>;
   }
 
   return (

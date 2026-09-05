@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import { readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import * as vscode from "vscode";
-import { AgentBusApiError, type AgentBusClient } from "../../apiClient";
+import { SyndraApiError, type SyndraClient } from "../../apiClient";
 import { formatApprovalConfirmation } from "../../approvalPresentation";
 import { toolArtifactUri } from "../../artifactDocuments";
-import type { AgentBusExtensionApi } from "../../extension";
+import type { SyndraExtensionApi } from "../../extension";
 import type {
   ApprovalSummary,
   CancelResponse,
@@ -27,12 +27,12 @@ type DeterministicProfile = NonNullable<
 >;
 
 export async function run(): Promise<void> {
-  const pythonPath = requiredEnvironment("AGENTBUS_E2E_PYTHON");
-  const configPath = requiredEnvironment("AGENTBUS_E2E_CONFIG");
-  const mcpPrivateMarker = requiredEnvironment("AGENTBUS_E2E_MCP_MARKER");
-  const registryPath = requiredEnvironment("AGENTBUS_E2E_REGISTRY");
-  const workspace = requiredEnvironment("AGENTBUS_E2E_WORKSPACE");
-  const artifactRoot = requiredEnvironment("AGENTBUS_E2E_ARTIFACT_ROOT");
+  const pythonPath = requiredEnvironment("SYNDRA_E2E_PYTHON");
+  const configPath = requiredEnvironment("SYNDRA_E2E_CONFIG");
+  const mcpPrivateMarker = requiredEnvironment("SYNDRA_E2E_MCP_MARKER");
+  const registryPath = requiredEnvironment("SYNDRA_E2E_REGISTRY");
+  const workspace = requiredEnvironment("SYNDRA_E2E_WORKSPACE");
+  const artifactRoot = requiredEnvironment("SYNDRA_E2E_ARTIFACT_ROOT");
   const configuration = vscode.workspace.getConfiguration("agentbus");
   await configuration.update(
     "pythonPath",
@@ -60,10 +60,10 @@ export async function run(): Promise<void> {
     vscode.ConfigurationTarget.Global
   );
 
-  const extension = vscode.extensions.getExtension<AgentBusExtensionApi>(
-    "agentbus.agentbus-vscode"
+  const extension = vscode.extensions.getExtension<SyndraExtensionApi>(
+    "syndra.syndra-vscode"
   );
-  assert.ok(extension, "AgentBus extension was not discovered");
+  assert.ok(extension, "Syndra extension was not discovered");
   const api = await extension.activate();
   const commands = await vscode.commands.getCommands(true);
   assert.ok(commands.includes("agentbus.startTask"));
@@ -97,7 +97,7 @@ export async function run(): Promise<void> {
 
   const client = await api.client();
   const initialDaemon = api.daemonId();
-  assert.ok(initialDaemon, "AgentBus daemon did not start");
+  assert.ok(initialDaemon, "Syndra daemon did not start");
   await waitFor(() => (api.eventStreamConnected() ? true : undefined));
   const intelligenceLifecycle = await exerciseRepositoryIntelligence(
     client,
@@ -314,7 +314,7 @@ export async function run(): Promise<void> {
     vscode.workspace.textDocuments.find(
       (document) =>
         document.uri.scheme === "agentbus-report" &&
-        document.getText().includes(`AgentBus Run ${processRun.run_id}`) &&
+        document.getText().includes(`Syndra Run ${processRun.run_id}`) &&
         document.getText().includes("**Status:** cancelled")
     )
   );
@@ -518,7 +518,7 @@ interface RepositoryIntelligenceLifecycle {
 }
 
 async function exerciseRepositoryIntelligence(
-  client: AgentBusClient,
+  client: SyndraClient,
   workspace: string
 ): Promise<RepositoryIntelligenceLifecycle> {
   const built = await vscode.commands.executeCommand<
@@ -706,7 +706,7 @@ async function exerciseRepositoryIntelligence(
 }
 
 async function exerciseIntelligenceGuidedRun(
-  client: AgentBusClient,
+  client: SyndraClient,
   workspace: string,
   workspaceId: string
 ): Promise<void> {
@@ -729,7 +729,7 @@ async function exerciseIntelligenceGuidedRun(
   const completed = await waitForRun(client, run.run_id, "succeeded");
   assert.equal(completed.reviewer_status, "approved");
   const spans = await client.traceSpans(run.run_id, 0, 500);
-  let intelligenceSpan: Awaited<ReturnType<AgentBusClient["traceSpan"]>> | undefined;
+  let intelligenceSpan: Awaited<ReturnType<SyndraClient["traceSpan"]>> | undefined;
   for (const span of spans.spans.filter((item) => item.span_type === "custom")) {
     const detail = await client.traceSpan(run.run_id, span.span_id);
     if (detail.attributes?.component === "repository_intelligence") {
@@ -760,7 +760,7 @@ async function exerciseIntelligenceGuidedRun(
     vscode.workspace.textDocuments.find(
       (document) =>
         document.uri.scheme === "agentbus-report" &&
-        document.getText().includes(`AgentBus Run ${run.run_id}`) &&
+        document.getText().includes(`Syndra Run ${run.run_id}`) &&
         document.getText().includes("**Status:** succeeded")
     )
   );
@@ -771,7 +771,7 @@ async function exerciseIntelligenceGuidedRun(
 }
 
 interface ReplayLifecycleInput {
-  client: AgentBusClient;
+  client: SyndraClient;
   runId: string;
   workspace: string;
   artifactRoot: string;
@@ -1025,7 +1025,7 @@ async function exerciseReplayLifecycle(
       allowSourceContent: true
     });
   } catch (error) {
-    assert.ok(error instanceof AgentBusApiError);
+    assert.ok(error instanceof SyndraApiError);
     assert.equal(error.status, 409);
     corruptionRejected = true;
   }
@@ -1065,7 +1065,7 @@ async function exerciseReplayLifecycle(
 }
 
 async function waitForReplay(
-  client: AgentBusClient,
+  client: SyndraClient,
   replayId: string
 ): Promise<ReplaySessionResponse> {
   const terminal = new Set([
@@ -1148,7 +1148,7 @@ function runRequest(
 }
 
 async function waitForEvent(
-  api: AgentBusExtensionApi,
+  api: SyndraExtensionApi,
   runId: string,
   eventType: string
 ): Promise<void> {
@@ -1177,7 +1177,7 @@ async function waitForEvent(
 }
 
 async function waitForToolApproval(
-  client: Awaited<ReturnType<AgentBusExtensionApi["client"]>>,
+  client: Awaited<ReturnType<SyndraExtensionApi["client"]>>,
   runId: string
 ): Promise<ApprovalSummary> {
   return waitFor(async () => {
@@ -1194,7 +1194,7 @@ async function waitForToolApproval(
 }
 
 async function waitForToolInvocation(
-  client: Awaited<ReturnType<AgentBusExtensionApi["client"]>>,
+  client: Awaited<ReturnType<SyndraExtensionApi["client"]>>,
   runId: string,
   predicate: (invocation: ToolInvocationSummary) => boolean
 ): Promise<ToolInvocationSummary> {
@@ -1218,9 +1218,9 @@ async function submitAfterWorkspaceRelease(
       );
     } catch (error) {
       if (
-        error instanceof AgentBusApiError &&
+        error instanceof SyndraApiError &&
         error.status === 409 &&
-        /^Workspace already has an active AgentBus run: [0-9a-f]+\.$/.test(
+        /^Workspace already has an active Syndra run: [0-9a-f]+\.$/.test(
           error.message
         )
       ) {
@@ -1232,7 +1232,7 @@ async function submitAfterWorkspaceRelease(
 }
 
 async function resumeAfterOwnerRelease(
-  client: Awaited<ReturnType<AgentBusExtensionApi["client"]>>,
+  client: Awaited<ReturnType<SyndraExtensionApi["client"]>>,
   runId: string
 ) {
   return waitFor(async () => {
@@ -1240,7 +1240,7 @@ async function resumeAfterOwnerRelease(
       return await client.resume(runId);
     } catch (error) {
       if (
-        error instanceof AgentBusApiError &&
+        error instanceof SyndraApiError &&
         error.status === 409 &&
         error.message === "The run already has an active owner."
       ) {
@@ -1270,7 +1270,7 @@ function requiredInvocation(
 }
 
 async function waitForRun(
-  client: Awaited<ReturnType<AgentBusExtensionApi["client"]>>,
+  client: Awaited<ReturnType<SyndraExtensionApi["client"]>>,
   runId: string,
   expected: string
 ): Promise<RunSummary> {
@@ -1292,7 +1292,7 @@ async function waitForRun(
 }
 
 async function waitForProviderOperation(
-  client: Awaited<ReturnType<AgentBusExtensionApi["client"]>>,
+  client: Awaited<ReturnType<SyndraExtensionApi["client"]>>,
   runId: string
 ): Promise<void> {
   await waitFor(async () => {
@@ -1327,7 +1327,7 @@ async function waitFor<T>(
     if (value !== undefined && value !== false) return value;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  throw new Error("Timed out waiting for AgentBus Electron state.");
+  throw new Error("Timed out waiting for Syndra Electron state.");
 }
 
 function recordValue(value: unknown): Record<string, unknown> | undefined {
@@ -1338,6 +1338,6 @@ function recordValue(value: unknown): Record<string, unknown> | undefined {
 
 function requiredEnvironment(name: string): string {
   const value = process.env[name];
-  if (!value) throw new Error(`Missing ${name} for AgentBus Electron test.`);
+  if (!value) throw new Error(`Missing ${name} for Syndra Electron test.`);
   return value;
 }

@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import type { ExtensionContext, OutputChannel } from "vscode";
 import * as vscode from "vscode";
-import { AgentBusClient } from "./apiClient";
+import { SyndraClient } from "./apiClient";
 import {
   buildLaunchSpec,
   buildStopSpec,
@@ -20,7 +20,7 @@ const secretPrefix = "agentbus.daemonToken.";
 
 export interface DaemonConnection {
   entry: DaemonRegistryEntry;
-  client: AgentBusClient;
+  client: SyndraClient;
 }
 
 export class DaemonManager implements vscode.Disposable {
@@ -85,7 +85,7 @@ export class DaemonManager implements vscode.Disposable {
         continue;
       }
       try {
-        const client = new AgentBusClient(daemonBaseUrl(entry), token);
+        const client = new SyndraClient(daemonBaseUrl(entry), token);
         const info = await client.info();
         const infoCompatibility = assessDaemonCompatibility(
           info.agentbus_version,
@@ -102,7 +102,7 @@ export class DaemonManager implements vscode.Disposable {
           continue;
         }
         this.connection = { entry, client };
-        this.output.appendLine(`Connected to AgentBus daemon ${entry.daemon_id}.`);
+        this.output.appendLine(`Connected to Syndra daemon ${entry.daemon_id}.`);
         return this.connection;
       } catch (error) {
         this.output.appendLine(
@@ -116,12 +116,12 @@ export class DaemonManager implements vscode.Disposable {
   public async start(): Promise<DaemonConnection> {
     if (!vscode.workspace.isTrusted) {
       throw new Error(
-        "AgentBus daemon startup is disabled until the workspace is trusted."
+        "Syndra daemon startup is disabled until the workspace is trusted."
       );
     }
     if (this.child) {
       if (this.child.exitCode === null && this.child.signalCode === null) {
-        throw new Error("An AgentBus daemon process is already running.");
+        throw new Error("An Syndra daemon process is already running.");
       }
       this.child = undefined;
     }
@@ -156,7 +156,7 @@ export class DaemonManager implements vscode.Disposable {
       state_database: "",
       registry_path: handshake.registry_path
     };
-    const client = new AgentBusClient(
+    const client = new SyndraClient(
       daemonBaseUrl(entry),
       handshake.bearer_token
     );
@@ -173,7 +173,7 @@ export class DaemonManager implements vscode.Disposable {
       child.kill();
       throw new Error(
         info.daemon_id !== handshake.daemon_id
-          ? "Started AgentBus daemon failed identity validation."
+          ? "Started Syndra daemon failed identity validation."
           : compatibility.message
       );
     }
@@ -189,7 +189,7 @@ export class DaemonManager implements vscode.Disposable {
         this.connection = undefined;
       }
     });
-    this.output.appendLine(`Started AgentBus daemon ${handshake.daemon_id}.`);
+    this.output.appendLine(`Started Syndra daemon ${handshake.daemon_id}.`);
     return this.connection;
   }
 
@@ -206,7 +206,7 @@ export class DaemonManager implements vscode.Disposable {
     const result = await runChild(spec.command, spec.args);
     if (result.exitCode !== 0) {
       throw new Error(
-        `AgentBus refused the safe daemon stop request: ${
+        `Syndra refused the safe daemon stop request: ${
           redactText(result.stderr) || "no diagnostic was returned"
         }`
       );
@@ -242,7 +242,7 @@ export class DaemonManager implements vscode.Disposable {
     const configuration = vscode.workspace.getConfiguration("agentbus");
     if (!configuration.get<boolean>("autoStartDaemon", true)) {
       throw new Error(
-        "No compatible AgentBus daemon is available and automatic startup is disabled."
+        "No compatible Syndra daemon is available and automatic startup is disabled."
       );
     }
     return this.start();
@@ -270,14 +270,14 @@ async function readHandshake(
   return new Promise((resolve, reject) => {
     let buffer = "";
     const timer = setTimeout(() => {
-      reject(new Error("Timed out waiting for AgentBus daemon startup."));
+      reject(new Error("Timed out waiting for Syndra daemon startup."));
       child.kill();
     }, 15_000);
     const onData = (chunk: string): void => {
       buffer += chunk;
       if (buffer.length > 65_536) {
         cleanup();
-        reject(new Error("AgentBus daemon startup output exceeded its limit."));
+        reject(new Error("Syndra daemon startup output exceeded its limit."));
         child.kill();
         return;
       }
@@ -299,7 +299,7 @@ async function readHandshake(
     };
     const onExit = (): void => {
       cleanup();
-      reject(new Error("AgentBus daemon exited before startup completed."));
+      reject(new Error("Syndra daemon exited before startup completed."));
     };
     const cleanup = (): void => {
       clearTimeout(timer);

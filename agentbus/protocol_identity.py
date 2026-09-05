@@ -1,4 +1,4 @@
-"""Dependency-free identities shared by generated AgentBus protocols."""
+"""Dependency-free identities shared by generated Syndra protocols."""
 
 CONTROL_PROTOCOL_VERSION = "1.0"
 TOOL_PROTOCOL_NAME = "agentbus.tool"

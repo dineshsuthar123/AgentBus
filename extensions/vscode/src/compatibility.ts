@@ -1,7 +1,7 @@
 import { CONTROL_PROTOCOL_VERSION } from "./generated/protocol";
 
-export const MINIMUM_AGENTBUS_MINOR = [0, 6] as const;
-export const MAXIMUM_AGENTBUS_MINOR_EXCLUSIVE = [0, 7] as const;
+export const MINIMUM_SYNDRA_MINOR = [0, 6] as const;
+export const MAXIMUM_SYNDRA_MINOR_EXCLUSIVE = [0, 7] as const;
 export const EXPECTED_STATE_SCHEMA = 6;
 
 export type CompatibilityCode =
@@ -20,7 +20,7 @@ export interface CompatibilityAssessment {
 }
 
 export function assessDaemonCompatibility(
-  agentbusVersion: string,
+  syndraVersion: string,
   protocolVersion: string
 ): CompatibilityAssessment {
   if (protocolVersion !== CONTROL_PROTOCOL_VERSION) {
@@ -29,42 +29,42 @@ export function assessDaemonCompatibility(
       code: "protocol_mismatch",
       message:
         `Daemon protocol ${protocolVersion || "unknown"} is incompatible with ` +
-        `extension protocol ${CONTROL_PROTOCOL_VERSION}. Upgrade AgentBus and the ` +
+        `extension protocol ${CONTROL_PROTOCOL_VERSION}. Upgrade Syndra and the ` +
         "extension to the same minor release."
     };
   }
-  const parsed = parseMinor(agentbusVersion);
+  const parsed = parseMinor(syndraVersion);
   if (!parsed) {
     return {
       compatible: false,
       code: "invalid_version",
       message:
-        "The daemon did not report a valid AgentBus version. Run `agentbus version` " +
+        "The daemon did not report a valid Syndra version. Run `syndra version` " +
         "and reinstall a supported package."
     };
   }
-  if (compareMinor(parsed, MINIMUM_AGENTBUS_MINOR) < 0) {
+  if (compareMinor(parsed, MINIMUM_SYNDRA_MINOR) < 0) {
     return {
       compatible: false,
       code: "daemon_too_old",
       message:
-        `AgentBus ${agentbusVersion} is too old for this extension. ` +
+        `Syndra ${syndraVersion} is too old for this extension. ` +
         "Upgrade the Python package to the 0.6 beta line."
     };
   }
-  if (compareMinor(parsed, MAXIMUM_AGENTBUS_MINOR_EXCLUSIVE) >= 0) {
+  if (compareMinor(parsed, MAXIMUM_SYNDRA_MINOR_EXCLUSIVE) >= 0) {
     return {
       compatible: false,
       code: "daemon_too_new",
       message:
-        `AgentBus ${agentbusVersion} is newer than this extension supports. ` +
+        `Syndra ${syndraVersion} is newer than this extension supports. ` +
         "Upgrade the extension before connecting."
     };
   }
   return {
     compatible: true,
     code: "compatible",
-    message: `AgentBus ${agentbusVersion} and protocol ${protocolVersion} are compatible.`
+    message: `Syndra ${syndraVersion} and protocol ${protocolVersion} are compatible.`
   };
 }
 
@@ -82,7 +82,7 @@ export function assessStateSchema(actual: number): CompatibilityAssessment {
       code: "schema_too_old",
       message:
         `State schema ${actual} requires migration to ${EXPECTED_STATE_SCHEMA}. ` +
-        "Run `agentbus migrate plan`."
+        "Run `syndra migrate plan`."
     };
   }
   if (actual > EXPECTED_STATE_SCHEMA) {

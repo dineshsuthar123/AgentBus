@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { DaemonRegistryEntry, ReadyHandshake } from "./generated/protocol";
@@ -24,16 +25,16 @@ export interface LaunchSpec {
 
 export function parseReadyHandshake(line: string): ReadyHandshake {
   if (line.length > 65_536) {
-    throw new Error("AgentBus startup handshake exceeded its size limit.");
+    throw new Error("Syndra startup handshake exceeded its size limit.");
   }
   let value: unknown;
   try {
     value = JSON.parse(line);
   } catch {
-    throw new Error("AgentBus did not return a valid startup handshake.");
+    throw new Error("Syndra did not return a valid startup handshake.");
   }
   if (!isRecord(value)) {
-    throw new Error("AgentBus startup handshake is not an object.");
+    throw new Error("Syndra startup handshake is not an object.");
   }
   const requiredStrings = [
     "protocol_version",
@@ -46,7 +47,7 @@ export function parseReadyHandshake(line: string): ReadyHandshake {
   ] as const;
   for (const key of requiredStrings) {
     if (typeof value[key] !== "string" || value[key].length === 0) {
-      throw new Error(`AgentBus startup handshake is missing ${key}.`);
+      throw new Error(`Syndra startup handshake is missing ${key}.`);
     }
   }
   const compatibility = assessDaemonCompatibility(
@@ -67,7 +68,7 @@ export function parseReadyHandshake(line: string): ReadyHandshake {
     value.pid < 1 ||
     String(value.bearer_token).length < 32
   ) {
-    throw new Error("AgentBus startup handshake is incompatible or invalid.");
+    throw new Error("Syndra startup handshake is incompatible or invalid.");
   }
   return value as unknown as ReadyHandshake;
 }
@@ -77,14 +78,14 @@ export function parseRegistry(content: string): RegistryDocument {
   try {
     value = JSON.parse(content);
   } catch {
-    throw new Error("AgentBus daemon registry is not valid JSON.");
+    throw new Error("Syndra daemon registry is not valid JSON.");
   }
   if (!isRecord(value) || value.version !== 1 || !Array.isArray(value.daemons)) {
-    throw new Error("AgentBus daemon registry has an unsupported format.");
+    throw new Error("Syndra daemon registry has an unsupported format.");
   }
   const serialized = JSON.stringify(value).toLowerCase();
   if (serialized.includes("bearer_token") || serialized.includes('"token"')) {
-    throw new Error("AgentBus daemon registry unexpectedly contains secret fields.");
+    throw new Error("Syndra daemon registry unexpectedly contains secret fields.");
   }
   return value as unknown as RegistryDocument;
 }
@@ -92,7 +93,7 @@ export function parseRegistry(content: string): RegistryDocument {
 export function buildLaunchSpec(settings: LaunchSettings): LaunchSpec {
   const registryPath = settings.registryPath
     ? resolve(settings.registryPath)
-    : join(homedir(), ".agentbus", "daemons.json");
+    : defaultRegistryPath();
   const common = [
     "serve",
     ...(settings.configPath
@@ -119,11 +120,11 @@ export function buildLaunchSpec(settings: LaunchSettings): LaunchSpec {
   if (settings.pythonPath) {
     return {
       command: resolve(settings.pythonPath),
-      args: ["-m", "agentbus.cli", ...common],
+      args: ["-m", "syndra.cli", ...common],
       registryPath
     };
   }
-  return { command: "agentbus", args: common, registryPath };
+  return { command: "syndra", args: common, registryPath };
 }
 
 export function buildStopSpec(
@@ -142,9 +143,18 @@ export function buildStopSpec(
     return { ...launch, args: commandArgs };
   }
   if (settings.pythonPath) {
-    return { ...launch, args: ["-m", "agentbus.cli", ...commandArgs] };
+    return { ...launch, args: ["-m", "syndra.cli", ...commandArgs] };
   }
   return { ...launch, args: commandArgs };
+}
+
+export function defaultRegistryPath(
+  home = homedir(),
+  pathExists: (path: string) => boolean = existsSync
+): string {
+  const canonical = join(home, ".syndra", "daemons.json");
+  const legacy = join(home, ".agentbus", "daemons.json");
+  return pathExists(canonical) || !pathExists(legacy) ? canonical : legacy;
 }
 
 export function daemonBaseUrl(entry: {

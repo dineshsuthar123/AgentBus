@@ -5,7 +5,7 @@
 
 ## Context
 
-AgentBus already had durable task graphs, approvals, cancellation, worktrees,
+Syndra already had durable task graphs, approvals, cancellation, worktrees,
 Git finalization, a local control plane, and provider-neutral model routing.
 Filesystem, command, Git, verifier, and future external tools did not share one
 versioned authorization and accounting boundary. Extending each path
@@ -13,7 +13,7 @@ independently would make workspace scope, approval semantics, retries, process
 cleanup, resource limits, and audit behavior diverge.
 
 Model output and repository code are untrusted. A tool name or a local MCP
-server is not authority. AgentBus also cannot honestly claim complete sandbox
+server is not authority. Syndra also cannot honestly claim complete sandbox
 isolation without a kernel or virtual-machine boundary.
 
 ## Decision
@@ -74,7 +74,7 @@ atomic where the platform permits.
 
 Managed Git adapters validate exact repository top-level equality, use explicit
 arguments and path separators, disable hooks, bound and redact output, and
-permit mutation only in AgentBus-owned worktrees. Remote and destructive Git
+permit mutation only in Syndra-owned worktrees. Remote and destructive Git
 operations are absent from the managed registry.
 
 ## MCP decision
@@ -85,10 +85,10 @@ capability map, a namespaced registry identity, local schema validation, normal
 policy evaluation, and exact approval. Sessions are bounded and closed with the
 owning runtime.
 
-AgentBus exposes a separate authenticated MCP endpoint with a fixed set of
+Syndra exposes a separate authenticated MCP endpoint with a fixed set of
 bounded control operations. It does not expose arbitrary files, process
 execution, raw SQLite, secrets, approval decisions, commit, push, PR creation,
-or live-provider submission.
+or live-provider invocation.
 
 ## Persistence and recovery
 
@@ -118,7 +118,7 @@ Costs and limitations:
 - descriptors and capability maps require deliberate maintenance;
 - conservative defaults reject some legitimate workflows until a safe adapter
   or explicit policy is added;
-- local interpreters and MCP peers still run with the AgentBus OS account;
+- local interpreters and MCP peers still run with the Syndra OS account;
 - policy network denial is not an OS firewall;
 - POSIX process resource enforcement is incomplete;
 - external and filesystem side effects are not transactionally rolled back;

@@ -1,6 +1,6 @@
 # Regression Fixtures
 
-An AgentBus regression fixture is a successful, sanitized execution trace plus
+An Syndra regression fixture is a successful, sanitized execution trace plus
 deterministic assertions. It uses the `.agentbus-trace` container and can be
 replayed without provider credentials or network access.
 
@@ -17,7 +17,7 @@ writing the archive.
 Capture without source-like objects:
 
 ```powershell
-agentbus trace capture <run-or-trace-id> `
+syndra trace capture <run-or-trace-id> `
   --output tests/fixtures/example.agentbus-trace `
   --json
 ```
@@ -27,7 +27,7 @@ expected outcomes. Capture then refuses to create a non-executable partial
 fixture and requires explicit source consent:
 
 ```powershell
-agentbus trace capture <run-or-trace-id> `
+syndra trace capture <run-or-trace-id> `
   --output tests/fixtures/example.agentbus-trace `
   --include-source-content `
   --json
@@ -71,7 +71,7 @@ rejected at capture time.
 Replay the fixture offline:
 
 ```powershell
-agentbus replay tests/fixtures/example.agentbus-trace `
+syndra replay tests/fixtures/example.agentbus-trace `
   --mode offline `
   --json
 ```
@@ -79,7 +79,7 @@ agentbus replay tests/fixtures/example.agentbus-trace `
 For a source-bearing fixture:
 
 ```powershell
-agentbus replay tests/fixtures/example.agentbus-trace `
+syndra replay tests/fixtures/example.agentbus-trace `
   --mode offline `
   --allow-source-content `
   --json
@@ -99,7 +99,7 @@ not execute the fixture.
 
 ## Assertions and interpretation
 
-A passing fixture means the current AgentBus version:
+A passing fixture means the current Syndra version:
 
 - accepted the archive and provenance;
 - reproduced the applicable structured replay outcomes;
@@ -120,7 +120,7 @@ provenance reports.
 ## Source and license boundary
 
 Source-like content includes more than files ending in `.py` or `.ts`.
-AgentBus derives the boundary from trace media types and reference names and
+Syndra derives the boundary from trace media types and reference names and
 can classify:
 
 - patches and diffs;
@@ -138,7 +138,7 @@ Review:
 - whether the fixture belongs in the repository;
 - whether its size is appropriate.
 
-AgentBus redaction and secret detection are defense in depth, not a legal or
+Syndra redaction and secret detection are defense in depth, not a legal or
 data-classification review.
 
 ## Repository hygiene
@@ -167,7 +167,7 @@ that do not belong in release artifacts.
 
 ## VS Code workflow
 
-Use **AgentBus: Capture Regression Fixture** on a successful run.
+Use **Syndra: Capture Regression Fixture** on a successful run.
 
 The command:
 
@@ -189,7 +189,7 @@ Do not overwrite a fixture merely because replay changed. Compare the old and
 new runs first:
 
 ```powershell
-agentbus compare <old-run-or-trace> <new-run-or-trace> --json
+syndra compare <old-run-or-trace> <new-run-or-trace> --json
 ```
 
 Classify whether differences are expected configuration changes, policy drift,

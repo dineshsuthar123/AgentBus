@@ -8,8 +8,8 @@ from agentbus.product.acceptance import AcceptanceKind, run_clean_install_accept
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="python -m agentbus.beta_acceptance",
-        description="Run the complete offline AgentBus public-beta acceptance.",
+        prog="python -m syndra.beta_acceptance",
+        description="Run the complete offline Syndra public-beta acceptance.",
     )
     parser.add_argument("--root", default=".")
     parser.add_argument("--json", action="store_true")
@@ -19,7 +19,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
-        print("AgentBus public beta acceptance: " + ("PASS" if report.ok else "FAIL"))
+        print("Syndra public beta acceptance: " + ("PASS" if report.ok else "FAIL"))
         for step in report.steps:
             print(f"  [{step.status.upper()}] {step.name}: {step.detail}")
         if report.error:

@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { AgentBusApiError, AgentBusClient } from "../apiClient";
+import { SyndraApiError, SyndraClient } from "../apiClient";
 
 const token = "a-test-token-that-is-more-than-thirty-two-bytes";
 
 test("API client authenticates in headers without token URLs", async () => {
   let observedUrl = "";
   let observedAuthorization = "";
-  const client = new AgentBusClient(
+  const client = new SyndraClient(
     "http://127.0.0.1:43123",
     token,
     async (input, init) => {
@@ -33,7 +33,7 @@ test("API client authenticates in headers without token URLs", async () => {
 });
 
 test("API client maps stable safe errors", async () => {
-  const client = new AgentBusClient(
+  const client = new SyndraClient(
     "http://127.0.0.1:43123",
     token,
     async () =>
@@ -51,7 +51,7 @@ test("API client maps stable safe errors", async () => {
   );
 
   await assert.rejects(client.listRuns(), (error: unknown) => {
-    assert.ok(error instanceof AgentBusApiError);
+    assert.ok(error instanceof SyndraApiError);
     assert.equal(error.code, "conflict");
     assert.equal(error.retryable, true);
     return true;
@@ -60,11 +60,11 @@ test("API client maps stable safe errors", async () => {
 
 test("API client rejects remote and credentialed daemon URLs", () => {
   assert.throws(
-    () => new AgentBusClient("http://example.com:43123", token),
+    () => new SyndraClient("http://example.com:43123", token),
     /loopback/
   );
   assert.throws(
-    () => new AgentBusClient("http://user:pass@127.0.0.1:43123", token),
+    () => new SyndraClient("http://user:pass@127.0.0.1:43123", token),
     /loopback/
   );
 });
@@ -76,7 +76,7 @@ test("tool and MCP client routes are encoded bounded and command-free", async ()
     body: BodyInit | null | undefined;
     contentType: string | null;
   }> = [];
-  const client = new AgentBusClient(
+  const client = new SyndraClient(
     "http://127.0.0.1:43123",
     token,
     async (input, init) => {
@@ -146,7 +146,7 @@ test("tool and MCP client routes are encoded bounded and command-free", async ()
 
 test("trace client routes encode identifiers and bound span pages", async () => {
   const requests: string[] = [];
-  const client = new AgentBusClient(
+  const client = new SyndraClient(
     "http://127.0.0.1:43123",
     token,
     async (input) => {
@@ -189,7 +189,7 @@ test("repository intelligence client routes are encoded bounded and abortable", 
     method: string;
     body: unknown;
   }> = [];
-  const client = new AgentBusClient(
+  const client = new SyndraClient(
     "http://127.0.0.1:43123",
     token,
     async (input, init) => {
@@ -281,7 +281,7 @@ test("repository intelligence client routes are encoded bounded and abortable", 
 
   const cancelled = new AbortController();
   cancelled.abort(new Error("index cancelled"));
-  const aborting = new AgentBusClient(
+  const aborting = new SyndraClient(
     "http://127.0.0.1:43123",
     token,
     async (_input, init) => {
@@ -304,7 +304,7 @@ test("replay client routes are explicit bounded and command-free", async () => {
     method: string;
     body: BodyInit | null | undefined;
   }> = [];
-  const client = new AgentBusClient(
+  const client = new SyndraClient(
     "http://127.0.0.1:43123",
     token,
     async (input, init) => {
@@ -368,7 +368,7 @@ test("comparison client posts identifiers and uses bounded result pages", async 
     method: string;
     body: BodyInit | null | undefined;
   }> = [];
-  const client = new AgentBusClient(
+  const client = new SyndraClient(
     "http://127.0.0.1:43123",
     token,
     async (input, init) => {
@@ -415,7 +415,7 @@ test("trace archive client keeps payloads in authenticated JSON bodies", async (
     method: string;
     body: BodyInit | null | undefined;
   }> = [];
-  const client = new AgentBusClient(
+  const client = new SyndraClient(
     "http://127.0.0.1:43123",
     token,
     async (input, init) => {

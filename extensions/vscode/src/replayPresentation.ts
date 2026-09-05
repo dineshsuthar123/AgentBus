@@ -60,7 +60,7 @@ export function formatReplayDocument(
   session: ReplaySessionResponse
 ): string {
   const lines = [
-    `# AgentBus Replay ${markdown(session.replay_id)}`,
+    `# Syndra Replay ${markdown(session.replay_id)}`,
     "",
     `**Status:** ${markdown(session.status)}`,
     "",
@@ -135,7 +135,7 @@ export function formatReplayabilityDocument(
   ).length;
   const blocked = replayability.spans.length - replayable;
   const lines = [
-    `# AgentBus Replay Plan ${markdown(replayability.run_id)}`,
+    `# Syndra Replay Plan ${markdown(replayability.run_id)}`,
     "",
     "## Selection",
     "",

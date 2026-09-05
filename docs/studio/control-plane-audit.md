@@ -1,6 +1,6 @@
-# AgentBus Studio control-plane audit
+# Syndra Studio control-plane audit
 
-AgentBus Studio is a presentation layer over the existing authenticated local
+Syndra Studio is a presentation layer over the existing authenticated local
 control plane. It does not own run, policy, approval, repository, or replay
 semantics.
 

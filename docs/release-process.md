@@ -9,9 +9,9 @@ release reports import the same value.
 PowerShell:
 
 ```powershell
-.venv\Scripts\python.exe -m compileall agentbus
+.venv\Scripts\python.exe -m compileall syndra agentbus
 .venv\Scripts\python.exe -m pytest
-.venv\Scripts\python.exe -m agentbus.eval run --suite release-offline --variant durable-parallel-fake
+.venv\Scripts\python.exe -m syndra.eval run --suite release-offline --variant durable-parallel-fake
 .venv\Scripts\python.exe -m build
 git diff --check
 ```
@@ -19,9 +19,9 @@ git diff --check
 POSIX:
 
 ```bash
-.venv/bin/python -m compileall agentbus
+.venv/bin/python -m compileall syndra agentbus
 .venv/bin/python -m pytest
-.venv/bin/python -m agentbus.eval run --suite release-offline --variant durable-parallel-fake
+.venv/bin/python -m syndra.eval run --suite release-offline --variant durable-parallel-fake
 .venv/bin/python -m build
 git diff --check
 ```
@@ -40,7 +40,7 @@ offline doctor, and the release suite. This proves there is no repository-root
 Generate evidence JSON for tests and install smoke, then run:
 
 ```powershell
-agentbus release-report --offline-run RUN_ID --test-evidence TEST.json --install-evidence INSTALL.json --markdown-output REPORT.md --json-output REPORT.json --check
+syndra release-report --offline-run RUN_ID --test-evidence TEST.json --install-evidence INSTALL.json --markdown-output REPORT.md --json-output REPORT.json --check
 ```
 
 The report reads actual build artifacts, evaluation storage, Git state, schema,

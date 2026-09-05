@@ -614,7 +614,7 @@ class ContainedFileSystem:
         temporary: Path | None = None
         try:
             descriptor, temporary_name = tempfile.mkstemp(
-                prefix=f".{resolved.lexical_path.name}.agentbus-",
+                prefix=f".{resolved.lexical_path.name}.syndra-",
                 suffix=".tmp",
                 dir=resolved.lexical_path.parent,
             )

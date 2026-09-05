@@ -13,7 +13,8 @@ from agentbus.evaluation.errors import FixtureOwnershipError
 from agentbus.evaluation.models import EvaluationCase
 
 
-OWNERSHIP_FILE = ".agentbus-evaluation-owned.json"
+OWNERSHIP_FILE = ".syndra-evaluation-owned.json"
+LEGACY_OWNERSHIP_FILE = ".agentbus-evaluation-owned.json"
 
 
 @dataclass(frozen=True)
@@ -65,8 +66,8 @@ class FixtureRepositoryManager:
         _git(repository, "init", "-q")
         if os.name == "nt":
             _git(repository, "config", "core.longpaths", "true")
-        _git(repository, "config", "user.name", "AgentBus Evaluation")
-        _git(repository, "config", "user.email", "evaluation@agentbus.invalid")
+        _git(repository, "config", "user.name", "Syndra Evaluation")
+        _git(repository, "config", "user.email", "evaluation@syndra.invalid")
         _git(repository, "add", "-A")
         _git(repository, "commit", "-q", "-m", "evaluation fixture baseline")
         baseline = _git(repository, "rev-parse", "HEAD")
@@ -84,6 +85,8 @@ class FixtureRepositoryManager:
         if not _within(root, self.owned_root):
             raise FixtureOwnershipError("Refusing cleanup outside the evaluation root.")
         marker_path = root / OWNERSHIP_FILE
+        if not marker_path.exists():
+            marker_path = root / LEGACY_OWNERSHIP_FILE
         if not marker_path.is_file():
             raise FixtureOwnershipError("Refusing cleanup without an ownership marker.")
         try:

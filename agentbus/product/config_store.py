@@ -11,7 +11,8 @@ from typing import Any, Mapping
 
 from agentbus.config import AgentBusConfig
 from agentbus.configuration import (
-    default_user_config_path,
+    canonical_user_config_path,
+    configuration_table,
     default_workspace_config_path,
     resolve_configuration,
 )
@@ -40,14 +41,14 @@ def config_target_path(
 ) -> Path:
     selected = ConfigScope(scope)
     if selected == ConfigScope.USER:
-        return default_user_config_path(environ)
+        return canonical_user_config_path(environ)
     return default_workspace_config_path(workspace)
 
 
 def parse_config_value(key: str, raw: str) -> Any:
     field_map = {item.name: item for item in fields(AgentBusConfig)}
     if key not in field_map:
-        raise ValueError(f"Unsupported AgentBus configuration key: {key}")
+        raise ValueError(f"Unsupported Syndra configuration key: {key}")
     _reject_secret_key(key)
     default = getattr(AgentBusConfig(), key)
     text = raw.strip()
@@ -117,25 +118,25 @@ def read_config_document(path: str | Path) -> dict[str, Any]:
     if not target.exists():
         return {}
     if target.is_symlink():
-        raise ValueError("AgentBus refuses to edit a configuration symlink")
+        raise ValueError("Syndra refuses to edit a configuration symlink")
     if target.suffix.lower() == ".json":
         try:
             loaded = json.loads(target.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
-            raise ValueError(f"Unable to read AgentBus JSON config: {target}") from exc
+            raise ValueError(f"Unable to read Syndra JSON config: {target}") from exc
     elif target.suffix.lower() == ".toml":
         try:
             with target.open("rb") as handle:
                 loaded = tomllib.load(handle)
         except (OSError, tomllib.TOMLDecodeError) as exc:
-            raise ValueError(f"Unable to read AgentBus TOML config: {target}") from exc
+            raise ValueError(f"Unable to read Syndra TOML config: {target}") from exc
     else:
-        raise ValueError("AgentBus config files must use .toml or .json")
+        raise ValueError("Syndra config files must use .toml or .json")
     if not isinstance(loaded, dict):
-        raise ValueError("AgentBus config must contain an object/table")
-    document = loaded.get("agentbus", loaded)
+        raise ValueError("Syndra config must contain an object/table")
+    document = configuration_table(loaded)
     if not isinstance(document, dict):
-        raise ValueError("The 'agentbus' config section must be a table/object")
+        raise ValueError("The 'syndra' config section must be a table/object")
     return dict(document)
 
 
@@ -157,7 +158,7 @@ def ensure_safe_config_target(
 ) -> Path:
     target = Path(path).expanduser().absolute()
     if target.exists() and target.is_symlink():
-        raise ValueError("AgentBus refuses to edit a configuration symlink")
+        raise ValueError("Syndra refuses to edit a configuration symlink")
     if workspace is None:
         return target
     root = Path(workspace).expanduser().resolve(strict=True)
@@ -173,14 +174,14 @@ def _atomic_write_validated(path: Path, document: Mapping[str, Any]) -> None:
     parent = path.parent
     parent.mkdir(parents=True, exist_ok=True)
     if path.exists() and path.is_symlink():
-        raise ValueError("AgentBus refuses to replace a configuration symlink")
+        raise ValueError("Syndra refuses to replace a configuration symlink")
     suffix = path.suffix.lower()
     if suffix == ".json":
-        content = json.dumps({"agentbus": document}, indent=2, sort_keys=True) + "\n"
+        content = json.dumps({"syndra": document}, indent=2, sort_keys=True) + "\n"
     elif suffix == ".toml":
         content = render_toml(document)
     else:
-        raise ValueError("AgentBus config files must use .toml or .json")
+        raise ValueError("Syndra config files must use .toml or .json")
     temporary = parent / f".{path.stem}.{uuid.uuid4().hex}{suffix}"
     try:
         temporary.write_text(content, encoding="utf-8", newline="\n")
@@ -197,7 +198,7 @@ def _atomic_write_validated(path: Path, document: Mapping[str, Any]) -> None:
 
 def render_toml(document: Mapping[str, Any]) -> str:
     lines: list[str] = []
-    _emit_toml_table(lines, ("agentbus",), document, array=False)
+    _emit_toml_table(lines, ("syndra",), document, array=False)
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -257,12 +258,12 @@ def _toml_value(value: Any) -> str:
 
 def _validate_key(key: str) -> None:
     if key not in {item.name for item in fields(AgentBusConfig)}:
-        raise ValueError(f"Unsupported AgentBus configuration key: {key}")
+        raise ValueError(f"Unsupported Syndra configuration key: {key}")
     _reject_secret_key(key)
 
 
 def _reject_secret_key(key: str) -> None:
     if is_sensitive_key(key):
         raise ValueError(
-            "AgentBus credentials must use the process environment or a secure store"
+            "Syndra credentials must use the process environment or a secure store"
         )

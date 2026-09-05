@@ -22,7 +22,7 @@ const ONBOARDING_STATE_KEY = "agentbus.onboarding.lastShownVersion";
 const ONBOARDING_MARKER_FILE = "onboarding-version";
 const MAX_ONBOARDING_MARKER_BYTES = 128;
 const DOCUMENTATION_URL =
-  "https://github.com/dineshsuthar123/AgentBus/blob/main/docs/getting-started.md";
+  "https://github.com/dineshsuthar123/Syndra/blob/main/docs/getting-started/index.md";
 
 export class OnboardingController implements vscode.Disposable {
   private readonly disposables: vscode.Disposable[] = [];
@@ -69,7 +69,7 @@ export class OnboardingController implements vscode.Disposable {
         } catch (error) {
           const detail = safeError(error);
           this.output.appendLine(`Onboarding command failed: ${detail}`);
-          void vscode.window.showErrorMessage(`AgentBus: ${detail}`);
+          void vscode.window.showErrorMessage(`Syndra: ${detail}`);
         }
       })
     );
@@ -174,14 +174,14 @@ export class OnboardingController implements vscode.Disposable {
       if (result.exitCode !== 0) {
         return {
           state: "missing",
-          message: "AgentBus is not available from the configured executable."
+          message: "Syndra is not available from the configured executable."
         };
       }
       return assessInstallationOutput(result.stdout);
     } catch {
       return {
         state: "missing",
-        message: "AgentBus is not available from the configured executable."
+        message: "Syndra is not available from the configured executable."
       };
     }
   }
@@ -198,7 +198,7 @@ export class OnboardingController implements vscode.Disposable {
   private async getStarted(): Promise<void> {
     await vscode.commands.executeCommand(
       "workbench.action.openWalkthrough",
-      "agentbus.agentbus-vscode#agentbus.gettingStarted",
+      "syndra.syndra-vscode#agentbus.gettingStarted",
       false
     );
   }
@@ -206,11 +206,11 @@ export class OnboardingController implements vscode.Disposable {
   private async runSetup(): Promise<void> {
     if (!(await ensureWorkspaceTrust("first-run setup"))) return;
     const confirmed = await vscode.window.showWarningMessage(
-      "Run local AgentBus setup with the deterministic, network-free provider?",
+      "Run local Syndra setup with the deterministic, network-free provider?",
       {
         modal: true,
         detail:
-          "Setup creates or updates AgentBus user configuration and runtime directories. " +
+          "Setup creates or updates Syndra user configuration and runtime directories. " +
           "It preserves existing configuration and does not contact Azure or Ollama."
       },
       "Run Setup"
@@ -227,43 +227,43 @@ export class OnboardingController implements vscode.Disposable {
       ...(workspace ? ["--workspace", workspace] : []),
       "--json"
     ];
-    const result = await this.progress("Running offline AgentBus setup", args);
+    const result = await this.progress("Running offline Syndra setup", args);
     this.requireSuccess(result, "setup");
     this.reportResult("Setup", result);
-    void vscode.window.showInformationMessage("AgentBus setup completed offline.");
+    void vscode.window.showInformationMessage("Syndra setup completed offline.");
   }
 
   private async runQuickstart(): Promise<void> {
     if (!(await ensureWorkspaceTrust("offline quickstart"))) return;
     const result = await this.progress(
-      "Running deterministic AgentBus quickstart",
+      "Running deterministic Syndra quickstart",
       ["quickstart", "--json"]
     );
     this.requireSuccess(result, "quickstart");
     this.reportResult("Quickstart", result);
     void vscode.window.showInformationMessage(
-      "AgentBus quickstart completed without a live provider."
+      "Syndra quickstart completed without a live provider."
     );
   }
 
   private async checkInstallation(): Promise<void> {
     if (!(await ensureWorkspaceTrust("installation diagnostics"))) return;
     const installationResult = await this.progress(
-      "Checking AgentBus installation",
+      "Checking Syndra installation",
       ["version", "--json"]
     );
     this.requireSuccess(installationResult, "version check");
     const installation = assessInstallationOutput(installationResult.stdout);
     const workspace = this.workspacePath();
     const doctor = await this.progress(
-      "Running offline AgentBus diagnostics",
+      "Running offline Syndra diagnostics",
       this.doctorArgs(workspace)
     );
     this.output.appendLine(`Installation: ${installation.message}`);
     this.reportResult("Doctor", doctor);
     this.output.show();
     const message = installation.state === "compatible"
-      ? "AgentBus installation is compatible. Review Doctor for any local warnings."
+      ? "Syndra installation is compatible. Review Doctor for any local warnings."
       : installation.message;
     if (installation.state === "compatible") {
       void vscode.window.showInformationMessage(message);
@@ -283,7 +283,7 @@ export class OnboardingController implements vscode.Disposable {
       ...(workspace ? ["--workspace", workspace] : []),
       "--json"
     ];
-    const result = await this.progress("Resolving safe AgentBus configuration", args);
+    const result = await this.progress("Resolving safe Syndra configuration", args);
     this.requireSuccess(result, "configuration inspection");
     const document = await vscode.workspace.openTextDocument({
       content: safeConfigurationDocument(result.stdout),
@@ -294,7 +294,7 @@ export class OnboardingController implements vscode.Disposable {
 
   private async openDocumentation(): Promise<void> {
     const opened = await vscode.env.openExternal(vscode.Uri.parse(DOCUMENTATION_URL));
-    if (!opened) throw new Error("VS Code could not open the AgentBus documentation.");
+    if (!opened) throw new Error("VS Code could not open the Syndra documentation.");
   }
 
   private doctorArgs(workspace?: string): string[] {
@@ -323,7 +323,7 @@ export class OnboardingController implements vscode.Disposable {
     if (result.exitCode === 0) return;
     const detail = redactText(result.stderr || result.stdout, 4_000).trim();
     throw new Error(
-      `AgentBus ${operation} failed${detail ? `: ${detail}` : "."}`
+      `Syndra ${operation} failed${detail ? `: ${detail}` : "."}`
     );
   }
 

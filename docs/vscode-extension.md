@@ -1,10 +1,10 @@
 # VS Code Extension
 
-Install AgentBus with `pip install "agentbus[ide]"`, then package the extension
+Install Syndra with `pip install "syndra[ide]"`, then package the extension
 from `extensions/vscode` with `npm ci && npm run package`.
 
 The extension discovers compatible daemons from the metadata-only registry,
-retrieves known tokens from SecretStorage, or launches `agentbus serve --port 0
+retrieves known tokens from SecretStorage, or launches `syndra serve --port 0
 --json-ready`. It validates daemon identity and protocol version before use.
 
 Native views show runs, task state, execution timelines, replay sessions,
@@ -17,24 +17,24 @@ time-travel debugging.
 
 ## Timeline and deterministic replay
 
-The AgentBus Timeline orders run, task, provider, parse, policy, tool,
+The Syndra Timeline orders run, task, provider, parse, policy, tool,
 approval, verifier, reviewer, integration, cancellation, and cleanup spans by
-their persisted deterministic sequence. **AgentBus: Show Span** opens a
+their persisted deterministic sequence. **Syndra: Show Span** opens a
 read-only bounded document containing identities, hashes, safe attribute keys,
 resource usage, and artifact metadata. It never renders prompts, provider
 payload values, credentials, or arbitrary attributes.
 
 Replay commands are:
 
-- **AgentBus: Replay Run Offline**
-- **AgentBus: Replay from Checkpoint**
-- **AgentBus: Fork Run**
-- **AgentBus: Cancel Replay**
-- **AgentBus: Compare Runs**
-- **AgentBus: Export Trace**
-- **AgentBus: Import Trace**
-- **AgentBus: Capture Regression Fixture**
-- **AgentBus: Open Provenance Manifest**
+- **Syndra: Replay Run Offline**
+- **Syndra: Replay from Checkpoint**
+- **Syndra: Fork Run**
+- **Syndra: Cancel Replay**
+- **Syndra: Compare Runs**
+- **Syndra: Export Trace**
+- **Syndra: Import Trace**
+- **Syndra: Capture Regression Fixture**
+- **Syndra: Open Provenance Manifest**
 
 Before replay, the extension opens a plan showing mode, replayability, missing
 hashes, substitutions, isolation requirements, policy implications, and
@@ -58,12 +58,12 @@ bounded run outcomes.
 
 The Tool Invocations view shows the registered name, status, owning task,
 policy outcome, approval state, budget usage, cancellation, truncation, and safe
-error category. `AgentBus: Show Tool Invocation` opens a bounded Markdown
+error category. `Syndra: Show Tool Invocation` opens a bounded Markdown
 document with exact capabilities and scopes, resource limits and support,
 artifacts, process metadata, and redacted output. It never renders raw HTML or
 unescaped remote Markdown.
 
-`AgentBus: Cancel Tool Invocation` requests cancellation for the owning run and
+`Syndra: Cancel Tool Invocation` requests cancellation for the owning run and
 is available only while the invocation can still be cancelled. The UI does not
 accept or signal an arbitrary PID.
 
@@ -73,11 +73,11 @@ policy rule, constraints, and budget. Approve and reject commands submit the
 displayed persisted revision. Approval does not broaden scope; runtime
 revalidation still occurs during resume.
 
-`AgentBus: Open Tool Artifact` accepts only a repository-relative artifact that
+`Syndra: Open Tool Artifact` accepts only a repository-relative artifact that
 the authenticated API returned for that invocation. Repository containment,
 protected-path, binary, size, digest, and exact invocation checks remain active.
 
-`AgentBus: Show Tool Policy` presents the bounded default policy. Policy
+`Syndra: Show Tool Policy` presents the bounded default policy. Policy
 inspection is read-only and does not execute a diagnostic call unless the user
 explicitly invokes the corresponding control operation.
 
@@ -85,14 +85,14 @@ explicitly invokes the corresponding control operation.
 
 The MCP Servers view lists only explicitly configured server IDs, local
 transport, safe executable alias or endpoint host, supported protocol versions,
-and namespaced tools. `AgentBus: Show MCP Server` displays configuration without
-commands, environment values, or tokens. `AgentBus: Check MCP Server` performs
+and namespaced tools. `Syndra: Show MCP Server` displays configuration without
+commands, environment values, or tokens. `Syndra: Check MCP Server` performs
 a bounded local diagnostic and displays negotiation, advertised tools, and
 cleanup status.
 
 Imported MCP calls use the Tool Invocations and Approvals views. The extension
 cannot add a server or supply an arbitrary server command through the control
-API. Configure servers in an explicit AgentBus config file and select it with
+API. Configure servers in an explicit Syndra config file and select it with
 `agentbus.configPath`.
 
 The deterministic provider is available in the provider setting for offline

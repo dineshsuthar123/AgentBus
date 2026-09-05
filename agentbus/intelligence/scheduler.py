@@ -231,7 +231,7 @@ class BoundedIndexScheduler:
 
         with ThreadPoolExecutor(
             max_workers=self.limits.maximum_workers,
-            thread_name_prefix="agentbus-index",
+            thread_name_prefix="syndra-index",
         ) as executor:
 
             def submit_available() -> None:

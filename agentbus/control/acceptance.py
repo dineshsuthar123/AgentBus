@@ -40,7 +40,7 @@ _INDEX_SECRET_MARKER = "acceptance-index-private-marker"
 
 
 def main() -> int:
-    with tempfile.TemporaryDirectory(prefix="agentbus-control-acceptance-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="syndra-control-acceptance-") as temporary:
         root = Path(temporary)
         workspace = _initialize_repository(root / "repo")
         state_path = root / "state.db"
@@ -531,7 +531,7 @@ def main() -> int:
             if process.poll() is None:
                 process.terminate()
                 process.wait(timeout=10)
-    print("AgentBus control-plane true offline acceptance: PASS")
+    print("Syndra control-plane true offline acceptance: PASS")
     return 0
 
 
@@ -542,8 +542,8 @@ def _initialize_repository(
 ) -> Path:
     workspace.mkdir()
     _git(workspace, "init")
-    _git(workspace, "config", "user.email", "acceptance@agentbus.invalid")
-    _git(workspace, "config", "user.name", "AgentBus Acceptance")
+    _git(workspace, "config", "user.email", "acceptance@syndra.invalid")
+    _git(workspace, "config", "user.name", "Syndra Acceptance")
     if mixed_language:
         fixture = (
             Path(__file__).resolve().parents[1]
@@ -924,7 +924,7 @@ def _launch_daemon(
         "m=McpServerConfig(server_id='fixture',transport='stdio',"
         "executable_alias='python',arguments=('-u',sys.argv[5],'--mode',"
         "'normal','--lifecycle-dir',sys.argv[6]),"
-        "environment={'CI':os.environ['AGENTBUS_ACCEPTANCE_MCP_MARKER']},"
+        "environment={'CI':os.environ['SYNDRA_ACCEPTANCE_MCP_MARKER']},"
         "capability_map={'echo':mcp_server_capabilities('fixture'),"
         "'write_note':mcp_server_capabilities('fixture')});"
         "c=AgentBusConfig(workspace_dir=sys.argv[1],state_db=sys.argv[2],"
@@ -933,7 +933,7 @@ def _launch_daemon(
         "idle_timeout=3.0,registry_path=sys.argv[4],log_level='error'))"
     )
     environment = safe_child_environment()
-    environment["AGENTBUS_ACCEPTANCE_MCP_MARKER"] = mcp_environment_marker
+    environment["SYNDRA_ACCEPTANCE_MCP_MARKER"] = mcp_environment_marker
     return subprocess.Popen(
         [
             sys.executable,
@@ -1079,7 +1079,7 @@ def _submit_run(
         payload = response.json()
         message = str(payload.get("error", {}).get("message", ""))
         if not message.startswith(
-            "Workspace already has an active AgentBus run:"
+            "Workspace already has an active Syndra run:"
         ):
             response.raise_for_status()
         if clock() >= deadline:
@@ -1362,8 +1362,8 @@ def _assert_successful_run(
     assert payload["integration_commit"]
     assert payload["commit_identifier"] == payload["integration_commit"]
     assert payload["changed_files"] == [
-        "agentbus_result.py",
-        "test_agentbus_result.py",
+        "syndra_result.py",
+        "test_syndra_result.py",
     ]
     required_events = {
         "durable_run_created",
@@ -1389,8 +1389,8 @@ def _assert_successful_run(
         headers=headers,
     ).json()
     assert {item["path"] for item in changes["changes"]} == {
-        "agentbus_result.py",
-        "test_agentbus_result.py",
+        "syndra_result.py",
+        "test_syndra_result.py",
     }
     assert all(item["status"] == "committed" for item in changes["changes"])
     diff = _request(
@@ -1402,12 +1402,12 @@ def _assert_successful_run(
     assert diff["truncated"] is False
     after = _request(
         "GET",
-        f"{base}/api/v1/runs/{run_id}/changes/agentbus_result.py",
+        f"{base}/api/v1/runs/{run_id}/changes/syndra_result.py",
         headers=headers,
         params={"revision": "after"},
     ).json()
     assert "return left + right" in after["content"]
-    assert not (workspace / "agentbus_result.py").exists()
+    assert not (workspace / "syndra_result.py").exists()
 
 
 def _assert_cancelled_run(

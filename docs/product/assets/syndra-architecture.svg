@@ -1,0 +1,197 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title description">
+  <title id="title">Syndra safety architecture</title>
+  <desc id="description">Syndra Studio routes user intent through an authenticated control plane, planner, durable task engine, coder, managed tool runtime, and repository. Policy, approval, verifier, and reviewer gates constrain execution while trace evidence feeds provenance and offline replay.</desc>
+  <defs>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#15252b" stroke-width="1" opacity="0.42"/>
+    </pattern>
+    <marker id="arrow-cyan" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#66d9e8"/>
+    </marker>
+    <marker id="arrow-violet" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#a78bfa"/>
+    </marker>
+    <filter id="soft-glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <style>
+      .sans { font-family: "IBM Plex Sans", "Segoe UI", sans-serif; }
+      .mono { font-family: "IBM Plex Mono", Consolas, monospace; }
+      .eyebrow { fill: #66d9e8; font-size: 12px; font-weight: 700; letter-spacing: 2.4px; }
+      .heading { fill: #f2f7f8; font-size: 31px; font-weight: 650; }
+      .subheading { fill: #8ba4ad; font-size: 14px; }
+      .node-title { fill: #f2f7f8; font-size: 17px; font-weight: 650; }
+      .node-meta { fill: #78919a; font-size: 10px; letter-spacing: 1px; }
+      .panel-title { fill: #f2f7f8; font-size: 18px; font-weight: 650; }
+      .small { fill: #8ba4ad; font-size: 11px; }
+      .tiny { fill: #78919a; font-size: 9px; letter-spacing: 1px; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="900" fill="#070d10"/>
+  <rect width="1600" height="900" fill="url(#grid)"/>
+  <rect x="1" y="1" width="1598" height="898" fill="none" stroke="#20343c" stroke-width="2"/>
+
+  <g class="sans">
+    <text x="42" y="45" class="eyebrow">SYNDRA / TRUSTED EXECUTION PATH</text>
+    <text x="42" y="78" class="heading">From model intent to repository evidence</text>
+    <text x="42" y="102" class="subheading">Local, durable, workspace-scoped autonomous engineering.</text>
+
+    <g aria-label="User and Studio">
+      <rect x="505" y="95" width="340" height="56" rx="4" fill="#0c1519" stroke="#36515b"/>
+      <circle cx="535" cy="123" r="13" fill="#10252b" stroke="#66d9e8"/>
+      <text x="535" y="127" text-anchor="middle" class="mono" fill="#66d9e8" font-size="10">01</text>
+      <text x="563" y="119" class="node-title">User</text>
+      <text x="563" y="137" class="node-meta mono">OBJECTIVE + DECISION</text>
+
+      <line x1="675" y1="151" x2="675" y2="174" stroke="#66d9e8" stroke-width="2" marker-end="url(#arrow-cyan)"/>
+
+      <rect x="505" y="180" width="340" height="56" rx="4" fill="#0d1d22" stroke="#66d9e8" stroke-width="1.5"/>
+      <circle cx="535" cy="208" r="13" fill="#10252b" stroke="#66d9e8"/>
+      <text x="535" y="212" text-anchor="middle" class="mono" fill="#66d9e8" font-size="10">02</text>
+      <text x="563" y="204" class="node-title">Syndra Studio</text>
+      <text x="563" y="222" class="node-meta mono">VISUAL CONTROL PLANE</text>
+    </g>
+
+    <g aria-label="Syndra local runtime boundary">
+      <rect x="400" y="258" width="550" height="590" rx="6" fill="#091216" stroke="#29444e" stroke-width="1.5"/>
+      <path d="M400 298 V264 Q400 258 406 258 H584" fill="none" stroke="#66d9e8" stroke-width="2"/>
+      <rect x="418" y="247" width="232" height="22" fill="#070d10"/>
+      <text x="428" y="263" class="eyebrow">LOCAL RUNTIME BOUNDARY</text>
+
+      <line x1="675" y1="236" x2="675" y2="287" stroke="#66d9e8" stroke-width="2" marker-end="url(#arrow-cyan)"/>
+
+      <g>
+        <rect x="510" y="293" width="330" height="56" rx="3" fill="#0d181d" stroke="#35525d"/>
+        <rect x="510" y="293" width="5" height="56" fill="#66d9e8"/>
+        <text x="535" y="318" class="node-title">Authenticated Control Plane</text>
+        <text x="535" y="337" class="node-meta mono">LOOPBACK API + DURABLE STATE</text>
+      </g>
+      <line x1="675" y1="349" x2="675" y2="379" stroke="#66d9e8" stroke-width="2" marker-end="url(#arrow-cyan)"/>
+
+      <g>
+        <rect x="510" y="385" width="330" height="56" rx="3" fill="#0d181d" stroke="#35525d"/>
+        <rect x="510" y="385" width="5" height="56" fill="#66d9e8"/>
+        <text x="535" y="410" class="node-title">Planner</text>
+        <text x="535" y="429" class="node-meta mono">BOUNDED TASK GRAPH</text>
+      </g>
+      <line x1="675" y1="441" x2="675" y2="471" stroke="#66d9e8" stroke-width="2" marker-end="url(#arrow-cyan)"/>
+
+      <g>
+        <rect x="510" y="477" width="330" height="56" rx="3" fill="#0d181d" stroke="#35525d"/>
+        <rect x="510" y="477" width="5" height="56" fill="#66d9e8"/>
+        <text x="535" y="502" class="node-title">Durable Task Engine</text>
+        <text x="535" y="521" class="node-meta mono">ATTEMPTS + RESUME + LEASES</text>
+      </g>
+      <line x1="675" y1="533" x2="675" y2="563" stroke="#66d9e8" stroke-width="2" marker-end="url(#arrow-cyan)"/>
+
+      <g>
+        <rect x="510" y="569" width="330" height="56" rx="3" fill="#0d181d" stroke="#35525d"/>
+        <rect x="510" y="569" width="5" height="56" fill="#66d9e8"/>
+        <text x="535" y="594" class="node-title">Coder</text>
+        <text x="535" y="613" class="node-meta mono">SCOPED CHANGE PROPOSAL</text>
+      </g>
+      <line x1="675" y1="625" x2="675" y2="655" stroke="#66d9e8" stroke-width="2" marker-end="url(#arrow-cyan)"/>
+
+      <g>
+        <rect x="510" y="661" width="330" height="56" rx="3" fill="#0d181d" stroke="#f4bd50" stroke-width="1.5"/>
+        <rect x="510" y="661" width="5" height="56" fill="#f4bd50"/>
+        <text x="535" y="686" class="node-title">Managed Tool Runtime</text>
+        <text x="535" y="705" class="node-meta mono">CAPABILITIES + BUDGETS + AUDIT</text>
+      </g>
+      <line x1="675" y1="717" x2="675" y2="747" stroke="#66d9e8" stroke-width="2" marker-end="url(#arrow-cyan)"/>
+
+      <g>
+        <rect x="510" y="753" width="330" height="56" rx="3" fill="#0b1d18" stroke="#52e0a4" stroke-width="1.5"/>
+        <rect x="510" y="753" width="5" height="56" fill="#52e0a4"/>
+        <text x="535" y="778" class="node-title">Repository</text>
+        <text x="535" y="797" class="node-meta mono">CANONICAL GIT BOUNDARY</text>
+      </g>
+    </g>
+
+    <g aria-label="Model providers">
+      <rect x="42" y="282" width="304" height="306" rx="6" fill="#091216" stroke="#29444e"/>
+      <text x="66" y="318" class="eyebrow">MODEL PROVIDERS</text>
+      <text x="66" y="346" class="panel-title">Outside the runtime boundary</text>
+      <text x="66" y="369" class="small">Providers propose structured work.</text>
+      <text x="66" y="386" class="small">They never grant tool authority.</text>
+
+      <rect x="66" y="410" width="256" height="42" rx="3" fill="#0d181d" stroke="#35525d"/>
+      <circle cx="86" cy="431" r="5" fill="#8ba4ad"/>
+      <text x="103" y="436" class="node-title" font-size="14">Azure OpenAI</text>
+
+      <rect x="66" y="462" width="256" height="42" rx="3" fill="#0d181d" stroke="#35525d"/>
+      <circle cx="86" cy="483" r="5" fill="#52e0a4"/>
+      <text x="103" y="488" class="node-title" font-size="14">Ollama</text>
+
+      <rect x="66" y="514" width="256" height="50" rx="3" fill="#10252b" stroke="#66d9e8"/>
+      <circle cx="86" cy="539" r="5" fill="#66d9e8" filter="url(#soft-glow)"/>
+      <text x="103" y="537" class="node-title" font-size="14">Deterministic</text>
+      <text x="103" y="551" class="tiny mono">OFFLINE DEMO + CI</text>
+
+      <path d="M346 437 H390 V413 H503" fill="none" stroke="#66d9e8" stroke-width="1.5" stroke-dasharray="5 5" marker-end="url(#arrow-cyan)"/>
+      <path d="M346 539 H372 V597 H503" fill="none" stroke="#66d9e8" stroke-width="1.5" stroke-dasharray="5 5" marker-end="url(#arrow-cyan)"/>
+    </g>
+
+    <g aria-label="Safety gates">
+      <rect x="990" y="282" width="244" height="426" rx="6" fill="#0d110f" stroke="#5b4a22"/>
+      <text x="1014" y="318" class="eyebrow" fill="#f4bd50">SAFETY GATES</text>
+      <text x="1014" y="346" class="panel-title">Independent authority</text>
+
+      <rect x="1014" y="376" width="196" height="58" rx="3" fill="#17150d" stroke="#8e6e27"/>
+      <text x="1032" y="401" class="node-title" font-size="15">Policy</text>
+      <text x="1032" y="419" class="tiny mono">DENY / ALLOW / REQUIRE</text>
+
+      <rect x="1014" y="450" width="196" height="58" rx="3" fill="#1b150a" stroke="#f4bd50"/>
+      <text x="1032" y="475" class="node-title" font-size="15">Approval</text>
+      <text x="1032" y="493" class="tiny mono">EXACT REVISION + SCOPE</text>
+
+      <rect x="1014" y="524" width="196" height="58" rx="3" fill="#0b1d18" stroke="#52e0a4"/>
+      <text x="1032" y="549" class="node-title" font-size="15">Verifier</text>
+      <text x="1032" y="567" class="tiny mono">MECHANICAL DONE CRITERIA</text>
+
+      <rect x="1014" y="598" width="196" height="58" rx="3" fill="#0b1d18" stroke="#52e0a4"/>
+      <text x="1032" y="623" class="node-title" font-size="15">Reviewer</text>
+      <text x="1032" y="641" class="tiny mono">MANDATORY FINAL DECISION</text>
+
+      <path d="M990 405 H912 V321 H845" fill="none" stroke="#f4bd50" stroke-width="1.5" stroke-dasharray="4 5"/>
+      <path d="M990 479 H934 V689 H845" fill="none" stroke="#f4bd50" stroke-width="1.5" stroke-dasharray="4 5"/>
+      <path d="M990 553 H920 V735 H845" fill="none" stroke="#52e0a4" stroke-width="1.5" stroke-dasharray="4 5"/>
+      <path d="M990 627 H946 V781 H845" fill="none" stroke="#52e0a4" stroke-width="1.5" stroke-dasharray="4 5"/>
+    </g>
+
+    <g aria-label="Evidence and replay">
+      <rect x="1272" y="282" width="286" height="426" rx="6" fill="#100d19" stroke="#51427b"/>
+      <text x="1296" y="318" class="eyebrow" fill="#a78bfa">EVIDENCE PATH</text>
+      <text x="1296" y="346" class="panel-title">Flight recorder</text>
+      <text x="1296" y="369" class="small">Sanitized, content-addressed, sealed.</text>
+
+      <rect x="1304" y="400" width="238" height="64" rx="3" fill="#171226" stroke="#7562ad"/>
+      <text x="1324" y="428" class="node-title">Trace</text>
+      <text x="1324" y="447" class="node-meta mono">SPANS + POLICY + OUTPUTS</text>
+      <line x1="1423" y1="464" x2="1423" y2="495" stroke="#a78bfa" stroke-width="2" marker-end="url(#arrow-violet)"/>
+
+      <rect x="1304" y="501" width="238" height="64" rx="3" fill="#171226" stroke="#7562ad"/>
+      <text x="1324" y="529" class="node-title">Provenance</text>
+      <text x="1324" y="548" class="node-meta mono">HASH CHAIN + INTEGRITY ROOT</text>
+      <line x1="1423" y1="565" x2="1423" y2="596" stroke="#a78bfa" stroke-width="2" marker-end="url(#arrow-violet)"/>
+
+      <rect x="1304" y="602" width="238" height="76" rx="3" fill="#21183a" stroke="#a78bfa" stroke-width="1.5"/>
+      <text x="1324" y="631" class="node-title">Offline Replay</text>
+      <text x="1324" y="651" class="node-meta mono">CAPTURED RESULTS REUSED</text>
+      <text x="1324" y="666" class="tiny mono" fill="#a78bfa">PROVIDER 0 / NETWORK 0</text>
+
+      <path d="M950 818 H1254 Q1272 818 1272 800 V432 H1297" fill="none" stroke="#a78bfa" stroke-width="1.5" stroke-dasharray="6 5" marker-end="url(#arrow-violet)"/>
+    </g>
+
+    <g aria-label="Legend">
+      <line x1="42" y1="842" x2="1558" y2="842" stroke="#20343c"/>
+      <circle cx="58" cy="870" r="5" fill="#66d9e8"/><text x="72" y="874" class="small">Execution</text>
+      <circle cx="168" cy="870" r="5" fill="#f4bd50"/><text x="182" y="874" class="small">Human authority</text>
+      <circle cx="316" cy="870" r="5" fill="#52e0a4"/><text x="330" y="874" class="small">Verified boundary</text>
+      <circle cx="470" cy="870" r="5" fill="#a78bfa"/><text x="484" y="874" class="small">Evidence and replay</text>
+      <text x="1558" y="874" text-anchor="end" class="tiny mono">PLAN / EXECUTE / APPROVE / VERIFY / REVIEW / REPLAY</text>
+    </g>
+  </g>
+</svg>

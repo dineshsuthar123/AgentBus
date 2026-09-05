@@ -9,7 +9,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: AgentBus version or artifact name
+      label: Syndra version or artifact name
     validations:
       required: true
   - type: input

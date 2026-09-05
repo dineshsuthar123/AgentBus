@@ -1,5 +1,5 @@
 import type { EventEnvelope } from "./generated/protocol";
-import type { AgentBusClient } from "./apiClient";
+import type { SyndraClient } from "./apiClient";
 
 export class SseParser {
   private buffer = "";
@@ -64,7 +64,7 @@ export class ReconnectingSseClient {
   private lastSequence = 0;
 
   public constructor(
-    private readonly client: AgentBusClient,
+    private readonly client: SyndraClient,
     private readonly onEvent: (event: EventEnvelope) => void,
     private readonly options: SseClientOptions = {}
   ) {}

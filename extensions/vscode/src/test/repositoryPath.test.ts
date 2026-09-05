@@ -26,6 +26,7 @@ test("public paths reject control and credential files", () => {
     ".env",
     ".aws/credentials",
     ".azure/accessTokens.json",
+    ".syndra/state.db",
     ".agentbus/state.db",
     ".git/config",
     "nested/private.pem",

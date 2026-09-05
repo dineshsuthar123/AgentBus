@@ -13,7 +13,7 @@ acceptance and VS Code Electron tests also used seeded state or command
 registration as substitutes for real execution.
 
 Python `Future.cancel()` does not stop an active thread. Azure OpenAI and Ollama
-requests may be inside transports that AgentBus cannot safely interrupt. Git
+requests may be inside transports that Syndra cannot safely interrupt. Git
 commits, verifier commands, and persistence checkpoints must not be abandoned
 halfway through. Any stronger cancellation claim would be misleading.
 
@@ -56,7 +56,7 @@ terminal state instead of promising forced interruption.
 
 Filesystem edits and retained worktrees are not rolled back automatically.
 Reports preserve their paths and may offer manual cleanup guidance, but
-AgentBus never resets, cleans, or deletes user changes.
+Syndra never resets, cleans, or deletes user changes.
 
 The deterministic provider is a production development and acceptance adapter,
 not a quality substitute for a real model. Its fixed profiles deliberately

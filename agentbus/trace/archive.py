@@ -788,7 +788,7 @@ def _write_deterministic_zip(
     temporary: Path | None = None
     try:
         descriptor, temporary_name = tempfile.mkstemp(
-            prefix=".agentbus-trace-",
+            prefix=".syndra-trace-",
             suffix=".tmp",
             dir=parent,
         )

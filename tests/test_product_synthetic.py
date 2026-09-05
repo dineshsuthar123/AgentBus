@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from agentbus.product.synthetic import (
@@ -26,6 +28,22 @@ def test_synthetic_repository_is_deterministic_across_roots(tmp_path):
     assert first.fingerprint == second.fingerprint
     assert verify_synthetic_repository(first.root).fingerprint == first.fingerprint
     assert len(list(first.root.glob("package_*/module_*.py"))) == 125
+
+
+def test_synthetic_repository_prefers_syndra_marker_and_reads_legacy_marker(tmp_path):
+    generated = generate_synthetic_repository(tmp_path / "repository", file_count=2)
+    canonical = generated.root / ".syndra-synthetic.json"
+    legacy = generated.root / ".agentbus-synthetic.json"
+    assert canonical.is_file()
+    assert not legacy.exists()
+
+    marker = json.loads(canonical.read_text(encoding="utf-8"))
+    marker["owner"] = "agentbus-synthetic-repository"
+    legacy.write_text(json.dumps(marker), encoding="utf-8")
+    canonical.unlink()
+
+    verified = verify_synthetic_repository(generated.root)
+    assert verified.fingerprint == generated.fingerprint
 
 
 def test_synthetic_repository_refuses_nonempty_user_destination(tmp_path):

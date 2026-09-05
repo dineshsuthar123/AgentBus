@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import math
-import os
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from agentbus.identity import environment_names, environment_value
 from agentbus.security.redaction import safe_endpoint_host
 
 if TYPE_CHECKING:
@@ -53,12 +53,12 @@ SUPPORTED_DETERMINISTIC_FAILURES = (
 
 @dataclass(frozen=True)
 class AgentBusConfig:
-    # Existing local defaults remain the source of truth for Ollama.
+    # The legacy class name remains import-compatible; SyndraConfig is canonical.
     model_name: str = "qwen2.5-coder:7b"
     ollama_url: str = "http://localhost:11434/api/generate"
     workspace_dir: str = "workspace"
     runs_dir: str = "runs"
-    state_dir: str = ".agentbus"
+    state_dir: str = ".syndra"
     state_db: str = "state.db"
     max_steps: int = 12
     command_timeout_seconds: int = 90
@@ -382,72 +382,72 @@ class AgentBusConfig:
         return replace(self, **updates)
 
     def validate_static(self) -> None:
-        _validate_provider("AGENTBUS_PROVIDER", self.provider_name)
+        _validate_provider("SYNDRA_PROVIDER", self.provider_name)
         _validate_provider(
-            "AGENTBUS_FALLBACK_PROVIDER",
+            "SYNDRA_FALLBACK_PROVIDER",
             self.fallback_provider_name,
         )
         if self.provider_name == "azure":
             self.validate_azure_modes()
         if not self.model_name.strip():
-            raise ValueError("AGENTBUS_MODEL must not be empty")
+            raise ValueError("SYNDRA_MODEL must not be empty")
         if self.max_steps <= 0:
-            raise ValueError("AGENTBUS_MAX_STEPS must be greater than 0")
+            raise ValueError("SYNDRA_MAX_STEPS must be greater than 0")
         if self.command_timeout_seconds <= 0:
-            raise ValueError("AGENTBUS_COMMAND_TIMEOUT must be greater than 0")
+            raise ValueError("SYNDRA_COMMAND_TIMEOUT must be greater than 0")
         if self.max_history_chars <= 0:
-            raise ValueError("AGENTBUS_MAX_HISTORY_CHARS must be greater than 0")
+            raise ValueError("SYNDRA_MAX_HISTORY_CHARS must be greater than 0")
         if self.max_workers < 1:
-            raise ValueError("AGENTBUS_MAX_WORKERS must be at least 1")
+            raise ValueError("SYNDRA_MAX_WORKERS must be at least 1")
         if self.worker_lease_seconds <= 0:
-            raise ValueError("AGENTBUS_WORKER_LEASE_SECONDS must be greater than 0")
+            raise ValueError("SYNDRA_WORKER_LEASE_SECONDS must be greater than 0")
         if self.worker_heartbeat_seconds <= 0:
-            raise ValueError("AGENTBUS_WORKER_HEARTBEAT_SECONDS must be greater than 0")
+            raise ValueError("SYNDRA_WORKER_HEARTBEAT_SECONDS must be greater than 0")
         if self.worker_heartbeat_seconds >= self.worker_lease_seconds / 2:
             raise ValueError(
-                "AGENTBUS_WORKER_HEARTBEAT_SECONDS must be less than half the "
+                "SYNDRA_WORKER_HEARTBEAT_SECONDS must be less than half the "
                 "worker lease duration"
             )
         if self.integration_strategy != "cherry-pick":
-            raise ValueError("AGENTBUS_INTEGRATION_STRATEGY must be 'cherry-pick'")
+            raise ValueError("SYNDRA_INTEGRATION_STRATEGY must be 'cherry-pick'")
         if self.policy_mode != "enforce":
             raise ValueError(
-                "AGENTBUS_POLICY_MODE must be 'enforce' during the public beta"
+                "SYNDRA_POLICY_MODE must be 'enforce' during the public beta"
             )
         if self.trace_retention_days < 1:
-            raise ValueError("AGENTBUS_TRACE_RETENTION_DAYS must be at least 1")
+            raise ValueError("SYNDRA_TRACE_RETENTION_DAYS must be at least 1")
         if self.daemon_idle_timeout_seconds < 0:
             raise ValueError(
-                "AGENTBUS_DAEMON_IDLE_TIMEOUT_SECONDS must be at least 0"
+                "SYNDRA_DAEMON_IDLE_TIMEOUT_SECONDS must be at least 0"
             )
         if self.log_level not in {"error", "warning", "info", "debug", "trace"}:
             raise ValueError(
-                "AGENTBUS_LOG_LEVEL must be error, warning, info, debug, or trace"
+                "SYNDRA_LOG_LEVEL must be error, warning, info, debug, or trace"
             )
         if self.log_retention_files < 1 or self.log_retention_files > 100:
             raise ValueError(
-                "AGENTBUS_LOG_RETENTION_FILES must be between 1 and 100"
+                "SYNDRA_LOG_RETENTION_FILES must be between 1 and 100"
             )
         if self.vscode_default_workflow not in {"single", "multi"}:
             raise ValueError(
                 "vscode_default_workflow must be 'single' or 'multi'"
             )
         if not math.isfinite(self.model_timeout_seconds) or self.model_timeout_seconds <= 0:
-            raise ValueError("AGENTBUS_MODEL_TIMEOUT_SECONDS must be greater than 0")
+            raise ValueError("SYNDRA_MODEL_TIMEOUT_SECONDS must be greater than 0")
         if self.model_max_retries < 0:
-            raise ValueError("AGENTBUS_MODEL_MAX_RETRIES must be at least 0")
+            raise ValueError("SYNDRA_MODEL_MAX_RETRIES must be at least 0")
         if (
             not math.isfinite(self.model_retry_base_seconds)
             or self.model_retry_base_seconds < 0
         ):
-            raise ValueError("AGENTBUS_MODEL_RETRY_BASE_SECONDS must be at least 0")
+            raise ValueError("SYNDRA_MODEL_RETRY_BASE_SECONDS must be at least 0")
         if (
             not math.isfinite(self.model_retry_max_seconds)
             or self.model_retry_max_seconds < self.model_retry_base_seconds
         ):
             raise ValueError(
-                "AGENTBUS_MODEL_RETRY_MAX_SECONDS must be greater than or equal "
-                "to AGENTBUS_MODEL_RETRY_BASE_SECONDS"
+                "SYNDRA_MODEL_RETRY_MAX_SECONDS must be greater than or equal "
+                "to SYNDRA_MODEL_RETRY_BASE_SECONDS"
             )
         if self.enable_provider_fallback and not (
             self.provider_name == "azure"
@@ -469,7 +469,7 @@ class AgentBusConfig:
         if self.deterministic_profile not in SUPPORTED_DETERMINISTIC_PROFILES:
             choices = ", ".join(SUPPORTED_DETERMINISTIC_PROFILES)
             raise ValueError(
-                "AGENTBUS_DETERMINISTIC_PROFILE must be one of: "
+                "SYNDRA_DETERMINISTIC_PROFILE must be one of: "
                 f"{choices}"
             )
         from agentbus.tools.protocol import ToolResourceBudget
@@ -481,17 +481,17 @@ class AgentBusConfig:
             or self.deterministic_latency_seconds < 0
         ):
             raise ValueError(
-                "AGENTBUS_DETERMINISTIC_LATENCY_SECONDS must be at least 0"
+                "SYNDRA_DETERMINISTIC_LATENCY_SECONDS must be at least 0"
             )
         if self.deterministic_failure_kind not in SUPPORTED_DETERMINISTIC_FAILURES:
             choices = ", ".join(SUPPORTED_DETERMINISTIC_FAILURES)
             raise ValueError(
-                "AGENTBUS_DETERMINISTIC_FAILURE_KIND must be one of: "
+                "SYNDRA_DETERMINISTIC_FAILURE_KIND must be one of: "
                 f"{choices}"
             )
         if any(call < 1 for call in self.deterministic_failure_calls):
             raise ValueError(
-                "AGENTBUS_DETERMINISTIC_FAILURE_CALLS must contain positive integers"
+                "SYNDRA_DETERMINISTIC_FAILURE_CALLS must contain positive integers"
             )
         for role in (
             *self.deterministic_latency_roles,
@@ -499,7 +499,7 @@ class AgentBusConfig:
         ):
             _normalize_role(role)
         if len(self.mcp_server_configs) > 64:
-            raise ValueError("AgentBus supports at most 64 configured MCP servers")
+            raise ValueError("Syndra supports at most 64 configured MCP servers")
         if self.mcp_server_configs:
             from agentbus.mcp.models import McpServerConfig
 
@@ -565,7 +565,7 @@ class AgentBusConfig:
             parsed = urlsplit(self.ollama_url)
             if parsed.scheme not in {"http", "https"} or not parsed.hostname:
                 raise ValueError(
-                    "AGENTBUS_OLLAMA_URL must be an HTTP(S) URL with a hostname."
+                    "SYNDRA_OLLAMA_URL must be an HTTP(S) URL with a hostname."
                 )
             return model
         if selected_provider == "deterministic":
@@ -650,7 +650,7 @@ class AgentBusConfig:
         if not resolved.is_relative_to(workspace):
             raise ValueError(
                 "Relative state_dir must remain within the configured workspace; "
-                "use an absolute path for external AgentBus state."
+                "use an absolute path for external Syndra state."
             )
         return resolved
 
@@ -664,17 +664,17 @@ class AgentBusConfig:
             resolved = (state_root / directory).resolve()
             if not resolved.is_relative_to(state_root):
                 raise ValueError(
-                    "Relative runs_dir must remain within the AgentBus state "
+                    "Relative runs_dir must remain within the Syndra state "
                     "directory; use an absolute path for external run logs."
                 )
 
         workspace = self.workspace_path
-        managed_workspace_root = (workspace / ".agentbus").resolve()
+        managed_workspace_root = self.state_directory_path
         if resolved.is_relative_to(workspace) and not resolved.is_relative_to(
             managed_workspace_root
         ):
             raise ValueError(
-                "AgentBus run logs inside the target repository must stay under "
+                "Syndra run logs inside the target repository must stay under "
                 f"{managed_workspace_root}; use an absolute external runs_dir "
                 "otherwise."
             )
@@ -685,7 +685,11 @@ class AgentBusConfig:
         if self.worktree_root:
             return Path(self.worktree_root).expanduser().resolve()
         workspace = self.workspace_path
-        return (workspace.parent / ".agentbus-worktrees" / workspace.name).resolve()
+        canonical = workspace.parent / ".syndra-worktrees" / workspace.name
+        legacy = workspace.parent / ".agentbus-worktrees" / workspace.name
+        if canonical.exists() or not legacy.exists():
+            return canonical.resolve()
+        return legacy.resolve()
 
     @property
     def state_database_path(self) -> Path:
@@ -696,7 +700,7 @@ class AgentBusConfig:
         resolved = (state_root / database).resolve()
         if not resolved.is_relative_to(state_root):
             raise ValueError(
-                "Relative state_db must remain within the AgentBus state directory; "
+                "Relative state_db must remain within the Syndra state directory; "
                 "use an absolute path for an external database."
             )
         return resolved
@@ -708,15 +712,11 @@ class AgentBusConfig:
 
 
 def _env_text(name: str) -> str | None:
-    raw = os.getenv(name)
-    if raw is None:
-        return None
-    value = raw.strip()
-    return value or None
+    return environment_value(name)[0]
 
 
 def _env_bool(name: str, default: bool) -> bool:
-    raw = _env_text(name)
+    raw, source = environment_value(name)
     if raw is None:
         return default
     normalized = raw.lower()
@@ -724,21 +724,21 @@ def _env_bool(name: str, default: bool) -> bool:
         return True
     if normalized in {"0", "false", "no", "off"}:
         return False
-    raise ValueError(f"{name} must be true or false, got {raw!r}")
+    raise ValueError(f"{source or environment_names(name)[0]} must be true or false, got {raw!r}")
 
 
 def _env_int(name: str, default: int, *, minimum: int) -> int:
-    raw = _env_text(name)
+    raw, source = environment_value(name)
     if raw is None:
         return default
-    return _parse_int(name, raw, minimum=minimum)
+    return _parse_int(source or environment_names(name)[0], raw, minimum=minimum)
 
 
 def _env_optional_int(name: str, *, minimum: int) -> int | None:
-    raw = _env_text(name)
+    raw, source = environment_value(name)
     if raw is None:
         return None
-    return _parse_int(name, raw, minimum=minimum)
+    return _parse_int(source or environment_names(name)[0], raw, minimum=minimum)
 
 
 def _parse_int(name: str, raw: str, *, minimum: int) -> int:
@@ -752,32 +752,35 @@ def _parse_int(name: str, raw: str, *, minimum: int) -> int:
 
 
 def _env_float(name: str, default: float, *, minimum: float) -> float:
-    raw = _env_text(name)
+    raw, source = environment_value(name)
     if raw is None:
         return default
-    return _parse_float(name, raw, minimum=minimum)
+    return _parse_float(source or environment_names(name)[0], raw, minimum=minimum)
 
 
 def _env_optional_float(name: str, *, minimum: float) -> float | None:
-    raw = _env_text(name)
+    raw, source = environment_value(name)
     if raw is None:
         return None
-    return _parse_float(name, raw, minimum=minimum)
+    return _parse_float(source or environment_names(name)[0], raw, minimum=minimum)
 
 
 def _env_csv(name: str) -> tuple[str, ...]:
-    raw = _env_text(name)
+    raw, source = environment_value(name)
     if raw is None:
         return ()
     values = tuple(item.strip().lower() for item in raw.split(",") if item.strip())
     if len(values) != len(set(values)):
-        raise ValueError(f"{name} must not contain duplicate values")
+        raise ValueError(
+            f"{source or environment_names(name)[0]} must not contain duplicate values"
+        )
     return values
 
 
 def _env_int_csv(name: str, *, minimum: int) -> tuple[int, ...]:
     values = _env_csv(name)
-    return tuple(_parse_int(name, value, minimum=minimum) for value in values)
+    label = environment_names(name)[0]
+    return tuple(_parse_int(label, value, minimum=minimum) for value in values)
 
 
 def _parse_float(name: str, raw: str, *, minimum: float) -> float:
@@ -802,3 +805,6 @@ def _normalize_role(role: str) -> str:
     if normalized not in {"default", "planner", "coder", "reviewer", "summarizer"}:
         raise ValueError(f"Unsupported model role: {normalized!r}")
     return normalized
+
+
+SyndraConfig = AgentBusConfig

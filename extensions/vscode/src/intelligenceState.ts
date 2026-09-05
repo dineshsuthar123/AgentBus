@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import type { AgentBusClient } from "./apiClient";
+import type { SyndraClient } from "./apiClient";
 import type {
   WorkspaceContextPlanResponse,
   WorkspaceImpactResponse,
@@ -15,7 +15,7 @@ import {
   selectWorkspace
 } from "./workspace";
 
-type ClientProvider = () => Promise<AgentBusClient>;
+type ClientProvider = () => Promise<SyndraClient>;
 
 export interface IntelligenceWorkspaceState {
   readonly folder: vscode.WorkspaceFolder;
@@ -39,7 +39,7 @@ export class RepositoryIntelligenceState implements vscode.Disposable {
 
   public constructor(private readonly clientProvider: ClientProvider) {}
 
-  public client(): Promise<AgentBusClient> {
+  public client(): Promise<SyndraClient> {
     return this.clientProvider();
   }
 

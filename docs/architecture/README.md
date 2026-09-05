@@ -1,6 +1,6 @@
 # Architecture and decisions
 
-AgentBus keeps architecture decisions as ADRs and detailed subsystem guides.
+Syndra keeps architecture decisions as ADRs and detailed subsystem guides.
 They remain authoritative for design invariants; the user guides provide the
 short operational path.
 

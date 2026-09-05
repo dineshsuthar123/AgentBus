@@ -594,7 +594,7 @@ class BackgroundRunSupervisor:
         self.workspace_service = workspace_service or WorkspaceService()
         self._executor = ThreadPoolExecutor(
             max_workers=max_background_runs,
-            thread_name_prefix="agentbus-control",
+            thread_name_prefix="syndra-control",
         )
         self._active: dict[str, ActiveRun] = {}
         self._workspace_owners: dict[str, str] = {}
@@ -747,7 +747,7 @@ class BackgroundRunSupervisor:
         owner = self._workspace_owners.get(key)
         if owner is not None:
             raise ControlPlaneConflictError(
-                f"Workspace already has an active AgentBus run: {owner}."
+                f"Workspace already has an active Syndra run: {owner}."
             )
         self._workspace_owners[key] = run_id
 

@@ -272,7 +272,7 @@ export function impactTree(
       leaf(
         "impact:none",
         "No impact analysis yet",
-        "Run AgentBus: Analyze Change Impact",
+        "Run Syndra: Analyze Change Impact",
         "info"
       )
     ];
@@ -329,7 +329,7 @@ export function contextPlanTree(
       leaf(
         "context:none",
         "No context plan yet",
-        "Run AgentBus: Preview Agent Context",
+        "Run Syndra: Preview Agent Context",
         "info"
       )
     ];
@@ -631,7 +631,7 @@ export function formatOwnershipDocument(rule: OwnershipRuleSummary): string {
       ["Field", "Value"]
     ),
     "",
-    "_Ownership is reported from local repository metadata and does not grant AgentBus capabilities._"
+    "_Ownership is reported from local repository metadata and does not grant Syndra capabilities._"
   ]);
 }
 

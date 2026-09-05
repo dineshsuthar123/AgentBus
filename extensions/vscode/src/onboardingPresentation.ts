@@ -33,10 +33,10 @@ export function assessInstallationOutput(output: string): InstallationAssessment
   try {
     value = JSON.parse(output);
   } catch {
-    return incompatible("AgentBus returned invalid version metadata.");
+    return incompatible("Syndra returned invalid version metadata.");
   }
   if (!isRecord(value)) {
-    return incompatible("AgentBus returned invalid version metadata.");
+    return incompatible("Syndra returned invalid version metadata.");
   }
   const version = boundedString(value.version);
   const protocols = isRecord(value.protocols) ? value.protocols : undefined;
@@ -44,7 +44,7 @@ export function assessInstallationOutput(output: string): InstallationAssessment
   const protocol = boundedString(protocols?.control);
   const stateSchema = schemas?.state;
   if (!version || !protocol || typeof stateSchema !== "number") {
-    return incompatible("AgentBus version metadata is incomplete.");
+    return incompatible("Syndra version metadata is incomplete.");
   }
   const daemon = assessDaemonCompatibility(version, protocol);
   if (!daemon.compatible) return fromCompatibility(daemon, version);
@@ -53,7 +53,7 @@ export function assessInstallationOutput(output: string): InstallationAssessment
   return {
     state: "compatible",
     version,
-    message: `AgentBus ${version} is compatible with this extension.`
+    message: `Syndra ${version} is compatible with this extension.`
   };
 }
 
@@ -85,7 +85,7 @@ export function safeConfigurationDocument(output: string): string {
   try {
     value = JSON.parse(output);
   } catch {
-    throw new Error("AgentBus returned invalid configuration metadata.");
+    throw new Error("Syndra returned invalid configuration metadata.");
   }
   return `${JSON.stringify(sanitizeJson(value), null, 2)}\n`;
 }
@@ -104,7 +104,7 @@ export function formatOnboardingSummary(state: OnboardingState): string {
     unknown: "unknown",
     no_workspace: "no workspace"
   }[state.index];
-  return `AgentBus: ${installation}. Daemon: ${daemon}. Workspace: ${
+  return `Syndra: ${installation}. Daemon: ${daemon}. Workspace: ${
     state.trusted ? "trusted" : "restricted"
   }. Repository index: ${index}.`;
 }

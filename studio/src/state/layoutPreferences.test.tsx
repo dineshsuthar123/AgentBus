@@ -3,7 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it } from "vitest";
 import { useLayoutPreferences } from "./layoutPreferences";
 
-const STORAGE_KEY = "agentbus.studio.layout.v2";
+const STORAGE_KEY = "syndra.studio.layout.v2";
+const LEGACY_STORAGE_KEY = "agentbus.studio.layout.v2";
 
 function PreferencesProbe() {
   const [preferences, setPreferences] = useLayoutPreferences();
@@ -32,5 +33,18 @@ describe("layout preference persistence", () => {
     }));
     expect(localStorage.getItem(STORAGE_KEY)).not.toContain("bearer_token");
     expect(localStorage.getItem(STORAGE_KEY)).not.toContain("run_payload");
+  });
+
+  it("migrates allowlisted preferences from the legacy Studio key", async () => {
+    localStorage.setItem(LEGACY_STORAGE_KEY, JSON.stringify({
+      density: "comfortable",
+      inspectorCollapsed: true,
+      timelineCollapsed: false
+    }));
+
+    render(<PreferencesProbe />);
+
+    expect(screen.getByRole("button", { name: "comfortable" })).toBeInTheDocument();
+    await waitFor(() => expect(localStorage.getItem(STORAGE_KEY)).not.toBeNull());
   });
 });

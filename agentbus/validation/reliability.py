@@ -145,8 +145,8 @@ def run_reliability_validation(
         )
 
     if soak_report is None:
-        process_leaks = _unavailable_leak("AgentBus-owned child processes")
-        worktree_leaks = _unavailable_leak("AgentBus-owned Git worktrees")
+        process_leaks = _unavailable_leak("Syndra-owned child processes")
+        worktree_leaks = _unavailable_leak("Syndra-owned Git worktrees")
         db_integrity = _unavailable_integrity(
             "Durable state database integrity was not checked."
         )
@@ -183,11 +183,11 @@ def run_reliability_validation(
         )
         process_leaks = _leak_result(
             soak_report.leaked_process_count,
-            "AgentBus-owned child processes",
+            "Syndra-owned child processes",
         )
         worktree_leaks = _leak_result(
             soak_report.leaked_worktree_count,
-            "AgentBus-owned Git worktrees",
+            "Syndra-owned Git worktrees",
         )
         db_integrity = _integrity_result(
             soak_report.state_database_integrity,
@@ -429,12 +429,12 @@ def _collect_aggregate_failures(
         (
             process_leaks.status,
             FailureCategory.PROCESS,
-            f"Detected {process_leaks.count or 0} AgentBus-owned process leak(s).",
+            f"Detected {process_leaks.count or 0} Syndra-owned process leak(s).",
         ),
         (
             worktree_leaks.status,
             FailureCategory.REPOSITORY,
-            f"Detected {worktree_leaks.count or 0} AgentBus-owned worktree leak(s).",
+            f"Detected {worktree_leaks.count or 0} Syndra-owned worktree leak(s).",
         ),
         (
             db_integrity.status,

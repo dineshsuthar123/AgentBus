@@ -1,6 +1,6 @@
 # Local MCP integration
 
-MCP is optional and disabled until servers are configured explicitly. AgentBus
+MCP is optional and disabled until servers are configured explicitly. Syndra
 supports managed stdio and authenticated numeric-loopback HTTP transports. It
 does not discover public servers or trust advertised tools automatically.
 
@@ -16,8 +16,8 @@ credentials.
 After configuring a local server, run offline diagnostics:
 
 ```console
-agentbus doctor --workspace . --verbose --json
-agentbus config get mcp_server_configs --json
+syndra doctor --workspace . --verbose --json
+syndra config get mcp_server_configs --json
 ```
 
 Treat MCP peers and their outputs as untrusted even after protocol and schema

@@ -129,7 +129,7 @@ class McpStdioTransport:
                 self.worktree,
                 self.config.working_directory,
             )
-            isolated_home = tempfile.TemporaryDirectory(prefix="agentbus-mcp-")
+            isolated_home = tempfile.TemporaryDirectory(prefix="syndra-mcp-")
             environment = sanitized_process_environment(
                 source=self.source_environment,
                 executable_directories=self.catalog.executable_directories,
@@ -228,7 +228,7 @@ class McpStdioTransport:
             self.send(message)
             while True:
                 if cancellation is not None and cancellation.is_requested:
-                    self._best_effort_cancel(request_id, "AgentBus run cancelled")
+                    self._best_effort_cancel(request_id, "Syndra run cancelled")
                     cancellation.mark_propagated("mcp-stdio")
                     self.close()
                     cancellation.checkpoint(
@@ -237,7 +237,7 @@ class McpStdioTransport:
                     )
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    self._best_effort_cancel(request_id, "AgentBus request timed out")
+                    self._best_effort_cancel(request_id, "Syndra request timed out")
                     raise McpRequestTimeout(
                         f"MCP server request timed out: {self.config.server_id}."
                     )
@@ -374,13 +374,13 @@ class McpStdioTransport:
         stdout = threading.Thread(
             target=self._read_stdout,
             args=(process.stdout,),
-            name=f"agentbus-mcp-stdout-{process.pid}",
+            name=f"syndra-mcp-stdout-{process.pid}",
             daemon=True,
         )
         stderr = threading.Thread(
             target=self._read_stderr,
             args=(process.stderr,),
-            name=f"agentbus-mcp-stderr-{process.pid}",
+            name=f"syndra-mcp-stderr-{process.pid}",
             daemon=True,
         )
         stdout.start()

@@ -68,7 +68,7 @@ export function App() {
 
 function NavigationRail({ route, onDisconnect }: { route: string; onDisconnect: () => void }) {
   return <aside className="navigation-rail">
-    <a className="rail-brand" href="#/" aria-label="AgentBus Studio home"><img src="/agentbus-mark.svg" alt="" /><span>AB</span></a>
+    <a className="rail-brand" href="#/" aria-label="Syndra Studio home"><img src="/syndra-mark.svg" alt="" /><span>SY</span></a>
     <nav aria-label="Studio navigation">
       <NavLink route={route} href="#/" label="Command" icon={<Command size={18} />} />
       <NavLink route={route} href="#/new" label="New run" icon={<Plus size={18} />} />
@@ -108,23 +108,23 @@ function ConnectionScreen() {
   return (
     <main className="connection-screen">
       <section className="connection-story">
-        <div className="brand-lockup brand-lockup-large"><img src="/agentbus-mark.svg" alt="" /><span><strong>AgentBus</strong><small>Studio</small></span></div>
+        <div className="brand-lockup brand-lockup-large"><img src="/syndra-mark.svg" alt="" /><span><strong>Syndra</strong><small>Studio</small></span></div>
         <p className="connection-kicker"><ShieldCheck size={15} /> Local execution control plane</p>
         <h1>See the agent.<br /><span>Trust the evidence.</span></h1>
         <p className="connection-lede"><strong>Safe execution for autonomous software engineering.</strong> Plan repository changes, hold risky tools at exact approval gates, and verify every outcome with durable evidence.</p>
-        <div className="connection-rail" aria-label="AgentBus execution lifecycle">
+        <div className="connection-rail" aria-label="Syndra execution lifecycle">
           {["Plan", "Execute", "Approve", "Verify", "Review", "Replay"].map((stage) => <span key={stage}><i />{stage}</span>)}
         </div>
       </section>
       <section className="connection-panel">
-        <div><p className="eyebrow">Loopback session</p><h2>Connect to AgentBus</h2><p>Start the authenticated local daemon, then enter its one-time bearer token. The token stays in browser memory.</p></div>
-        <pre className="startup-command"><code>agentbus serve --port 8765 --json-ready</code></pre>
+        <div><p className="eyebrow">Loopback session</p><h2>Connect to Syndra</h2><p>Start the authenticated local daemon, then enter its one-time bearer token. The token stays in browser memory.</p></div>
+        <pre className="startup-command"><code>syndra serve --port 8765 --json-ready</code></pre>
         <form onSubmit={(event) => void submit(event)}>
           <label><span>Session token</span><input type="password" autoComplete="off" value={token} onChange={(event) => setToken(event.target.value)} placeholder="Paste bearer_token from the ready handshake" minLength={32} required /></label>
           {connectionMessage && <p className="inline-error" role="alert">{connectionMessage}</p>}
           <button className="button button-primary button-wide" disabled={connection === "connecting"} type="submit">{connection === "connecting" ? <Activity className="spin" size={16} /> : <Play size={16} />}{connection === "connecting" ? "Establishing control path" : "Open Studio"}</button>
         </form>
-        <div className="security-note"><span>01</span><p><strong>Same-origin by design.</strong> Vite proxies only to the configured numeric-loopback daemon; AgentBus keeps its no-CORS security boundary.</p></div>
+        <div className="security-note"><span>01</span><p><strong>Same-origin by design.</strong> Vite proxies only to the configured numeric-loopback daemon; Syndra keeps its no-CORS security boundary.</p></div>
       </section>
     </main>
   );
@@ -134,8 +134,8 @@ export function StudioAnnouncements({ runs, streamPhase }: { runs: RunSummary[];
   const active = runs.find((run) => !["succeeded", "completed", "failed", "rejected", "cancelled"].includes(run.status.toLowerCase()));
   const latest = runs[0];
   const latestStatus = latest?.status.toLowerCase();
-  const message = streamPhase === "reconnecting" ? "AgentBus event stream reconnecting. Last authoritative state remains visible."
-    : streamPhase === "restored" ? "AgentBus event stream restored."
+  const message = streamPhase === "reconnecting" ? "Syndra event stream reconnecting. Last authoritative state remains visible."
+    : streamPhase === "restored" ? "Syndra event stream restored."
       : active?.status === "waiting_for_approval" ? "Approval required. Execution is paused."
         : active ? `Run ${active.status}.`
           : latestStatus === "succeeded" || latestStatus === "completed" ? "Run succeeded. Durable verification and review state are available."

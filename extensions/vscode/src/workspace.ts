@@ -35,7 +35,7 @@ export async function selectWorkspace(
   const folders = vscode.workspace.workspaceFolders ?? [];
   if (folders.length === 0) {
     void vscode.window.showErrorMessage(
-      "Open a repository folder before using AgentBus."
+      "Open a repository folder before using Syndra."
     );
     return undefined;
   }
@@ -49,8 +49,8 @@ export async function selectWorkspace(
   return chooseWorkspace(
     choices,
     picker ?? ((items) => vscode.window.showQuickPick(items, {
-      title: "Select the repository AgentBus may operate on",
-      placeHolder: "AgentBus never silently selects another workspace root"
+      title: "Select the repository Syndra may operate on",
+      placeHolder: "Syndra never silently selects another workspace root"
     }))
   );
 }

@@ -35,6 +35,7 @@ from agentbus.control.registry import (
 from agentbus.control.services import ControlQueryService
 from agentbus.control.supervisor import AgentBusRunBackend, BackgroundRunSupervisor
 from agentbus.execution.state_store import StateStore
+from agentbus.identity import environment_value
 
 
 _DAEMON_ID = re.compile(r"^[a-f0-9]{32}$")
@@ -147,7 +148,7 @@ def serve(
             FailureInjectionPoint.DAEMON_TERMINATION,
             scope="before-server-run",
         ):
-            raise RuntimeError("Controlled AgentBus daemon termination.")
+            raise RuntimeError("Controlled Syndra daemon termination.")
         if json_ready:
             handshake = ReadyHandshake(
                 host=normalized_host,
@@ -180,8 +181,8 @@ def serve(
 
 
 def _startup_stage(stage: str) -> None:
-    if os.environ.get("AGENTBUS_DAEMON_STARTUP_DIAGNOSTICS") == "1":
-        sys.stderr.write(f"agentbus-daemon-stage:{stage}\n")
+    if environment_value("SYNDRA_DAEMON_STARTUP_DIAGNOSTICS")[0] == "1":
+        sys.stderr.write(f"syndra-daemon-stage:{stage}\n")
         sys.stderr.flush()
 
 

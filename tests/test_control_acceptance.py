@@ -92,7 +92,7 @@ def test_submit_waits_for_transient_workspace_owner_release(
                 {
                     "error": {
                         "message": (
-                            "Workspace already has an active AgentBus run: run-0"
+                            "Workspace already has an active Syndra run: run-0"
                         ),
                     }
                 },

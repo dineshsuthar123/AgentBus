@@ -14,7 +14,9 @@ SYNTHETIC_SIZES = {
     "large": 10_000,
     "very-large": 50_000,
 }
-_MARKER = ".agentbus-synthetic.json"
+_MARKER = ".syndra-synthetic.json"
+_LEGACY_MARKER = ".agentbus-synthetic.json"
+_OWNERS = frozenset({"syndra-synthetic-repository", "agentbus-synthetic-repository"})
 _MAX_FILES = 50_000
 
 
@@ -63,12 +65,12 @@ def generate_synthetic_repository(
     root = Path(destination).expanduser().resolve()
     if root.exists() and any(root.iterdir()):
         raise ValueError(
-            "Synthetic destination must be empty; AgentBus never replaces user data."
+            "Synthetic destination must be empty; Syndra never replaces user data."
         )
     root.mkdir(parents=True, exist_ok=True)
     marker = {
         "schema": 1,
-        "owner": "agentbus-synthetic-repository",
+        "owner": "syndra-synthetic-repository",
         "profile": profile,
         "file_count": selected_count,
         "seed": seed,
@@ -79,7 +81,7 @@ def generate_synthetic_repository(
         newline="\n",
     )
     (root / ".gitignore").write_text(
-        "__pycache__/\n*.py[cod]\n.agentbus/\n",
+        "__pycache__/\n*.py[cod]\n.syndra/\n.agentbus/\n",
         encoding="utf-8",
         newline="\n",
     )
@@ -117,16 +119,16 @@ def generate_synthetic_repository(
 def verify_synthetic_repository(root: str | Path) -> SyntheticRepository:
     repository = Path(root).expanduser().resolve()
     marker_path = repository / _MARKER
+    if not marker_path.exists():
+        marker_path = repository / _LEGACY_MARKER
     if marker_path.is_symlink() or not marker_path.is_file():
         raise ValueError("Synthetic repository ownership marker is missing or unsafe.")
     try:
         marker = json.loads(marker_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError("Synthetic repository marker is invalid.") from exc
-    if marker.get("schema") != 1 or marker.get("owner") != (
-        "agentbus-synthetic-repository"
-    ):
-        raise ValueError("Synthetic repository marker does not prove AgentBus ownership.")
+    if marker.get("schema") != 1 or marker.get("owner") not in _OWNERS:
+        raise ValueError("Synthetic repository marker does not prove Syndra ownership.")
     expected = int(marker.get("file_count", 0))
     files = sorted(repository.glob("package_*/module_*.py"))
     if len(files) != expected:
@@ -164,7 +166,7 @@ def _module_content(index: int, dependency: int, seed: int) -> str:
     previous = "value" if index == 0 else f"compute_{dependency:05d}(value)"
     offset = (seed + index * 17) % 997
     return (
-        f'"""Generated AgentBus benchmark module {index}."""\n\n'
+        f'"""Generated Syndra benchmark module {index}."""\n\n'
         f"{import_line}"
         f"CONSTANT_{index:05d} = {offset}\n\n\n"
         f"def compute_{index:05d}(value: int) -> int:\n"

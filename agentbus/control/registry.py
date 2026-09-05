@@ -16,6 +16,7 @@ from agentbus.control.errors import (
     ControlPlaneNotFoundError,
 )
 from agentbus.control.models import DaemonRegistryEntry
+from agentbus.identity import discover_compatible_path
 
 _REGISTRY_VERSION = 1
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
@@ -26,7 +27,10 @@ def utc_now() -> datetime:
 
 
 def default_registry_path() -> Path:
-    return (Path.home() / ".agentbus" / "daemons.json").resolve()
+    return discover_compatible_path(
+        Path.home() / ".syndra" / "daemons.json",
+        Path.home() / ".agentbus" / "daemons.json",
+    ).resolve()
 
 
 def executable_identity(pid: int | None = None) -> str:

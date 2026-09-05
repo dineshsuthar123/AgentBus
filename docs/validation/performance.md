@@ -1,12 +1,12 @@
 # Performance validation
 
-AgentBus performance validation is generated, local, providerless regression
+Syndra performance validation is generated, local, providerless regression
 evidence. It measures product overhead and does not claim model quality, remote
 latency, or universal capacity.
 
 ```console
-agentbus benchmark all --files 250 --iterations 5 --output .tmp/perf-baseline.json --json
-agentbus benchmark all --files 250 --iterations 5 --baseline .tmp/perf-baseline.json --comparison-output .tmp/perf-scorecard.json --json
+syndra benchmark all --files 250 --iterations 5 --output .tmp/perf-baseline.json --json
+syndra benchmark all --files 250 --iterations 5 --baseline .tmp/perf-baseline.json --comparison-output .tmp/perf-scorecard.json --json
 ```
 
 The full scorecard compares 11 metrics:
@@ -21,7 +21,7 @@ The full scorecard compares 11 metrics:
 8. Managed filesystem read invocation.
 9. Offline replay.
 10. Isolated daemon Python-allocation peak.
-11. AgentBus-owned persistent storage size.
+11. Syndra-owned persistent storage size.
 
 Generated repository bytes are excluded from persistent-storage measurements.
 Reports include the environment, fixture dimensions and fingerprint, operation
@@ -58,8 +58,8 @@ Synthetic profiles contain deterministic Python source files:
 | `very-large` | 50,000 | Explicit manual validation |
 
 ```console
-agentbus benchmark index-scale --size medium --iterations 1 --json
-agentbus benchmark index-scale --size large --iterations 1 --json
+syndra benchmark index-scale --size medium --iterations 1 --json
+syndra benchmark index-scale --size large --iterations 1 --json
 ```
 
 The scale runner measures full index, one-file and 100-file updates, rename and

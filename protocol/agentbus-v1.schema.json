@@ -9827,6 +9827,6 @@
     }
   },
   "$id": "https://agentbus.invalid/protocol/agentbus-v1.schema.json",
-  "title": "AgentBus Control Protocol v1",
+  "title": "Syndra Control Protocol v1",
   "x-agentbus-protocol-version": "1.0"
 }

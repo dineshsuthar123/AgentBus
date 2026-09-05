@@ -1,6 +1,6 @@
 # Repository Intelligence
 
-AgentBus repository intelligence is an optional, local, providerless index for
+Syndra repository intelligence is an optional, local, providerless index for
 planning and reviewing work in larger repositories. It adds persisted projects,
 files, modules, symbols, references, typed dependency edges, ownership rules,
 architecture evidence, search, impact analysis, test selection, and bounded
@@ -17,19 +17,19 @@ files, resolve every dynamic call, or prove runtime behavior.
 Run commands from the intended repository root or pass an explicit workspace:
 
 ```powershell
-agentbus index build --workspace C:\src\sample
-agentbus index status --workspace C:\src\sample
-agentbus search calculate_total --workspace C:\src\sample --evidence
-agentbus dependencies SYMBOL_ID --workspace C:\src\sample --depth 3
-agentbus impact services/api/calculator.py --workspace C:\src\sample
-agentbus tests-for services/api/calculator.py --workspace C:\src\sample
-agentbus context-plan "Change calculator rounding" --role planner --workspace C:\src\sample
+syndra index build --workspace C:\src\sample
+syndra index status --workspace C:\src\sample
+syndra search calculate_total --workspace C:\src\sample --evidence
+syndra dependencies SYMBOL_ID --workspace C:\src\sample --depth 3
+syndra impact services/api/calculator.py --workspace C:\src\sample
+syndra tests-for services/api/calculator.py --workspace C:\src\sample
+syndra context-plan "Change calculator rounding" --role planner --workspace C:\src\sample
 ```
 
 Use `--json` for bounded machine-readable output. Human output shows at most a
 bounded subset; `--evidence` includes safe explanations and hashes, never raw
 secret-file content. The default index database is
-`repository-index.sqlite3` beside the configured AgentBus state database.
+`repository-index.sqlite3` beside the configured Syndra state database.
 `--index-db` selects another local database explicitly.
 
 ## Index lifecycle
@@ -46,7 +46,7 @@ secret-file content. The default index database is
 | `paused` | An operation stopped at a safe checkpoint. | Resume through update or repair. |
 
 Build, update, verify, repair, cancellation, garbage collection, and clear are
-explicit operations. AgentBus never resets, cleans, deletes, or rolls back
+explicit operations. Syndra never resets, cleans, deletes, or rolls back
 repository files as part of index recovery. See
 [Incremental Indexing](incremental-indexing.md).
 
@@ -78,7 +78,7 @@ be silently reused for another workspace identity.
 
 ## Runtime integration
 
-For a current compatible snapshot, AgentBus builds deterministic planner,
+For a current compatible snapshot, Syndra builds deterministic planner,
 coder, verifier, and reviewer summaries from paths, symbol identities, graph
 evidence, hashes, confidence, and uncertainty. Runtime scope validation rejects
 claims outside the current task and repository. Trace and provenance records

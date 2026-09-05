@@ -1,7 +1,7 @@
 # MCP Integration
 
-AgentBus supports explicitly configured local Model Context Protocol servers
-and exposes a separate constrained AgentBus MCP endpoint. MCP peers are
+Syndra supports explicitly configured local Model Context Protocol servers
+and exposes a separate constrained Syndra MCP endpoint. MCP peers are
 untrusted. A server name, local process, schema, or successful handshake never
 grants tool authority by itself.
 
@@ -11,7 +11,7 @@ server command, or unrestricted plugin loading.
 ## Client configuration
 
 MCP servers are configured only through an explicitly selected JSON or TOML
-AgentBus config file. At most 64 server IDs may be configured, and IDs must be
+Syndra config file. At most 64 server IDs may be configured, and IDs must be
 unique lowercase ASCII identifiers. Each configured tool requires an explicit
 capability map.
 
@@ -20,7 +20,7 @@ allowlisted `python` executable alias:
 
 ```json
 {
-  "agentbus": {
+  "syndra": {
     "mcp_server_configs": [
       {
         "server_id": "local_tools",
@@ -89,7 +89,7 @@ same cleanup path.
 
 ## Authenticated loopback HTTP
 
-Install the optional dependency with `pip install "agentbus[mcp]"` before using
+Install the optional dependency with `pip install "syndra[mcp]"` before using
 `loopback_http`. This transport requires all of the following:
 
 - `explicit_loopback_http: true`;
@@ -107,7 +107,7 @@ An explicit config file is not a secrets manager: if it contains the token,
 protect that file with OS permissions, keep it outside source control, and do
 not share it as a diagnostic artifact.
 
-The numeric-host rule avoids DNS and hosts-file ambiguity. AgentBus does not
+The numeric-host rule avoids DNS and hosts-file ambiguity. Syndra does not
 support LAN, public internet, Unix-socket, named-pipe, or unauthenticated MCP
 HTTP endpoints.
 
@@ -166,13 +166,13 @@ never return the command path supplied by a remote caller, raw environment
 values, or an HTTP bearer token. A check creates a temporary session and closes
 it before returning.
 
-VS Code exposes configured servers in the MCP Servers view with `AgentBus:
-Show MCP Server` and `AgentBus: Check MCP Server`. Imported calls appear in the
+VS Code exposes configured servers in the MCP Servers view with `Syndra:
+Show MCP Server` and `Syndra: Check MCP Server`. Imported calls appear in the
 Tool Invocations and Approvals views and use the same exact approval commands.
 
-## AgentBus MCP server
+## Syndra MCP server
 
-The local AgentBus daemon exposes MCP JSON-RPC at authenticated `POST /mcp`.
+The local Syndra daemon exposes MCP JSON-RPC at authenticated `POST /mcp`.
 It reuses the loopback-only daemon bearer authentication, repository services,
 path validation, run supervisor, response models, and redaction. The maximum
 batch is 64 requests and the maximum encoded tool result is 1,000,000 bytes.
@@ -189,24 +189,27 @@ Exposed tools are:
 - `agentbus.run.cancel`
 - `agentbus.run.submit`
 
-Submission is deliberately narrow: deterministic provider, durable
+These `agentbus.*` tool names are stable protocol identifiers retained for
+existing MCP clients; they are not current product branding.
+
+Run creation is deliberately narrow: deterministic provider, durable
 multi-agent workflow, one worker, no parallel execution, no fallback, no live
 provider consent, no commit, no PR, and only the `python-calculator` or
 `cancellation-two-task` profiles. Cancellation is a cooperative request. The
 server does not expose approval decisions.
 
-The AgentBus MCP server does not expose arbitrary files, arbitrary process or
+The Syndra MCP server does not expose arbitrary files, arbitrary process or
 Git execution, raw SQLite, hidden prompts, provider credentials, daemon tokens,
 daemon stop, remote binding, push, commit, PR creation, or unrestricted source
 extraction.
 
 ## Limitations
 
-- A local MCP process executes with the AgentBus OS account's permissions; the
+- A local MCP process executes with the Syndra OS account's permissions; the
   capability layer is not kernel isolation.
 - Loopback HTTP authenticates the configured peer but does not make its output
   trustworthy.
-- MCP effects outside managed AgentBus adapters cannot be transactionally
+- MCP effects outside managed Syndra adapters cannot be transactionally
   rolled back after failure or cancellation.
 - Imported tools must be configured in advance; dynamic remote capability
   expansion is intentionally unsupported.

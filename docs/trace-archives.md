@@ -1,6 +1,6 @@
 # Trace Archives
 
-AgentBus v0.4 uses `.agentbus-trace` as a portable, deterministic archive for
+Syndra v0.4 uses `.agentbus-trace` as a portable, deterministic archive for
 terminal execution traces and regression fixtures. The format is a constrained
 ZIP document, not a general extraction format and not an executable package.
 
@@ -53,7 +53,7 @@ covered run evidence. Neither root is a signature.
 Export without source-like objects:
 
 ```powershell
-agentbus trace export <run-or-trace-id> `
+syndra trace export <run-or-trace-id> `
   --output run.agentbus-trace `
   --json
 ```
@@ -61,7 +61,7 @@ agentbus trace export <run-or-trace-id> `
 Explicitly include bounded sanitized source-like objects:
 
 ```powershell
-agentbus trace export <run-or-trace-id> `
+syndra trace export <run-or-trace-id> `
   --output run-with-source.agentbus-trace `
   --include-source-content `
   --json
@@ -78,19 +78,19 @@ origin and license before sharing it.
 ## Import trust boundary
 
 Treat every archive as untrusted input, including an archive created by an
-older AgentBus version.
+older Syndra version.
 
 Import without source consent:
 
 ```powershell
-agentbus trace import run.agentbus-trace --json
+syndra trace import run.agentbus-trace --json
 ```
 
 If validation derives that source-like objects are present, import stops
 before writing any object. Consent must be explicit:
 
 ```powershell
-agentbus trace import run-with-source.agentbus-trace `
+syndra trace import run-with-source.agentbus-trace `
   --allow-source-content `
   --json
 ```
@@ -101,7 +101,7 @@ objects were newly imported. `replay_started` is always false.
 Run replay separately:
 
 ```powershell
-agentbus replay run-with-source.agentbus-trace `
+syndra replay run-with-source.agentbus-trace `
   --mode offline `
   --allow-source-content `
   --json
@@ -182,7 +182,7 @@ Any of the following fails safely:
 Use:
 
 ```powershell
-agentbus trace verify <run-or-trace-id> --json
+syndra trace verify <run-or-trace-id> --json
 ```
 
 Verification of an imported trace rechecks provenance and stored objects.
@@ -202,9 +202,9 @@ base64, identity, and SHA-256.
 
 VS Code commands:
 
-- **AgentBus: Export Trace**
-- **AgentBus: Import Trace**
-- **AgentBus: Capture Regression Fixture**
+- **Syndra: Export Trace**
+- **Syndra: Import Trace**
+- **Syndra: Capture Regression Fixture**
 
 Source inclusion and import require explicit user choices. Import confirmation
 states that replay was not started.

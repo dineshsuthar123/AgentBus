@@ -138,5 +138,5 @@ def test_atomic_writes_leave_no_temporary_objects(tmp_path: Path) -> None:
     store = ContentAddressedStore(root)
     store.put_text("safe", producing_span_id="span-1")
 
-    temporary = list(root.rglob(".agentbus-tmp-*"))
+    temporary = list(root.rglob(".syndra-tmp-*"))
     assert temporary == []

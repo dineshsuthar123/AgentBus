@@ -50,7 +50,7 @@ def test_required_public_beta_documentation_exists() -> None:
     assert missing == []
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     assert "0.6.0b1" in readme
-    assert "agentbus quickstart --json" in readme
+    assert "syndra quickstart --json" in readme
     assert "complete sandbox isolation" in readme
 
 
@@ -72,7 +72,7 @@ def test_relative_markdown_links_resolve() -> None:
     assert broken == []
 
 
-def test_documented_agentbus_commands_are_registered() -> None:
+def test_documented_syndra_commands_are_registered() -> None:
     parser = _root_parser()
     registered = next(
         action.choices
@@ -85,7 +85,7 @@ def test_documented_agentbus_commands_are_registered() -> None:
         for block in FENCED_BLOCK.findall(text):
             for line in block.splitlines():
                 stripped = line.strip()
-                if not stripped.startswith("agentbus "):
+                if not stripped.startswith("syndra "):
                     continue
                 tokens = shlex.split(stripped, posix=False)
                 if len(tokens) < 2 or tokens[1] not in registered:
@@ -98,11 +98,11 @@ def test_quickstart_examples_match_current_cli() -> None:
         encoding="utf-8"
     )
     for snippet in (
-        "agentbus setup --workspace . --provider deterministic",
-        "agentbus doctor --workspace . --provider deterministic --json",
-        "agentbus index build --workspace . --json",
-        "agentbus replay <run-id> --mode offline --json",
-        "agentbus cleanup --dry-run --stale --json",
+        "syndra setup --workspace . --provider deterministic",
+        "syndra doctor --workspace . --provider deterministic --json",
+        "syndra index build --workspace . --json",
+        "syndra replay <run-id> --mode offline --json",
+        "syndra cleanup --dry-run --stale --json",
     ):
         assert snippet in quickstart
 

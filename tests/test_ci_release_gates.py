@@ -50,13 +50,13 @@ def test_ci_exposes_every_named_v07_gate() -> None:
 def test_ci_runs_product_acceptance_on_both_platforms_and_beta_readiness() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
 
-    assert "python -m agentbus.product_acceptance" in workflow
-    assert "python -m agentbus.beta_acceptance" in workflow
-    assert "python -m agentbus.rc_acceptance" in workflow
+    assert "python -m syndra.product_acceptance" in workflow
+    assert "python -m syndra.beta_acceptance" in workflow
+    assert "python -m syndra.rc_acceptance" in workflow
     assert "ubuntu-latest" in workflow
     assert "windows-latest" in workflow
     assert "xvfb-run -a npm run test:product" in workflow
-    assert "python -m agentbus.release_security" in workflow
+    assert "python -m syndra.release_security" in workflow
     assert "continue-on-error" not in workflow
 
 
@@ -72,9 +72,9 @@ def test_v07_specialized_ci_gates_are_focused_and_mandatory() -> None:
         "tests/test_sqlite_contention.py",
         "tests/test_index_scale_benchmark.py",
         "tests/test_trace_sealing.py",
-        "python -m agentbus.rc_acceptance",
-        "python -m agentbus.release_security",
-        "python -m agentbus.cli benchmark all",
+        "python -m syndra.rc_acceptance",
+        "python -m syndra.release_security",
+        "python -m syndra.cli benchmark all",
     )
     for command in expected_commands:
         assert command in workflow

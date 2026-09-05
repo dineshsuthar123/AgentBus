@@ -6,13 +6,13 @@ Accepted
 
 ## Context
 
-AgentBus has unit-tested providers, agents, durable state, parallel scheduling, worktrees, integration, verification, review, artifact filtering, and Git finalization. Component tests alone cannot answer whether a complete runtime variant performs a representative software-engineering task correctly, safely, efficiently, and reproducibly. Model-only judging is also insufficient: a reviewer can overlook functional defects, accept unrelated changes, or reject valid work for reasons outside the current task.
+Syndra has unit-tested providers, agents, durable state, parallel scheduling, worktrees, integration, verification, review, artifact filtering, and Git finalization. Component tests alone cannot answer whether a complete runtime variant performs a representative software-engineering task correctly, safely, efficiently, and reproducibly. Model-only review is also insufficient: a reviewer can overlook functional defects, accept unrelated changes, or reject valid work for reasons outside the current task.
 
 The product needs a repeatable way to compare single-agent, multi-agent, durable, parallel, provider, retry, fallback, and prompt/configuration variants without creating another orchestration engine.
 
 ## Decision
 
-Add `agentbus.evaluation` as a measurement layer over the existing runtime. An `EvaluationRunner` creates an isolated repository, invokes the selected existing runtime path, collects structured reports and usage, evaluates deterministic assertions, calculates a transparent score, and stores a sanitized versioned result. Evaluation case execution is sequential; AgentBus task parallelism remains the scheduler's responsibility.
+Add `agentbus.evaluation` as a measurement layer over the existing runtime. An `EvaluationRunner` creates an isolated repository, invokes the selected existing runtime path, collects structured reports and usage, evaluates deterministic assertions, calculates a transparent score, and stores a sanitized versioned result. Evaluation case execution is sequential; Syndra task parallelism remains the scheduler's responsibility.
 
 ### Deterministic Assertions
 
@@ -55,7 +55,7 @@ For each applicable dimension, points equal `weight * passing assertions / appli
 
 ### Storage And Privacy
 
-Evaluation results use schema-versioned JSON under `.agentbus/evaluations`, separate from normal durable SQLite state. Writes are atomic. Stored data includes suite/run IDs, timestamps, AgentBus commit, configuration fingerprint, variant, case outcomes, assertions, metrics, scores, and safe artifact references.
+Evaluation results use schema-versioned JSON under `.syndra/evaluations`, separate from normal durable SQLite state. Writes are atomic. Stored data includes suite/run IDs, timestamps, Syndra commit, configuration fingerprint, variant, case outcomes, assertions, metrics, scores, and safe artifact references.
 
 Results exclude task prompts, unrestricted source snapshots, environment dumps, API keys, SDK objects, and raw provider responses. All free-form metadata passes through the existing redaction layer. Export reads the sanitized typed record rather than copying runtime logs.
 
@@ -89,13 +89,13 @@ Passing the offline or live fixtures is evidence of behavior under those cases. 
 
 ## Alternatives Considered
 
-### Model Reviewer As The Only Judge
+### Model Reviewer As The Sole Authority
 
 Rejected because it is nondeterministic and cannot independently prove file contents, test results, repository scope, resource limits, or absence of forbidden side effects.
 
 ### A Separate Benchmark Orchestrator
 
-Rejected because it would measure a new implementation instead of AgentBus. The harness must invoke the production agents, engine, scheduler, worktrees, verifier, reviewer, and reporting paths.
+Rejected because it would measure a new implementation instead of Syndra. The harness must invoke the production agents, engine, scheduler, worktrees, verifier, reviewer, and reporting paths.
 
 ### Live Provider Evaluation By Default
 

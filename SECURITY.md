@@ -3,22 +3,22 @@
 ## Supported versions
 
 The latest `0.6` public-beta prerelease receives security fixes. Older pre-1.0
-milestones are unsupported unless maintainers state otherwise. AgentBus has no
+milestones are unsupported unless maintainers state otherwise. Syndra has no
 production SLA.
 
 ## Report a vulnerability privately
 
 Do not open a public issue with vulnerability details. Use this repository's
-[private security advisory form](https://github.com/dineshsuthar123/AgentBus/security/advisories/new).
+[private security advisory form](https://github.com/dineshsuthar123/Syndra/security/advisories/new).
 
-Include the affected AgentBus version, operating system, Python version,
+Include the affected Syndra version, operating system, Python version,
 minimal sanitized reproduction, impact, and a proposed mitigation if known.
 Never include real API keys, bearer tokens, `.env` files, private source,
 prompts, provider responses, databases, trace archives, or personal data.
 
 ## Security boundaries
 
-AgentBus validates the canonical configured workspace and exact Git top-level,
+Syndra validates the canonical configured workspace and exact Git top-level,
 derives capabilities independently of model claims, applies deterministic
 policy, and binds risky approvals to an exact revision and scope. Managed
 subprocesses use an absolute revalidated executable, separate arguments with
@@ -50,7 +50,7 @@ review changes before execution, commit, push, or pull-request creation.
 
 Filesystem and external side effects are not transactionally rolled back.
 Failed runs report created and modified files but do not automatically reset,
-clean, delete, or restore them. Cleanup removes only validated AgentBus-owned
+clean, delete, or restore them. Cleanup removes only validated Syndra-owned
 runtime artifacts and must preserve unknown or active user data.
 
 See [security documentation](docs/security/README.md),

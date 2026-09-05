@@ -1,13 +1,13 @@
 # Release-candidate acceptance
 
 The v0.7 release-candidate acceptance is one entirely local, non-publishing
-workflow. It builds AgentBus from the current checkout, installs the wheel in a
+workflow. It builds Syndra from the current checkout, installs the wheel in a
 fresh virtual environment, exercises the installed product, and cleans only
-AgentBus-owned temporary state.
+Syndra-owned temporary state.
 
 ```console
-python -m agentbus.rc_acceptance
-python -m agentbus.rc_acceptance --json
+python -m syndra.rc_acceptance
+python -m syndra.rc_acceptance --json
 ```
 
 No live model provider, public repository, third-party MCP server, external
@@ -39,8 +39,8 @@ The gates run in this order and stop on the first failure:
 17. Inspect a bounded support bundle for private-marker leakage.
 18. Require reliability smoke with no owned process or worktree leaks.
 19. Compare all 11 performance metrics with no broad regression.
-20. Stop the daemon and remove validated AgentBus-owned runtime state.
-21. Uninstall AgentBus from the fresh environment.
+20. Stop the daemon and remove validated Syndra-owned runtime state.
+21. Uninstall Syndra from the fresh environment.
 22. Verify post-uninstall process, worktree, registry, and credential cleanup.
 
 Structured output records each completed gate, status, bounded detail, duration,
@@ -56,10 +56,10 @@ owned registry. It never runs `git reset`, `git clean`, or destructive source
 rollback.
 
 The acceptance workspace itself is disposable and removed by its temporary
-directory owner. That does not change normal AgentBus semantics: files written
+directory owner. That does not change normal Syndra semantics: files written
 to a user workspace during a failed run remain for inspection, and reports must
 list created or modified artifacts. Cleanup recommendations are advisory unless
-the operator explicitly confirms an AgentBus ownership-aware cleanup command.
+the operator explicitly confirms an Syndra ownership-aware cleanup command.
 
 ## Evidence scope
 
@@ -67,7 +67,7 @@ RC acceptance combines synthetic and real local product evidence:
 
 - synthetic fixtures drive quickstart, reliability, hostile MCP, path, and
   performance scenarios;
-- the current local AgentBus checkout supplies package source and real wheel
+- the current local Syndra checkout supplies package source and real wheel
   and source-distribution bytes to package and defensive artifact audits;
 - no public repository is downloaded and no live provider is invoked.
 

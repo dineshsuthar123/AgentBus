@@ -213,7 +213,7 @@ def test_payment_safety_profile_patches_through_managed_tools(
 
     source = (
         harness.workspace
-        / "src/main/java/com/agentbus/demo/PaymentService.java"
+        / "src/main/java/com/syndra/demo/PaymentService.java"
     ).read_text(encoding="utf-8")
     records = harness.store.list_tool_invocations("run-1")
     assert summary == "Completed deterministic profile payment-safety."
@@ -223,6 +223,26 @@ def test_payment_safety_profile_patches_through_managed_tools(
     ]
     assert all(record.status == ToolInvocationStatus.SUCCEEDED for record in records)
     assert "return confirmedPaymentIds.add(paymentId) ? 1 : 0;" in source
+
+
+def test_payment_safety_profile_supports_legacy_agentbus_fixture(
+    tmp_path: Path,
+) -> None:
+    harness = _harness(tmp_path, "payment-safety", legacy_payment=True)
+    runtime = harness.runtime()
+    try:
+        summary = harness.loop(runtime).run(
+            "Repair legacy payment retries in "
+            "src/main/java/com/agentbus/demo/PaymentService.java."
+        )
+    finally:
+        runtime.close()
+
+    source = harness.workspace / "src/main/java/com/agentbus/demo/PaymentService.java"
+    assert summary == "Completed deterministic profile payment-safety."
+    assert "return confirmedPaymentIds.add(paymentId) ? 1 : 0;" in source.read_text(
+        encoding="utf-8"
+    )
 
 
 @pytest.mark.parametrize(
@@ -477,6 +497,7 @@ def _harness(
     profile: str,
     *,
     budget: ToolResourceBudget | None = None,
+    legacy_payment: bool = False,
 ) -> ProfileHarness:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -497,10 +518,12 @@ def _harness(
             encoding="utf-8",
         )
     if profile == "payment-safety":
-        payment_source = workspace / "src/main/java/com/agentbus/demo/PaymentService.java"
+        package_path = "com/agentbus/demo" if legacy_payment else "com/syndra/demo"
+        package_name = "com.agentbus.demo" if legacy_payment else "com.syndra.demo"
+        payment_source = workspace / f"src/main/java/{package_path}/PaymentService.java"
         payment_source.parent.mkdir(parents=True)
         payment_source.write_text(
-            "package com.agentbus.demo;\n\n"
+            f"package {package_name};\n\n"
             "import java.util.Set;\n"
             "import java.util.concurrent.ConcurrentHashMap;\n\n"
             "public final class PaymentService {\n"
@@ -531,9 +554,12 @@ def _harness(
         state_dir=str(tmp_path / "state"),
         tool_resource_budget=budget or ToolResourceBudget(),
     )
+    planner_prompt = "Plan the deterministic managed-tool profile."
+    if profile == "payment-safety":
+        planner_prompt += f"\nRepository file: {payment_source.relative_to(workspace)}"
     planner = ModelRouter(config).generate_json(
         ModelRole.PLANNER,
-        "Plan the deterministic managed-tool profile.",
+        planner_prompt,
         schema=PlannerOutput,
     )
     plan = planner.json_value()

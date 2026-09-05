@@ -76,8 +76,10 @@ _ANALYSIS_READ_ONLY_CAPABILITIES = {
     "git.read",
     "environment.read_safe",
 }
+_PAYMENT_SOURCE = "src/main/java/com/syndra/demo/PaymentService.java"
+_LEGACY_PAYMENT_SOURCE = "src/main/java/com/agentbus/demo/PaymentService.java"
 _PROFILE_OUTPUTS: dict[str, list[str]] = {
-    "payment-safety": ["src/main/java/com/agentbus/demo/PaymentService.java"],
+    "payment-safety": [_PAYMENT_SOURCE],
     "tool-atomic-write": ["profile_result.txt"],
     "tool-source-patch": ["module.py"],
     "tool-source-patch-review-retry": ["module.py"],
@@ -319,7 +321,7 @@ class DeterministicProvider:
         ):
             return {"status": "ok"}
         if self.role == ModelRole.PLANNER:
-            return self._plan()
+            return self._plan(prompt=prompt)
         if self.role == ModelRole.REVIEWER:
             if self.profile == "tool-source-patch-review-retry":
                 task_review = bool(metadata.get("task_id"))
@@ -377,8 +379,9 @@ class DeterministicProvider:
             prompt=prompt,
         )
 
-    def _plan(self) -> dict[str, Any]:
+    def _plan(self, *, prompt: str = "") -> dict[str, Any]:
         if self.profile == "payment-safety":
+            payment_source = _payment_source_path(prompt)
             return {
                 "goal": "Make payment confirmation idempotent under concurrent retries.",
                 "steps": [
@@ -395,7 +398,7 @@ class DeterministicProvider:
                         "dependencies": [],
                         "assigned_role": "coder",
                         "maximum_attempts": 2,
-                        "expected_outputs": _PROFILE_OUTPUTS[self.profile],
+                        "expected_outputs": [payment_source],
                         "done_criteria": [
                             "Exactly one concurrent confirmation returns success.",
                             "Repeated confirmation preserves the public API and returns zero.",
@@ -446,6 +449,7 @@ class DeterministicProvider:
                     "Policy, dispatch, cancellation, and audit paths remain active."
                 ],
             }
+        source_path, test_path, product_name = _calculator_artifacts(prompt)
         steps = [
             {
                 "id": "step-1",
@@ -459,8 +463,8 @@ class DeterministicProvider:
                 "assigned_role": "coder",
                 "maximum_attempts": 2,
                 "expected_outputs": [
-                    "agentbus_result.py",
-                    "test_agentbus_result.py",
+                    source_path,
+                    test_path,
                 ],
                 "done_criteria": [
                     "The calculator adds two integers.",
@@ -488,7 +492,7 @@ class DeterministicProvider:
                     "dependencies": [],
                     "assigned_role": "coder",
                     "maximum_attempts": 1,
-                    "expected_outputs": ["agentbus_secondary.py"],
+                    "expected_outputs": [f"{product_name.casefold()}_secondary.py"],
                     "done_criteria": ["The secondary artifact is present."],
                     "required_capabilities": [
                         "filesystem.write",
@@ -497,7 +501,7 @@ class DeterministicProvider:
                 }
             )
         return {
-            "goal": "Complete a deterministic offline AgentBus execution.",
+            "goal": f"Complete a deterministic offline {product_name} execution.",
             "steps": steps,
             "test_strategy": "Run the repository's standard-library unittest suite.",
             "done_criteria": [
@@ -522,16 +526,19 @@ class DeterministicProvider:
                     ["filesystem.read"],
                     f"{task_id}:bounded-loop-{action_position}",
                 )
-            actions = self._profile_actions(task_id)
+            actions = self._profile_actions(task_id, prompt=prompt)
             return actions[min(action_position, len(actions)) - 1]
+        source_path, test_path, product_name = _calculator_artifacts(prompt)
+        module_name = source_path.removesuffix(".py")
         if task_id == "step-2":
+            secondary_path = f"{product_name.casefold()}_secondary.py"
             actions = [
                 {
                     "action": "tool_call",
                     "tool_call": {
                         "tool_name": "filesystem.write",
                         "arguments": {
-                            "path": "agentbus_secondary.py",
+                            "path": secondary_path,
                             "content": 'MESSAGE = "scheduled"\n',
                         },
                         "expected_capabilities": [
@@ -553,9 +560,9 @@ class DeterministicProvider:
                     "tool_call": {
                         "tool_name": "filesystem.write",
                         "arguments": {
-                            "path": "agentbus_result.py",
+                            "path": source_path,
                             "content": (
-                                '"""Deterministic AgentBus acceptance artifact."""\n\n'
+                                f'"""Deterministic {product_name} acceptance artifact."""\n\n'
                                 "def add(left: int, right: int) -> int:\n"
                                 "    return left + right\n"
                             ),
@@ -572,11 +579,11 @@ class DeterministicProvider:
                     "tool_call": {
                         "tool_name": "filesystem.write",
                         "arguments": {
-                            "path": "test_agentbus_result.py",
+                            "path": test_path,
                             "content": (
                                 "import unittest\n\n"
-                                "from agentbus_result import add\n\n\n"
-                                "class AgentBusResultTest(unittest.TestCase):\n"
+                                f"from {module_name} import add\n\n\n"
+                                f"class {product_name}ResultTest(unittest.TestCase):\n"
                                 "    def test_add(self) -> None:\n"
                                 "        self.assertEqual(add(2, 3), 5)\n\n\n"
                                 "if __name__ == '__main__':\n"
@@ -629,7 +636,12 @@ class DeterministicProvider:
             ]
         return actions[min(action_position, len(actions)) - 1]
 
-    def _profile_actions(self, task_id: str) -> list[dict[str, Any]]:
+    def _profile_actions(
+        self,
+        task_id: str,
+        *,
+        prompt: str = "",
+    ) -> list[dict[str, Any]]:
         finish = {
             "action": "finish",
             "summary": f"Completed deterministic profile {self.profile}.",
@@ -639,7 +651,7 @@ class DeterministicProvider:
                 _tool_action(
                     "filesystem.patch",
                     {
-                        "path": "src/main/java/com/agentbus/demo/PaymentService.java",
+                        "path": _payment_source_path(prompt),
                         "expected": (
                             "confirmedPaymentIds.add(paymentId);\n"
                             "        return 1;"
@@ -953,6 +965,21 @@ class DeterministicProvider:
 
     def _request_id(self, call_number: int) -> str:
         return f"det-{self.role.value}-{call_number:04d}"
+
+
+def _payment_source_path(prompt: str) -> str:
+    normalized = prompt.replace("\\", "/")
+    if _LEGACY_PAYMENT_SOURCE in normalized and _PAYMENT_SOURCE not in normalized:
+        return _LEGACY_PAYMENT_SOURCE
+    return _PAYMENT_SOURCE
+
+
+def _calculator_artifacts(prompt: str) -> tuple[str, str, str]:
+    if "syndra_result.py" in prompt or "deterministic Syndra calculator" in prompt:
+        return "syndra_result.py", "test_syndra_result.py", "Syndra"
+    if "agentbus_result.py" in prompt or "deterministic AgentBus calculator" in prompt:
+        return "agentbus_result.py", "test_agentbus_result.py", "AgentBus"
+    return "syndra_result.py", "test_syndra_result.py", "Syndra"
 
 
 def _runtime_action_position(prompt: str, fallback: int) -> int:

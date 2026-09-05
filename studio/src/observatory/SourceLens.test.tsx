@@ -14,7 +14,7 @@ const bundle = {
     original_task: "Make payment confirmation idempotent",
     created_at: "2026-08-30T10:00:00Z",
     updated_at: "2026-08-30T10:02:00Z",
-    changed_files: [".agentbus", "src/payment.ts", "dist/payment.js"],
+    changed_files: [".syndra", ".agentbus", "src/payment.ts", "dist/payment.js"],
     version: 4
   },
   tasks: { run_id: "run-source-001", tasks: [{
@@ -40,6 +40,7 @@ const bundle = {
     completed_at: "2026-08-30T10:01:30Z"
   }] },
   changes: { run_id: "run-source-001", workspace: "C:\\work\\payment-demo", changes: [
+    { path: ".syndra", status: "ignored", tracked: false, classification: "ignored" },
     { path: ".agentbus", status: "ignored", tracked: false, classification: "ignored" },
     { path: "src/payment.ts", status: "modified", tracked: true, additions: 4, deletions: 1, classification: "relevant", task_id: "step-1" },
     { path: "dist/payment.js", status: "created", tracked: false, additions: 30, deletions: 0, generated: true, classification: "generated-excluded" }
@@ -76,9 +77,11 @@ describe("source lens", () => {
 
     await user.click(screen.getByRole("button", { name: /^review$/i }));
     expect(screen.getByRole("button", { name: /src\/payment.ts/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /\.syndra/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /\.agentbus/i })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /^excluded$/i }));
+    expect(screen.getByRole("button", { name: /\.syndra/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /\.agentbus/i })).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /locate execution/i }));

@@ -19,6 +19,7 @@ from agentbus.execution.state_store import (
     StateStoreError,
     TraceRecordNotFoundError,
 )
+from agentbus.identity import discover_compatible_path
 from agentbus.policy.defaults import DEFAULT_TOOL_POLICY
 from agentbus.replay.checkpoints import (
     CheckpointManager,
@@ -311,7 +312,7 @@ class TraceReplayService:
         if protocol_drift:
             raise ReplayIncompatibleError(
                 "Trace archive protocols are incompatible with the current "
-                "AgentBus runtime."
+                "Syndra runtime."
             )
         try:
             fixture = RegressionFixtureSpec.model_validate(
@@ -651,11 +652,7 @@ class TraceReplayService:
         ):
             run = self.state_store.get_run(trace.run_id)
             source_workspace = Path(run.workspace).expanduser().resolve()
-            replay_root = (
-                source_workspace.parent
-                / ".agentbus-replays"
-                / source_workspace.name
-            )
+            replay_root = _replay_root(source_workspace)
             if request.isolated_workspace is None:
                 raise StateStoreError(
                     "Partial replay request was not prepared for isolation."
@@ -728,11 +725,7 @@ class TraceReplayService:
                     "reconstructed repository and is not available."
                 )
             source_workspace = Path(run.workspace).expanduser().resolve()
-            replay_root = (
-                source_workspace.parent
-                / ".agentbus-replays"
-                / source_workspace.name
-            )
+            replay_root = _replay_root(source_workspace)
             prepared.isolated_workspace = str(
                 replay_root / prepared.replay_id
             )
@@ -1004,6 +997,14 @@ class _ReplayToolPolicyContext:
                 "Policy replay requires one matching captured tool envelope."
             )
         return next(iter(unique.values()))
+
+
+def _replay_root(source_workspace: Path) -> Path:
+    parent = source_workspace.parent
+    return discover_compatible_path(
+        parent / ".syndra-replays" / source_workspace.name,
+        parent / ".agentbus-replays" / source_workspace.name,
+    )
 
 
 def _validated_tool_descriptors(

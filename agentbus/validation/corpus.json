@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "corpus_id": "agentbus-v07",
-  "title": "AgentBus v0.7 repository validation corpus",
+  "title": "Syndra v0.7 repository validation corpus",
   "description": "Deterministic offline fixtures and opt-in public repository checkouts.",
   "repositories": [
     {

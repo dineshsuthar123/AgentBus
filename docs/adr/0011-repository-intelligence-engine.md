@@ -5,7 +5,7 @@
 
 ## Context
 
-AgentBus already had a safe repository scanner and bounded context-pack builder,
+Syndra already had a safe repository scanner and bounded context-pack builder,
 but repeated runs rediscovered the same files and lacked durable symbol,
 dependency, ownership, architecture, impact, and test-selection evidence. Large
 or mixed-language repositories need more selective context without uploading
@@ -21,7 +21,7 @@ and review.
 Implement an optional local repository-intelligence subsystem with:
 
 1. portable repository/workspace identities and immutable snapshot identities;
-2. a versioned SQLite metadata and graph store beside AgentBus state;
+2. a versioned SQLite metadata and graph store beside Syndra state;
 3. contained static discovery for Python, Node, Java, Go, and monorepo metadata;
 4. bounded, non-executing parsers for Python, TypeScript/JavaScript, Java, and Go;
 5. typed imports, exports, calls, references, inheritance, implementation, test,

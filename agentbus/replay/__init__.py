@@ -1,4 +1,4 @@
-"""Providerless deterministic replay for captured AgentBus traces."""
+"""Providerless deterministic replay for captured Syndra traces."""
 
 from agentbus.replay.classification import (
     ReplayabilityClassifier,

@@ -65,7 +65,7 @@ def test_newer_or_downgrade_schema_is_rejected():
     connection = sqlite3.connect(":memory:")
     connection.execute(f"PRAGMA user_version = {LATEST_SCHEMA_VERSION + 1}")
 
-    with pytest.raises(IndexSchemaError, match="newer AgentBus"):
+    with pytest.raises(IndexSchemaError, match="newer Syndra"):
         apply_migrations(connection)
 
     current = sqlite3.connect(":memory:")

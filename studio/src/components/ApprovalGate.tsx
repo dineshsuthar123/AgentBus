@@ -28,7 +28,7 @@ export function ApprovalGate({ approval, onDecision, busy = false }: {
             <div className="gate-command-exact"><dt>Exact command</dt><dd><code>{displayCommand(approval.command)}</code></dd></div>
           </dl>
           <dl className="technical-grid">
-            <div><dt>Workspace scope</dt><dd title="Canonical path retained by AgentBus">{displayWorkspace(approval.working_directory)}</dd></div>
+            <div><dt>Workspace scope</dt><dd title="Canonical path retained by Syndra">{displayWorkspace(approval.working_directory)}</dd></div>
             <div><dt>Policy rule</dt><dd><code>{approval.policy_rule ?? approval.risk_category}</code></dd></div>
             <div><dt>Reason</dt><dd>{approval.reason ?? "Exact human authorization is required."}</dd></div>
             <div><dt>Revision</dt><dd>{approval.revision ?? 1}</dd></div>
@@ -48,10 +48,10 @@ export function ApprovalGate({ approval, onDecision, busy = false }: {
         <label><span>Decision note <small>optional</small></span><input value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Why are you approving or rejecting?" maxLength={2_000} /></label>
         <div>
           <button className="button button-danger" type="button" disabled={busy} title={busy ? "Waiting for server confirmation" : undefined} onClick={() => void onDecision("reject", reason)}><Ban size={15} /> {busy ? "Decision pending" : "Reject"}</button>
-          <button className="button button-approval" type="button" disabled={busy} title={busy ? "Waiting for server confirmation" : undefined} onClick={() => void onDecision("approve", reason)}>{busy ? "Waiting for AgentBus" : "Approve & continue"} <ArrowRight size={15} /></button>
+          <button className="button button-approval" type="button" disabled={busy} title={busy ? "Waiting for server confirmation" : undefined} onClick={() => void onDecision("approve", reason)}>{busy ? "Waiting for Syndra" : "Approve & continue"} <ArrowRight size={15} /></button>
         </div>
       </div>
-      <p className="gate-authority" aria-live="polite">{busy ? "Decision submitted. The gate remains closed until AgentBus confirms it." : "Server-authoritative gate. No execution continues before confirmation."}</p>
+      <p className="gate-authority" aria-live="polite">{busy ? "Decision submitted. The gate remains closed until Syndra confirms it." : "Server-authoritative gate. No execution continues before confirmation."}</p>
     </section>
   );
 }

@@ -24,7 +24,7 @@ class CoderAgent(BaseAgent):
     ):
         super().__init__(
             name="coder",
-            role="Execute an approved local coding plan using AgentBus tools.",
+            role="Execute an approved local coding plan using Syndra tools.",
             config=config,
             model=model,
             model_role=ModelRole.CODER,

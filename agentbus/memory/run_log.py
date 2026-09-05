@@ -16,7 +16,7 @@ class RunLogger:
         configured_dir = Path(log_dir).expanduser()
         if not configured_dir.is_absolute():
             raise ValueError(
-                "RunLogger requires an absolute directory resolved from AgentBus "
+                "RunLogger requires an absolute directory resolved from Syndra "
                 "runtime configuration."
             )
         self.log_dir = configured_dir.resolve()

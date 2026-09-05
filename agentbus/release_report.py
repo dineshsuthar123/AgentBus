@@ -85,7 +85,7 @@ def build_release_report(
     repository: str | Path = ".",
     workspace: str | Path | None = None,
     config_file: str | Path | None = None,
-    results_dir: str | Path = ".agentbus/evaluations",
+    results_dir: str | Path = ".syndra/evaluations",
     offline_run_id: str | None = None,
     live_run_id: str | None = None,
     test_evidence: str | Path | None = None,
@@ -142,7 +142,7 @@ def build_release_report(
 
 def render_markdown(report: ReleaseReport) -> str:
     lines = [
-        f"# AgentBus {report.version} release report",
+        f"# Syndra {report.version} release report",
         "",
         f"- Commit: `{report.commit or '[unavailable]'}`",
         f"- Branch: `{report.branch or '[detached]'}`",
@@ -164,11 +164,11 @@ def render_markdown(report: ReleaseReport) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="agentbus release-report")
+    parser = argparse.ArgumentParser(prog="syndra release-report")
     parser.add_argument("--repository", default=".")
     parser.add_argument("--workspace")
     parser.add_argument("--config")
-    parser.add_argument("--results-dir", default=".agentbus/evaluations")
+    parser.add_argument("--results-dir", default=".syndra/evaluations")
     parser.add_argument("--offline-run")
     parser.add_argument("--live-run")
     parser.add_argument("--test-evidence")
@@ -223,8 +223,8 @@ def _evidence_check(name: str, path: str | Path | None) -> ReleaseCheck:
 
 
 def _build_check(dist_dir: Path) -> ReleaseCheck:
-    wheels = sorted(dist_dir.glob("agentbus-*.whl")) if dist_dir.is_dir() else []
-    sdists = sorted(dist_dir.glob("agentbus-*.tar.gz")) if dist_dir.is_dir() else []
+    wheels = sorted(dist_dir.glob("syndra-*.whl")) if dist_dir.is_dir() else []
+    sdists = sorted(dist_dir.glob("syndra-*.tar.gz")) if dist_dir.is_dir() else []
     if not wheels and not sdists:
         return ReleaseCheck("package-build", ReleaseStatus.NOT_RUN, "No wheel or sdist was found.")
     if not wheels or not sdists:

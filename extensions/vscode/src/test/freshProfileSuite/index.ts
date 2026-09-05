@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile, realpath, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import * as vscode from "vscode";
-import type { AgentBusExtensionApi } from "../../extension";
+import type { SyndraExtensionApi } from "../../extension";
 import type {
   ApprovalSummary,
   CancelResponse,
@@ -33,7 +33,7 @@ export async function run(): Promise<void> {
   } catch (error) {
     const diagnostic = safeDiagnostic(error);
     process.stderr.write(`Fresh-profile assertion: ${diagnostic}\n`);
-    const handoffPath = process.env.AGENTBUS_FRESH_HANDOFF;
+    const handoffPath = process.env.SYNDRA_FRESH_HANDOFF;
     if (handoffPath) {
       await writeFile(`${handoffPath}.failure`, diagnostic, "utf8");
     }
@@ -42,19 +42,19 @@ export async function run(): Promise<void> {
 }
 
 async function runStage(): Promise<void> {
-  const stage = requiredEnvironment("AGENTBUS_FRESH_STAGE");
-  const pythonPath = requiredEnvironment("AGENTBUS_FRESH_PYTHON");
-  const configPath = requiredEnvironment("AGENTBUS_FRESH_CONFIG");
-  const mcpConfigPath = requiredEnvironment("AGENTBUS_FRESH_MCP_CONFIG");
-  const registryPath = requiredEnvironment("AGENTBUS_FRESH_REGISTRY");
-  const workspace = requiredEnvironment("AGENTBUS_FRESH_WORKSPACE");
+  const stage = requiredEnvironment("SYNDRA_FRESH_STAGE");
+  const pythonPath = requiredEnvironment("SYNDRA_FRESH_PYTHON");
+  const configPath = requiredEnvironment("SYNDRA_FRESH_CONFIG");
+  const mcpConfigPath = requiredEnvironment("SYNDRA_FRESH_MCP_CONFIG");
+  const registryPath = requiredEnvironment("SYNDRA_FRESH_REGISTRY");
+  const workspace = requiredEnvironment("SYNDRA_FRESH_WORKSPACE");
   const secondaryWorkspace = requiredEnvironment(
-    "AGENTBUS_FRESH_SECONDARY_WORKSPACE"
+    "SYNDRA_FRESH_SECONDARY_WORKSPACE"
   );
   const incompatibleDaemonId = requiredEnvironment(
-    "AGENTBUS_FRESH_INCOMPATIBLE_DAEMON"
+    "SYNDRA_FRESH_INCOMPATIBLE_DAEMON"
   );
-  const handoffPath = requiredEnvironment("AGENTBUS_FRESH_HANDOFF");
+  const handoffPath = requiredEnvironment("SYNDRA_FRESH_HANDOFF");
   const configuration = vscode.workspace.getConfiguration("agentbus");
   await configuration.update("pythonPath", pythonPath, vscode.ConfigurationTarget.Global);
   await configuration.update("configPath", configPath, vscode.ConfigurationTarget.Global);
@@ -71,8 +71,8 @@ async function runStage(): Promise<void> {
     vscode.ConfigurationTarget.Global
   );
 
-  const extension = vscode.extensions.getExtension<AgentBusExtensionApi>(
-    "agentbus.agentbus-vscode"
+  const extension = vscode.extensions.getExtension<SyndraExtensionApi>(
+    "syndra.syndra-vscode"
   );
   assert.ok(extension, "Fresh-profile VSIX was not discovered");
   const api = await bounded(extension.activate(), 30_000, "extension activation");
@@ -117,7 +117,7 @@ async function runStage(): Promise<void> {
 }
 
 async function initialFlow(
-  api: AgentBusExtensionApi,
+  api: SyndraExtensionApi,
   configuration: vscode.WorkspaceConfiguration,
   workspace: string,
   handoffPath: string
@@ -191,15 +191,15 @@ async function initialFlow(
   const changes = await client.changes(run.run_id);
   assert.deepEqual(
     changes.changes.map((change) => change.path).sort(),
-    ["agentbus_result.py", "test_agentbus_result.py"]
+    ["syndra_result.py", "test_syndra_result.py"]
   );
   assert.ok(changes.changes.every((change) => change.status === "committed"));
   const implementation = changes.changes.find(
-    (change) => change.path === "agentbus_result.py"
+    (change) => change.path === "syndra_result.py"
   );
   assert.ok(implementation);
   const diff = await client.diff(run.run_id);
-  assert.match(diff.diff, /agentbus_result\.py/u);
+  assert.match(diff.diff, /syndra_result\.py/u);
   assert.equal(diff.truncated ?? false, false);
   assert.equal(report.status, "succeeded");
   await vscode.commands.executeCommand("agentbus.openRunReport");
@@ -210,7 +210,7 @@ async function initialFlow(
   );
   assert.match(reportDocument.getText(), /\*\*Status:\*\* succeeded/u);
   assert.match(reportDocument.getText(), /reviewer_status \| approved/u);
-  assert.match(reportDocument.getText(), /agentbus_result\.py/u);
+  assert.match(reportDocument.getText(), /syndra_result\.py/u);
   await vscode.commands.executeCommand(
     "agentbus.openChange",
     run.run_id,
@@ -248,7 +248,7 @@ async function initialFlow(
 }
 
 async function recoveryFlow(
-  api: AgentBusExtensionApi,
+  api: SyndraExtensionApi,
   workspace: string,
   handoffPath: string
 ): Promise<void> {
@@ -271,7 +271,7 @@ async function recoveryFlow(
   const run = await client.run(handoff.runId);
   assert.equal(run.status, "succeeded");
   assert.equal((await client.report(handoff.runId)).status, "succeeded");
-  assert.match((await client.diff(handoff.runId)).diff, /agentbus_result\.py/u);
+  assert.match((await client.diff(handoff.runId)).diff, /syndra_result\.py/u);
   const replay = await client.replay(handoff.replayId);
   assert.equal(replay.status, "succeeded");
   assert.equal(replay.provider_calls, 0);
@@ -284,7 +284,7 @@ async function recoveryFlow(
 }
 
 async function stressFlow(
-  api: AgentBusExtensionApi,
+  api: SyndraExtensionApi,
   configuration: vscode.WorkspaceConfiguration,
   workspace: string,
   secondaryWorkspace: string,
@@ -462,7 +462,7 @@ async function stressFlow(
 }
 
 async function exerciseCancellation(
-  api: AgentBusExtensionApi,
+  api: SyndraExtensionApi,
   client: FreshClient,
   workspace: string
 ): Promise<string> {
@@ -487,7 +487,7 @@ async function exerciseCancellation(
       } satisfies RunCreateRequest
     ),
     15_000,
-    "cancellation run submission"
+    "cancellation run request"
   );
   assert.ok(accepted?.run_id, "Cancellation run was not accepted");
   await waitForRunStatus(client, accepted.run_id, ["running"], 30_000);
@@ -508,7 +508,7 @@ async function exerciseCancellation(
 }
 
 async function exerciseApproval(
-  api: AgentBusExtensionApi,
+  api: SyndraExtensionApi,
   client: FreshClient,
   workspace: string
 ): Promise<string> {
@@ -601,7 +601,7 @@ async function submitAfterWorkspaceRelease(
         request
       );
     } catch (error) {
-      if (/Workspace already has an active AgentBus run/iu.test(String(error))) {
+      if (/Workspace already has an active Syndra run/iu.test(String(error))) {
         return undefined;
       }
       throw error;
@@ -619,7 +619,7 @@ async function exerciseReplay(
       runId
     ),
     15_000,
-    "stress replay submission"
+    "stress replay request"
   );
   assert.ok(replay?.replay_id, "Stress replay was not accepted");
   const completed = await waitForReplay(client, replay.replay_id);
@@ -658,10 +658,10 @@ async function exerciseSecondaryWorkspaceRun(
   );
   assert.deepEqual(
     changes.changes.map((change) => change.path).sort(),
-    ["agentbus_result.py", "test_agentbus_result.py"]
+    ["syndra_result.py", "test_syndra_result.py"]
   );
   const diff = await client.diff(run.run_id);
-  assert.match(diff.diff, /agentbus_result\.py/u);
+  assert.match(diff.diff, /syndra_result\.py/u);
   assert.doesNotMatch(diff.diff, /delete_me\.txt/u);
   const report = await client.report(run.run_id);
   assert.equal(
@@ -672,7 +672,7 @@ async function exerciseSecondaryWorkspaceRun(
 }
 
 async function exerciseSyntheticMcpFailure(
-  api: AgentBusExtensionApi,
+  api: SyndraExtensionApi,
   configuration: vscode.WorkspaceConfiguration,
   configPath: string,
   mcpConfigPath: string
@@ -721,7 +721,7 @@ async function exerciseSyntheticMcpFailure(
   return bounded(api.client(), 10_000, "post-MCP daemon connection");
 }
 
-async function untrustedFlow(api: AgentBusExtensionApi): Promise<void> {
+async function untrustedFlow(api: SyndraExtensionApi): Promise<void> {
   assert.equal(
     vscode.workspace.isTrusted,
     false,
@@ -739,7 +739,7 @@ async function untrustedFlow(api: AgentBusExtensionApi): Promise<void> {
 }
 
 async function trustedRecoveryFlow(
-  api: AgentBusExtensionApi,
+  api: SyndraExtensionApi,
   workspace: string,
   handoffPath: string
 ): Promise<void> {
@@ -780,7 +780,7 @@ async function trustedRecoveryFlow(
   await waitFor(() => api.daemonId() === undefined ? true : undefined);
 }
 
-type FreshClient = Awaited<ReturnType<AgentBusExtensionApi["client"]>>;
+type FreshClient = Awaited<ReturnType<SyndraExtensionApi["client"]>>;
 
 async function waitForRunStatus(
   client: FreshClient,
@@ -912,7 +912,7 @@ async function bounded<T>(
 }
 
 async function waitForRun(
-  client: Awaited<ReturnType<AgentBusExtensionApi["client"]>>,
+  client: Awaited<ReturnType<SyndraExtensionApi["client"]>>,
   runId: string
 ): Promise<RunSummary> {
   let lastRun: RunSummary | undefined;
@@ -956,7 +956,7 @@ async function waitForRun(
 }
 
 async function waitForCommittedReport(
-  client: Awaited<ReturnType<AgentBusExtensionApi["client"]>>,
+  client: Awaited<ReturnType<SyndraExtensionApi["client"]>>,
   runId: string
 ) {
   return waitFor(async () => {
@@ -969,7 +969,7 @@ async function waitForCommittedReport(
 }
 
 async function waitForReplay(
-  client: Awaited<ReturnType<AgentBusExtensionApi["client"]>>,
+  client: Awaited<ReturnType<SyndraExtensionApi["client"]>>,
   replayId: string
 ): Promise<ReplaySessionResponse> {
   return waitFor(async () => {
@@ -1003,7 +1003,7 @@ async function waitFor<T>(
     if (value !== undefined && value !== false) return value;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  throw new Error("Timed out waiting for fresh-profile AgentBus state.");
+  throw new Error("Timed out waiting for fresh-profile Syndra state.");
 }
 
 function requiredEnvironment(name: string): string {

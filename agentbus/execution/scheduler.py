@@ -159,7 +159,7 @@ class ParallelExecutionScheduler:
             selected = ready[: min(self.max_workers, len(ready))]
             futures: list[tuple[TaskRecord, Future[WorkerResult]]] = []
             with ThreadPoolExecutor(
-                max_workers=len(selected), thread_name_prefix="agentbus-worker"
+                max_workers=len(selected), thread_name_prefix="syndra-worker"
             ) as pool:
                 for index, task in enumerate(selected, start=1):
                     if self._is_cancelled():

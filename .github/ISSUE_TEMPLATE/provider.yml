@@ -16,14 +16,14 @@ body:
   - type: input
     id: version
     attributes:
-      label: AgentBus, OS, and Python versions
+      label: Syndra, OS, and Python versions
     validations:
       required: true
   - type: textarea
     id: routing
     attributes:
       label: Redacted routing summary
-      description: Use reviewed agentbus providers show --json output.
+      description: Use reviewed syndra providers show --json output.
       render: json
   - type: textarea
     id: reproduction

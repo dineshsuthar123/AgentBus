@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { AgentBusApiError, type AgentBusClient } from "./apiClient";
+import { SyndraApiError, type SyndraClient } from "./apiClient";
 import type {
   ApprovalSummary,
   ComparisonResponse,
@@ -73,7 +73,7 @@ export class Selection implements RunSelection {
   }
 }
 
-export class AgentBusItem extends vscode.TreeItem {
+export class SyndraItem extends vscode.TreeItem {
   public constructor(
     label: string,
     collapsibleState: vscode.TreeItemCollapsibleState,
@@ -84,10 +84,10 @@ export class AgentBusItem extends vscode.TreeItem {
 }
 
 abstract class RefreshableProvider
-  implements vscode.TreeDataProvider<AgentBusItem>
+  implements vscode.TreeDataProvider<SyndraItem>
 {
   protected readonly changed = new vscode.EventEmitter<
-    AgentBusItem | undefined | void
+    SyndraItem | undefined | void
   >();
   public readonly onDidChangeTreeData = this.changed.event;
 
@@ -95,11 +95,11 @@ abstract class RefreshableProvider
     this.changed.fire();
   }
 
-  public getTreeItem(element: AgentBusItem): vscode.TreeItem {
+  public getTreeItem(element: SyndraItem): vscode.TreeItem {
     return element;
   }
 
-  public abstract getChildren(element?: AgentBusItem): Promise<AgentBusItem[]>;
+  public abstract getChildren(element?: SyndraItem): Promise<SyndraItem[]>;
 }
 
 export class RunsProvider extends RefreshableProvider {
@@ -107,7 +107,7 @@ export class RunsProvider extends RefreshableProvider {
     super();
   }
 
-  public async getChildren(element?: AgentBusItem): Promise<AgentBusItem[]> {
+  public async getChildren(element?: SyndraItem): Promise<SyndraItem[]> {
     if (element) {
       const category = String(element.value);
       return this.store
@@ -130,7 +130,7 @@ export class RunsProvider extends RefreshableProvider {
         const count = this.store
           .runs()
           .filter((run) => categoryFor(run.status) === key).length;
-        const item = new AgentBusItem(
+        const item = new SyndraItem(
           `${label} (${count})`,
           vscode.TreeItemCollapsibleState.Expanded,
           key
@@ -143,13 +143,13 @@ export class RunsProvider extends RefreshableProvider {
 
 export class TasksProvider extends RefreshableProvider {
   public constructor(
-    private readonly client: () => Promise<AgentBusClient>,
+    private readonly client: () => Promise<SyndraClient>,
     private readonly selection: RunSelection
   ) {
     super();
   }
 
-  public async getChildren(): Promise<AgentBusItem[]> {
+  public async getChildren(): Promise<SyndraItem[]> {
     const runId = this.selection.get();
     if (!runId) {
       return [messageItem("Select a run to inspect its task graph.")];
@@ -165,7 +165,7 @@ export class ExecutionTimelineProvider extends RefreshableProvider {
   private cachedTruncated = false;
 
   public constructor(
-    private readonly client: () => Promise<AgentBusClient>,
+    private readonly client: () => Promise<SyndraClient>,
     private readonly selection: RunSelection
   ) {
     super();
@@ -178,7 +178,7 @@ export class ExecutionTimelineProvider extends RefreshableProvider {
     super.refresh();
   }
 
-  public async getChildren(element?: AgentBusItem): Promise<AgentBusItem[]> {
+  public async getChildren(element?: SyndraItem): Promise<SyndraItem[]> {
     const runId = this.selection.get();
     if (!runId) {
       return [messageItem("Select a run to inspect its execution timeline.")];
@@ -211,7 +211,7 @@ export class ExecutionTimelineProvider extends RefreshableProvider {
       this.cachedTruncated = response.truncated ?? false;
       return this.cachedSpans;
     } catch (error) {
-      if (error instanceof AgentBusApiError && error.status === 404) {
+      if (error instanceof SyndraApiError && error.status === 404) {
         this.cachedRunId = runId;
         this.cachedSpans = [];
         return undefined;
@@ -223,13 +223,13 @@ export class ExecutionTimelineProvider extends RefreshableProvider {
 
 export class ApprovalsProvider extends RefreshableProvider {
   public constructor(
-    private readonly client: () => Promise<AgentBusClient>,
+    private readonly client: () => Promise<SyndraClient>,
     private readonly selection: RunSelection
   ) {
     super();
   }
 
-  public async getChildren(): Promise<AgentBusItem[]> {
+  public async getChildren(): Promise<SyndraItem[]> {
     const runId = this.selection.get();
     if (!runId) {
       return [messageItem("Select a run to inspect approvals.")];
@@ -252,13 +252,13 @@ export class ApprovalsProvider extends RefreshableProvider {
 
 export class WorktreesProvider extends RefreshableProvider {
   public constructor(
-    private readonly client: () => Promise<AgentBusClient>,
+    private readonly client: () => Promise<SyndraClient>,
     private readonly selection: RunSelection
   ) {
     super();
   }
 
-  public async getChildren(): Promise<AgentBusItem[]> {
+  public async getChildren(): Promise<SyndraItem[]> {
     const runId = this.selection.get();
     if (!runId) {
       return [messageItem("Select a run to inspect worktrees.")];
@@ -280,7 +280,7 @@ export class ToolInvocationsProvider extends RefreshableProvider {
   private cachedTruncated = false;
 
   public constructor(
-    private readonly client: () => Promise<AgentBusClient>,
+    private readonly client: () => Promise<SyndraClient>,
     private readonly selection: RunSelection
   ) {
     super();
@@ -294,7 +294,7 @@ export class ToolInvocationsProvider extends RefreshableProvider {
     super.refresh();
   }
 
-  public async getChildren(element?: AgentBusItem): Promise<AgentBusItem[]> {
+  public async getChildren(element?: SyndraItem): Promise<SyndraItem[]> {
     const runId = this.selection.get();
     if (!runId) {
       return [messageItem("Select a run to inspect managed tool calls.")];
@@ -318,7 +318,7 @@ export class ToolInvocationsProvider extends RefreshableProvider {
       const count = invocations.filter(
         (invocation) => toolGroup(invocation.status) === key
       ).length;
-      const item = new AgentBusItem(
+      const item = new SyndraItem(
         `${label} (${count})`,
         key === "active" || key === "awaiting_approval"
           ? vscode.TreeItemCollapsibleState.Expanded
@@ -357,11 +357,11 @@ export class ToolInvocationsProvider extends RefreshableProvider {
 }
 
 export class ProvidersProvider extends RefreshableProvider {
-  public constructor(private readonly client: () => Promise<AgentBusClient>) {
+  public constructor(private readonly client: () => Promise<SyndraClient>) {
     super();
   }
 
-  public async getChildren(): Promise<AgentBusItem[]> {
+  public async getChildren(): Promise<SyndraItem[]> {
     const response = await (await this.client()).providers();
     return response.providers.map(providerItem);
   }
@@ -376,7 +376,7 @@ export class ReplaySessionsProvider extends RefreshableProvider {
   private cached: ReplaySessionResponse[] | undefined;
   private truncated = false;
 
-  public constructor(private readonly client: () => Promise<AgentBusClient>) {
+  public constructor(private readonly client: () => Promise<SyndraClient>) {
     super();
   }
 
@@ -386,7 +386,7 @@ export class ReplaySessionsProvider extends RefreshableProvider {
     super.refresh();
   }
 
-  public async getChildren(element?: AgentBusItem): Promise<AgentBusItem[]> {
+  public async getChildren(element?: SyndraItem): Promise<SyndraItem[]> {
     const sessions = await this.load();
     if (element) {
       const group = element.value as ReplayGroupValue;
@@ -399,7 +399,7 @@ export class ReplaySessionsProvider extends RefreshableProvider {
       const count = sessions.filter(
         (session) => replayGroup(session.status) === key
       ).length;
-      const item = new AgentBusItem(
+      const item = new SyndraItem(
         `${label} (${count})`,
         key === "active"
           ? vscode.TreeItemCollapsibleState.Expanded
@@ -443,13 +443,13 @@ type ComparisonTreeValue =
 
 export class ComparisonsProvider extends RefreshableProvider {
   public constructor(
-    private readonly client: () => Promise<AgentBusClient>,
+    private readonly client: () => Promise<SyndraClient>,
     private readonly store: ComparisonStore
   ) {
     super();
   }
 
-  public async getChildren(element?: AgentBusItem): Promise<AgentBusItem[]> {
+  public async getChildren(element?: SyndraItem): Promise<SyndraItem[]> {
     if (!element) {
       const comparisons = await this.store.load(await this.client());
       if (comparisons.length === 0) {
@@ -461,7 +461,7 @@ export class ComparisonsProvider extends RefreshableProvider {
     if (value?.kind === "comparison") {
       return COMPARISON_GROUPS.map(({ key, label }) => {
         const count = comparisonSpans(value.comparison, key).length;
-        const item = new AgentBusItem(
+        const item = new SyndraItem(
           `${label} (${count})`,
           count
             ? vscode.TreeItemCollapsibleState.Collapsed
@@ -479,7 +479,7 @@ export class ComparisonsProvider extends RefreshableProvider {
     }
     if (value?.kind === "comparison-group") {
       return comparisonSpans(value.comparison, value.key).map((span) => {
-        const item = new AgentBusItem(
+        const item = new SyndraItem(
           span.semantic_key,
           vscode.TreeItemCollapsibleState.None,
           value
@@ -501,8 +501,8 @@ export class ComparisonsProvider extends RefreshableProvider {
   }
 }
 
-function runItem(run: RunSummary): AgentBusItem {
-  const item = new AgentBusItem(
+function runItem(run: RunSummary): SyndraItem {
+  const item = new SyndraItem(
     run.original_task,
     vscode.TreeItemCollapsibleState.None,
     run
@@ -532,8 +532,8 @@ function runItem(run: RunSummary): AgentBusItem {
   return item;
 }
 
-function taskItem(task: TaskSummary): AgentBusItem {
-  const item = new AgentBusItem(
+function taskItem(task: TaskSummary): SyndraItem {
+  const item = new SyndraItem(
     task.title,
     vscode.TreeItemCollapsibleState.None,
     task
@@ -560,9 +560,9 @@ function taskItem(task: TaskSummary): AgentBusItem {
 function traceSpanItem(
   span: TraceSpanSummary,
   spans: readonly TraceSpanSummary[]
-): AgentBusItem {
+): SyndraItem {
   const hasChildren = timelineChildren(spans, span.span_id).length > 0;
-  const item = new AgentBusItem(
+  const item = new SyndraItem(
     span.name,
     hasChildren
       ? vscode.TreeItemCollapsibleState.Collapsed
@@ -581,8 +581,8 @@ function traceSpanItem(
   return item;
 }
 
-function approvalItem(approval: ApprovalSummary): AgentBusItem {
-  const item = new AgentBusItem(
+function approvalItem(approval: ApprovalSummary): SyndraItem {
+  const item = new SyndraItem(
     approval.requested_action,
     vscode.TreeItemCollapsibleState.None,
     approval
@@ -598,11 +598,11 @@ function approvalItem(approval: ApprovalSummary): AgentBusItem {
 }
 
 export class McpServersProvider extends RefreshableProvider {
-  public constructor(private readonly client: () => Promise<AgentBusClient>) {
+  public constructor(private readonly client: () => Promise<SyndraClient>) {
     super();
   }
 
-  public async getChildren(): Promise<AgentBusItem[]> {
+  public async getChildren(): Promise<SyndraItem[]> {
     const response = await (await this.client()).mcpServers();
     if (response.servers.length === 0) {
       return [messageItem("No local MCP servers are configured.")];
@@ -614,8 +614,8 @@ export class McpServersProvider extends RefreshableProvider {
 function toolInvocationItem(
   invocation: ToolInvocationSummary,
   approvalState?: string
-): AgentBusItem {
-  const item = new AgentBusItem(
+): SyndraItem {
+  const item = new SyndraItem(
     invocation.tool_name,
     vscode.TreeItemCollapsibleState.None,
     invocation
@@ -653,8 +653,8 @@ function toolInvocationItem(
   return item;
 }
 
-function worktreeItem(worktree: WorktreeSummary): AgentBusItem {
-  const item = new AgentBusItem(
+function worktreeItem(worktree: WorktreeSummary): SyndraItem {
+  const item = new SyndraItem(
     worktree.task_id ?? "Integration",
     vscode.TreeItemCollapsibleState.None,
     worktree
@@ -667,8 +667,8 @@ function worktreeItem(worktree: WorktreeSummary): AgentBusItem {
   return item;
 }
 
-function providerItem(provider: ProviderSummary): AgentBusItem {
-  const item = new AgentBusItem(
+function providerItem(provider: ProviderSummary): SyndraItem {
+  const item = new SyndraItem(
     provider.name,
     vscode.TreeItemCollapsibleState.None,
     provider
@@ -682,8 +682,8 @@ function providerItem(provider: ProviderSummary): AgentBusItem {
   return item;
 }
 
-function replaySessionItem(session: ReplaySessionResponse): AgentBusItem {
-  const item = new AgentBusItem(
+function replaySessionItem(session: ReplaySessionResponse): SyndraItem {
+  const item = new SyndraItem(
     session.replay_id,
     vscode.TreeItemCollapsibleState.None,
     session
@@ -702,8 +702,8 @@ function replaySessionItem(session: ReplaySessionResponse): AgentBusItem {
   return item;
 }
 
-function comparisonItem(comparison: ComparisonResponse): AgentBusItem {
-  const item = new AgentBusItem(
+function comparisonItem(comparison: ComparisonResponse): SyndraItem {
+  const item = new SyndraItem(
     comparison.comparison_id,
     vscode.TreeItemCollapsibleState.Collapsed,
     { kind: "comparison", comparison } satisfies ComparisonTreeValue
@@ -728,8 +728,8 @@ function comparisonItem(comparison: ComparisonResponse): AgentBusItem {
   return item;
 }
 
-function mcpServerItem(server: McpServerSummary): AgentBusItem {
-  const item = new AgentBusItem(
+function mcpServerItem(server: McpServerSummary): SyndraItem {
+  const item = new SyndraItem(
     server.server_id,
     vscode.TreeItemCollapsibleState.None,
     server
@@ -746,8 +746,8 @@ function mcpServerItem(server: McpServerSummary): AgentBusItem {
   return item;
 }
 
-function messageItem(message: string): AgentBusItem {
-  const item = new AgentBusItem(
+function messageItem(message: string): SyndraItem {
+  const item = new SyndraItem(
     message,
     vscode.TreeItemCollapsibleState.None
   );

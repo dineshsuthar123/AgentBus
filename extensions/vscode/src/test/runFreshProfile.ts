@@ -24,8 +24,8 @@ import {
 import { downloadAndUnzipVSCode } from "@vscode/test-electron";
 import JSZip from "jszip";
 
-const POSIX_SESSION_PREFIX = "agentbus-vscode-fresh-profile-";
-const WINDOWS_SESSION_PREFIX = "agentbus-vfp-";
+const POSIX_SESSION_PREFIX = "syndra-vscode-fresh-profile-";
+const WINDOWS_SESSION_PREFIX = "syndra-vfp-";
 const INCOMPATIBLE_DAEMON_ID = "ffffffffffffffffffffffffffffffff";
 
 type FreshStage =
@@ -61,7 +61,7 @@ async function main(): Promise<void> {
   const runsPath = join(sessionRoot, "runs");
   const worktreesPath = join(sessionRoot, "worktrees");
   const handoffPath = join(sessionRoot, "handoff.json");
-  const vsixPath = join(extensionSource, "agentbus-vscode.vsix");
+  const vsixPath = join(extensionSource, "syndra-vscode.vsix");
   const pythonPath = await findPython(repositoryRoot);
   await stopDaemons(pythonPath, registryPath);
   await assertNoRegisteredDaemons(registryPath);
@@ -141,15 +141,15 @@ async function main(): Promise<void> {
           extensionDevelopmentPath: extensionPath,
           extensionTestsPath,
           environment: {
-            AGENTBUS_FRESH_STAGE: stage,
-            AGENTBUS_FRESH_PYTHON: pythonPath,
-            AGENTBUS_FRESH_CONFIG: configPath,
-            AGENTBUS_FRESH_MCP_CONFIG: mcpConfigPath,
-            AGENTBUS_FRESH_REGISTRY: registryPath,
-            AGENTBUS_FRESH_WORKSPACE: workspacePath,
-            AGENTBUS_FRESH_SECONDARY_WORKSPACE: secondaryWorkspacePath,
-            AGENTBUS_FRESH_INCOMPATIBLE_DAEMON: INCOMPATIBLE_DAEMON_ID,
-            AGENTBUS_FRESH_HANDOFF: handoffPath
+            SYNDRA_FRESH_STAGE: stage,
+            SYNDRA_FRESH_PYTHON: pythonPath,
+            SYNDRA_FRESH_CONFIG: configPath,
+            SYNDRA_FRESH_MCP_CONFIG: mcpConfigPath,
+            SYNDRA_FRESH_REGISTRY: registryPath,
+            SYNDRA_FRESH_WORKSPACE: workspacePath,
+            SYNDRA_FRESH_SECONDARY_WORKSPACE: secondaryWorkspacePath,
+            SYNDRA_FRESH_INCOMPATIBLE_DAEMON: INCOMPATIBLE_DAEMON_ID,
+            SYNDRA_FRESH_HANDOFF: handoffPath
           },
           launchTarget: stage === "stress" ? workspaceFilePath : workspacePath,
           userDataPath,
@@ -376,7 +376,7 @@ async function initializeRepository(
   await mkdir(workspacePath, { recursive: true });
   await writeFile(
     join(workspacePath, "README.md"),
-    `# Fresh AgentBus ${label} product acceptance\n`,
+    `# Fresh Syndra ${label} product acceptance\n`,
     "utf8"
   );
   await writeFile(
@@ -392,8 +392,8 @@ async function initializeRepository(
     );
   }
   git(workspacePath, "init");
-  git(workspacePath, "config", "user.email", "fresh-profile@agentbus.invalid");
-  git(workspacePath, "config", "user.name", "AgentBus Fresh Profile");
+  git(workspacePath, "config", "user.email", "fresh-profile@syndra.invalid");
+  git(workspacePath, "config", "user.name", "Syndra Fresh Profile");
   git(workspacePath, "add", "--all");
   git(workspacePath, "commit", "-m", "initial");
 }
@@ -597,7 +597,7 @@ function daemonCommand(
     pythonPath,
     [
       "-m",
-      "agentbus.cli",
+      "syndra.cli",
       "daemon",
       "--registry-path",
       registryPath,
@@ -671,7 +671,7 @@ async function emitElectronDiagnostics(
 ): Promise<void> {
   const logs = await collectLogs(join(userDataPath, "logs"), 0);
   const selected = logs.filter((path) =>
-    /AgentBus|exthost|extension|renderer|sharedprocess|window/iu.test(
+    /Syndra|exthost|extension|renderer|sharedprocess|window/iu.test(
       basename(path)
     )
   ).slice(-10);
@@ -730,6 +730,7 @@ async function collectLogs(root: string, depth: number): Promise<string[]> {
 function removeProviderSecrets(): Map<string, string> {
   const removed = new Map<string, string>();
   for (const name of [
+    "SYNDRA_AZURE_API_KEY",
     "AGENTBUS_AZURE_API_KEY",
     "AZURE_CLIENT_ID",
     "AZURE_CLIENT_SECRET",

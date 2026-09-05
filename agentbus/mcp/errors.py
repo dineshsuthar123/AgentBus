@@ -1,5 +1,5 @@
 class McpError(RuntimeError):
-    """Base error for the constrained AgentBus MCP boundary."""
+    """Base error for the constrained Syndra MCP boundary."""
 
 
 class McpTransportError(McpError):

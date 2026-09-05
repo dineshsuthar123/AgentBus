@@ -52,7 +52,7 @@ existing safe context extraction, never by an unbounded full-file read.
 
 A stale or partial snapshot adds a warning and uncertainty to the plan. Runtime
 scope validation checks that persisted context claims still belong to the exact
-run workspace. If no valid index source is available, AgentBus continues with
+run workspace. If no valid index source is available, Syndra continues with
 the existing repository scanner and bounded context pack. It never silently
 loads an index for a parent or different workspace.
 
@@ -65,8 +65,8 @@ original trace.
 ## Usage
 
 ```powershell
-agentbus context-plan "Change calculator rounding" --role planner --evidence
-agentbus context-plan "Review calculator API compatibility" --role reviewer --json
+syndra context-plan "Change calculator rounding" --role planner --evidence
+syndra context-plan "Review calculator API compatibility" --role reviewer --json
 ```
 
 The VS Code `Context Plan` view exposes the same bounded candidates and budget

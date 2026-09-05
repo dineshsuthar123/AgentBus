@@ -66,7 +66,7 @@ class BackgroundReplaySupervisor:
         self._service_factory = service_factory
         self._executor = ThreadPoolExecutor(
             max_workers=max_background_replays,
-            thread_name_prefix="agentbus-replay",
+            thread_name_prefix="syndra-replay",
         )
         self._active: dict[str, ActiveReplay] = {}
         self._lock = threading.RLock()

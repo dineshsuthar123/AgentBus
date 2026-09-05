@@ -2,7 +2,7 @@ import { FileCheck2, FileCode2, FileLock2, Wand2 } from "lucide-react";
 import type { ChangeSummary } from "../api/types";
 
 export function SourcePulse({ changes }: { changes: ChangeSummary[] }) {
-  if (!changes.length) return <p className="quiet-copy">Repository changes appear here as AgentBus observes them.</p>;
+  if (!changes.length) return <p className="quiet-copy">Repository changes appear here as Syndra observes them.</p>;
   return (
     <div className="source-pulse">
       {changes.map((change) => {

@@ -120,7 +120,7 @@ class MigrationCoordinator:
                         apply_index_migrations(connection)
             verified = self.verify()
             if not verified.ok:
-                raise RuntimeError("AgentBus migration verification failed")
+                raise RuntimeError("Syndra migration verification failed")
         except BaseException:
             self._write_journal("failed", required)
             raise
@@ -249,7 +249,7 @@ class MigrationCoordinator:
         ]
         if unsafe:
             detail = "; ".join(f"{item.name}: {item.message}" for item in unsafe)
-            raise ValueError(f"Unsafe AgentBus migration state: {detail}")
+            raise ValueError(f"Unsafe Syndra migration state: {detail}")
 
 
 def _inspect_database(

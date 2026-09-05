@@ -1,7 +1,7 @@
 # CLI reference
 
-Run `agentbus --help` for the current command list and
-`agentbus <command> --help` for exact options.
+Run `syndra --help` for the current command list and
+`syndra <command> --help` for exact options.
 
 ## Product lifecycle
 
@@ -21,23 +21,23 @@ Run `agentbus --help` for the current command list and
 | `soak` | Run bounded offline reliability checks |
 | `release-check` | Run non-publishing beta gates |
 
-`agentbus soak --profile quick` is the short development check.
-`agentbus soak --profile release-candidate` selects the bounded 5-10 minute
+`syndra soak --profile quick` is the short development check.
+`syndra soak --profile release-candidate` selects the bounded 5-10 minute
 release profile. `--duration`, `--runs`, `--parallelism`, and
 `--repository-files` may override profile defaults for explicit manual runs;
 the soak remains synthetic, local, providerless, and non-publishing.
 
-`agentbus validate reliability` combines the generated repository corpus with
+`syndra validate reliability` combines the generated repository corpus with
 the bounded quick lifecycle soak and emits an explicit `PASS`,
 `PASS_WITH_WARNINGS`, or `FAIL` scorecard. Repeat `--repository PATH` to add
-real local repositories; AgentBus indexes them into temporary databases and
+real local repositories; Syndra indexes them into temporary databases and
 does not modify their source trees. `--runs`, `--duration`, `--parallelism`,
 `--repository-files`, and `--seed` provide bounded deterministic overrides.
 Use `--json` for structured output or `--output PATH` for an atomic JSON report.
 The report lists concrete checks and observations rather than an opaque numeric
 score, and it never uses a provider or the network.
 
-`agentbus benchmark all --output BASELINE.json` writes an atomic reusable local
+`syndra benchmark all --output BASELINE.json` writes an atomic reusable local
 performance baseline. A later compatible run can add `--baseline BASELINE.json`
 and `--comparison-output SCORECARD.json` to classify broad regressions,
 improvements, and neutral changes across release performance metrics. Baseline
@@ -77,6 +77,6 @@ and compare sanitized execution evidence. Offline replay never uses a provider.
 
 ## Evaluation
 
-`agentbus evaluate` routes to the evaluation harness. The separate
-`agentbus-eval` entry point also provides `list`, `run`, `show`, `compare`,
+`syndra evaluate` routes to the evaluation harness. The separate
+`syndra-eval` entry point also provides `list`, `run`, `show`, `compare`,
 baseline, and sanitized export commands.

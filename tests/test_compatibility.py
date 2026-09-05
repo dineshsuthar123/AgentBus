@@ -32,7 +32,7 @@ def test_compatibility_manifest_covers_product_protocols_and_schemas():
     assert current_python_supported() is True
 
 
-def test_extension_declares_matching_agentbus_compatibility():
+def test_extension_declares_matching_syndra_compatibility():
     path = ROOT / "extensions" / "vscode" / "package.json"
 
     metadata = extension_package_metadata(path)
@@ -47,6 +47,25 @@ def test_version_cli_exposes_complete_machine_readable_contract(capsys):
 
     payload = json.loads(capsys.readouterr().out)
 
-    assert payload["package"] == "agentbus"
+    assert payload["package"] == "syndra"
     assert payload["running_python_supported"] is True
     assert payload["extension_compatibility"] == ">=0.6.0-beta.1 <0.7.0"
+
+
+def test_legacy_extension_compatibility_key_remains_readable(tmp_path):
+    path = tmp_path / "package.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": "0.6.0-beta.1",
+                "agentbusCompatibility": {
+                    "python": ">=0.6.0b1,<0.7.0",
+                    "controlProtocol": "1.0",
+                    "stateSchema": 6,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert extension_package_metadata(path)["control_protocol"] == "1.0"

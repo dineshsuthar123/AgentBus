@@ -127,19 +127,19 @@ class _ResourceTracker:
         (
             "process_count",
             "processes",
-            "AgentBus-owned synthetic child processes",
+            "Syndra-owned synthetic child processes",
         ),
         (
             "owned_worktree_count",
             "worktrees",
-            "non-removed AgentBus-owned worktrees",
+            "non-removed Syndra-owned worktrees",
         ),
         ("state_database_bytes", "bytes", "durable state database files"),
         ("index_database_bytes", "bytes", "repository index database files"),
         ("trace_bytes", "bytes", "content-addressed trace storage"),
         ("memory_bytes", "bytes", "Python allocations measured by tracemalloc"),
-        ("handle_count", "handles", "current AgentBus process"),
-        ("thread_count", "threads", "current AgentBus process"),
+        ("handle_count", "handles", "current Syndra process"),
+        ("thread_count", "threads", "current Syndra process"),
     )
 
     def __init__(
@@ -441,7 +441,7 @@ def run_soak(
     )
     started = time.monotonic()
     deadline = started + duration_seconds
-    with tempfile.TemporaryDirectory(prefix="agentbus-soak-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="syndra-soak-") as temporary:
         root = Path(temporary).resolve()
         workspace = root / "repository"
         runtime = root / "runtime"
@@ -516,7 +516,7 @@ def run_soak(
             workers = min(parallelism, runs)
             with ThreadPoolExecutor(
                 max_workers=workers,
-                thread_name_prefix="agentbus-soak",
+                thread_name_prefix="syndra-soak",
             ) as executor:
                 futures = [
                     executor.submit(worker, index) for index in range(workers)
@@ -646,7 +646,7 @@ def _run_cycle(
             ),
         )
         engine.create_run(
-            "Exercise deterministic AgentBus reliability.",
+            "Exercise deterministic Syndra reliability.",
             plan,
             model="deterministic",
             workspace=str(workspace),
@@ -725,12 +725,12 @@ def _run_cycle(
             except Exception as exc:
                 if worktree is not None:
                     raise _SoakCleanupError(
-                        "The AgentBus-owned worktree cleanup failed."
+                        "The Syndra-owned worktree cleanup failed."
                     ) from exc
                 raise
         if not worktree_cleaned:
             raise _SoakCleanupError(
-                "The AgentBus-owned worktree was not removed."
+                "The Syndra-owned worktree was not removed."
             )
         daemon_reconnected = _verify_daemon_restart(
             store.database_path,
@@ -816,7 +816,7 @@ def _prepare_worker_files(workspace: Path, parallelism: int) -> None:
 
 def _soak_mcp_configuration() -> tuple[McpServerConfig, ExecutableCatalog]:
     server_id = "soak-peer"
-    alias = "agentbus-soak-peer"
+    alias = "syndra-soak-peer"
     peer = Path(__file__).with_name("soak_mcp_peer.py").resolve(strict=True)
     config = McpServerConfig(
         server_id=server_id,
@@ -1062,9 +1062,9 @@ def _initialize_git_repository(workspace: Path, hooks: Path) -> None:
         "-c",
         "commit.gpgSign=false",
         "-c",
-        "user.name=AgentBus Soak",
+        "user.name=Syndra Soak",
         "-c",
-        "user.email=soak@agentbus.invalid",
+        "user.email=soak@syndra.invalid",
         "commit",
         "-q",
         "-m",

@@ -430,7 +430,7 @@ class ContentAddressedStore:
         temporary: Path | None = None
         try:
             descriptor, temporary_name = tempfile.mkstemp(
-                prefix=".agentbus-tmp-",
+                prefix=".syndra-tmp-",
                 dir=destination.parent,
             )
             temporary = Path(temporary_name)

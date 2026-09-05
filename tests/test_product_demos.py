@@ -14,9 +14,9 @@ def test_demo_creation_is_small_owned_and_task_oriented(tmp_path, language):
 
     assert result.language == language
     assert len(result.created_files) <= 8
-    assert ".agentbus-demo.json" in result.created_files
-    assert "AGENTBUS_TASK.md" in result.created_files
-    assert (result.workspace / "AGENTBUS_TASK.md").is_file()
+    assert ".syndra-demo.json" in result.created_files
+    assert "SYNDRA_TASK.md" in result.created_files
+    assert (result.workspace / "SYNDRA_TASK.md").is_file()
     assert result.to_dict()["network_used"] is False
 
 
@@ -31,19 +31,32 @@ def test_python_demo_preflight_observes_intentional_failure(tmp_path):
     assert result.to_dict()["ready"] is True
 
 
+def test_legacy_agentbus_demo_marker_remains_readable(tmp_path):
+    workspace = tmp_path / "legacy-python"
+    create_demo("python", workspace)
+    marker = workspace / ".syndra-demo.json"
+    marker.replace(workspace / ".agentbus-demo.json")
+
+    result = run_demo("python", workspace=workspace)
+
+    assert result.test_executed is True
+    assert result.workspace == workspace.resolve()
+
+
 def test_payment_demo_contains_concurrent_retry_proof(tmp_path):
     result = create_demo("payment", tmp_path / "payment")
     source = (
         result.workspace
-        / "src/main/java/com/agentbus/demo/PaymentService.java"
+        / "src/main/java/com/syndra/demo/PaymentService.java"
     ).read_text(encoding="utf-8")
     test_source = (
         result.workspace
-        / "src/test/java/com/agentbus/demo/PaymentServiceTest.java"
+        / "src/test/java/com/syndra/demo/PaymentServiceTest.java"
     ).read_text(encoding="utf-8")
     pom = (result.workspace / "pom.xml").read_text(encoding="utf-8")
 
     assert "confirmedPaymentIds.add(paymentId);\n        return 1;" in source
+    assert result.language == "payment"
     assert "CountDownLatch" in test_source
     assert "assertEquals(1, accepted)" in test_source
     assert result.test_command == ("mvn", "-q", "-o", "test")

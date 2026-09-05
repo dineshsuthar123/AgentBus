@@ -309,7 +309,7 @@ class StateStore:
                     existing = int(row["value"])
                     if existing > SCHEMA_VERSION:
                         raise StateStoreError(
-                            "State database schema is newer than this AgentBus version: "
+                            "State database schema is newer than this Syndra version: "
                             f"{existing} > {SCHEMA_VERSION}."
                         )
                     if existing < SCHEMA_VERSION:

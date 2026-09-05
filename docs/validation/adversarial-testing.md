@@ -1,8 +1,8 @@
 # Adversarial defensive testing
 
-AgentBus adversarial validation is local defensive testing. It attempts to
+Syndra adversarial validation is local defensive testing. It attempts to
 falsify containment, parsing, protocol, lifecycle, and privacy invariants using
-AgentBus-owned fixtures. It does not scan or attack third-party systems.
+Syndra-owned fixtures. It does not scan or attack third-party systems.
 
 ## Fixture methodology
 
@@ -39,7 +39,7 @@ No public MCP server, socket outside loopback, or third-party target is used.
 Run the release boundary scorecard locally:
 
 ```console
-python -m agentbus.release_security
+python -m syndra.release_security
 ```
 
 The scorecard evaluates nine explicit boundaries:
@@ -70,7 +70,7 @@ required.
 Tests may intentionally create files, SQLite databases, Git repositories,
 worktrees, processes, package archives, traces, and support bundles inside
 their owned roots. The tests verify cleanup and preserve ambiguous user state
-rather than resetting, cleaning, or deleting it. Normal failed AgentBus runs
+rather than resetting, cleaning, or deleting it. Normal failed Syndra runs
 also do not automatically roll back source edits.
 
 ## Platforms and limits

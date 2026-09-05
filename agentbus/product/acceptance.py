@@ -17,15 +17,15 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Callable
 
-from agentbus import __version__
+from syndra import __version__
 from agentbus.release_packaging import audit_distributions
 from agentbus.security.redaction import redact_text
 
 
-_TEMP_PREFIX = "agentbus-product-acceptance-"
-_REPEAT_TEMP_PREFIX = "agentbus-product-repetitions-"
+_TEMP_PREFIX = "syndra-product-acceptance-"
+_REPEAT_TEMP_PREFIX = "syndra-product-repetitions-"
 MAX_CLEAN_INSTALL_REPETITIONS = 10
-_OWNER_FILE = ".agentbus-product-acceptance.json"
+_OWNER_FILE = ".syndra-product-acceptance.json"
 _PRODUCT_EXTRAS = ("ide", "mcp")
 
 
@@ -322,7 +322,7 @@ class _CleanInstallRunner:
         self.wheel: Path | None = None
         self.artifacts: tuple[Path, ...] = ()
         self.python: Path | None = None
-        self.agentbus: Path | None = None
+        self.syndra: Path | None = None
         self.daemon_id: str | None = None
         self.daemon_pid: int | None = None
         self.daemon_pids: set[int] = set()
@@ -330,7 +330,7 @@ class _CleanInstallRunner:
         self.reliability_payload: dict[str, Any] | None = None
         self.security_scorecard: Any | None = None
         self.root.joinpath(_OWNER_FILE).write_text(
-            json.dumps({"owner": "agentbus", "kind": kind.value}) + "\n",
+            json.dumps({"owner": "syndra", "kind": kind.value}) + "\n",
             encoding="utf-8",
         )
 
@@ -429,7 +429,7 @@ class _CleanInstallRunner:
         if self.kind == AcceptanceKind.PRODUCT:
             arguments.insert(4, "--wheel")
         self._command(arguments, cwd=self.repository, timeout=600)
-        wheels = tuple(self.distributions.glob("agentbus-*.whl"))
+        wheels = tuple(self.distributions.glob("syndra-*.whl"))
         if len(wheels) != 1:
             raise RuntimeError("Package build did not produce exactly one wheel.")
         self.wheel = wheels[0].resolve(strict=True)
@@ -453,11 +453,11 @@ class _CleanInstallRunner:
     def _create_environment(self) -> str:
         venv.EnvBuilder(with_pip=True).create(self.environment_root)
         self.python = _venv_executable(self.environment_root, "python")
-        self.agentbus = _venv_executable(self.environment_root, "agentbus")
+        self.syndra = _venv_executable(self.environment_root, "syndra")
         dependency_paths = _host_dependency_paths()
         if not dependency_paths:
             raise RuntimeError("Offline host dependencies are unavailable.")
-        bridge = _venv_site_packages(self.environment_root) / "agentbus-host-dependencies.pth"
+        bridge = _venv_site_packages(self.environment_root) / "syndra-host-dependencies.pth"
         bridge.write_text(
             "".join(f"{path}\n" for path in dependency_paths),
             encoding="utf-8",
@@ -479,15 +479,17 @@ class _CleanInstallRunner:
             [
                 str(python),
                 "-m",
-                "agentbus.product_acceptance",
+                "syndra.product_acceptance",
                 "--verify-install",
                 str(self.environment_root),
             ],
             cwd=self.root,
         )
         if not payload.get("ok") or payload.get("version") != __version__:
-            raise RuntimeError("Fresh Python did not import the expected AgentBus wheel.")
-        return "Verified AgentBus imports from fresh-environment site-packages."
+            raise RuntimeError("Fresh Python did not import the expected Syndra wheel.")
+        if payload.get("legacy_import_compatible") is not True:
+            raise RuntimeError("The legacy AgentBus import compatibility surface is missing.")
+        return "Verified Syndra and legacy AgentBus imports from fresh-environment site-packages."
 
     def _clean_install(self) -> str:
         self._create_environment()
@@ -522,7 +524,7 @@ class _CleanInstallRunner:
         payload = self._agentbus_json("version", "--json")
         if payload.get("version") != __version__:
             raise RuntimeError("Installed version metadata does not match the built wheel.")
-        return f"Verified AgentBus {__version__} compatibility metadata."
+        return f"Verified Syndra {__version__} compatibility metadata."
 
     def _doctor(self) -> str:
         payload = self._agentbus_json(
@@ -654,8 +656,8 @@ class _CleanInstallRunner:
         if not payload.get("reviewer_approved") or not payload.get("verifier_passed"):
             raise RuntimeError("Quickstart verification or final review did not pass.")
         if sorted(payload.get("changed_files", [])) != [
-            "agentbus_result.py",
-            "test_agentbus_result.py",
+            "syndra_result.py",
+            "test_syndra_result.py",
         ]:
             raise RuntimeError("Quickstart changed-file evidence was incomplete.")
         return "Completed the reviewed deterministic first-task workflow and cleanup."
@@ -672,7 +674,7 @@ class _CleanInstallRunner:
             "--workspace",
             str(self.workspace),
             "--durable",
-            "Create and verify the deterministic AgentBus calculator.",
+            "Create and verify the deterministic Syndra calculator.",
             timeout=300,
         )
         match = re.search(r"^Run ID:\s+(\S+)$", output, flags=re.MULTILINE)
@@ -692,12 +694,12 @@ class _CleanInstallRunner:
         required = (
             "Status: succeeded",
             "Final reviewer: approved",
-            "agentbus_result.py",
-            "test_agentbus_result.py",
+            "syndra_result.py",
+            "test_syndra_result.py",
         )
         if not all(value in output for value in required):
             raise RuntimeError("The durable final report omitted required task evidence.")
-        return "Inspected the persisted final report, review, and scoped file evidence."
+        return "Inspected the persisted Syndra report, review, and scoped file evidence."
 
     def _managed_tool_approval(self) -> str:
         python = self._required(self.python, "fresh Python")
@@ -885,7 +887,7 @@ class _CleanInstallRunner:
         return "Rejected adversarial local path and Git forms within disposable roots."
 
     def _support_bundle(self) -> str:
-        output = self.root / "agentbus-support.zip"
+        output = self.root / "syndra-support.zip"
         payload = self._agentbus_json(
             "support-bundle",
             "--config",
@@ -906,7 +908,7 @@ class _CleanInstallRunner:
 
     def _support_bundle_privacy(self) -> str:
         self._support_bundle()
-        output = self.root / "agentbus-support.zip"
+        output = self.root / "syndra-support.zip"
         marker = self.private_marker.encode("utf-8")
         total = 0
         with zipfile.ZipFile(output) as archive:
@@ -1023,7 +1025,7 @@ class _CleanInstallRunner:
         )
         if payload.get("ok") is not True:
             raise RuntimeError("Explicit cleanup did not complete safely.")
-        return "Removed only validated AgentBus-owned runtime state after confirmation."
+        return "Removed only validated Syndra-owned runtime state after confirmation."
 
     def _leak_check(self) -> str:
         registry = self._agentbus_json(
@@ -1034,9 +1036,9 @@ class _CleanInstallRunner:
             "status",
         )
         if registry.get("count") != 0:
-            raise RuntimeError("An AgentBus daemon registration remained after shutdown.")
+            raise RuntimeError("A Syndra daemon registration remained after shutdown.")
         if any(_process_exists(pid) for pid in self.daemon_pids):
-            raise RuntimeError("The owned AgentBus daemon process remained active.")
+            raise RuntimeError("The owned Syndra daemon process remained active.")
         worktrees = self._command(
             ["git", "worktree", "list", "--porcelain"],
             cwd=self.workspace,
@@ -1055,18 +1057,19 @@ class _CleanInstallRunner:
                 "pip",
                 "uninstall",
                 "--yes",
-                "agentbus",
+                "syndra",
             ],
             cwd=self.root,
             timeout=180,
         )
         site_packages = _venv_site_packages(self.environment_root)
         local_artifacts = [
+            site_packages / "syndra",
             site_packages / "agentbus",
-            *site_packages.glob("agentbus-*.dist-info"),
+            *site_packages.glob("syndra-*.dist-info"),
         ]
         if any(path.exists() for path in local_artifacts):
-            raise RuntimeError("AgentBus wheel files remained after uninstall.")
+            raise RuntimeError("Syndra wheel files remained after uninstall.")
         result = self._command(
             [
                 str(python),
@@ -1074,14 +1077,15 @@ class _CleanInstallRunner:
                 "-c",
                 (
                     "import importlib.util; "
-                    "print('present' if importlib.util.find_spec('agentbus') "
-                    "else 'absent')"
+                    "names = ('syndra', 'agentbus'); "
+                    "print('present' if any(importlib.util.find_spec(name) "
+                    "for name in names) else 'absent')"
                 ),
             ],
             cwd=self.root,
         )
         if result.strip() != "absent":
-            raise RuntimeError("AgentBus remained importable after uninstall.")
+            raise RuntimeError("Syndra or its legacy alias remained importable after uninstall.")
         return "Uninstalled the wheel from the fresh virtual environment."
 
     def _post_uninstall_leak_check(self) -> str:
@@ -1115,9 +1119,9 @@ class _CleanInstallRunner:
         try:
             payload = json.loads(output)
         except json.JSONDecodeError as exc:
-            raise RuntimeError("AgentBus command did not return valid JSON.") from exc
+            raise RuntimeError("Syndra command did not return valid JSON.") from exc
         if not isinstance(payload, dict):
-            raise RuntimeError("AgentBus JSON output must be an object.")
+            raise RuntimeError("Syndra JSON output must be an object.")
         return payload
 
     def _agentbus_text(
@@ -1126,7 +1130,7 @@ class _CleanInstallRunner:
         timeout: float = 120,
         allowed_returncodes: set[int] | None = None,
     ) -> str:
-        executable = self._required(self.agentbus, "AgentBus console script")
+        executable = self._required(self.syndra, "Syndra console script")
         return self._command(
             [str(executable), *arguments],
             cwd=self.root,
@@ -1202,16 +1206,22 @@ def install_arguments(python: Path, requirement: str) -> list[str]:
 
 
 def installed_origin_payload(environment_root: str | Path) -> dict[str, Any]:
+    import syndra
     import agentbus
 
     environment = Path(environment_root).expanduser().resolve(strict=True)
-    package = Path(agentbus.__file__).resolve(strict=True)
+    package = Path(syndra.__file__).resolve(strict=True)
+    legacy_package = Path(agentbus.__file__).resolve(strict=True)
     site_packages = _venv_site_packages(environment).resolve(strict=True)
-    ok = package.is_relative_to(site_packages)
+    ok = package.is_relative_to(site_packages) and legacy_package.is_relative_to(
+        site_packages
+    )
+    compatible = agentbus.__version__ == syndra.__version__
     return {
-        "ok": ok,
-        "version": agentbus.__version__,
+        "ok": ok and compatible,
+        "version": syndra.__version__,
         "wheel_origin": ok,
+        "legacy_import_compatible": compatible,
         "editable_install": False,
         "repository_pythonpath_used": False,
     }
@@ -1221,7 +1231,7 @@ def _create_repository(workspace: Path, hooks: Path) -> None:
     workspace.mkdir()
     hooks.mkdir()
     workspace.joinpath("README.md").write_text(
-        "# AgentBus clean-install acceptance\n",
+        "# Syndra clean-install acceptance\n",
         encoding="utf-8",
         newline="\n",
     )
@@ -1247,9 +1257,9 @@ def _create_repository(workspace: Path, hooks: Path) -> None:
         "-c",
         "commit.gpgSign=false",
         "-c",
-        "user.name=AgentBus Acceptance",
+        "user.name=Syndra Acceptance",
         "-c",
-        "user.email=acceptance@agentbus.invalid",
+        "user.email=acceptance@syndra.invalid",
         "commit",
         "-q",
         "-m",
@@ -1324,12 +1334,12 @@ def _offline_environment(
         directory.mkdir(exist_ok=True)
     environment.update(
         {
-            "AGENTBUS_PROVIDER": "deterministic",
-            "AGENTBUS_STATE_DIR": str(root / ".agentbus"),
-            "AGENTBUS_RUNS_DIR": str(root / ".agentbus" / "runs"),
-            "AGENTBUS_MODEL_MAX_RETRIES": "0",
-            "AGENTBUS_KEEP_WORKTREES": "false",
-            "AGENTBUS_ACCEPTANCE": "1",
+            "SYNDRA_PROVIDER": "deterministic",
+            "SYNDRA_STATE_DIR": str(root / ".syndra"),
+            "SYNDRA_RUNS_DIR": str(root / ".syndra" / "runs"),
+            "SYNDRA_MODEL_MAX_RETRIES": "0",
+            "SYNDRA_KEEP_WORKTREES": "false",
+            "SYNDRA_ACCEPTANCE": "1",
             "AZURE_OPENAI_ENDPOINT": "https://acceptance.invalid",
             "AZURE_OPENAI_API_KEY": private_marker or secrets.token_urlsafe(32),
             "AZURE_OPENAI_DEFAULT_DEPLOYMENT": "acceptance-only",

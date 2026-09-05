@@ -95,10 +95,10 @@ class PlannerAgent(BaseAgent):
                 + "\nReturn a corrected plan. Do not add capabilities unless the "
                 "implementation slice legitimately requires them. When feedback "
                 "identifies a missing capability, the corrected response must explicitly "
-                "declare it; AgentBus will not add it automatically.\n"
+                "declare it; Syndra will not add it automatically.\n"
             )
         prompt = f"""
-You are the AgentBus Planner Agent.
+You are the Syndra Planner Agent.
 Return ONLY valid JSON with this shape:
 {{
   "goal": "...",

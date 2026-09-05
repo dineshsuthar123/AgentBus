@@ -11,9 +11,9 @@ import {
 test("Windows fresh-profile sessions stay within the IPC path budget", () => {
   const name = freshProfileSessionName(0x7fff_ffff, "win32");
 
-  assert.match(name, /^agentbus-vfp-[0-9a-z]+$/u);
+  assert.match(name, /^syndra-vfp-[0-9a-z]+$/u);
   assert.ok(name.length <= 20);
-  assert.equal(freshProfileSessionPrefix("win32"), "agentbus-vfp-");
+  assert.equal(freshProfileSessionPrefix("win32"), "syndra-vfp-");
   assert.equal(
     freshProfileStagingRoot(
       "win32",
@@ -26,11 +26,11 @@ test("Windows fresh-profile sessions stay within the IPC path budget", () => {
 test("non-Windows fresh-profile sessions retain descriptive ownership", () => {
   assert.equal(
     freshProfileSessionName(12345, "linux"),
-    "agentbus-vscode-fresh-profile-12345"
+    "syndra-vscode-fresh-profile-12345"
   );
   assert.equal(
     freshProfileSessionPrefix("darwin"),
-    "agentbus-vscode-fresh-profile-"
+    "syndra-vscode-fresh-profile-"
   );
   assert.equal(freshProfileStagingRoot("linux", "/var/tmp"), resolve("/var/tmp"));
 });

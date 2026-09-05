@@ -31,7 +31,7 @@ as uncertainty. Their identities or content are not copied into the result.
 
 ## Test selection
 
-`agentbus tests-for` uses typed `tests` edges, project test roots, naming
+`syndra tests-for` uses typed `tests` edges, project test roots, naming
 conventions, ownership, architecture crossings, and impact evidence. It returns:
 
 - mandatory tests that available evidence directly requires;
@@ -41,15 +41,15 @@ conventions, ownership, architecture crossings, and impact evidence. It returns:
 
 Mandatory tests survive output truncation. If test evidence is missing, stale,
 protected, or too broad, selection fails toward a wider test recommendation
-rather than claiming a precise minimal set. AgentBus does not execute selected
+rather than claiming a precise minimal set. Syndra does not execute selected
 tests during analysis; the verifier remains responsible for real execution.
 
 ## Examples
 
 ```powershell
-agentbus impact services/python_service/calculator.py --evidence
-agentbus impact SYMBOL_ID --depth 4 --max-nodes 500 --json
-agentbus tests-for services/python_service/calculator.py --evidence
+syndra impact services/python_service/calculator.py --evidence
+syndra impact SYMBOL_ID --depth 4 --max-nodes 500 --json
+syndra tests-for services/python_service/calculator.py --evidence
 ```
 
 Use explicit project and language filters only when the task is intentionally

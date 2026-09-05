@@ -1,6 +1,6 @@
 import {
-  AgentBusApiError,
-  type AgentBusClient
+  SyndraApiError,
+  type SyndraClient
 } from "./apiClient";
 import type { ComparisonResponse } from "./generated/protocol";
 
@@ -24,7 +24,7 @@ export class ComparisonStore {
     );
   }
 
-  public async load(client: AgentBusClient): Promise<ComparisonResponse[]> {
+  public async load(client: SyndraClient): Promise<ComparisonResponse[]> {
     if (this.loaded) return this.list();
     const ids = this.persistedIds();
     const retained: string[] = [];
@@ -34,7 +34,7 @@ export class ComparisonStore {
         this.values.set(comparison.comparison_id, comparison);
         retained.push(comparison.comparison_id);
       } catch (error) {
-        if (!(error instanceof AgentBusApiError && error.status === 404)) {
+        if (!(error instanceof SyndraApiError && error.status === 404)) {
           throw error;
         }
       }

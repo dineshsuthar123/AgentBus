@@ -113,7 +113,7 @@ def run_doctor(
 def render_doctor(report: DoctorReport, *, verbose: bool = False) -> str:
     payload = report.to_dict()
     lines = [
-        f"AgentBus doctor {payload['version']}",
+        f"Syndra doctor {payload['version']}",
         f"Overall: {payload['status']}",
         f"Workspace: {payload['workspace']}",
         f"Network used: {'yes' if payload['network_used'] else 'no'}",
@@ -170,7 +170,7 @@ def _platform_checks() -> list[DoctorCheck]:
         )
     return [
         python,
-        DoctorCheck("package", CheckStatus.PASS, f"AgentBus {__version__} imports."),
+        DoctorCheck("package", CheckStatus.PASS, f"Syndra {__version__} imports."),
         git,
         DoctorCheck(
             "sqlite",
@@ -203,7 +203,7 @@ def _provider_checks(
                 "provider:ollama",
                 status,
                 str(exc),
-                "Set AGENTBUS_OLLAMA_URL and AGENTBUS_MODEL.",
+                "Set SYNDRA_OLLAMA_URL and SYNDRA_MODEL.",
             )
         )
     try:
@@ -284,7 +284,7 @@ def _product_checks(
         DoctorCheck(
             "configuration",
             CheckStatus.OK,
-            "Resolved configuration is valid and credential values are not persisted by AgentBus config commands.",
+            "Resolved configuration is valid and credential values are not persisted by Syndra config commands.",
             details={
                 "provider": config.provider_name,
                 "policy_mode": config.policy_mode,
@@ -327,7 +327,7 @@ def _product_checks(
                 name,
                 CheckStatus.OK if installed else CheckStatus.OPTIONAL,
                 f"Optional {extra} extra is {'available' if installed else 'not installed'}.",
-                None if installed else f"Install with `pip install \"agentbus[{extra}]\"` when needed.",
+                None if installed else f"Install with `pip install \"syndra[{extra}]\"` when needed.",
             )
         )
     migration = MigrationCoordinator(config).status()
@@ -346,7 +346,7 @@ def _product_checks(
                 status,
                 target.message,
                 (
-                    "Run `agentbus migrate plan`, then `agentbus migrate apply`."
+                    "Run `syndra migrate plan`, then `syndra migrate apply`."
                     if status == CheckStatus.REPAIRABLE
                     else None
                 ),
@@ -373,7 +373,7 @@ def _product_checks(
                 if missing
                 else "Runtime directories are present."
             ),
-            "Run `agentbus doctor --repair` to create missing runtime directories."
+            "Run `syndra doctor --repair` to create missing runtime directories."
             if missing
             else None,
             details={"repaired": repaired},
@@ -409,9 +409,9 @@ def _product_checks(
                 f"{len(entries)} registered daemon(s), {len(stale)} stale, "
                 f"{len(incompatible)} incompatible."
             ),
-            "Run `agentbus doctor --repair` or `agentbus daemon cleanup-stale`."
+            "Run `syndra doctor --repair` or `syndra daemon cleanup-stale`."
             if stale
-            else "Restart AgentBus with matching package and protocol versions."
+            else "Restart Syndra with matching package and protocol versions."
             if incompatible
             else None,
             details={
@@ -431,7 +431,7 @@ def _product_checks(
                 if index_path.is_file()
                 else "Repository index has not been built."
             ),
-            None if index_path.is_file() else "Run `agentbus index build` when repository intelligence is desired.",
+            None if index_path.is_file() else "Run `syndra index build` when repository intelligence is desired.",
         )
     )
     trace_path = config.trace_store_path.expanduser().resolve()
@@ -449,7 +449,7 @@ def _product_checks(
         DoctorCheck(
             "storage-size",
             CheckStatus.OK,
-            f"AgentBus state uses {_directory_size(state_root)} bytes.",
+            f"Syndra state uses {_directory_size(state_root)} bytes.",
             details={"path": str(state_root)},
         )
     )
@@ -556,7 +556,7 @@ def _runtime_checks(
                 name,
                 CheckStatus.PASS if writable else CheckStatus.FAIL,
                 f"Runtime path is writable via {target}." if writable else f"Runtime path is not writable: {path}",
-                None if writable else "Choose a writable runtime directory or run agentbus init.",
+                None if writable else "Choose a writable runtime directory or run syndra init.",
             )
         )
     worktree_root = config.worktree_root_path
@@ -566,7 +566,7 @@ def _runtime_checks(
             "worktree-root",
             CheckStatus.FAIL if inside_workspace else CheckStatus.PASS,
             f"Worktree root is {'inside' if inside_workspace else 'outside'} the source workspace: {worktree_root}",
-            "Set AGENTBUS_WORKTREE_ROOT outside the repository."
+            "Set SYNDRA_WORKTREE_ROOT outside the repository."
             if inside_workspace
             else None,
         )
@@ -593,7 +593,7 @@ def _runtime_checks(
             f"Found {count} named evaluation baseline(s)."
             if count
             else "No named evaluation baselines were found.",
-            None if count else "Save a known-good run with agentbus-eval baseline save.",
+            None if count else "Save a known-good run with syndra-eval baseline save.",
         )
     )
     return checks
@@ -606,7 +606,7 @@ def _state_checks(path: Path) -> list[DoctorCheck]:
                 "state-database",
                 CheckStatus.WARN,
                 f"State database does not exist: {path}",
-                "Run agentbus init or start a durable run.",
+                "Run syndra init or start a durable run.",
             ),
             DoctorCheck("stale-leases", CheckStatus.PASS, "No state database; no leases."),
             DoctorCheck("orphaned-worktrees", CheckStatus.PASS, "No state database; no worktrees."),
@@ -626,7 +626,7 @@ def _state_checks(path: Path) -> list[DoctorCheck]:
                 "state-database",
                 CheckStatus.FAIL,
                 f"State database is unreadable or incompatible: {type(exc).__name__}",
-                "Back up the file and verify it is an AgentBus SQLite database.",
+                "Back up the file and verify it is a Syndra-compatible SQLite database.",
             )
         ]
     if version == SCHEMA_VERSION:
@@ -635,12 +635,12 @@ def _state_checks(path: Path) -> list[DoctorCheck]:
     elif version is not None and version < SCHEMA_VERSION:
         schema_status = CheckStatus.WARN
         schema_remediation = (
-            "Back up the database, then open it with AgentBus to apply registered "
+            "Back up the database, then open it with Syndra to apply registered "
             "transactional migrations."
         )
     else:
         schema_status = CheckStatus.FAIL
-        schema_remediation = "Use an AgentBus release compatible with this database."
+        schema_remediation = "Use a Syndra release compatible with this database."
     return [
         DoctorCheck(
             "state-database",

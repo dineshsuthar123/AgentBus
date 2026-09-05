@@ -17,7 +17,7 @@ async function main(): Promise<void> {
   const stagingRoot = process.platform === "win32" ? "C:\\tmp" : "/tmp";
   const sessionRoot = join(
     stagingRoot,
-    `agentbus-vscode-integration-${process.pid}`
+    `syndra-vscode-integration-${process.pid}`
   );
   const extensionDevelopmentPath = join(sessionRoot, "extension");
   const workspacePath = join(sessionRoot, "workspace");
@@ -86,12 +86,12 @@ async function main(): Promise<void> {
         "index"
       ),
       extensionTestsEnv: {
-        AGENTBUS_E2E_PYTHON: pythonPath,
-        AGENTBUS_E2E_CONFIG: configPath,
-        AGENTBUS_E2E_MCP_MARKER: mcpPrivateMarker,
-        AGENTBUS_E2E_REGISTRY: registryPath,
-        AGENTBUS_E2E_WORKSPACE: workspacePath,
-        AGENTBUS_E2E_ARTIFACT_ROOT: artifactPath
+        SYNDRA_E2E_PYTHON: pythonPath,
+        SYNDRA_E2E_CONFIG: configPath,
+        SYNDRA_E2E_MCP_MARKER: mcpPrivateMarker,
+        SYNDRA_E2E_REGISTRY: registryPath,
+        SYNDRA_E2E_WORKSPACE: workspacePath,
+        SYNDRA_E2E_ARTIFACT_ROOT: artifactPath
       },
       launchArgs: [
         workspacePath,
@@ -136,20 +136,20 @@ async function initializeRepository(
   await cp(repositoryFixturePath, workspacePath, { recursive: true });
   await writeFile(
     join(workspacePath, ".env"),
-    "AGENTBUS_E2E_PRIVATE=vscode-e2e-private-repository-marker\n",
+    "SYNDRA_E2E_PRIVATE=vscode-e2e-private-repository-marker\n",
     "utf8"
   );
   git(workspacePath, "init");
-  git(workspacePath, "config", "user.email", "vscode-e2e@agentbus.invalid");
-  git(workspacePath, "config", "user.name", "AgentBus VS Code E2E");
+  git(workspacePath, "config", "user.email", "vscode-e2e@syndra.invalid");
+  git(workspacePath, "config", "user.name", "Syndra VS Code E2E");
   await writeFile(
     join(workspacePath, "README.md"),
-    "# AgentBus VS Code integration workspace\n",
+    "# Syndra VS Code integration workspace\n",
     "utf8"
   );
   await writeFile(
     join(workspacePath, "pyproject.toml"),
-    "[project]\nname = \"agentbus-vscode-integration\"\nversion = \"0.1.0\"\n",
+    "[project]\nname = \"syndra-vscode-integration\"\nversion = \"0.1.0\"\n",
     "utf8"
   );
   await writeFile(
@@ -294,7 +294,7 @@ function daemonCommand(
     pythonPath,
     [
       "-m",
-      "agentbus.cli",
+      "syndra.cli",
       "daemon",
       "--registry-path",
       registryPath,
@@ -307,6 +307,7 @@ function daemonCommand(
 function removeProviderSecrets(): Map<string, string> {
   const removed = new Map<string, string>();
   const names = [
+    "SYNDRA_AZURE_API_KEY",
     "AGENTBUS_AZURE_API_KEY",
     "AZURE_CLIENT_ID",
     "AZURE_CLIENT_SECRET",

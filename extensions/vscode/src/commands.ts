@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { AgentBusApiError, type AgentBusClient } from "./apiClient";
+import { SyndraApiError, type SyndraClient } from "./apiClient";
 import { formatApprovalConfirmation } from "./approvalPresentation";
 import { toolArtifactUri } from "./artifactDocuments";
 import { validateToolArtifact } from "./artifactPresentation";
@@ -61,7 +61,7 @@ import {
   ensureWorkspaceTrust,
   selectWorkspace
 } from "./workspace";
-import type { AgentBusItem, RunSelection } from "./views";
+import type { SyndraItem, RunSelection } from "./views";
 import {
   canCancel,
   cancellationDetails,
@@ -178,9 +178,9 @@ export class CommandController implements vscode.Disposable {
     if (vscode.workspace.isTrusted) {
       void this.connect();
     } else {
-      this.status.text = "$(shield) AgentBus restricted";
+      this.status.text = "$(shield) Syndra restricted";
       this.output.appendLine(
-        "AgentBus daemon startup is paused until this workspace is trusted."
+        "Syndra daemon startup is paused until this workspace is trusted."
       );
     }
     this.disposables.push(
@@ -203,7 +203,7 @@ export class CommandController implements vscode.Disposable {
     return this.stream?.isConnected ?? false;
   }
 
-  private async client(): Promise<AgentBusClient> {
+  private async client(): Promise<SyndraClient> {
     return (await this.daemon.connectOrStart()).client;
   }
 
@@ -226,8 +226,8 @@ export class CommandController implements vscode.Disposable {
       this.stream.start();
       await this.refresh();
     } catch (error) {
-      this.output.appendLine(`AgentBus connection: ${safeError(error)}`);
-      this.status.text = "$(debug-disconnect) AgentBus offline";
+      this.output.appendLine(`Syndra connection: ${safeError(error)}`);
+      this.status.text = "$(debug-disconnect) Syndra offline";
     }
   }
 
@@ -241,8 +241,8 @@ export class CommandController implements vscode.Disposable {
       )
     ).length;
     this.status.text = active
-      ? `$(sync~spin) AgentBus ${active}`
-      : "$(check) AgentBus";
+      ? `$(sync~spin) Syndra ${active}`
+      : "$(check) Syndra";
   }
 
   private refreshViews(): void {
@@ -253,7 +253,7 @@ export class CommandController implements vscode.Disposable {
     const folder = await selectWorkspace(true);
     if (!folder) return;
     const task = await vscode.window.showInputBox({
-      title: "AgentBus Task",
+      title: "Syndra Task",
       prompt: "Describe the software engineering task",
       validateInput: (value) => value.trim() ? undefined : "Task is required."
     });
@@ -311,9 +311,9 @@ export class CommandController implements vscode.Disposable {
       version: 1
     });
     this.selection.set(accepted.run_id);
-    this.status.text = "$(sync~spin) AgentBus 1";
+    this.status.text = "$(sync~spin) Syndra 1";
     this.refreshViews();
-    void vscode.window.showInformationMessage(`AgentBus run ${accepted.run_id} started.`);
+    void vscode.window.showInformationMessage(`Syndra run ${accepted.run_id} started.`);
     return accepted;
   }
 
@@ -330,7 +330,7 @@ export class CommandController implements vscode.Disposable {
   }
 
   private async showRun(raw?: unknown): Promise<void> {
-    const item = raw as AgentBusItem | undefined;
+    const item = raw as SyndraItem | undefined;
     const run = item?.value as RunSummary | undefined ?? await this.chooseRun();
     if (!run) return;
     this.selection.set(run.run_id);
@@ -347,7 +347,7 @@ export class CommandController implements vscode.Disposable {
   }
 
   private async showSpan(raw?: unknown): Promise<void> {
-    const item = raw as AgentBusItem | undefined;
+    const item = raw as SyndraItem | undefined;
     let span = item?.value as TraceSpanSummary | undefined;
     let runId = span?.run_id;
     if (!span) {
@@ -362,7 +362,7 @@ export class CommandController implements vscode.Disposable {
             description: `#${value.sequence} ${value.span_type} | ${value.status}`,
             value
           })),
-          { title: "Show AgentBus Span" }
+          { title: "Show Syndra Span" }
         )
       )?.value;
     }
@@ -374,7 +374,7 @@ export class CommandController implements vscode.Disposable {
   }
 
   private async showReplaySession(raw?: unknown): Promise<void> {
-    const item = raw as AgentBusItem | undefined;
+    const item = raw as SyndraItem | undefined;
     let replay = item?.value as ReplaySessionResponse | undefined;
     if (!replay) {
       const response = await (await this.client()).listReplays(
@@ -389,7 +389,7 @@ export class CommandController implements vscode.Disposable {
             description: `${value.mode} | ${value.status}`,
             value
           })),
-          { title: "Show AgentBus Replay Session" }
+          { title: "Show Syndra Replay Session" }
         )
       )?.value;
     }
@@ -445,7 +445,7 @@ export class CommandController implements vscode.Disposable {
           description: `#${value.sequence} | ${value.checkpoint_id}`,
           value
         })),
-        { title: "Replay AgentBus from Checkpoint" }
+        { title: "Replay Syndra from Checkpoint" }
       )
     )?.value;
     if (!checkpoint) return undefined;
@@ -538,7 +538,7 @@ export class CommandController implements vscode.Disposable {
                 value: true
               }
             ],
-            { title: "Export AgentBus Trace" }
+            { title: "Export Syndra Trace" }
           )
         )?.value;
     }
@@ -568,11 +568,11 @@ export class CommandController implements vscode.Disposable {
       exported.trace_id !== trace.trace_id ||
       exported.run_id !== run.run_id
     ) {
-      throw new Error("AgentBus trace export identity did not match the request.");
+      throw new Error("Syndra trace export identity did not match the request.");
     }
     if (exported.source_content_included && !includeSourceContent) {
       throw new Error(
-        "AgentBus refused an unexpected source-content archive response."
+        "Syndra refused an unexpected source-content archive response."
       );
     }
     const bytes = decodeTraceArchive(
@@ -605,7 +605,7 @@ export class CommandController implements vscode.Disposable {
       });
     } catch (error) {
       if (
-        !(error instanceof AgentBusApiError && error.status === 403) ||
+        !(error instanceof SyndraApiError && error.status === 403) ||
         allowSourceContent ||
         explicitConsent
       ) {
@@ -628,7 +628,7 @@ export class CommandController implements vscode.Disposable {
       imported.replay_started !== false
     ) {
       throw new Error(
-        "AgentBus trace import integrity or no-execution confirmation failed."
+        "Syndra trace import integrity or no-execution confirmation failed."
       );
     }
     await this.refresh();
@@ -656,7 +656,7 @@ export class CommandController implements vscode.Disposable {
       );
     } catch (error) {
       if (
-        !(error instanceof AgentBusApiError && error.status === 403) ||
+        !(error instanceof SyndraApiError && error.status === 403) ||
         includeSourceContent ||
         explicitConsent
       ) {
@@ -714,7 +714,7 @@ export class CommandController implements vscode.Disposable {
     }
     const folder = vscode.workspace.workspaceFolders?.[0]?.uri;
     const destination = await vscode.window.showSaveDialog({
-      title: "Export AgentBus Trace",
+      title: "Export Syndra Trace",
       defaultUri: folder
         ? vscode.Uri.joinPath(
             folder,
@@ -722,7 +722,7 @@ export class CommandController implements vscode.Disposable {
           )
         : undefined,
       filters: {
-        "AgentBus Trace Archive": ["agentbus-trace"]
+        "Syndra Trace Archive": ["agentbus-trace"]
       }
     });
     if (destination) validateTraceArchiveFileName(destination.fsPath);
@@ -735,12 +735,12 @@ export class CommandController implements vscode.Disposable {
       return vscode.Uri.file(raw);
     }
     const selected = await vscode.window.showOpenDialog({
-      title: "Import AgentBus Trace",
+      title: "Import Syndra Trace",
       canSelectFiles: true,
       canSelectFolders: false,
       canSelectMany: false,
       filters: {
-        "AgentBus Trace Archive": ["agentbus-trace"]
+        "Syndra Trace Archive": ["agentbus-trace"]
       }
     });
     const source = selected?.[0];
@@ -758,7 +758,7 @@ export class CommandController implements vscode.Disposable {
     }
     const folder = vscode.workspace.workspaceFolders?.[0]?.uri;
     const destination = await vscode.window.showSaveDialog({
-      title: "Capture AgentBus Regression Fixture",
+      title: "Capture Syndra Regression Fixture",
       defaultUri: folder
         ? vscode.Uri.joinPath(
             folder,
@@ -766,7 +766,7 @@ export class CommandController implements vscode.Disposable {
           )
         : undefined,
       filters: {
-        "AgentBus Regression Fixture": ["agentbus-trace"]
+        "Syndra Regression Fixture": ["agentbus-trace"]
       }
     });
     if (destination) validateTraceArchiveFileName(destination.fsPath);
@@ -803,7 +803,7 @@ export class CommandController implements vscode.Disposable {
   private async cancelReplay(
     raw?: unknown
   ): Promise<ReplayCancelResponse | undefined> {
-    const item = raw as AgentBusItem | undefined;
+    const item = raw as SyndraItem | undefined;
     let replay = item?.value as ReplaySessionResponse | undefined;
     if (typeof raw === "string") {
       replay = await (await this.client()).replay(raw);
@@ -823,7 +823,7 @@ export class CommandController implements vscode.Disposable {
               description: `${value.mode} | ${value.status}`,
               value
             })),
-          { title: "Cancel AgentBus Replay" }
+          { title: "Cancel Syndra Replay" }
         )
       )?.value;
     }
@@ -873,7 +873,7 @@ export class CommandController implements vscode.Disposable {
           await this.comparisons.upsert(comparison);
           this.refreshViews();
         }
-        const message = `AgentBus replay ${replayId} ${replay.status}.`;
+        const message = `Syndra replay ${replayId} ${replay.status}.`;
         if (replay.status === "succeeded") {
           void vscode.window.showInformationMessage(message);
         } else {
@@ -895,12 +895,12 @@ export class CommandController implements vscode.Disposable {
     rightRaw?: unknown
   ): Promise<ComparisonResponse | undefined> {
     const left = await this.chooseComparisonTarget(
-      "Select Left AgentBus Run",
+      "Select Left Syndra Run",
       leftRaw
     );
     if (!left) return undefined;
     const right = await this.chooseComparisonTarget(
-      "Select Right AgentBus Run",
+      "Select Right Syndra Run",
       rightRaw,
       left
     );
@@ -931,7 +931,7 @@ export class CommandController implements vscode.Disposable {
       "vscode.diff",
       comparisonSideUri(comparison.comparison_id, "left"),
       comparisonSideUri(comparison.comparison_id, "right"),
-      `AgentBus ${comparison.comparison_id} (hashes only)`
+      `Syndra ${comparison.comparison_id} (hashes only)`
     );
   }
 
@@ -940,12 +940,12 @@ export class CommandController implements vscode.Disposable {
     rightRaw?: unknown
   ): Promise<void> {
     const left = await this.chooseComparisonTarget(
-      "Select Left AgentBus Report",
+      "Select Left Syndra Report",
       leftRaw
     );
     if (!left) return;
     const right = await this.chooseComparisonTarget(
-      "Select Right AgentBus Report",
+      "Select Right Syndra Report",
       rightRaw,
       left
     );
@@ -954,14 +954,14 @@ export class CommandController implements vscode.Disposable {
       "vscode.diff",
       reportUri(left),
       reportUri(right),
-      "AgentBus Run Reports"
+      "Syndra Run Reports"
     );
   }
 
   private async resolveComparison(
     raw?: unknown
   ): Promise<ComparisonResponse | undefined> {
-    const item = raw as AgentBusItem | undefined;
+    const item = raw as SyndraItem | undefined;
     const treeValue = item?.value as
       | { comparison?: ComparisonResponse }
       | undefined;
@@ -975,7 +975,7 @@ export class CommandController implements vscode.Disposable {
             description: `${value.summary.changed_spans} changed span(s)`,
             value
           })),
-          { title: "Show AgentBus Comparison" }
+          { title: "Show Syndra Comparison" }
         )
       )?.value;
     }
@@ -996,7 +996,7 @@ export class CommandController implements vscode.Disposable {
   ): Promise<string | undefined> {
     if (typeof raw === "string") {
       if (!isSafeControlId(raw) || raw === excluded) {
-        throw new Error("AgentBus comparison identifiers must be safe and distinct.");
+        throw new Error("Syndra comparison identifiers must be safe and distinct.");
       }
       return raw;
     }
@@ -1020,7 +1020,7 @@ export class CommandController implements vscode.Disposable {
       const cached = this.store.run(raw);
       return cached ?? (await (await this.client()).run(raw));
     }
-    const item = raw as AgentBusItem | undefined;
+    const item = raw as SyndraItem | undefined;
     const value = item?.value as RunSummary | undefined;
     return value?.run_id ? value : this.chooseRun();
   }
@@ -1045,7 +1045,7 @@ export class CommandController implements vscode.Disposable {
       return;
     }
     const confirmed = await vscode.window.showWarningMessage(
-      `Cancel AgentBus run ${run.run_id}?`,
+      `Cancel Syndra run ${run.run_id}?`,
       { modal: true },
       "Cancel Run"
     );
@@ -1079,7 +1079,7 @@ export class CommandController implements vscode.Disposable {
     }
     this.cancellationsInFlight.add(runId);
     this.output.appendLine(`[${runId}] Cancelling...`);
-    this.status.text = "$(sync~spin) AgentBus cancelling";
+    this.status.text = "$(sync~spin) Syndra cancelling";
     try {
       const response = await (await this.client()).cancel(runId, reason || undefined);
       this.store.updateCancellation(
@@ -1124,7 +1124,7 @@ export class CommandController implements vscode.Disposable {
   }
 
   private async showToolInvocation(raw?: unknown): Promise<void> {
-    const item = raw as AgentBusItem | undefined;
+    const item = raw as SyndraItem | undefined;
     let invocation = item?.value as ToolInvocationSummary | undefined;
     if (!invocation) {
       const run = await this.chooseRun();
@@ -1146,7 +1146,7 @@ export class CommandController implements vscode.Disposable {
   }
 
   private async cancelToolInvocation(raw?: unknown): Promise<void> {
-    const item = raw as AgentBusItem | undefined;
+    const item = raw as SyndraItem | undefined;
     let invocation = item?.value as ToolInvocationSummary | undefined;
     if (!invocation) {
       const run = await this.chooseRun();
@@ -1185,7 +1185,7 @@ export class CommandController implements vscode.Disposable {
     this.output.appendLine(
       `[${invocation.run_id}] Cancelling through tool ${invocation.invocation_id}...`
     );
-    this.status.text = "$(sync~spin) AgentBus cancelling";
+    this.status.text = "$(sync~spin) Syndra cancelling";
     try {
       const response = await (await this.client()).cancelToolInvocation(
         invocation.run_id,
@@ -1213,7 +1213,7 @@ export class CommandController implements vscode.Disposable {
   }
 
   private async openToolArtifact(raw?: unknown): Promise<void> {
-    const item = raw as AgentBusItem | undefined;
+    const item = raw as SyndraItem | undefined;
     let invocation = item?.value as ToolInvocationSummary | undefined;
     if (!invocation) {
       const run = await this.chooseRun();
@@ -1273,7 +1273,7 @@ export class CommandController implements vscode.Disposable {
     const response = await (await this.client()).tools();
     this.refreshViews();
     void vscode.window.showInformationMessage(
-      `AgentBus loaded ${response.total} managed tool descriptor(s).`
+      `Syndra loaded ${response.total} managed tool descriptor(s).`
     );
   }
 
@@ -1313,7 +1313,7 @@ export class CommandController implements vscode.Disposable {
   private async chooseMcpServer(
     raw?: unknown
   ): Promise<McpServerSummary | undefined> {
-    const item = raw as AgentBusItem | undefined;
+    const item = raw as SyndraItem | undefined;
     const selected = item?.value as McpServerSummary | undefined;
     if (selected) return selected;
     const response = await (await this.client()).mcpServers();
@@ -1332,7 +1332,7 @@ export class CommandController implements vscode.Disposable {
       "vscode.diff",
       changeUri({ runId, path, revision: "before" }),
       changeUri({ runId, path, revision: "after" }),
-      `${path} (AgentBus)`
+      `${path} (Syndra)`
     );
   }
 
@@ -1340,7 +1340,7 @@ export class CommandController implements vscode.Disposable {
     if (decision === "approve" && !(await ensureWorkspaceTrust("approval"))) {
       return;
     }
-    const item = raw as AgentBusItem | undefined;
+    const item = raw as SyndraItem | undefined;
     let approval = item?.value as ApprovalSummary | undefined;
     if (!approval) {
       const run = await this.chooseRun();
@@ -1419,7 +1419,7 @@ export class CommandController implements vscode.Disposable {
   private async stopDaemon(): Promise<void> {
     this.stream?.stop();
     await this.daemon.stop();
-    this.status.text = "$(debug-disconnect) AgentBus offline";
+    this.status.text = "$(debug-disconnect) Syndra offline";
   }
 }
 

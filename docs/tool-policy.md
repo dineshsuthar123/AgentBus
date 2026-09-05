@@ -1,6 +1,6 @@
 # Tool Capability Policy
 
-AgentBus authorizes each managed invocation from explicit capabilities and
+Syndra authorizes each managed invocation from explicit capabilities and
 concrete resource scopes. Model output proposes a tool call; it does not grant
 authority. The runtime derives the required capabilities independently and the
 policy engine evaluates the frozen invocation before any implementation runs.
@@ -106,13 +106,13 @@ A tool approval request records:
 - policy rule, reason, proposed constraints, and optional expiry.
 
 The persisted grant contains a hash of the complete request. Before dispatch,
-AgentBus compares every binding field with the current invocation. A grant is
+Syndra compares every binding field with the current invocation. A grant is
 invalid if arguments, capabilities, scope, task, run, executable, worktree,
 budget, cancellation revision, idempotency identity, tool version, protocol
 version, or invocation revision changed. It cannot be reused for another task,
 another worktree, a broader path set, or a later request revision.
 
-Approvals are immutable decisions. Repeated submission of the same decision is
+Approvals are immutable decisions. Repeated delivery of the same decision is
 idempotent; a conflicting disposition or revision is rejected. Rejection keeps
 the invocation terminal and prevents dependent durable work and Git
 finalization where applicable.
@@ -142,5 +142,5 @@ The authenticated control plane exposes:
 
 Dry-run evaluation does not execute the tool or create an approval. API
 responses use hashes and bounded summaries in place of raw sensitive
-arguments. The VS Code `AgentBus: Show Tool Policy` command presents the same
+arguments. The VS Code `Syndra: Show Tool Policy` command presents the same
 safe rule information.

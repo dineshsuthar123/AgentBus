@@ -1,9 +1,9 @@
 import * as vscode from "vscode";
-import type { AgentBusClient } from "./apiClient";
+import type { SyndraClient } from "./apiClient";
 import { formatSpanDocument } from "./tracePresentation";
 import { isSafeControlId } from "./toolPresentation";
 
-export type TraceClientProvider = () => Promise<AgentBusClient>;
+export type TraceClientProvider = () => Promise<SyndraClient>;
 
 export interface SpanDocumentIdentity {
   runId: string;
@@ -12,7 +12,7 @@ export interface SpanDocumentIdentity {
 
 export function spanUri(runId: string, spanId: string): vscode.Uri {
   if (!isSafeControlId(runId) || !isSafeControlId(spanId)) {
-    throw new Error("AgentBus span document requires safe identifiers.");
+    throw new Error("Syndra span document requires safe identifiers.");
   }
   return vscode.Uri.from({
     scheme: "agentbus-span",
@@ -33,7 +33,7 @@ export function parseSpanUri(uri: vscode.Uri): SpanDocumentIdentity {
     !isSafeControlId(runId) ||
     !isSafeControlId(spanId)
   ) {
-    throw new Error("Unsafe AgentBus span document URI.");
+    throw new Error("Unsafe Syndra span document URI.");
   }
   return { runId, spanId };
 }

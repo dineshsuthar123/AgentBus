@@ -27,7 +27,7 @@ export function formatProvenanceReport(
     {}
   );
   const lines = [
-    `# AgentBus Provenance ${markdown(provenance.run_id)}`,
+    `# Syndra Provenance ${markdown(provenance.run_id)}`,
     "",
     "## Integrity",
     "",
@@ -84,7 +84,7 @@ export function formatProvenanceReport(
     "## Runtime",
     "",
     table([
-      ["AgentBus", provenance.agentbus_version],
+      ["Syndra", provenance.agentbus_version],
       ["Operating system", provenance.operating_system],
       ["Python", provenance.python_version],
       ["Node", provenance.node_version ?? "not recorded"],

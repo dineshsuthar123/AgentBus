@@ -12,7 +12,7 @@
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "paths": {
-      "@agentbus/protocol": ["../extensions/vscode/src/generated/protocol.ts"]
+      "@syndra/protocol": ["../extensions/vscode/src/generated/protocol.ts"]
     },
     "resolveJsonModule": true,
     "isolatedModules": true,

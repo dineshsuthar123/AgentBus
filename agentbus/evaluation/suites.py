@@ -371,7 +371,7 @@ def core_offline_suite() -> EvaluationSuite:
     ]
     return EvaluationSuite(
         suite_id="core-offline",
-        title="AgentBus deterministic offline core",
+        title="Syndra deterministic offline core",
         description="Bounded local evaluation of correctness, scope, safety, recovery, and parallel integration.",
         cases=cases,
         default_variant="durable-parallel-fake",
@@ -417,7 +417,7 @@ def release_offline_suite() -> EvaluationSuite:
     return core.model_copy(
         update={
             "suite_id": "release-offline",
-            "title": "AgentBus v0.1 offline release acceptance",
+            "title": "Syndra offline release acceptance",
             "description": (
                 "Deterministic package/CLI preflight plus all core feature, scope, "
                 "safety, recovery, approval, parallel, and conflict cases."
@@ -433,7 +433,7 @@ def release_azure_smoke_suite() -> EvaluationSuite:
     smoke = azure_smoke_suite().cases[0].model_copy(
         update={
             "case_id": "release-azure-calculator",
-            "title": "AgentBus release Azure calculator smoke",
+            "title": "Syndra release Azure calculator smoke",
             "timeout_seconds": 180,
             "metadata": {
                 "limits": {
@@ -449,7 +449,7 @@ def release_azure_smoke_suite() -> EvaluationSuite:
     )
     return EvaluationSuite(
         suite_id="release-azure-smoke",
-        title="Opt-in AgentBus release Azure smoke",
+        title="Opt-in Syndra release Azure smoke",
         description=(
             "One bounded local fixture. Fallback, pushes, and PR creation remain disabled."
         ),

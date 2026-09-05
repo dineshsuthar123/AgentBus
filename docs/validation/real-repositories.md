@@ -1,6 +1,6 @@
 # Real local repository validation
 
-AgentBus can validate an arbitrary repository that already exists on the local
+Syndra can validate an arbitrary repository that already exists on the local
 machine. This workflow is providerless: it inventories bounded source files,
 builds a disposable repository index, and runs declared search, context,
 impact, or task-context scenarios without executing repository setup scripts.
@@ -8,23 +8,23 @@ impact, or task-context scenarios without executing repository setup scripts.
 ## Authorization boundary
 
 Only validate a repository when its owner has authorized the inspection. The
-operator supplies the path explicitly; AgentBus does not discover sibling
+operator supplies the path explicitly; Syndra does not discover sibling
 repositories, search user profile directories, or infer consent from filesystem
 access. Validation does not grant permission to read material that policy marks
 as protected.
 
 ```console
-agentbus validate repo --path C:\work\authorized-repository --json
-agentbus validate reliability --repository C:\work\authorized-repository --json
+syndra validate repo --path C:\work\authorized-repository --json
+syndra validate reliability --repository C:\work\authorized-repository --json
 ```
 
 The path is resolved canonically. A Git workspace must resolve to its own Git
 top-level directory rather than an unintended parent repository. Source files
 are read and indexed, but repository commands, package managers, hooks, tests,
 and model providers are not invoked by `validate repo`. Index state is created
-under AgentBus-owned temporary storage, not in the supplied source tree.
+under Syndra-owned temporary storage, not in the supplied source tree.
 
-Normal AgentBus task execution is a different workflow and may edit files after
+Normal Syndra task execution is a different workflow and may edit files after
 approval and policy checks. A failed task does not automatically roll back
 filesystem edits. Always inspect changed-file reporting before committing.
 
@@ -41,7 +41,7 @@ The bundled `agentbus-v07` corpus contains three enabled generated fixtures:
 Run those fixtures entirely offline:
 
 ```console
-agentbus validate corpus --offline --json
+syndra validate corpus --offline --json
 ```
 
 The corpus also describes ten disabled public repositories. They are not
@@ -99,7 +99,7 @@ generated fixtures do not predict behavior for every real repository.
   reflection, or runtime dependency relationship.
 - Validation does not execute repository tests or prove that a proposed change
   is correct.
-- Local filesystem authorization is an operator responsibility; AgentBus is
+- Local filesystem authorization is an operator responsibility; Syndra is
   not a data-classification system.
 - The current validation process is not a kernel sandbox and does not replace a
   VM, container, restricted OS account, or network policy.

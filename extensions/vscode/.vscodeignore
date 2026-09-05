@@ -1,4 +1,5 @@
 .github/**
+.syndra/**
 .agentbus/**
 .venv/**
 .vscode-test/**
@@ -16,7 +17,7 @@ out/test/**
 tsconfig.json
 eslint.config.mjs
 package-lock.json
-agentbus-vscode.vsix
+syndra-vscode.vsix
 *.vsix
 *.log
 *.db
@@ -28,4 +29,5 @@ agentbus-vscode.vsix
 **/traces/**
 **/worktrees/**
 **/*profile*/**
+**/syndra-support-*.zip
 **/agentbus-support-*.zip

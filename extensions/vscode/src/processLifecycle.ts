@@ -16,7 +16,7 @@ export function waitForChildExit(
     };
     const timer = setTimeout(() => {
       cleanup();
-      reject(new Error("Timed out waiting for AgentBus daemon process to exit."));
+      reject(new Error("Timed out waiting for Syndra daemon process to exit."));
     }, timeoutMilliseconds);
     const cleanup = (): void => {
       clearTimeout(timer);

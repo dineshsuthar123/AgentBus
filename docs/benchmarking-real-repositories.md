@@ -16,18 +16,18 @@ commit identifiers.
 
 1. The user selects `real-repos`, a live variant, `--live`, and
    `--allow-repository-download` explicitly.
-2. AgentBus creates a marker-owned temporary session and clones with
+2. Syndra creates a marker-owned temporary session and clones with
    `shell=False`, disabled terminal prompting, and a bounded timeout.
 3. It verifies `origin` and the exact checked-out commit.
 4. The immutable source working tree is copied without its `.git` directory to
    a fresh disposable repository; remotes and hooks are not inherited, and
    agents never edit the source clone directly.
-5. Durable execution uses AgentBus worktrees. Push and PR creation are disabled.
+5. Durable execution uses Syndra worktrees. Push and PR creation are disabled.
 6. Request, token, retry, and wall-clock limits are capped by the manifest.
 7. Source clones are removed only after ownership-marker validation. Failed
    execution fixtures are retained only with `--preserve-fixtures`.
 
-Git subprocesses ignore system/global configuration, use an AgentBus-owned
+Git subprocesses ignore system/global configuration, use an Syndra-owned
 empty hooks directory, disable terminal prompting, and receive a sanitized
 environment without common credential-bearing variables. Verifier commands use
 the same credential filtering. These controls reduce exposure but are not a
@@ -41,7 +41,7 @@ an additional product/security decision.
 ## Command
 
 ```powershell
-agentbus-eval run --suite real-repos --variant durable-azure --repeat 3 --live --allow-repository-download --max-requests 16 --max-tokens 4000 --timeout-seconds 300
+syndra-eval run --suite real-repos --variant durable-azure --repeat 3 --live --allow-repository-download --max-requests 16 --max-tokens 4000 --timeout-seconds 300
 ```
 
 This command performs real Git and provider network access and may incur cost.

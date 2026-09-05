@@ -100,7 +100,7 @@ export function RunPage({ query = EMPTY_QUERY, runId }: { query?: URLSearchParam
       await client.decideApproval(runId, approval.approval_id, approval.revision ?? 1, decision, reason);
       if (decision === "approve") await client.resume(runId);
       await refresh();
-      setAnnouncement(decision === "approve" ? "Approval confirmed by AgentBus. Execution may continue." : "Rejection confirmed by AgentBus. The run remains stopped.");
+      setAnnouncement(decision === "approve" ? "Approval confirmed by Syndra. Execution may continue." : "Rejection confirmed by Syndra. The run remains stopped.");
     } catch (reasonValue) {
       setError(reasonValue instanceof Error ? reasonValue.message : "The approval decision was not accepted.");
     } finally {
@@ -118,7 +118,7 @@ export function RunPage({ query = EMPTY_QUERY, runId }: { query?: URLSearchParam
 
   async function cancel() {
     if (!client) return;
-    const reason = window.prompt("Why should this durable run be cancelled?", "Cancelled from AgentBus Studio");
+    const reason = window.prompt("Why should this durable run be cancelled?", "Cancelled from Syndra Studio");
     if (reason === null || !reason.trim()) return;
     setBusy("cancel");
     try { await client.cancel(runId, reason.trim()); await refresh(); }
@@ -173,8 +173,8 @@ export function RunPage({ query = EMPTY_QUERY, runId }: { query?: URLSearchParam
 
   useEffect(() => {
     const onCommand = (event: Event) => handleCommand(String((event as CustomEvent).detail ?? ""));
-    window.addEventListener("agentbus:studio-command", onCommand);
-    return () => window.removeEventListener("agentbus:studio-command", onCommand);
+    window.addEventListener("syndra:studio-command", onCommand);
+    return () => window.removeEventListener("syndra:studio-command", onCommand);
   }, []);
 
   const handleShortcut = useEffectEvent((event: KeyboardEvent) => {

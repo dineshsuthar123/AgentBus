@@ -21,6 +21,7 @@ from agentbus.intelligence.version import INTELLIGENCE_SCHEMA_VERSION
 from agentbus.product.compatibility import (
     PYTHON_COMPATIBILITY_RANGE,
     compatibility_manifest,
+    extension_package_metadata,
 )
 from agentbus.release_packaging import (
     audit_distributions,
@@ -122,7 +123,7 @@ def run_release_check(
         _security_gate(repository),
     ]
     gates.extend(_git_gates(repository, execute))
-    with tempfile.TemporaryDirectory(prefix="agentbus-release-check-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="syndra-release-check-") as temporary:
         temporary_root = Path(temporary).resolve()
         for spec in release_check_commands(mode, repository, temporary_root):
             gates.append(_execute_gate(spec, execute))
@@ -149,7 +150,7 @@ def release_check_commands(
         CommandSpec(
             "python-compile",
             "Python bytecode compilation",
-            (python, "-m", "compileall", "agentbus"),
+            (python, "-m", "compileall", "syndra", "agentbus"),
             root,
             180,
         ),
@@ -166,7 +167,7 @@ def release_check_commands(
             (
                 python,
                 "-m",
-                "agentbus.cli",
+                "syndra.cli",
                 "benchmark",
                 "startup",
                 "--iterations",
@@ -197,21 +198,21 @@ def release_check_commands(
             CommandSpec(
                 "control-acceptance",
                 "Control-plane acceptance",
-                (python, "-m", "agentbus.control.acceptance"),
+                (python, "-m", "syndra.control.acceptance"),
                 root,
                 300,
             ),
             CommandSpec(
                 "product-acceptance",
                 "Clean-install product acceptance",
-                (python, "-m", "agentbus.product_acceptance"),
+                (python, "-m", "syndra.product_acceptance"),
                 root,
                 900,
             ),
             CommandSpec(
                 "beta-acceptance",
                 "Public beta acceptance",
-                (python, "-m", "agentbus.beta_acceptance"),
+                (python, "-m", "syndra.beta_acceptance"),
                 root,
                 1_200,
             ),
@@ -221,7 +222,7 @@ def release_check_commands(
                 (
                     python,
                     "-m",
-                    "agentbus.eval",
+                    "syndra.eval",
                     "run",
                     "--suite",
                     "release-offline",
@@ -237,7 +238,7 @@ def release_check_commands(
                 (
                     python,
                     "-m",
-                    "agentbus.eval",
+                    "syndra.eval",
                     "run",
                     "--suite",
                     "repository-intelligence",
@@ -253,7 +254,7 @@ def release_check_commands(
                 (
                     python,
                     "-m",
-                    "agentbus.cli",
+                    "syndra.cli",
                     "soak",
                     "--duration",
                     "60",
@@ -272,7 +273,7 @@ def release_check_commands(
                 (
                     python,
                     "-m",
-                    "agentbus.cli",
+                    "syndra.cli",
                     "benchmark",
                     "all",
                     "--files",
@@ -327,7 +328,7 @@ def release_check_commands(
                     "package",
                     "--no-dependencies",
                     "-o",
-                    str(temporary_root / "agentbus-vscode.vsix"),
+                    str(temporary_root / "syndra-vscode.vsix"),
                 ),
                 extension,
                 300,
@@ -338,7 +339,7 @@ def release_check_commands(
                 (
                     node,
                     "scripts/audit-vsix.mjs",
-                    str(temporary_root / "agentbus-vscode.vsix"),
+                    str(temporary_root / "syndra-vscode.vsix"),
                 ),
                 extension,
                 120,
@@ -356,13 +357,15 @@ def _version_gate(root: Path) -> ReleaseGate:
                 encoding="utf-8"
             )
         )
-        compatibility = package["agentbusCompatibility"]
+        compatibility = extension_package_metadata(
+            root / "extensions" / "vscode" / "package.json"
+        )
         current = compatibility_manifest()
         valid = (
             package["version"] == "0.6.0-beta.1"
             and compatibility["python"] == PYTHON_COMPATIBILITY_RANGE
-            and compatibility["controlProtocol"] == current.control_protocol
-            and compatibility["stateSchema"] == current.state_schema
+            and compatibility["control_protocol"] == current.control_protocol
+            and compatibility["state_schema"] == current.state_schema
         )
     except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
         return _gate_failure("version-consistency", "Version consistency", exc, started)
@@ -634,8 +637,8 @@ def _offline_environment() -> dict[str, str]:
     }
     environment.update(
         {
-            "AGENTBUS_PROVIDER": "deterministic",
-            "AGENTBUS_RELEASE_CHECK": "1",
+            "SYNDRA_PROVIDER": "deterministic",
+            "SYNDRA_RELEASE_CHECK": "1",
             "ALL_PROXY": "http://127.0.0.1:9",
             "HTTP_PROXY": "http://127.0.0.1:9",
             "HTTPS_PROXY": "http://127.0.0.1:9",
@@ -688,8 +691,8 @@ def _tracked_markdown(root: Path) -> tuple[Path, ...]:
 def _distribution_paths(directory: Path) -> tuple[Path, ...]:
     return tuple(
         [
-            *sorted(directory.glob(f"agentbus-{__version__}*.whl")),
-            *sorted(directory.glob(f"agentbus-{__version__}*.tar.gz")),
+            *sorted(directory.glob(f"syndra-{__version__}*.whl")),
+            *sorted(directory.glob(f"syndra-{__version__}*.tar.gz")),
         ]
     )
 

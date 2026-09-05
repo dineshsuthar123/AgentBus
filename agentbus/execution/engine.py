@@ -808,7 +808,7 @@ class DurableExecutionEngine:
 
         thread = threading.Thread(
             target=heartbeat,
-            name=f"agentbus-resume-{lease.lease_id[:8]}",
+            name=f"syndra-resume-{lease.lease_id[:8]}",
             daemon=True,
         )
         thread.start()
@@ -1941,7 +1941,7 @@ class DurableExecutionEngine:
             cleanup_recommendations=(
                 [
                     "Inspect retained worktrees, then use the explicit cleanup command "
-                    "for clean AgentBus-owned paths."
+                    "for clean Syndra-owned paths."
                 ]
                 if retained
                 else []

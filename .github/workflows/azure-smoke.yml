@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: agentbus-azure-release-smoke
+  group: syndra-azure-release-smoke
   cancel-in-progress: false
 
 jobs:
@@ -15,8 +15,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      AGENTBUS_PROVIDER: azure
-      AGENTBUS_ENABLE_PROVIDER_FALLBACK: "false"
+      SYNDRA_PROVIDER: azure
+      SYNDRA_ENABLE_PROVIDER_FALLBACK: "false"
       AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
       AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
       AZURE_OPENAI_DEFAULT_DEPLOYMENT: ${{ secrets.AZURE_OPENAI_DEFAULT_DEPLOYMENT }}
@@ -34,7 +34,7 @@ jobs:
         run: python -m pip install ".[azure]"
       - name: Run bounded live acceptance twice
         run: >-
-          agentbus-eval run
+          syndra-eval run
           --suite release-azure-smoke
           --variant durable-azure
           --live

@@ -1,6 +1,6 @@
 # Managed Tool Runtime
 
-AgentBus v0.3 routes model-requested tools through one managed runtime. The
+Syndra v0.3 routes model-requested tools through one managed runtime. The
 runtime is a defense-in-depth boundary around local tools, not a kernel-grade
 sandbox and not a guarantee that generated code is harmless.
 
@@ -10,7 +10,7 @@ Every managed call follows the same sequence:
 
 1. The model names a registered tool, supplies bounded JSON arguments, and
    declares the capability names it expects.
-2. AgentBus resolves the versioned descriptor and validates the argument
+2. Syndra resolves the versioned descriptor and validates the argument
    schema locally.
 3. The runtime independently derives the exact capabilities and scopes from
    the descriptor, arguments, workspace, and assigned worktree. A model claim
@@ -82,7 +82,7 @@ append-only audit entry. Events contain safe identifiers and summaries, not
 raw arguments, prompts, inherited environments, bearer tokens, provider keys,
 or unrestricted output.
 
-At restart, AgentBus restores persisted budget reservations and reconciles
+At restart, Syndra restores persisted budget reservations and reconciles
 non-terminal invocations. A process from a previous daemon cannot be adopted
 safely, so the stale record receives a terminal restart-cancelled or
 restart-interrupted result and active accounting is abandoned without
@@ -117,7 +117,7 @@ expand existing reservations. Output readers continue draining a child after
 the retained limit so a full pipe cannot deadlock the process.
 
 Every reported process limit includes `requested`, `supported`, `enforced`,
-and `observed` fields. AgentBus reports unsupported memory, CPU, or child
+and `observed` fields. Syndra reports unsupported memory, CPU, or child
 limits as unsupported instead of treating measurement as enforcement. Platform
 details are in [Sandbox Security](sandbox-security.md).
 
@@ -141,5 +141,5 @@ Output and source diffs are bounded and secret-shaped values are redacted.
 
 Failed, rejected, cancelled, and timed-out runs do not reset, clean, delete, or
 roll back workspace files. Reported files remain available for inspection.
-Cleanup is a separate explicit workflow and must validate AgentBus ownership;
+Cleanup is a separate explicit workflow and must validate Syndra ownership;
 the runtime never performs destructive rollback automatically.

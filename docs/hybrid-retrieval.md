@@ -1,6 +1,6 @@
 # Hybrid Retrieval
 
-AgentBus combines deterministic lexical, symbol, dependency, project,
+Syndra combines deterministic lexical, symbol, dependency, project,
 architecture, test, recent-change, and optional local semantic evidence. Every
 result reports score components, rank, source hash, index state, and a bounded
 explanation. Equal scores use stable identities as tie breakers.
@@ -38,7 +38,7 @@ as uncertainty or truncation. The system does not infer a runtime call graph.
 
 Semantic retrieval is disabled unless application code explicitly supplies a
 local `SemanticEmbeddingProvider`. The provider descriptor must declare a stable
-model fingerprint and that source is not sent off-device. AgentBus rejects a
+model fingerprint and that source is not sent off-device. Syndra rejects a
 provider that declares off-device source transfer.
 
 The semantic layer:

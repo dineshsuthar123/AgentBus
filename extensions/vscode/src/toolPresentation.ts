@@ -47,7 +47,7 @@ export function toolCancellationDetail(
   const runId = singleLine(invocation.run_id);
   const toolName = singleLine(invocation.tool_name);
   return [
-    `Tool cancellation is run-scoped in AgentBus.`,
+    `Tool cancellation is run-scoped in Syndra.`,
     `Cancelling ${toolName} requests cancellation for owning run ${runId}.`,
     `Scheduling will stop and other active managed work in that run may also be terminated.`
   ].join(" ");

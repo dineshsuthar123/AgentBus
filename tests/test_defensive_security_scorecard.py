@@ -63,7 +63,7 @@ def test_selected_real_vsix_is_included_in_scorecard_evidence(
 ) -> None:
     repository = tmp_path / "repository"
     repository.mkdir()
-    vsix = tmp_path / "agentbus-vscode.vsix"
+    vsix = tmp_path / "syndra-vscode.vsix"
     _write_selected_vsix(vsix)
 
     scorecard = run_defensive_security_validation(
@@ -185,8 +185,8 @@ def _write_selected_vsix(path: Path) -> None:
         ),
         "extension/LICENSE.txt": (extension / "LICENSE").read_bytes(),
         "extension/readme.md": (extension / "README.md").read_bytes(),
-        "extension/media/agentbus.svg": (
-            extension / "media" / "agentbus.svg"
+        "extension/media/syndra.svg": (
+            extension / "media" / "syndra.svg"
         ).read_bytes(),
         "extension/out/extension.js": b"exports.activate = () => {};\n",
         "extension/package.json": package_bytes,

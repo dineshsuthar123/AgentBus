@@ -169,7 +169,7 @@ def test_pr_body_builder_includes_required_sections():
     assert "Add calculator tests" in body
     assert "Create calculator tests" in body
     assert "`calculator.py`" in body
-    assert "AgentBus does not force push" in body
+    assert "Syndra does not force push" in body
 
 
 def test_github_client_handles_missing_gh_cli(monkeypatch, tmp_path):

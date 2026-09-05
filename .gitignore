@@ -22,6 +22,7 @@ env/
 
 # Logs / local runs
 runs/
+.syndra/
 .agentbus/
 repository-index.sqlite3*
 *.log

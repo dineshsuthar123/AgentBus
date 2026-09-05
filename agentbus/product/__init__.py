@@ -1,4 +1,4 @@
-"""User-facing AgentBus product services."""
+"""User-facing Syndra product services."""
 
 from agentbus.product.errors import (
     ProductError,

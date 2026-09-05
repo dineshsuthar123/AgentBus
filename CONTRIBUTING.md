@@ -1,6 +1,6 @@
-# Contributing to AgentBus
+# Contributing to Syndra
 
-AgentBus development is offline-first. Contributors do not need Azure, Ollama,
+Syndra development is offline-first. Contributors do not need Azure, Ollama,
 credentials, public MCP servers, or access to a private repository.
 
 ## Development setup
@@ -27,6 +27,11 @@ other remote services after dependencies are installed.
 
 ## Architecture map
 
+The public package and entry points are `syndra`. For the 0.6 compatibility
+line, the implementation remains in `agentbus/` behind the thin `syndra/`
+facade; do not duplicate those code trees. A later implementation-package move
+requires its own migration proof.
+
 - `agentbus/agents` contains planner, coder, and reviewer boundaries.
 - `agentbus/runtime` composes workflows, verification, context, and finalization.
 - `agentbus/execution` contains durable state, scheduling, workers, leases, and
@@ -50,7 +55,7 @@ Before every Python commit:
 
 ```powershell
 .venv\Scripts\python.exe -m pytest <relevant-test-files> -vv
-.venv\Scripts\python.exe -m compileall agentbus
+.venv\Scripts\python.exe -m compileall syndra agentbus
 git diff --check
 ```
 
@@ -58,8 +63,8 @@ Before final review:
 
 ```powershell
 .venv\Scripts\python.exe -m pytest
-.venv\Scripts\python.exe -m agentbus.eval run --suite core-offline --variant durable-parallel-fake
-.venv\Scripts\python.exe -m agentbus.control.acceptance
+.venv\Scripts\python.exe -m syndra.eval run --suite core-offline --variant durable-parallel-fake
+.venv\Scripts\python.exe -m syndra.control.acceptance
 ```
 
 Useful focused areas include `tests/test_workspace_scope.py`,
@@ -110,7 +115,7 @@ Control models are the source of generated JSON Schema and TypeScript types.
 After a compatible change:
 
 ```powershell
-.venv\Scripts\python.exe -m agentbus.cli control-schema export
+.venv\Scripts\python.exe -m syndra.cli control-schema export
 cd extensions\vscode
 npm run protocol:check
 ```

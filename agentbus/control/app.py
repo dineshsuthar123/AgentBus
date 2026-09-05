@@ -16,7 +16,7 @@ try:
     from starlette.exceptions import HTTPException as StarletteHTTPException
 except ImportError as exc:  # pragma: no cover - exercised by the CLI dependency test
     raise RuntimeError(
-        'The control plane requires optional dependencies. Install "agentbus[ide]".'
+        'The control plane requires optional dependencies. Install "syndra[ide]".'
     ) from exc
 
 from agentbus import __version__
@@ -168,7 +168,7 @@ def create_app(
             supervisor.shutdown(wait=True)
 
     app = FastAPI(
-        title="AgentBus Control Protocol",
+        title="Syndra Control Protocol",
         version="1.0",
         docs_url=None,
         redoc_url=None,

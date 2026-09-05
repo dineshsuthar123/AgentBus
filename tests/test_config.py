@@ -1,6 +1,8 @@
 import pytest
 
 from agentbus.config import AgentBusConfig
+from agentbus.identity import LegacyConfigurationWarning
+from syndra.config import SyndraConfig
 from agentbus.tools.protocol import ToolResourceBudget
 
 
@@ -40,6 +42,11 @@ ENV_VARS = [
     "AZURE_OPENAI_TIMEOUT_SECONDS",
     "AZURE_OPENAI_MAX_RETRIES",
 ]
+ENV_VARS += [
+    name.replace("AGENTBUS_", "SYNDRA_", 1)
+    for name in ENV_VARS
+    if name.startswith("AGENTBUS_")
+]
 
 
 def test_default_config(monkeypatch):
@@ -52,9 +59,9 @@ def test_default_config(monkeypatch):
     assert config.ollama_url == "http://localhost:11434/api/generate"
     assert config.workspace_dir == "workspace"
     assert config.runs_dir == "runs"
-    assert config.state_database_path == config.workspace_path / ".agentbus" / "state.db"
-    assert config.trace_store_path == config.workspace_path / ".agentbus" / "trace-objects"
-    assert config.runs_path == config.workspace_path / ".agentbus" / "runs"
+    assert config.state_database_path == config.workspace_path / ".syndra" / "state.db"
+    assert config.trace_store_path == config.workspace_path / ".syndra" / "trace-objects"
+    assert config.runs_path == config.workspace_path / ".syndra" / "runs"
     assert config.max_steps == 12
     assert config.command_timeout_seconds == 90
     assert config.max_history_chars == 25_000
@@ -108,6 +115,16 @@ def test_env_overrides(monkeypatch):
     assert config.max_steps == 3
     assert config.command_timeout_seconds == 4
     assert config.max_history_chars == 500
+
+
+def test_syndra_environment_precedes_conflicting_legacy_value(monkeypatch):
+    monkeypatch.setenv("SYNDRA_PROVIDER", "deterministic")
+    monkeypatch.setenv("AGENTBUS_PROVIDER", "ollama")
+
+    with pytest.warns(LegacyConfigurationWarning, match="takes precedence"):
+        config = SyndraConfig.from_env()
+
+    assert config.provider_name == "deterministic"
 
 
 def test_parallel_environment_configuration_and_canonical_worktree_root(
@@ -250,8 +267,10 @@ def test_invalid_numeric_ranges_are_rejected(monkeypatch, name, value):
 
 
 def test_invalid_provider_and_unsafe_fallback_policy_are_rejected(monkeypatch):
+    monkeypatch.delenv("SYNDRA_PROVIDER", raising=False)
+    monkeypatch.delenv("SYNDRA_ENABLE_PROVIDER_FALLBACK", raising=False)
     monkeypatch.setenv("AGENTBUS_PROVIDER", "unknown")
-    with pytest.raises(ValueError, match="AGENTBUS_PROVIDER"):
+    with pytest.raises(ValueError, match="SYNDRA_PROVIDER"):
         AgentBusConfig.from_env()
 
     monkeypatch.setenv("AGENTBUS_PROVIDER", "ollama")

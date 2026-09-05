@@ -194,6 +194,7 @@ _SECRET_NAMES = {
 }
 _SECRET_SUFFIXES = {".key", ".pem", ".p12", ".pfx", ".jks", ".keystore"}
 _FORBIDDEN_PARTS = {
+    ".syndra",
     ".agentbus",
     ".aws",
     ".azure",
@@ -1418,7 +1419,7 @@ class ControlQueryService:
         archive_sha256 = hashlib.sha256(archive_bytes).hexdigest()
         try:
             with tempfile.TemporaryDirectory(
-                prefix="agentbus-trace-import-"
+                prefix="syndra-trace-import-"
             ) as temporary:
                 source = Path(temporary) / "upload.agentbus-trace"
                 source.write_bytes(archive_bytes)
@@ -1450,7 +1451,7 @@ class ControlQueryService:
     ) -> TraceArchiveExportResponse:
         try:
             with tempfile.TemporaryDirectory(
-                prefix="agentbus-trace-export-"
+                prefix="syndra-trace-export-"
             ) as temporary:
                 destination = Path(temporary) / "trace.agentbus-trace"
                 manifest = self._trace_replay().export_trace(
@@ -1488,7 +1489,7 @@ class ControlQueryService:
     ) -> RegressionFixtureCaptureResponse:
         try:
             with tempfile.TemporaryDirectory(
-                prefix="agentbus-regression-fixture-"
+                prefix="syndra-regression-fixture-"
             ) as temporary:
                 destination = Path(temporary) / "fixture.agentbus-trace"
                 captured = self._trace_replay().capture_fixture(

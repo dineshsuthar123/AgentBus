@@ -34,7 +34,7 @@ def write_validation_report(
 
 def render_validation_report(report: ValidationReport) -> str:
     lines = [
-        f"AgentBus repository validation: {report.status.value}",
+        f"Syndra repository validation: {report.status.value}",
         f"Repositories: {len(report.runs)}; "
         f"network used: {'yes' if report.network_used else 'no'}",
     ]
@@ -59,7 +59,7 @@ def render_reliability_scorecard(scorecard: ReliabilityScorecard) -> str:
     memory = scorecard.memory
     latency = scorecard.latency
     lines = [
-        f"AgentBus reliability validation: {scorecard.classification.value}",
+        f"Syndra reliability validation: {scorecard.classification.value}",
         f"Scenarios: {scorecard.scenarios_run}; "
         f"fixtures={len(scorecard.repository_fixtures)} "
         f"real_local={len(scorecard.real_local_repositories)}; network used: no",
