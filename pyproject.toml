@@ -68,7 +68,7 @@ Issues = "https://github.com/dineshsuthar123/Syndra/issues"
 Repository = "https://github.com/dineshsuthar123/Syndra"
 
 [tool.setuptools.dynamic]
-version = { attr = "syndra.__version__" }
+version = { attr = "agentbus._version.__version__" }
 
 [tool.setuptools.packages.find]
 include = ["syndra*", "agentbus*"]

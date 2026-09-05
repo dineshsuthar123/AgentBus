@@ -1,3 +1,4 @@
+import ast
 import tomllib
 from pathlib import Path
 
@@ -18,7 +19,7 @@ def test_pyproject_metadata_version_and_entry_points_are_release_ready():
     assert project["name"] == "syndra"
     assert project["dynamic"] == ["version"]
     assert metadata["tool"]["setuptools"]["dynamic"]["version"] == {
-        "attr": "syndra.__version__"
+        "attr": "agentbus._version.__version__"
     }
     assert project["scripts"] == {
         "syndra": "syndra.cli:main",
@@ -32,6 +33,23 @@ def test_pyproject_metadata_version_and_entry_points_are_release_ready():
     assert "pytest>=8" in project["optional-dependencies"]["dev"]
     assert "setuptools>=69" in project["optional-dependencies"]["dev"]
     assert project["requires-python"] == ">=3.11"
+
+
+def test_dynamic_version_source_is_safe_for_isolated_build_metadata():
+    metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    target = metadata["tool"]["setuptools"]["dynamic"]["version"]["attr"]
+    module_name, attribute = target.rsplit(".", 1)
+    module_path = ROOT.joinpath(*module_name.split(".")).with_suffix(".py")
+    tree = ast.parse(module_path.read_text(encoding="utf-8"))
+
+    assert not any(isinstance(node, (ast.Import, ast.ImportFrom)) for node in tree.body)
+    assignment = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(name, ast.Name) and name.id == attribute for name in node.targets)
+    )
+    assert ast.literal_eval(assignment.value) == __version__
 
 
 def test_dependency_extras_keep_product_and_development_concerns_separate():
