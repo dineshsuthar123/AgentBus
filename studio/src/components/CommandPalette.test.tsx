@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { RunSummary } from "../api/types";
 import { CommandPalette } from "./CommandPalette";
 
@@ -17,6 +17,26 @@ const run: RunSummary = {
 };
 
 describe("Studio command palette", () => {
+  it("establishes modal focus before paint without a delayed frame stealing Tab navigation", () => {
+    const frame = vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 1);
+    try {
+      render(<><button>Origin control</button><CommandPalette currentRun={run} /></>);
+      const origin = screen.getByRole("button", { name: "Origin control" });
+      origin.focus();
+      fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+      const input = screen.getByRole("combobox", { name: "Search Studio commands" });
+      expect(input).toHaveFocus();
+      fireEvent.keyDown(input, { key: "Tab", shiftKey: true });
+      const last = screen.getByRole("option", { name: "Runtime diagnostics" });
+      expect(last).toHaveFocus();
+      expect(frame).not.toHaveBeenCalled();
+      fireEvent.keyDown(last, { key: "Escape" });
+      expect(origin).toHaveFocus();
+    } finally {
+      frame.mockRestore();
+    }
+  });
+
   it("opens keyboard-first, filters safe navigation, and restores focus", async () => {
     const user = userEvent.setup();
     render(<><button type="button">Origin control</button><CommandPalette currentRun={run} /></>);

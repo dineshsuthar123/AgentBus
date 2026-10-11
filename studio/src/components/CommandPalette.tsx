@@ -1,5 +1,5 @@
 import { Activity, CheckCheck, Command, FileCode2, Fingerprint, Gauge, History, Play, Plus, Search, ShieldCheck } from "lucide-react";
-import { useEffect, useEffectEvent, useRef, useState, type ReactNode } from "react";
+import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { RunSummary } from "../api/types";
 
 interface PaletteCommand {
@@ -38,14 +38,14 @@ export function CommandPalette({ currentRun }: { currentRun?: RunSummary }) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (open) {
-      const frame = window.requestAnimationFrame(() => input.current?.focus());
       function containFocus(event: FocusEvent) {
         if (event.target instanceof Node && !dialog.current?.contains(event.target)) input.current?.focus();
       }
       document.addEventListener("focusin", containFocus);
-      return () => { window.cancelAnimationFrame(frame); document.removeEventListener("focusin", containFocus); };
+      input.current?.focus();
+      return () => { document.removeEventListener("focusin", containFocus); };
     } else {
       restoreFocus.current?.focus();
     }

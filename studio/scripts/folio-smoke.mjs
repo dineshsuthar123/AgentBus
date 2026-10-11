@@ -1,4 +1,4 @@
-import { chromium } from "@playwright/test";
+import { chromium, expect } from "@playwright/test";
 import { spawn, spawnSync } from "node:child_process";
 import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -505,21 +505,22 @@ try {
   await page.getByRole("link", { name: "Workspace", exact: true }).focus();
   await page.keyboard.press("Enter");
   await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
-  if (!await page.getByRole("heading", { name: "Workspace", exact: true }).evaluate((element) => globalThis.document.activeElement === element)) throw new Error("Workspace drawer did not receive keyboard focus");
+  await expect(page.getByRole("heading", { name: "Workspace", exact: true })).toBeFocused();
   await page.keyboard.press("Escape");
   await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor({ state: "hidden" });
-  if (!await page.getByRole("link", { name: "Workspace", exact: true }).evaluate((element) => globalThis.document.activeElement === element)) throw new Error("Workspace drawer did not restore focus to its edge");
+  await expect(page.getByRole("link", { name: "Workspace", exact: true })).toBeFocused();
   await page.keyboard.press("Control+k");
   await page.getByRole("combobox", { name: "Search Studio commands", exact: true }).waitFor();
+  await expect(page.getByRole("combobox", { name: "Search Studio commands", exact: true })).toBeFocused();
   await page.keyboard.press("Shift+Tab");
-  if (!await page.getByRole("option", { name: "Runtime diagnostics", exact: true }).evaluate((element) => globalThis.document.activeElement === element)) throw new Error("Modal command menu allowed focus to leave its controls");
+  await expect(page.getByRole("option", { name: "Runtime diagnostics", exact: true })).toBeFocused();
   await page.keyboard.press("Tab");
-  if (!await page.getByRole("combobox", { name: "Search Studio commands", exact: true }).evaluate((element) => globalThis.document.activeElement === element)) throw new Error("Modal command menu did not wrap focus");
+  await expect(page.getByRole("combobox", { name: "Search Studio commands", exact: true })).toBeFocused();
   await page.screenshot({ path: path.join(output, "commands-dark.png"), fullPage: true });
   await checkAccessibility("commands-dark");
   await page.keyboard.press("Control+k");
   await page.getByRole("dialog", { name: "Studio command palette", exact: true }).waitFor({ state: "hidden" });
-  if (!await page.getByRole("link", { name: "Workspace", exact: true }).evaluate((element) => globalThis.document.activeElement === element)) throw new Error("Keyboard command toggle lost its original focus");
+  await expect(page.getByRole("link", { name: "Workspace", exact: true })).toBeFocused();
   const deletionTarget = path.join(accepted.workspace, "delete_me.txt");
   await writeFile(deletionTarget, "deterministic deletion target\n");
   async function requestDeletion() {
