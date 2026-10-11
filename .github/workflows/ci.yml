@@ -128,7 +128,8 @@ jobs:
   windows-core:
     name: Windows Core / ${{ matrix.python }}
     runs-on: windows-latest
-    timeout-minutes: 25
+    # Allow the complete Windows suite plus setup and offline evaluation.
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
