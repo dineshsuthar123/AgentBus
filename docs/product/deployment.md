@@ -22,6 +22,13 @@ Syndra does not make a cloud provider free. Offline guided fixtures use no API
 key. Live Azure and other paid models remain separately configured, optional,
 and potentially chargeable. This deployment does not invoke them.
 
+## Hosted Execution Planning
+
+Account-based hosted runs require a separate, currently unimplemented security
+architecture. See the [hosted execution plan](hosted-execution.md) for free-tier
+provider choices, account prerequisites, proposed limits and deployment gates.
+The plan does not enable public execution or relax the local daemon boundary.
+
 ## Local Installation
 
 Download a reviewed wheel and VSIX from the repository's Releases page. Before
