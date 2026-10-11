@@ -604,12 +604,12 @@ jobs:
       - name: Capture local performance baseline
         run: >-
           python -m syndra.cli benchmark all
-          --files 20 --iterations 1
+          --files 20 --iterations 5
           --output "${{ runner.temp }}/syndra-performance-baseline.json" --json
       - name: Compare local performance smoke
         run: >-
           python -m syndra.cli benchmark all
-          --files 20 --iterations 1
+          --files 20 --iterations 5
           --baseline "${{ runner.temp }}/syndra-performance-baseline.json" --json
       - name: Check patch whitespace
         run: git diff --check

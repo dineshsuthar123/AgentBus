@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+
+import agentbus.product.benchmark as benchmark_module
 
 from agentbus.cli import main
 from agentbus.product.benchmark import (
@@ -47,6 +50,40 @@ def test_index_and_search_benchmark_uses_generated_repository():
         "graph_traversal",
         "context_planning",
     ]
+    assert all(item["operation_count"] == 2 for item in payload["operations"])
+
+
+def test_initial_index_samples_are_cold_and_do_not_inflate_persistent_storage(monkeypatch):
+    indexes = []
+
+    class ColdIndex:
+        def __init__(self, workspace: Path, database: Path):
+            self.database = database
+            self.built = False
+            self.updates = 0
+            indexes.append(self)
+
+        def build(self):
+            assert not self.built
+            self.built = True
+            self.database.write_bytes(b"owned index fixture")
+
+        def update(self):
+            assert self.built
+            self.updates += 1
+
+    monkeypatch.setattr(benchmark_module, "RepositoryIntelligenceService", ColdIndex)
+    report = run_benchmark("index", file_count=2, iterations=3)
+
+    assert len(indexes) == 3
+    assert len({index.database for index in indexes}) == 3
+    assert all(index.built for index in indexes)
+    assert indexes[0].updates == 3
+    assert all(index.updates == 0 for index in indexes[1:])
+    assert all(operation.operation_count == 3 for operation in report.operations)
+    assert all(len(operation.samples_ms) == 3 for operation in report.operations)
+    assert report.persistent_storage_bytes == len(b"owned index fixture")
+    assert all(not index.database.exists() for index in indexes)
 
 
 def test_environment_fingerprint_is_stable_for_same_machine():
