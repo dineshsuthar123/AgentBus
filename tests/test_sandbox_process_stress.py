@@ -265,12 +265,14 @@ def test_launch_contract_pins_interpreter_and_closes_inherited_handles(
     )
 
     assert result.passed is True
-    assert result.executable.path == Path(sys.executable).resolve()
+    assert result.executable.path == Path(sys.executable).absolute()
+    assert result.executable.canonical_path == Path(sys.executable).resolve()
     assert result.executable.argument_prefix == ("-u", str(FIXTURE))
     assert len(calls) == 1
     command, options = calls[0]
     assert isinstance(command, list)
     assert Path(command[0]).is_absolute()
+    assert Path(command[0]) == result.executable.path
     assert options["shell"] is False
     assert options["close_fds"] is True
     assert result.process_tree is not None

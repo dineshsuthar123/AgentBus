@@ -60,8 +60,8 @@ $env:SYNDRA_BROWSER_CHANNEL = 'chrome'
 npm.cmd run test:showcase
 ```
 
-The generated `studio/showcase-dist/` is dedicated to `/AgentBus/`; the local
-Studio build remains dedicated to `/studio/`. Never substitute the real Studio
+The generated `studio/showcase-dist/` uses the canonical repository's project
+URL; the local Studio build remains dedicated to `/studio/`. Never substitute the real Studio
 bundle for the public showcase. The smoke test checks the isolated bundle,
 project-relative assets, clipboard fallbacks, mobile/touch composition, light
 and dark themes, accessibility, and absence of API or external requests.

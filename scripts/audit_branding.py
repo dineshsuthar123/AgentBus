@@ -48,6 +48,7 @@ IGNORED_PARTS = {
     "build",
     "coverage",
     "dist",
+    "showcase-dist",
     "node_modules",
     "out",
 }

@@ -7,6 +7,7 @@ import process from "node:process";
 import console from "node:console";
 
 const root = path.resolve(import.meta.dirname, "..");
+const base = `/${new URL("https://github.com/dineshsuthar123/AgentBus").pathname.split("/").at(-1)}/`;
 const dist = path.join(root, "showcase-dist");
 const evidence = path.resolve(root, "../.tmp/public-showcase-evidence");
 await mkdir(evidence, { recursive: true });
@@ -19,13 +20,13 @@ const html = await readFile(path.join(dist, "index.html"), "utf8");
 for (const license of ["LICENSE-bricolage.txt", "LICENSE-ibm-plex-sans.txt", "LICENSE-ibm-plex-mono.txt"]) {
   if (!(await readFile(path.join(dist, license), "utf8")).includes("OPEN FONT LICENSE")) throw new Error("Public font license is missing");
 }
-if (!html.includes("connect-src 'none'") || !html.includes("/AgentBus/assets/")) throw new Error("Public CSP or project-relative base is incorrect");
+if (!html.includes("connect-src 'none'") || !html.includes(`${base}assets/`)) throw new Error("Public CSP or project-relative base is incorrect");
 const types = { ".html": "text/html", ".js": "application/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".woff": "font/woff", ".woff2": "font/woff2" };
 const server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url, "http://localhost");
-    if (!url.pathname.startsWith("/AgentBus/")) { response.writeHead(404); response.end(); return; }
-    const relative = decodeURIComponent(url.pathname.slice("/AgentBus/".length)) || "index.html";
+    if (!url.pathname.startsWith(base)) { response.writeHead(404); response.end(); return; }
+    const relative = decodeURIComponent(url.pathname.slice(base.length)) || "index.html";
     const file = path.resolve(dist, relative);
     if (!file.startsWith(dist + path.sep)) { response.writeHead(404); response.end(); return; }
     const bytes = await readFile(file);
@@ -54,7 +55,7 @@ try {
     if (await page.evaluate(() => globalThis.document.documentElement.scrollWidth > globalThis.innerWidth + 1)) throw new Error(`Overflow in ${state}`);
     await page.screenshot({ path: path.join(evidence, `${state}.png`), fullPage: true });
   }
-  await page.goto(`${origin}/AgentBus/`);
+  await page.goto(`${origin}${base}`);
   await page.getByRole("heading", { name: "Your intent. Made real.", exact: true }).waitFor();
   await page.waitForFunction(() => globalThis.document.querySelector("canvas")?.dataset.ready === "true");
   await page.evaluate(() => globalThis.document.fonts.ready);

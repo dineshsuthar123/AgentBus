@@ -384,8 +384,10 @@ try {
   await page.screenshot({ path: path.join(output, "workshop-evidence-dark.png"), fullPage: true });
   await checkAccessibility("workshop-evidence-dark");
   await page.getByRole("link", { name: "New task", exact: true }).click();
+  // The preserved draft is mounted while hidden, so its value alone cannot prove navigation finished.
+  await page.getByLabel("What should Syndra change?").waitFor({ state: "visible" });
   if (await page.getByLabel("What should Syndra change?").inputValue() !== "Unsubmitted acceptance draft: preserve while inspecting work.") throw new Error("Workshop navigation discarded the task draft");
-  if (await page.locator(".workshop-sculpture canvas").count()) throw new Error("Workshop navigation retained its renderer behind a task");
+  await page.locator(".workshop-sculpture canvas").waitFor({ state: "detached" });
   await page.getByLabel("Absolute workspace").fill(accepted.workspace);
   await page.getByRole("button", { name: /Single loop/ }).click();
   await page.screenshot({ path: path.join(output, "new-task-dark.png"), fullPage: true });
@@ -395,6 +397,7 @@ try {
   await page.waitForFunction((top) => Math.abs(globalThis.document.querySelector(".folio-paper").scrollTop - top) <= 1, readingPosition);
   if (!page.url().includes("view=source")) throw new Error("Shelf selection lost the run's inspected section");
   await page.getByRole("link", { name: "New task", exact: true }).click();
+  await page.getByLabel("What should Syndra change?").waitFor({ state: "visible" });
   if (await page.getByLabel("What should Syndra change?").inputValue() !== "Unsubmitted acceptance draft: preserve while inspecting work.") throw new Error("Run navigation discarded the task draft");
   if (await page.getByLabel("Absolute workspace").inputValue() !== accepted.workspace || !await page.getByRole("button", { name: /Single loop/ }).evaluate((element) => element.classList.contains("is-active"))) throw new Error("Run navigation discarded draft execution settings");
   await page.locator(".open-run-shelf .run-object a").filter({ hasText: accepted.run_id.slice(0, 8) }).click();

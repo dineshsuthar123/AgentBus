@@ -1,5 +1,6 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useEffect } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { StudioClient } from "./api/client";
@@ -15,6 +16,11 @@ vi.mock("./components/DiagnosticsOverlay", () => ({ DiagnosticsOverlay: () => nu
 vi.mock("./pages/HistoryPage", () => ({ HistoryPage: () => <h1>Persisted ledger</h1> }));
 vi.mock("./pages/NewRunPage", () => ({ NewRunPage: () => <label>Task draft<textarea /></label> }));
 vi.mock("./pages/RunPage", () => ({ RunPage: ({ runId, query }: { runId: string; query: URLSearchParams }) => <h1>Run {runId} / {query.get("view") ?? "run"}</h1> }));
+const workshopDisposed = vi.hoisted(() => vi.fn());
+vi.mock("./pages/WorkshopPage", () => ({ WorkshopPage: () => {
+  useEffect(() => () => workshopDisposed(), []);
+  return <section aria-label="Workshop fixture" className="workshop-sculpture"><canvas aria-hidden="true" /></section>;
+} }));
 
 const older: RunSummary = {
   run_id: "older", original_task: "A persisted run beyond the recent page", workspace: "/work/original-scope",
@@ -78,6 +84,26 @@ describe("Returning to the work", () => {
     await act(async () => receive(older));
     expect(window.location.hash).toBe("#/new");
     expect(screen.getByLabelText("Task draft")).toHaveValue("Preserve this task");
+  });
+
+  it("unmounts the workshop renderer when returning to a preserved task draft", async () => {
+    connect(vi.fn());
+    workshopDisposed.mockClear();
+    window.location.hash = "#/new";
+    const { container } = render(<App />);
+    const user = userEvent.setup();
+    const draft = await screen.findByLabelText("Task draft");
+    await user.type(draft, "Keep this intent");
+    await user.click(screen.getByRole("link", { name: "Explore Syndra" }));
+    expect(await screen.findByRole("region", { name: "Workshop fixture" })).toBeVisible();
+    expect(draft).not.toBeVisible();
+    expect(draft).toHaveValue("Keep this intent");
+
+    await user.click(screen.getByRole("link", { name: "New task" }));
+    await waitFor(() => expect(draft).toBeVisible());
+    expect(draft).toHaveValue("Keep this intent");
+    expect(container.querySelector(".workshop-sculpture canvas")).toBeNull();
+    expect(workshopDisposed).toHaveBeenCalledOnce();
   });
 
   it("never mounts repository facilities against the launch workspace while an older run's own workspace is unresolved", async () => {
