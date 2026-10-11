@@ -493,6 +493,8 @@ try {
   await page.goto(`${origin}/studio/#/runs/${accepted.run_id}?view=evidence`);
   await page.getByRole("heading", { name: "Evidence management", exact: true }).waitFor();
   await page.getByRole("link", { name: "Syndra Studio", exact: true }).click();
+  // The old heading can survive until hashchange and async run validation finish.
+  await page.waitForURL((url) => url.hash === `#/runs/${accepted.run_id}?view=evidence`);
   await page.getByRole("heading", { name: "Evidence management", exact: true }).waitFor();
   if (!page.url().includes(`/runs/${accepted.run_id}?view=evidence`)) throw new Error("Root navigation did not resume the last validated folio");
   const selectedUrl = page.url();

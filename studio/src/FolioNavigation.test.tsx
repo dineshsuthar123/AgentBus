@@ -52,6 +52,26 @@ describe("Returning to the work", () => {
     expect(window.location.hash).toContain("view=evidence");
   });
 
+  it("validates root navigation before restoring an already-visible folio", async () => {
+    let receive!: (run: RunSummary) => void;
+    const run = vi.fn().mockResolvedValue(older).mockResolvedValueOnce(older).mockImplementationOnce(
+      () => new Promise<RunSummary>((resolve) => { receive = resolve; })
+    );
+    connect(run);
+    window.location.hash = "#/runs/older?view=evidence";
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Run older / evidence" })).toBeVisible();
+    await waitFor(() => expect(localStorage.getItem("syndra.studio.last-folio")).not.toBeNull());
+    await userEvent.setup().click(screen.getByRole("link", { name: "Syndra Studio" }));
+    await waitFor(() => expect(run).toHaveBeenCalledTimes(2));
+    expect(window.location.hash).toBe("#/");
+    expect(screen.queryByRole("heading", { name: "Run older / evidence" })).not.toBeInTheDocument();
+
+    await act(async () => receive(older));
+    expect(await screen.findByRole("heading", { name: "Run older / evidence" })).toBeVisible();
+    expect(window.location.hash).toBe("#/runs/older?view=evidence");
+  });
+
   it("keeps the ledger available when a saved selection no longer exists", async () => {
     const run = vi.fn().mockRejectedValue(new Error("Run does not exist"));
     connect(run);
