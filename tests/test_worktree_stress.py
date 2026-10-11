@@ -146,6 +146,36 @@ def test_concurrent_creators_cannot_claim_the_same_task_twice(
     _assert_repository_ok(source, base)
 
 
+def test_worktree_creation_keeps_boundary_checks_under_the_shared_git_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, base = _repository(tmp_path / "repo")
+    store = _state(tmp_path / "state.db", source, ["guarded-task"])
+    manager = GitWorktreeManager(source, tmp_path / "worktrees", store)
+    original_within = manager._is_within
+    guarded_checks = []
+
+    def lock_is_held_by_creator() -> bool:
+        acquired = manager._git_lock.acquire(blocking=False)
+        if acquired:
+            manager._git_lock.release()
+        return not acquired
+
+    def checked_boundary(path: Path, root: Path) -> bool:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            guarded_checks.append(executor.submit(lock_is_held_by_creator).result(timeout=10))
+        return original_within(path, root)
+
+    monkeypatch.setattr(manager, "_is_within", checked_boundary)
+    record = manager.create_task_worktree("run-1", "guarded-task", base, "worker-1")
+
+    assert record.status == WorktreeStatus.ACTIVE
+    assert guarded_checks and all(guarded_checks)
+    assert len(store.list_worktrees("run-1", task_id="guarded-task")) == 1
+    _assert_repository_ok(source, base)
+
+
 def test_legacy_duplicate_ownership_metadata_is_refused_without_cleanup(
     tmp_path: Path,
 ) -> None:
