@@ -22,7 +22,7 @@ const ONBOARDING_STATE_KEY = "agentbus.onboarding.lastShownVersion";
 const ONBOARDING_MARKER_FILE = "onboarding-version";
 const MAX_ONBOARDING_MARKER_BYTES = 128;
 const DOCUMENTATION_URL =
-  "https://github.com/dineshsuthar123/Syndra/blob/main/docs/getting-started/index.md";
+  "https://github.com/dineshsuthar123/AgentBus/blob/main/docs/getting-started/install.md";
 
 export class OnboardingController implements vscode.Disposable {
   private readonly disposables: vscode.Disposable[] = [];

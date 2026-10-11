@@ -2,6 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { StudioClient } from "../api/client";
+import { StudioApiError } from "../api/client";
 import { loadRunBundle, type RunBundle } from "../api/runBundle";
 import type { ApprovalSummary, RunSummary, TaskSummary } from "../api/types";
 import { StudioEventStore } from "../events/eventStore";
@@ -112,6 +113,7 @@ function makeBundle(overrides: Partial<RunBundle> = {}): RunBundle {
 
 function installStudioClient() {
   const methods = {
+    diff: vi.fn().mockResolvedValue({ run_id: run.run_id, diff: "+bounded fixture\n", truncated: false, byte_limit: 262_144 }),
     decideApproval: vi.fn().mockResolvedValue({}),
     verifyTrace: vi.fn().mockResolvedValue({
       trace_id: "trace-payment-001",
@@ -250,6 +252,72 @@ describe("live run page", () => {
     );
   });
 
+  it("selects one exact pending request without duplicating tickets or widening its revision", async () => {
+    const user = userEvent.setup();
+    const methods = installStudioClient();
+    const approvals: ApprovalSummary[] = [1, 2].map((number) => ({ approval_id: `request-${number}`, run_id: run.run_id, task_id: task.task_id, risk_category: "process_execution", requested_action: `Operation ${number}`, created_at: run.created_at, state: "pending", revision: number + 3, tool_name: "test.execute", executable: "python" }));
+    mockedLoadRunBundle.mockResolvedValue(makeBundle({ run: { ...run, status: "waiting_for_approval" }, approvals: { run_id: run.run_id, approvals } }));
+    const { rerender } = render(<RunPage runId={run.run_id} />);
+    await screen.findByRole("heading", { name: run.original_task });
+    expect(screen.getAllByRole("button", { name: "Reject" })).toHaveLength(1);
+    await user.selectOptions(screen.getByLabelText(/pending permission requests/i), "request-2");
+    expect(new URLSearchParams(window.location.hash.split("?")[1]).get("approval")).toBe("request-2");
+    rerender(<RunPage runId={run.run_id} query={new URLSearchParams("approval=request-2")} />);
+    await user.click(screen.getByRole("button", { name: "Reject" }));
+    await waitFor(() => expect(methods.decideApproval).toHaveBeenCalledWith(run.run_id, "request-2", 5, "reject", ""));
+    expect(methods.resume).not.toHaveBeenCalled();
+  });
+
+  it("renders the authoritative pending request even when its graph task is unavailable in a partial snapshot", async () => {
+    const user = userEvent.setup();
+    const methods = installStudioClient();
+    const approval: ApprovalSummary = { approval_id: "partial-request", run_id: run.run_id, task_id: "unavailable-task", risk_category: "tool", requested_action: "Delete an owned fixture", created_at: run.created_at, state: "pending", revision: 8 };
+    mockedLoadRunBundle.mockResolvedValue(makeBundle({ run: { ...run, status: "waiting_for_approval" }, tasks: { run_id: run.run_id, tasks: [] }, approvals: { run_id: run.run_id, approvals: [approval] }, attempts: undefined, invocations: undefined }));
+    render(<RunPage runId={run.run_id} />);
+    await screen.findByRole("heading", { name: run.original_task });
+    await user.click(screen.getByRole("button", { name: "Reject" }));
+    await waitFor(() => expect(methods.decideApproval).toHaveBeenCalledWith(run.run_id, "partial-request", 8, "reject", ""));
+    expect(methods.resume).not.toHaveBeenCalled();
+  });
+
+  it("keeps an inspected file selected while an independent exact approval is pending", async () => {
+    const methods = installStudioClient();
+    const approval: ApprovalSummary = { approval_id: "file-inspection-request", run_id: run.run_id, task_id: task.task_id, risk_category: "tool", requested_action: "Delete an owned fixture", created_at: run.created_at, state: "pending", revision: 2 };
+    mockedLoadRunBundle.mockResolvedValue(makeBundle({
+      approvals: { run_id: run.run_id, approvals: [approval] },
+      changes: { run_id: run.run_id, workspace: run.workspace, changes: ["first.py", "selected.py"].map((path) => ({ path, status: "modified", classification: "source", generated: false, tracked: true, binary: false, task_id: task.task_id })) }
+    }));
+    render(<RunPage runId={run.run_id} query={new URLSearchParams("view=source&file=selected.py")} />);
+    await screen.findByRole("heading", { name: "Delete an owned fixture" });
+    await waitFor(() => expect(methods.diff).toHaveBeenCalledWith(run.run_id, "selected.py", expect.any(Object)));
+    expect(methods.diff).not.toHaveBeenCalledWith(run.run_id, "first.py", expect.any(Object));
+    expect(methods.decideApproval).not.toHaveBeenCalled();
+    expect(methods.resume).not.toHaveBeenCalled();
+  });
+
+  it("reconciles a cross-client conflict without resuming or retaining an already resolved permission ticket", async () => {
+    const user = userEvent.setup();
+    const methods = installStudioClient();
+    const approval: ApprovalSummary = { approval_id: "resolved-elsewhere", run_id: run.run_id, task_id: task.task_id, risk_category: "tool", requested_action: "Delete an owned fixture", created_at: run.created_at, state: "pending", revision: 3 };
+    mockedLoadRunBundle.mockResolvedValueOnce(makeBundle({ run: { ...run, status: "waiting_for_approval" }, approvals: { run_id: run.run_id, approvals: [approval] } })).mockResolvedValue(makeBundle({ approvals: { run_id: run.run_id, approvals: [{ ...approval, state: "rejected" }] } }));
+    methods.decideApproval.mockRejectedValue(new StudioApiError("approval_conflict", "Request resolved elsewhere", 409));
+    render(<RunPage runId={run.run_id} />);
+    await screen.findByRole("heading", { name: run.original_task });
+    await user.click(screen.getByRole("button", { name: /Approve & continue/ }));
+    expect(await screen.findByText(/your decision was not applied/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Approve & continue/ })).not.toBeInTheDocument();
+    expect(methods.resume).not.toHaveBeenCalled();
+    expect(methods.decideApproval).toHaveBeenCalledOnce();
+    expect(methods.decideApproval).toHaveBeenCalledWith(run.run_id, approval.approval_id, 3, "approve", "");
+  });
+
+  it("does not offer durable recovery for an explicitly non-durable single loop", async () => {
+    mockedLoadRunBundle.mockResolvedValue(makeBundle({ run: { ...run, workflow: "single", status: "failed" } }));
+    render(<RunPage runId={run.run_id} />);
+    await screen.findByRole("heading", { name: run.original_task });
+    expect(screen.queryByRole("button", { name: "Resume" })).not.toBeInTheDocument();
+  });
+
   it("shows verifier success and a mandatory final-review rejection truthfully", async () => {
     const user = userEvent.setup();
     const rejectedRun = { ...run, status: "rejected", reviewer_status: "rejected" };
@@ -276,6 +344,16 @@ describe("live run page", () => {
     expect(screen.getByText("Final review rejected a missing rollback guard.")).toBeInTheDocument();
     expect(screen.getByText("Rollback behavior is not covered.")).toBeInTheDocument();
     expect(screen.getByText("Add a rollback regression test.")).toBeInTheDocument();
+  });
+
+  it("keeps structured reviewer issues visible alongside the required fixes", async () => {
+    const user = userEvent.setup();
+    mockedLoadRunBundle.mockResolvedValue(makeBundle({ report: { run_id: run.run_id, status: "rejected", report: { reviewer_summary: "Unsafe rollback", reviewer_issues: [{ severity: "high", message: "Rollback drops the existing record", file: "src/PaymentService.java" }], required_fixes: ["Retain the original record"] } } }));
+    render(<RunPage runId={run.run_id} />);
+    await screen.findByRole("heading", { name: run.original_task });
+    await user.click(screen.getByRole("button", { name: "Review" }));
+    expect(screen.getByText("high: Rollback drops the existing record (src/PaymentService.java)")).toBeInTheDocument();
+    expect(screen.getByText("Retain the original record")).toBeInTheDocument();
   });
 
   it("keeps the canonical workspace path private in the source inspector", async () => {
@@ -309,7 +387,7 @@ describe("live run page", () => {
     await user.click(screen.getByRole("button", { name: "Run offline replay" }));
     await waitFor(() => expect(methods.createReplay).toHaveBeenCalledOnce());
     expect(methods.createReplay).toHaveBeenCalledWith(run.run_id, { mode: "offline" });
-    expect(methods.replay).toHaveBeenCalledWith("replay-payment-002", { force: true });
+    expect(methods.replay).toHaveBeenCalledWith("replay-payment-002", { force: true, signal: expect.any(AbortSignal) });
   });
 
   it("opens bounded run events without exposing event payload arguments", async () => {

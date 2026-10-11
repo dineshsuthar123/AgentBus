@@ -28,6 +28,7 @@ export function validateControlTarget(value: string): string {
 }
 
 export default defineConfig({
+  base: "/studio/",
   plugins: [react()],
   resolve: {
     alias: {

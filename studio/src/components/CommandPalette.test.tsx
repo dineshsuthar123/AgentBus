@@ -43,4 +43,47 @@ describe("Studio command palette", () => {
     const approval = screen.getByRole("option", { name: /jump to approval/i });
     expect(approval.querySelector("kbd")).toBeNull();
   });
+
+  it("contains modal focus, exposes the selected option and closes from an option without changing the run section", async () => {
+    const user = userEvent.setup();
+    window.location.hash = "#/runs/run-command-001?view=evidence";
+    render(<><button>Background control</button><CommandPalette currentRun={run} /></>);
+    const trigger = screen.getByRole("button", { name: /command/i });
+    await user.click(trigger);
+    const input = screen.getByRole("combobox", { name: "Search Studio commands" });
+    await waitFor(() => expect(input).toHaveFocus());
+    expect(input).toHaveAttribute("aria-activedescendant", "studio-command-new");
+    await user.tab({ shift: true });
+    const last = screen.getByRole("option", { name: "Runtime diagnostics" });
+    expect(last).toHaveFocus();
+    await user.tab();
+    expect(input).toHaveFocus();
+    screen.getByRole("button", { name: "Background control" }).focus();
+    expect(input).toHaveFocus();
+    last.focus();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(trigger).toHaveFocus());
+    expect(window.location.hash).toBe("#/runs/run-command-001?view=evidence");
+  });
+
+  it("opens repository facilities in the selected run's drawer without retargeting its scope or section", async () => {
+    const user = userEvent.setup();
+    window.location.hash = "#/runs/run-command-001?view=source&file=src%2Fcalculator.py";
+    render(<CommandPalette currentRun={run} />);
+    await user.click(screen.getByRole("button", { name: /command/i }));
+    await user.click(screen.getByRole("option", { name: "Open repository" }));
+    expect(window.location.hash).toBe("#/runs/run-command-001?view=source&file=src%2Fcalculator.py&drawer=repository");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("restores the original control when the keyboard shortcut toggles the menu closed", async () => {
+    render(<><button>Original control</button><CommandPalette currentRun={run} /></>);
+    const origin = screen.getByRole("button", { name: "Original control" });
+    origin.focus();
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Search Studio commands" })).toHaveFocus());
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(origin).toHaveFocus();
+  });
 });

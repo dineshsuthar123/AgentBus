@@ -24,6 +24,7 @@ SUPPORTED_PROVIDERS = ("ollama", "azure", "deterministic")
 SUPPORTED_AZURE_API_MODES = ("responses", "chat_completions")
 SUPPORTED_DETERMINISTIC_PROFILES = (
     "python-calculator",
+    "python-calculator-repair",
     "payment-safety",
     "cancellation-two-task",
     "tool-safe-read",
@@ -298,6 +299,9 @@ class AgentBusConfig:
         *,
         model_name: str | None = None,
         workspace_dir: str | None = None,
+        state_dir: str | None = None,
+        state_db: str | None = None,
+        runs_dir: str | None = None,
         max_steps: int | None = None,
         provider_name: str | None = None,
         fallback_provider_name: str | None = None,
@@ -328,6 +332,9 @@ class AgentBusConfig:
                 updates["azure_openai_default_deployment"] = model_name
         if workspace_dir is not None:
             updates["workspace_dir"] = workspace_dir
+        for name, value in (("state_dir", state_dir), ("state_db", state_db), ("runs_dir", runs_dir)):
+            if value is not None:
+                updates[name] = value
         if max_steps is not None:
             updates["max_steps"] = max_steps
         if provider_name is not None:

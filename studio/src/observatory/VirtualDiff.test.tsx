@@ -16,6 +16,12 @@ class DeterministicDiffWorker {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("large virtual diff", () => {
+  it("offers one keyboard-readable horizontal viewport for long source lines", () => {
+    const { container } = render(<VirtualDiff diff={`+${"x".repeat(300)}\n+\tindented`} />);
+    expect(screen.getByRole("list", { name: "Bounded source diff" })).toHaveAttribute("tabindex", "0");
+    expect(container.querySelector(".virtual-list-spacer")).toHaveStyle({ minWidth: "calc(301ch + 52px)" });
+    expect(container.querySelectorAll("code[tabindex]")).toHaveLength(0);
+  });
   it("delegates parsing to a worker and mounts only the visible rows", async () => {
     vi.stubGlobal("Worker", DeterministicDiffWorker);
     const lines = Array.from({ length: 30_000 }, (_, index) => index % 1_000 === 0 ? `@@ -${index},1 +${index},1 @@` : `+bounded line ${index}`);

@@ -1,28 +1,23 @@
 import {
   Activity,
-  Command,
-  Gauge,
-  History,
-  LogOut,
-  Play,
-  Plus,
-  Radio,
-  ShieldCheck
+  Play
 } from "lucide-react";
 import { lazy, Suspense, useEffect, useState, type FormEvent, type ReactNode } from "react";
 import type { RunSummary } from "./api/types";
-import { CommandPalette } from "./components/CommandPalette";
+import { FolioShell } from "./components/FolioShell";
+import { WorkspaceDrawer } from "./components/WorkspaceDrawer";
 import { LoadingState } from "./components/Primitives";
-import { displayWorkspace, shortId } from "./lib/format";
+import { WorkshopJourney } from "./components/WorkshopJourney";
 import { decodeHashSegment } from "./lib/routing";
 import { useStudio } from "./state/StudioContext";
+import { readResumeFolio } from "./state/folioNavigation";
 
-const DashboardPage = lazy(() => import("./pages/DashboardPage").then((module) => ({ default: module.DashboardPage })));
 const DemoPage = lazy(() => import("./pages/DemoPage").then((module) => ({ default: module.DemoPage })));
 const HistoryPage = lazy(() => import("./pages/HistoryPage").then((module) => ({ default: module.HistoryPage })));
 const NewRunPage = lazy(() => import("./pages/NewRunPage").then((module) => ({ default: module.NewRunPage })));
 const RunPage = lazy(() => import("./pages/RunPage").then((module) => ({ default: module.RunPage })));
 const RuntimePage = lazy(() => import("./pages/RuntimePage").then((module) => ({ default: module.RuntimePage })));
+const WorkshopPage = lazy(() => import("./pages/WorkshopPage").then((module) => ({ default: module.WorkshopPage })));
 const DiagnosticsOverlay = lazy(() => import("./components/DiagnosticsOverlay").then((module) => ({ default: module.DiagnosticsOverlay })));
 
 interface RouteState {
@@ -33,62 +28,53 @@ interface RouteState {
 export function App() {
   const studio = useStudio();
   const route = useHashRoute();
-
-  if (!studio.client) return <ConnectionScreen />;
-
   const runMatch = /^\/runs\/([^/]+)$/.exec(route.path);
   const runId = runMatch ? decodeHashSegment(runMatch[1]) : undefined;
-  const currentRun = runId ? studio.runs.find((run) => run.run_id === runId) : undefined;
+  const ledgerVisible = !runId && !["/new", "/runtime", "/demo", "/workshop"].includes(route.path);
+  const [ledgerOpened, setLedgerOpened] = useState(ledgerVisible);
+  if (ledgerVisible && !ledgerOpened) setLedgerOpened(true);
+  const [openedRun, setOpenedRun] = useState<RunSummary>();
+  const recentRun = studio.runs.find((run) => run.run_id === runId);
+  useEffect(() => {
+    if (!runId || recentRun || !studio.client) return;
+    const controller = new AbortController();
+    void studio.client.run(runId, { signal: controller.signal }).then((run) => { if (!controller.signal.aborted) setOpenedRun(run); }).catch(() => { /* The run surface displays authoritative errors. */ });
+    return () => controller.abort();
+  }, [runId, recentRun, studio.client]);
+  useEffect(() => {
+    if (route.path !== "/" || !studio.client) return;
+    const candidate = readResumeFolio();
+    if (!candidate) return;
+    const controller = new AbortController();
+    const startHash = window.location.hash;
+    void studio.client.run(candidate.id, { signal: controller.signal }).then((run) => {
+      if (controller.signal.aborted || window.location.hash !== startHash || run.run_id !== candidate.id) return;
+      setOpenedRun(run);
+      window.history.replaceState(null, "", candidate.href);
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    }).catch(() => { /* An unavailable selection falls back to the persisted ledger. */ });
+    return () => controller.abort();
+  }, [route.path, studio.client]);
+  if (!studio.client) return <ConnectionScreen />;
+  const currentRun = recentRun ?? (openedRun?.run_id === runId ? openedRun : undefined);
   let page: ReactNode;
   if (runId) page = <RunPage key={runId} runId={runId} query={route.query} />;
-  else if (route.path === "/new") page = <NewRunPage demo={route.query.get("demo")} focus={route.query.get("focus")} />;
-  else if (route.path === "/history") page = <HistoryPage />;
+  else if (route.path === "/new") page = null;
+  else if (route.path === "/history") page = null;
   else if (route.path === "/runtime") page = <RuntimePage />;
   else if (route.path === "/demo") page = <DemoPage />;
-  else page = <DashboardPage />;
+  else if (route.path === "/workshop") page = <WorkshopPage />;
+  else page = null;
 
   return (
-    <div className="observatory-shell">
-      <NavigationRail route={route.path} onDisconnect={studio.disconnect} />
-      <header className="context-bar">
-        <ContextIdentity run={currentRun} route={route.path} />
-        <div className="context-actions">
-          <span className={`transport-state phase-${studio.streamStatus.phase}`} title={`Event cursor ${studio.streamStatus.cursor}`}><Radio size={12} /><span>{streamLabel(studio.streamStatus.phase)}</span><code>{studio.streamStatus.cursor || "--"}</code></span>
-          <CommandPalette currentRun={currentRun} />
-        </div>
-      </header>
-      <main className="observatory-main" id="main-content">
+    <FolioShell runs={currentRun && !recentRun ? [...studio.runs, currentRun] : studio.runs} selected={runId} phase={studio.streamStatus.phase} onDisconnect={studio.disconnect} drawer={runId && !currentRun ? <p role="status">Selected run workspace is unavailable. Wait for its scoped record or inspect the run's error. No repository action is enabled.</p> : <WorkspaceDrawer query={route.query} run={currentRun} />}>
         <Suspense fallback={<LoadingState label="Opening Studio surface" />}>{page}</Suspense>
-      </main>
+        {ledgerOpened && <div hidden={!ledgerVisible}><Suspense fallback={<LoadingState label="Opening persisted ledger" />}><HistoryPage /></Suspense></div>}
+        <div hidden={route.path !== "/new"}><Suspense fallback={<LoadingState label="Opening task draft" />}><NewRunPage demo={route.query.get("demo")} focus={route.query.get("focus")} /></Suspense></div>
       <StudioAnnouncements runs={studio.runs} streamPhase={studio.streamStatus.phase} />
       {import.meta.env.DEV && <Suspense><DiagnosticsOverlay /></Suspense>}
-    </div>
+    </FolioShell>
   );
-}
-
-function NavigationRail({ route, onDisconnect }: { route: string; onDisconnect: () => void }) {
-  return <aside className="navigation-rail">
-    <a className="rail-brand" href="#/" aria-label="Syndra Studio home"><img src="/syndra-mark.svg" alt="" /><span>SY</span></a>
-    <nav aria-label="Studio navigation">
-      <NavLink route={route} href="#/" label="Command" icon={<Command size={18} />} />
-      <NavLink route={route} href="#/new" label="New run" icon={<Plus size={18} />} />
-      <NavLink route={route} href="#/history" label="History" icon={<History size={18} />} />
-      <NavLink route={route} href="#/runtime" label="Runtime" icon={<Gauge size={18} />} />
-      <NavLink route={route} href="#/demo" label="Payment proof" icon={<ShieldCheck size={18} />} />
-    </nav>
-    <button className="rail-disconnect" type="button" onClick={onDisconnect} aria-label="Disconnect Studio"><LogOut size={17} /><span>Disconnect</span></button>
-  </aside>;
-}
-
-function ContextIdentity({ run, route }: { run?: RunSummary; route: string }) {
-  const section = route === "/" ? "Command deck" : route.split("/").filter(Boolean)[0] ?? "Studio";
-  return <div className="context-identity">
-    <span><small>Repository</small><strong>{run ? displayWorkspace(run.workspace) : "Runtime scope"}</strong></span>
-    <i />
-    <span><small>Branch</small><strong>{run ? "Not reported" : "--"}</strong></span>
-    <i />
-    <span><small>{run ? "Run" : "Surface"}</small><strong className="mono">{run ? shortId(run.run_id, 6) : section}</strong></span>
-  </div>;
 }
 
 function ConnectionScreen() {
@@ -106,26 +92,17 @@ function ConnectionScreen() {
   }
 
   return (
-    <main className="connection-screen">
-      <section className="connection-story">
-        <div className="brand-lockup brand-lockup-large"><img src="/syndra-mark.svg" alt="" /><span><strong>Syndra</strong><small>Studio</small></span></div>
-        <p className="connection-kicker"><ShieldCheck size={15} /> Local execution control plane</p>
-        <h1>See the agent.<br /><span>Trust the evidence.</span></h1>
-        <p className="connection-lede"><strong>Safe execution for autonomous software engineering.</strong> Plan repository changes, hold risky tools at exact approval gates, and verify every outcome with durable evidence.</p>
-        <div className="connection-rail" aria-label="Syndra execution lifecycle">
-          {["Plan", "Execute", "Approve", "Verify", "Review", "Replay"].map((stage) => <span key={stage}><i />{stage}</span>)}
-        </div>
-      </section>
-      <section className="connection-panel">
-        <div><p className="eyebrow">Loopback session</p><h2>Connect to Syndra</h2><p>Start the authenticated local daemon, then enter its one-time bearer token. The token stays in browser memory.</p></div>
-        <pre className="startup-command"><code>syndra serve --port 8765 --json-ready</code></pre>
-        <form onSubmit={(event) => void submit(event)}>
+    <main className="connection-workshop">
+      <WorkshopJourney entry={<section className="connection-panel" aria-label="Connect to Syndra">
+        <div><p className="eyebrow">Loopback session</p><h2>Connect to Syndra</h2><p>Run Syndra Studio locally to open a browser session automatically. If this session expired, use Open Studio from the connected extension, or explicitly stop your owned daemon before relaunching.</p></div>
+        <pre className="startup-command"><code>syndra studio --workspace .</code></pre>
+        {connectionMessage && <p className="inline-error" role="alert">{connectionMessage}</p>}
+        <details><summary>Developer recovery: bearer connection</summary><p>For a contributor's same-origin Vite proxy or a known local daemon only. Bearer credentials stay in memory, never in the URL or browser storage.</p><form onSubmit={(event) => void submit(event)}>
           <label><span>Session token</span><input type="password" autoComplete="off" value={token} onChange={(event) => setToken(event.target.value)} placeholder="Paste bearer_token from the ready handshake" minLength={32} required /></label>
-          {connectionMessage && <p className="inline-error" role="alert">{connectionMessage}</p>}
           <button className="button button-primary button-wide" disabled={connection === "connecting"} type="submit">{connection === "connecting" ? <Activity className="spin" size={16} /> : <Play size={16} />}{connection === "connecting" ? "Establishing control path" : "Open Studio"}</button>
-        </form>
-        <div className="security-note"><span>01</span><p><strong>Same-origin by design.</strong> Vite proxies only to the configured numeric-loopback daemon; Syndra keeps its no-CORS security boundary.</p></div>
-      </section>
+        </form></details>
+        <div className="security-note"><span>01</span><p><strong>Same-origin by design.</strong> Installed Studio uses a short-lived launch exchange and an HTTP-only session. Only numeric-loopback HTTP is supported.</p></div>
+      </section>} />
     </main>
   );
 }
@@ -147,12 +124,6 @@ export function connectionDestination(currentHash: string): string {
   return currentHash && currentHash !== "#" ? currentHash : "#/";
 }
 
-function NavLink({ route, href, label, icon }: { route: string; href: string; label: string; icon: ReactNode }) {
-  const target = href.slice(1);
-  const active = target === "/" ? route === "/" : route.startsWith(target);
-  return <a className={active ? "rail-link is-active" : "rail-link"} href={href} aria-label={label} title={label}>{icon}<span>{label}</span></a>;
-}
-
 function useHashRoute(): RouteState {
   const read = (): RouteState => {
     const raw = window.location.hash.slice(1) || "/";
@@ -166,12 +137,4 @@ function useHashRoute(): RouteState {
     return () => window.removeEventListener("hashchange", onChange);
   }, []);
   return route;
-}
-
-function streamLabel(phase: string): string {
-  if (phase === "connected") return "Connected";
-  if (phase === "restored") return "Restored";
-  if (phase === "reconnecting") return "Reconnecting";
-  if (phase === "degraded") return "Degraded";
-  return "Snapshot";
 }

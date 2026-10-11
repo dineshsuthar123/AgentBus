@@ -206,6 +206,7 @@ class ControlledProcessSupervisor:
             )
             if command_processor is not None:
                 environment["COMSPEC"] = str(command_processor.path)
+            self.catalog.resolve(identity.alias)
             try:
                 process = subprocess.Popen(
                     command,

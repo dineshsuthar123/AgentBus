@@ -13,6 +13,7 @@ coverage.xml
 htmlcov/
 build/
 dist/
+/syndra/studio_assets/
 *.egg-info/
 
 # Virtual env
@@ -47,6 +48,7 @@ extensions/vscode/.vscode-test/
 extensions/vscode/*.vsix
 studio/node_modules/
 studio/dist/
+studio/showcase-dist/
 studio/coverage/
 studio/*.tsbuildinfo
 

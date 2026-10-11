@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -286,6 +287,7 @@ def create_demo(
                 "schema": 1,
                 "language": definition.language,
                 "managed_files": sorted((*definition.files, _TASK_FILE, marker.name)),
+                **({"test_runner": "unittest"} if language == "python" else {}),
             },
             indent=2,
             sort_keys=True,
@@ -383,7 +385,7 @@ def _initialize_git_repository(root: Path, managed_files: tuple[str, ...]) -> No
     if git is None:
         raise ValueError("Git is required for --git demo initialization")
     commands = [
-        [git, "init"],
+        [git, "init", "--template="],
         [git, "config", "--local", "user.name", "Syndra Demo"],
         [git, "config", "--local", "user.email", "syndra-demo@example.invalid"],
         [git, "add", "--", *managed_files],
@@ -398,6 +400,8 @@ def _initialize_git_repository(root: Path, managed_files: tuple[str, ...]) -> No
         ],
     ]
     for command in commands:
+        # Only a fresh, marker-owned fixture is staged; inherited Git scope and hooks must not redirect it.
+        command[1:1] = ["-c", f"core.hooksPath={root / '.syndra-disabled-hooks'}", "-c", "core.fsmonitor=false"]
         result = subprocess.run(
             command,
             cwd=root,
@@ -406,6 +410,7 @@ def _initialize_git_repository(root: Path, managed_files: tuple[str, ...]) -> No
             timeout=30,
             shell=False,
             check=False,
+            env={key: value for key, value in os.environ.items() if not key.upper().startswith("GIT_")},
         )
         if result.returncode != 0:
             detail = (result.stderr or result.stdout).strip()

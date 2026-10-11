@@ -17,6 +17,7 @@ export function CapabilityScope({ capabilities, approvalRequired = false }: { ca
           </li>
         ))}
       </ul> : <p>No capability descriptor was persisted for this action.</p>}
+      {capabilities.length > 0 && <details className="capability-details"><summary>Full persisted capability scopes</summary>{capabilities.map((capability, index) => <div key={`${capability.name}-${index}`}><h4>{capability.name}</h4><dl>{Object.entries(capability.scope ?? {}).map(([key, value]) => <div key={key}><dt>{key.replaceAll("_", " ")}</dt><dd>{Array.isArray(value) ? value.length ? <ul>{value.map((item, itemIndex) => <li key={itemIndex}><code>{item}</code></li>)}</ul> : "No listed values" : typeof value === "boolean" ? value ? "Yes" : "No" : "Not reported"}</dd></div>)}</dl></div>)}</details>}
       <footer><span>Boundary</span><code>{boundaryLabel(capabilities)}</code></footer>
     </section>
   );

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import sqlite3
@@ -629,6 +630,58 @@ class StateStore:
             except sqlite3.Error as exc:
                 raise StateStoreError("Unable to list durable runs.") from exc
         return [self._run_from_row(row) for row in rows]
+
+    def page_runs(
+        self, *, limit: int = 50, cursor: str | None = None,
+        search: str = "", status: str | None = None,
+    ) -> tuple[list[RunRecord], str | None]:
+        """Keyset history ordered by immutable creation identity, not update time."""
+        if not 1 <= limit <= 1000 or len(search) > 512:
+            raise StateStoreError("Invalid run history bounds.")
+        clauses: list[str] = []
+        parameters: list[Any] = []
+        if status:
+            try:
+                RunStatus(status)
+            except ValueError as exc:
+                raise StateStoreError("Invalid run history status.") from exc
+            clauses.append("status = ?")
+            parameters.append(status)
+        if search:
+            clauses.append("(instr(lower(original_task), lower(?)) > 0 OR "
+                           "instr(lower(workspace), lower(?)) > 0 OR "
+                           "instr(lower(run_id), lower(?)) > 0)")
+            parameters.extend([search] * 3)
+        if cursor:
+            try:
+                if len(cursor) > 2048:
+                    raise ValueError("oversized cursor")
+                created, run_id, prior_search, prior_status = json.loads(
+                    base64.b64decode(cursor, altchars=b"-_", validate=True)
+                )
+                if not isinstance(created, str) or not isinstance(run_id, str):
+                    raise ValueError("invalid identity")
+                datetime.fromisoformat(created)
+                if (prior_search, prior_status) != (search, status):
+                    raise ValueError("filters changed")
+            except (ValueError, TypeError) as exc:
+                raise StateStoreError("Invalid run history cursor or changed filters.") from exc
+            clauses.append("(created_at < ? OR (created_at = ? AND run_id > ?))")
+            parameters.extend([created, created, run_id])
+        query = "SELECT * FROM runs"
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY created_at DESC, run_id ASC LIMIT ?"
+        with self._connection() as connection:
+            rows = connection.execute(query, [*parameters, limit + 1]).fetchall()
+        next_cursor = None
+        if len(rows) > limit:
+            last = rows[limit - 1]
+            next_cursor = base64.urlsafe_b64encode(json.dumps(
+                [last["created_at"], last["run_id"], search, status],
+                separators=(",", ":"),
+            ).encode()).decode()
+        return [self._run_from_row(row) for row in rows[:limit]], next_cursor
 
     def update_run_status(
         self,

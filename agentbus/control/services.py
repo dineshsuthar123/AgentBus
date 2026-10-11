@@ -7,7 +7,9 @@ import re
 import subprocess
 import tempfile
 import threading
+import uuid
 from collections import Counter
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -37,6 +39,7 @@ from agentbus.control.models import (
     ComparisonResponse,
     ComparisonSummaryResponse,
     DiffResponse,
+    DemoWorkspaceResponse,
     DoctorResponse,
     FileContentResponse,
     McpConfiguredToolSummary,
@@ -658,6 +661,9 @@ class ControlQueryService:
         self._mcp_executable_catalog = mcp_executable_catalog
         self._trace_replay_service: TraceReplayService | None = None
         self._trace_replay_lock = threading.Lock()
+        self._provider_checks: dict[str, ProviderSummary] = {}
+        self._provider_check_lock = threading.Lock()
+        self._demo_creation_lock = threading.Lock()
 
     def get_run(self, run_id: str) -> RunRecord:
         try:
@@ -665,7 +671,15 @@ class ControlQueryService:
         except RunNotFoundError as exc:
             raise ControlPlaneNotFoundError("The requested run was not found.") from exc
 
-    def list_runs(self, limit: int = 100) -> RunListResponse:
+    def list_runs(self, limit: int = 100, *, cursor: str | None = None,
+                  search: str = "", status: str | None = None,
+                  history: bool = False) -> RunListResponse:
+        if history or cursor or search or status:
+            records, next_cursor = self.store.page_runs(
+                limit=limit, cursor=cursor, search=search, status=status,
+            )
+            runs = [self.run_summary(run) for run in records]
+            return RunListResponse(runs=runs, total=len(runs), next_cursor=next_cursor)
         runs = [self.run_summary(run) for run in self.store.list_runs(limit=limit)]
         return RunListResponse(runs=runs, total=len(runs))
 
@@ -2374,6 +2388,31 @@ class ControlQueryService:
             ],
         }
 
+    def create_demo_workspace(self, profile: str) -> DemoWorkspaceResponse:
+        from agentbus.product.demos import create_demo, demo_definitions
+
+        language = {"python-calculator": "python", "payment-safety": "payment"}.get(profile)
+        if language is None:
+            raise ControlPlaneError("Only the supported guided fixtures can be created.")
+        if not self._demo_creation_lock.acquire(blocking=False):
+            raise ControlPlaneConflictError("A guided workspace is already being created.")
+        try:
+            storage = self.config.state_database_path.resolve().parent / "demo-workspaces"
+            if storage.resolve() != storage or storage.is_symlink():
+                raise ControlPlaneForbiddenError("Guided workspace storage cannot be redirected by a symlink.")
+            storage.mkdir(parents=True, exist_ok=True)
+            if sum(1 for _ in storage.iterdir()) >= 64:
+                raise ControlPlaneConflictError("Guided workspace limit reached. Inspect retained demo workspaces before creating another.")
+            destination = storage / uuid.uuid4().hex
+            result = create_demo(language, destination, initialize_git=True)
+            return DemoWorkspaceResponse(profile=profile, workspace=str(result.workspace),
+                                         execution_profile="python-calculator-repair" if language == "python" else "payment-safety",
+                                         task=demo_definitions()[language].task,
+                                         created_files=list(result.created_files),
+                                         test_command=list(result.test_command))
+        finally:
+            self._demo_creation_lock.release()
+
     def providers(self) -> ProviderListResponse:
         values: list[ProviderSummary] = []
         for name in ("ollama", "azure", "deterministic"):
@@ -2390,17 +2429,66 @@ class ControlQueryService:
                 ProviderSummary(
                     name=name,
                     configured=ready,
-                    ready=ready,
+                    ready=ready and name == "deterministic",
+                    configuration_status="valid" if ready else "invalid",
+                    check_status="passed" if ready and name == "deterministic" else "not_checked",
                     model=model,
                     endpoint_host=(
                         self.config.safe_model_summary().get("endpoint_host")
                         if name == "azure"
                         else ("localhost" if name == "ollama" else None)
                     ),
-                    message=message,
+                    message=message or (
+                        "Guided demo: fixed offline fixtures, no live model."
+                        if name == "deterministic" else
+                        "Configuration only; provider reachability and model availability have not been checked."
+                    ),
                 )
             )
+        now = datetime.now(timezone.utc)
+        for index, value in enumerate(values):
+            checked = self._provider_checks.get(value.name)
+            if checked and checked.checked_at and (now - checked.checked_at).total_seconds() < 300:
+                values[index] = checked
         return ProviderListResponse(providers=values)
+
+    def check_provider(self, provider: str, *, live_consent: bool = False) -> ProviderSummary:
+        summary = next(item for item in self.providers().providers if item.name == provider)
+        if not live_consent or provider == "deterministic" or not summary.configured:
+            return summary
+        if not self._provider_check_lock.acquire(blocking=False):
+            raise ControlPlaneConflictError("A provider check is already running.")
+        try:
+            # Match the CLI's explicit minimal generation check, with no fallback,
+            # no persisted prompt/output, no retries, and bounded transport time.
+            from agentbus.main import ProviderSmokeOutput
+            from agentbus.models.router import ModelRouter
+            from agentbus.models.types import ModelRole
+
+            config = replace(self.config, provider_name=provider,
+                             enable_provider_fallback=False, model_timeout_seconds=10,
+                             model_max_retries=0, azure_openai_timeout_seconds=10,
+                             azure_openai_max_retries=0)
+            try:
+                ModelRouter(config).generate_json(
+                    ModelRole.DEFAULT, 'Return exactly this JSON object: {"status":"ok"}',
+                    schema=ProviderSmokeOutput, metadata={"operation": "provider_smoke"},
+                )
+                result = summary.model_copy(update={
+                    "ready": True, "check_status": "passed", "reachable": True,
+                    "model_available": True, "checked_at": datetime.now(timezone.utc),
+                    "message": "Explicit minimal model check passed; valid for five minutes.",
+                })
+            except Exception:
+                result = summary.model_copy(update={
+                    "ready": False, "check_status": "failed", "reachable": None,
+                    "model_available": None, "checked_at": datetime.now(timezone.utc),
+                    "message": "Provider check failed. Verify the endpoint, credentials, model/deployment, and local provider diagnostics.",
+                })
+            self._provider_checks[provider] = result
+            return result
+        finally:
+            self._provider_check_lock.release()
 
     def doctor(self, workspace: str | None = None) -> DoctorResponse:
         config = (

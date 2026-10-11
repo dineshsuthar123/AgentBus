@@ -5,7 +5,7 @@
 - Python 3.11, 3.12, 3.13, or 3.14
 - Git available on `PATH`
 - Windows or Linux for the tested public-beta paths
-- Node.js 22 only when building the VS Code extension
+- Node.js 22 or newer only for contributors building Studio or the extension
 
 Syndra never installs Git, VS Code, Ollama, model weights, or system packages
 for you.
@@ -36,9 +36,39 @@ python -m venv .venv
 .venv/bin/python -m pip install -e '.[ide]'
 ```
 
-For a non-editable install from a checkout, omit `-e`. Release artifacts can
-be built with `python -m build`, audited, and installed from the resulting
-wheel. Do not use an editable install for clean-install acceptance.
+## Prepared wheel
+
+For an already prepared, audited local distribution:
+
+```powershell
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install "dist/syndra-0.6.0b1-py3-none-any.whl[ide]"
+.venv\Scripts\syndra.exe studio --workspace .
+```
+
+On Linux use `.venv/bin/python` and `.venv/bin/syndra`. The wheel contains
+Studio's built assets and license notices; the end user needs no Node process.
+Closing the browser does not stop the foreground daemon or cancel other clients'
+runs. Use Ctrl+C in its owning terminal to stop it deliberately.
+
+## Build from source
+
+Editable Python installation alone does not build web assets. Contributors:
+
+```powershell
+cd studio
+npm.cmd ci
+npm.cmd run build
+cd ..
+.venv\Scripts\python.exe scripts/prepare_studio.py
+.venv\Scripts\python.exe -m build
+.venv\Scripts\python.exe scripts/verify_distribution.py dist
+```
+
+Use `npm` rather than `npm.cmd` on Linux. Build before packaging, so both wheel
+and sdist include the prepared assets. Do not use an editable installation for
+clean-install acceptance. See [Studio](../product/studio.md) for development
+proxy and browser authentication details.
 
 ## Verify locally
 

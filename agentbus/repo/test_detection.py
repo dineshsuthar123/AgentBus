@@ -1,3 +1,4 @@
+import ast
 import json
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,9 @@ class TestCommandDetector:
         self.workspace = Path(workspace).resolve()
 
     def detect(self) -> dict[str, Any]:
+        if self._is_owned_unittest_fixture():
+            return {"command": ["python", "-B", "-m", "unittest", "discover", "-v"],
+                    "reason": "Detected a marker-owned standard-library unittest fixture.", "confidence": "high"}
         if self._has_pytest_marker():
             return {
                 "command": ["python", "-m", "pytest"],
@@ -59,6 +63,37 @@ class TestCommandDetector:
             "reason": "No test command detected",
             "confidence": "low",
         }
+
+    def _is_owned_unittest_fixture(self) -> bool:
+        marker = self.workspace / ".syndra-demo.json"
+        try:
+            if marker.stat().st_size > 4096:
+                return False
+            metadata = json.loads(marker.read_text(encoding="utf-8"))
+            if metadata.get("language") != "python" or metadata.get("test_runner") != "unittest":
+                return False
+            candidates = list(self.workspace.glob("test_*.py")) + list(self.workspace.glob("*_test.py"))
+            tests = self.workspace / "tests"
+            if tests.is_dir():
+                for candidate in tests.rglob("*.py"):
+                    candidates.append(candidate)
+                    if len(candidates) > 100:
+                        return False
+            if not candidates or len(candidates) > 100:
+                return False
+            for candidate in candidates:
+                if not candidate.resolve().is_relative_to(self.workspace) or candidate.stat().st_size > 65536:
+                    return False
+                tree = ast.parse(candidate.read_text(encoding="utf-8"))
+                # Do not silently replace pytest collection when function-style tests are present.
+                if any(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test") for node in tree.body):
+                    return False
+                classes = [node for node in tree.body if isinstance(node, ast.ClassDef)]
+                if not classes or any(not any(isinstance(base, ast.Attribute) and isinstance(base.value, ast.Name) and base.value.id == "unittest" and base.attr == "TestCase" for base in node.bases) for node in classes):
+                    return False
+            return True
+        except (OSError, ValueError, SyntaxError, AttributeError):
+            return False
 
     def _has_pytest_marker(self) -> bool:
         if (self.workspace / "pytest.ini").is_file():

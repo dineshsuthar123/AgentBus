@@ -30,6 +30,7 @@ import type {
   RunReportResponse,
   RunSummary,
   SchedulerResponse,
+  StudioLaunchResponse,
   TaskListResponse,
   TraceArchiveExportResponse,
   TraceArchiveImportRequest,
@@ -298,6 +299,10 @@ export class SyndraClient {
 
   public createRun(body: RunCreateRequest): Promise<RunAcceptedResponse> {
     return this.request("POST", "/api/v1/runs", body);
+  }
+
+  public launchStudio(runId?: string): Promise<StudioLaunchResponse> {
+    return this.request("POST", "/api/v1/studio/launch", { run_id: runId });
   }
 
   public listRuns(limit = 100): Promise<RunListResponse> {

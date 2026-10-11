@@ -45,6 +45,36 @@ def make_task(task_id="step-1", maximum_attempts=2):
     )
 
 
+def test_history_pages_more_than_100_runs_despite_concurrent_updates(tmp_path):
+    store = StateStore(tmp_path / "history.db")
+    for index in range(121):
+        store.create_run(make_run(f"run-{index:03}"))
+    first, cursor = store.page_runs(limit=50, search="Build")
+    assert len(first) == 50 and cursor
+    store.update_run_status("run-000", RunStatus.RUNNING)
+    store.create_run(make_run("newer-run"))
+    observed = [item.run_id for item in first]
+    while cursor:
+        page, cursor = store.page_runs(limit=50, search="Build", cursor=cursor)
+        observed.extend(item.run_id for item in page)
+    assert len(observed) == len(set(observed)) == 121
+    assert "newer-run" not in observed
+    matches, _ = store.page_runs(status="running", search="run-000")
+    assert [item.run_id for item in matches] == ["run-000"]
+    assert store.page_runs(search="no matching task") == ([], None)
+
+
+def test_history_cursor_rejects_changed_filters_and_malformed_input(tmp_path):
+    store = StateStore(tmp_path / "history.db")
+    store.create_run(make_run("a"))
+    store.create_run(make_run("b"))
+    _, cursor = store.page_runs(limit=1)
+    with pytest.raises(StateStoreError, match="cursor"):
+        store.page_runs(cursor=cursor, search="changed")
+    with pytest.raises(StateStoreError, match="cursor"):
+        store.page_runs(cursor="not-a-cursor")
+
+
 def test_schema_initializes_and_enables_foreign_keys(tmp_path):
     store = StateStore(tmp_path / "state.db")
 

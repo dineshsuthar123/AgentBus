@@ -5,6 +5,21 @@ import { ReconnectingSseClient, SseParser } from "../sse";
 
 const token = "sse-test-token-with-more-than-thirty-two-bytes";
 
+test("SSE handles every CRLF split and preserves data whitespace", () => {
+  const source = ": heartbeat\r\nid: 1\r\ndata:  one\r\ndata: two\r\n\r\n";
+  const expected = [{ id: "1", event: "message", data: " one\ntwo" }];
+  for (let split = 0; split <= source.length; split += 1) {
+    const parser = new SseParser();
+    assert.deepEqual([...parser.push(source.slice(0, split)), ...parser.push(source.slice(split))], expected);
+  }
+  const parser = new SseParser();
+  assert.deepEqual(Array.from(source).flatMap((character) => parser.push(character)), expected);
+});
+
+test("SSE rejects oversized unfinished frames", () => {
+  assert.throws(() => new SseParser().push("data: " + "x".repeat(1_048_576)), /limit/i);
+});
+
 test("SSE parser handles chunk boundaries and multiline data", () => {
   const parser = new SseParser();
 
@@ -27,11 +42,9 @@ test("SSE parser ignores heartbeat comments", () => {
 });
 
 test("SSE client exposes connection readiness and clears it on stop", async () => {
-  let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+  let cancelled = false;
   const body = new ReadableStream<Uint8Array>({
-    start(controller) {
-      streamController = controller;
-    }
+    cancel() { cancelled = true; }
   });
   const client = new SyndraClient("http://127.0.0.1:43123", token);
   const stream = new ReconnectingSseClient(client, () => undefined, {
@@ -45,6 +58,36 @@ test("SSE client exposes connection readiness and clears it on stop", async () =
 
   assert.equal(stream.isConnected, true);
   stream.stop();
-  streamController?.close();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(cancelled, true);
   assert.equal(stream.isConnected, false);
+});
+
+test("SSE authentication failure stops without retrying", async () => {
+  let calls = 0;
+  let expired = false;
+  const stream = new ReconnectingSseClient(new SyndraClient("http://127.0.0.1:43123", token), () => undefined, {
+    fetcher: async () => { calls += 1; return new Response(null, { status: 403 }); },
+    onAuthenticationFailure: () => { expired = true; }
+  });
+  stream.start();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(expired, true);
+  assert.equal(calls, 1);
+  assert.equal(stream.isConnected, false);
+});
+
+test("SSE stops empty-stream reconnects at its retry budget", async () => {
+  let calls = 0;
+  let exhausted = false;
+  const stream = new ReconnectingSseClient(new SyndraClient("http://127.0.0.1:43123", token), () => undefined, {
+    maximumReconnectAttempts: 2, reconnectDelayMs: 0,
+    fetcher: async () => { calls += 1; return new Response(""); },
+    onRetryExhausted: () => { exhausted = true; }
+  });
+  stream.start();
+  for (let i = 0; i < 100 && !exhausted; i += 1) await new Promise((resolve) => setImmediate(resolve));
+  stream.stop();
+  assert.equal(calls, 2);
+  assert.equal(exhausted, true);
 });

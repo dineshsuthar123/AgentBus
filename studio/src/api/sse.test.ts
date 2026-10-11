@@ -3,6 +3,24 @@ import type { StudioClient } from "./client";
 import { SseParser, StudioEventStream, type StreamStatus } from "./sse";
 
 describe("SseParser", () => {
+  it("handles every split of CRLF frames without losing data whitespace", () => {
+    const source = ": heartbeat\r\nid: 1\r\ndata:  one\r\ndata: two\r\n\r\n";
+    for (let split = 0; split <= source.length; split += 1) {
+      const parser = new SseParser();
+      expect([...parser.push(source.slice(0, split)), ...parser.push(source.slice(split))]).toEqual([
+        { id: "1", data: " one\ntwo" }
+      ]);
+    }
+    const parser = new SseParser();
+    expect(Array.from(source).flatMap((character) => parser.push(character))).toEqual([
+      { id: "1", data: " one\ntwo" }
+    ]);
+  });
+
+  it("rejects oversized unfinished frames", () => {
+    expect(() => new SseParser().push("data: " + "x".repeat(1_048_576))).toThrow(/limit/i);
+  });
+
   it("waits for complete frames and combines multiline data", () => {
     const parser = new SseParser();
     expect(parser.push("id: 4\r\ndata: {\"sequence\":4,")).toEqual([]);
@@ -17,6 +35,44 @@ describe("SseParser", () => {
       { id: "1", data: "one" },
       { id: "2", data: "two" }
     ]);
+  });
+
+  it("stops after authentication failure without automatic retries", async () => {
+    const expired = vi.fn();
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(null, { status: 403 }));
+    const client = { authorizationHeader: () => "", eventsUrl: () => new URL("http://127.0.0.1:8765/api/v1/events") } as StudioClient;
+    const stream = new StudioEventStream(client, { fetcher, onAuthenticationFailure: expired, onState: () => undefined, onEvent: () => undefined });
+    stream.start();
+    await vi.waitFor(() => expect(expired).toHaveBeenCalledOnce());
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(fetcher.mock.calls[0][1]?.headers).not.toHaveProperty("Authorization");
+    expect(stream.currentStatus.phase).toBe("stopped");
+  });
+
+  it("bounds repeated network failures", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => { throw new TypeError("offline"); });
+    const client = { authorizationHeader: () => "", eventsUrl: () => new URL("http://127.0.0.1:8765/api/v1/events") } as StudioClient;
+    const stream = new StudioEventStream(client, { fetcher, maximumReconnectAttempts: 2, reconnectDelayMs: 10, jitterRatio: 0, onState: () => undefined, onEvent: () => undefined });
+    stream.start();
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+    expect(stream.currentStatus.phase).toBe("degraded");
+    stream.stop();
+  });
+
+  it("decodes UTF-8 split into individual bytes and reconciles sequence gaps", async () => {
+    const reconcile = vi.fn();
+    const observed: string[] = [];
+    const bytes = new TextEncoder().encode(sseFrame(1) + sseFrame(3).replace("run.updated", "run.caf\u00e9"));
+    const body = new ReadableStream<Uint8Array>({ start(controller) {
+      for (const byte of bytes) controller.enqueue(new Uint8Array([byte]));
+      controller.close();
+    } });
+    const client = { authorizationHeader: () => "", eventsUrl: () => new URL("http://127.0.0.1:8765/api/v1/events") } as StudioClient;
+    const stream = new StudioEventStream(client, { fetcher: async () => new Response(body), onState: () => undefined, onReconcile: reconcile,
+      onEvent: (event) => { observed.push(event.event_type); if (event.sequence === 3) stream.stop(); } });
+    stream.start();
+    await vi.waitFor(() => expect(observed).toEqual(["run.updated", "run.caf\u00e9"]));
+    expect(reconcile).toHaveBeenCalledWith(1);
   });
 
   it("resumes from the monotonic cursor, drops duplicates, and reconciles after reconnect", async () => {

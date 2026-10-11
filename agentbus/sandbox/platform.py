@@ -24,6 +24,9 @@ _ALIAS_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 class ExecutableIdentity:
     alias: str
     path: Path
+    canonical_path: Path
+    launch_chain: tuple[tuple[object, ...], ...]
+    environment_metadata: tuple[tuple[str, str | None], ...]
     argument_prefix: tuple[str, ...]
     sha256: str
     device: int
@@ -41,6 +44,7 @@ class ExecutableIdentity:
         return {
             "alias": self.alias,
             "path": str(self.path),
+            "canonical_path": str(self.canonical_path),
             "sha256": self.sha256,
             "size_bytes": self.size_bytes,
         }
@@ -123,7 +127,7 @@ class ExecutableCatalog:
             identity = self._identities.get(_normalize_alias(raw))
         if identity is None and Path(raw).is_absolute():
             try:
-                requested_path = Path(raw).expanduser().resolve(strict=True)
+                requested_path = Path(os.path.abspath(Path(raw).expanduser()))
             except (OSError, RuntimeError) as exc:
                 raise ExecutableValidationError(
                     f"Allowlisted executable is unavailable: {raw}."
@@ -217,7 +221,8 @@ def _resolve_executable(requested: str, *, search_path: str | None) -> Path:
                 f"Allowlisted executable could not be resolved: {requested}."
             )
     try:
-        path = Path(located).resolve(strict=True)
+        path = Path(os.path.abspath(located))
+        path.resolve(strict=True)
     except (OSError, RuntimeError) as exc:
         raise ExecutableValidationError(
             f"Allowlisted executable is unavailable: {requested}."
@@ -236,6 +241,9 @@ def _capture_identity(
     argument_prefix: Sequence[str],
 ) -> ExecutableIdentity:
     try:
+        canonical = path.resolve(strict=True)
+        chain = _launch_chain(path)
+        metadata = _environment_metadata(path)
         stat = path.stat()
         digest = _sha256_file(path)
     except OSError as exc:
@@ -245,6 +253,9 @@ def _capture_identity(
     return ExecutableIdentity(
         alias=alias,
         path=path,
+        canonical_path=canonical,
+        launch_chain=chain,
+        environment_metadata=metadata,
         argument_prefix=tuple(argument_prefix),
         sha256=digest,
         device=stat.st_dev,
@@ -259,39 +270,63 @@ def _capture_identity(
 
 def _revalidate_identity(identity: ExecutableIdentity) -> None:
     try:
-        canonical = identity.path.resolve(strict=True)
-        stat = canonical.stat()
-        digest = _sha256_file(canonical)
-    except OSError as exc:
+        current = _capture_identity(
+            alias=identity.alias,
+            path=identity.path,
+            argument_prefix=identity.argument_prefix,
+        )
+    except (OSError, RuntimeError) as exc:
         raise ExecutableValidationError(
             f"Allowlisted executable is no longer available: {identity.alias}."
         ) from exc
-    current = (
-        _path_key(canonical),
-        stat.st_dev,
-        stat.st_ino,
-        stat.st_mode,
-        stat.st_uid,
-        stat.st_gid,
-        stat.st_size,
-        stat.st_mtime_ns,
-        digest,
-    )
-    expected = (
-        _path_key(identity.path),
-        identity.device,
-        identity.inode,
-        identity.mode,
-        identity.user_id,
-        identity.group_id,
-        identity.size_bytes,
-        identity.modified_ns,
-        identity.sha256,
-    )
-    if current != expected:
+    if current != identity:
         raise ExecutableValidationError(
             f"Allowlisted executable identity changed after registration: {identity.alias}."
         )
+
+
+def _launch_chain(path: Path) -> tuple[tuple[object, ...], ...]:
+    """Pin directory identities and every traversed link, without directory mtimes."""
+    records: list[tuple[object, ...]] = []
+    links = 0
+
+    def inspect(candidate: Path) -> Path:
+        nonlocal links
+        if candidate.parent == candidate:
+            return candidate
+        parent = inspect(candidate.parent)
+        current = parent / candidate.name
+        info = current.lstat()
+        target = os.readlink(current) if current.is_symlink() else None
+        records.append((str(current), info.st_dev, info.st_ino, info.st_mode,
+                        info.st_uid, info.st_gid, target))
+        if target is not None:
+            links += 1
+            if links > 40:
+                raise ExecutableValidationError("Executable symlink chain exceeds limit.")
+            destination = Path(target)
+            if not destination.is_absolute():
+                destination = current.parent / destination
+            return inspect(Path(os.path.abspath(destination)))
+        return current
+
+    inspect(path)
+    return tuple(records)
+
+
+def _environment_metadata(path: Path) -> tuple[tuple[str, str | None], ...]:
+    # Python discovers pyvenv.cfg beside the launch path or one directory above.
+    # Pin absence too: adding a configuration changes interpreter semantics.
+    records: list[tuple[str, str | None]] = []
+    for directory in (path.parent, path.parent.parent):
+        config = directory / "pyvenv.cfg"
+        if config.exists():
+            if config.stat().st_size > 65_536:
+                raise ExecutableValidationError("Virtualenv metadata exceeds size limit.")
+            records.append((str(config), repr(_launch_chain(config)) + _sha256_file(config)))
+        else:
+            records.append((str(config), None))
+    return tuple(records)
 
 
 def _resolve_directory(path: str | Path, *, description: str) -> Path:

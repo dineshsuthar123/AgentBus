@@ -93,7 +93,12 @@ def audit_branding(root: Path) -> list[BrandingFinding]:
             for category, pattern in FORBIDDEN_PATTERNS:
                 if category == "legacy product name" and relative in LEGACY_NAME_ALLOWLIST:
                     continue
-                if pattern.search(line):
+                # The public brand changed; the canonical GitHub repository did not.
+                inspected = re.sub(
+                    r"https://github\.com/dineshsuthar123/AgentBus(?=[/\s#\"')]|\.git|$)",
+                    "https://github.com/canonical/repository", line,
+                ) if category == "legacy product name" else line
+                if pattern.search(inspected):
                     findings.append(
                         BrandingFinding(
                             relative,

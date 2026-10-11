@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from concurrent.futures import Future
 from pathlib import Path
 
 import pytest
@@ -62,8 +63,8 @@ class BarrierExecutor:
         self,
         token: CancellationToken,
         boundary: str,
-        started: threading.Barrier,
-        release: threading.Barrier,
+        started: Future[None],
+        release: threading.Event,
     ) -> None:
         self.token = token
         self.boundary = boundary
@@ -87,8 +88,8 @@ class BarrierExecutor:
             interruptible=True,
             task_id=task_id,
         ):
-            self.started.wait(timeout=5)
-            self.release.wait(timeout=5)
+            self.started.set_result(None)
+            assert self.release.wait(timeout=30), "Cancellation request was not released"
             self.token.checkpoint(
                 "race-matrix",
                 stage=self.boundary,
@@ -108,8 +109,8 @@ def test_durable_cancellation_boundary_matrix(
     store = StateStore(database)
     registry = CancellationRegistry(store)
     token = registry.prepare("run-1")
-    started = threading.Barrier(2)
-    release = threading.Barrier(2)
+    started: Future[None] = Future()
+    release = threading.Event()
     executor = BarrierExecutor(token, boundary, started, release)
     engine = DurableExecutionEngine(
         store,
@@ -124,28 +125,37 @@ def test_durable_cancellation_boundary_matrix(
         run_id="run-1",
     )
     reports = []
-    thread = threading.Thread(
-        target=lambda: reports.append(engine.run_until_blocked("run-1"))
-    )
+    errors: list[BaseException] = []
+
+    def execute() -> None:
+        try:
+            reports.append(engine.run_until_blocked("run-1"))
+        except BaseException as exc:
+            errors.append(exc)
+            if not started.done():
+                started.set_exception(exc)
+        finally:
+            if not started.done():
+                started.set_exception(AssertionError("Executor stopped before cancellation boundary"))
+
+    thread = threading.Thread(target=execute)
     thread.start()
     try:
-        started.wait(timeout=5)
+        started.result(timeout=30)
         requested = engine.request_cancellation(
             "run-1",
             f"cancel at {boundary}",
         )
-        release.wait(timeout=5)
-        thread.join(timeout=5)
+        release.set()
+        thread.join(timeout=30)
     finally:
         if thread.is_alive():
             token.request("race matrix cleanup")
-            try:
-                release.abort()
-            except threading.BrokenBarrierError:
-                pass
-            thread.join(timeout=5)
+            release.set()
+            thread.join(timeout=30)
 
     assert thread.is_alive() is False
+    assert errors == []
     assert requested.status == RunStatus.RUNNING
     assert reports[0].status == RunStatus.CANCELLED
     assert executor.calls == ["step-1", "step-2"]

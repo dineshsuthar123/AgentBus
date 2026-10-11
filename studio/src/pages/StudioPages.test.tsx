@@ -87,19 +87,42 @@ describe("Studio pages", () => {
 
   it("filters durable history by query and terminal status", async () => {
     const user = userEvent.setup();
+    const history = vi.fn(async (search: string, status: string) => ({
+      runs: runs.filter((run) => run.original_task.toLowerCase().includes(search.toLowerCase()) && (status === "all" || run.status === status)),
+      total: 1, next_cursor: null
+    }));
+    mockedUseStudio.mockReturnValue(studioValue({ client: { history } as unknown as StudioClient }));
     render(<HistoryPage />);
 
-    const search = screen.getByPlaceholderText(/search task, workspace, or run id/i);
+    const search = screen.getByLabelText("Search history");
     await user.type(search, "payment");
-    await waitFor(() => expect(screen.getByText("1 / 3 runs")).toBeInTheDocument());
-    expect(screen.getByText("Make payment confirmation idempotent")).toBeInTheDocument();
+    expect(await screen.findByText("Make payment confirmation idempotent")).toBeInTheDocument();
+    expect(history).toHaveBeenLastCalledWith("payment", "all", undefined, expect.objectContaining({ force: true }));
     expect(screen.queryByText("Update ledger export")).not.toBeInTheDocument();
 
     await user.clear(search);
     await user.selectOptions(screen.getByRole("combobox"), "failed");
-    await waitFor(() => expect(screen.getByText("1 / 3 runs")).toBeInTheDocument());
-    expect(screen.getByText("Update ledger export")).toBeInTheDocument();
+    expect(await screen.findByText("Update ledger export")).toBeInTheDocument();
+    expect(history).toHaveBeenLastCalledWith("", "failed", undefined, expect.objectContaining({ force: true }));
     expect(screen.queryByText("Make payment confirmation idempotent")).not.toBeInTheDocument();
+  });
+
+  it("distinguishes an empty saved snapshot from authoritative no-history and reconciles only on explicit refresh", async () => {
+    const user = userEvent.setup();
+    const history = vi.fn().mockResolvedValueOnce({ runs: [], total: 0, next_cursor: null }).mockResolvedValue({ runs: [runs[0]], total: 1, next_cursor: null });
+    const client = { history } as unknown as StudioClient;
+    mockedUseStudio.mockReturnValue(studioValue({ client, eventRevision: 0 }));
+    const { rerender } = render(<HistoryPage />);
+    await screen.findByText("No runs yet");
+    mockedUseStudio.mockReturnValue(studioValue({ client, eventRevision: 1 }));
+    rerender(<HistoryPage />);
+    expect(screen.getByText("Saved history snapshot is empty")).toBeInTheDocument();
+    expect(screen.queryByText("No runs yet")).not.toBeInTheDocument();
+    expect(history).toHaveBeenCalledOnce();
+    await user.click(screen.getByRole("button", { name: "Refresh history" }));
+    await screen.findByText("Repair order reconciliation");
+    expect(history).toHaveBeenCalledTimes(2);
+    expect(screen.getByText("Server-read history snapshot.")).toBeInTheDocument();
   });
 
   it("launches the payment preset only after repository validation", async () => {
@@ -188,5 +211,27 @@ describe("Studio pages", () => {
     await user.click(commit);
     expect(commit).not.toBeChecked();
     expect(pullRequest).not.toBeChecked();
+  });
+
+  it("preserves an original draft when entering and leaving the guided preset", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<NewRunPage demo={null} />);
+    await user.type(screen.getByLabelText(/what should syndra change/i), "Keep my own task");
+    rerender(<NewRunPage demo="payment" />);
+    expect((screen.getByLabelText(/what should syndra change/i) as HTMLTextAreaElement).value).toContain("Make payment confirmation idempotent");
+    expect(screen.getByLabelText(/what should syndra change/i)).toHaveAttribute("readonly");
+    expect(screen.getByRole("button", { name: /guided demo/i })).toBeInTheDocument();
+    rerender(<NewRunPage demo={null} />);
+    expect(screen.getByLabelText(/what should syndra change/i)).toHaveValue("Keep my own task");
+    expect(screen.getByRole("button", { name: /guided demo/i })).toBeDisabled();
+  });
+
+  it("does not expose commit or PR controls for an unreviewed single loop", async () => {
+    const user = userEvent.setup();
+    render(<NewRunPage demo={null} />);
+    await user.click(screen.getByRole("button", { name: /single loop/i }));
+    expect(screen.queryByRole("checkbox", { name: /commit after final review/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: /create pull request/i })).not.toBeInTheDocument();
+    expect(screen.getByText("Single loops have no final review. Commit and PR creation are unavailable.")).toBeInTheDocument();
   });
 });
