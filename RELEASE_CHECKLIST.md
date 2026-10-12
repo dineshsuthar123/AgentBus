@@ -31,9 +31,28 @@ live model provider.
 - [ ] Run `syndra release-check --full` from a clean tracked worktree.
 - [ ] Run `git diff --check`.
 
+## Studio verification
+
+From `studio`, run the frontend gates before building the Python distributions:
+
+- [ ] Run `npm ci`, `npm run typecheck`, `npm run lint`, and `npm test`.
+- [ ] Run `npm run build`, then `python scripts/prepare_studio.py` from the root.
+- [ ] Use a fresh wheel-installed environment and run
+  `node studio/scripts/folio-smoke.mjs` with `SYNDRA_ACCEPTANCE_PYTHON` pointing
+  to its interpreter. No editable checkout, manual bearer entry, or live model.
+- [ ] Inspect real desktop/mobile screenshots, both themes, keyboard/focus,
+  zoom-equivalent reflow, and axe results. Report native browser zoom separately.
+- [ ] Require actual verification and final review for the guided repair and
+  approved owned-fixture action; stale/rejected requests cannot modify files.
+- [ ] Verify run/draft/ledger reading continuity, more than 100 persisted rows,
+  archive export/import/comparison, and cross-client approval resolution.
+
 ## Distribution verification
 
 - [ ] Build wheel and source distribution twice with `python -m build --no-isolation`.
+- [ ] Run `python scripts/verify_distribution.py <build-directory>` for each set;
+  both archives must contain exactly their manifest-listed Studio assets and
+  license notices. Do not reuse an incremental wheel-only build as a release.
 - [ ] Run `python -m syndra.release_packaging` against both build sets and
   confirm semantic reproducibility.
 - [ ] Inspect metadata, entry points, extras, package data, licenses, and archive

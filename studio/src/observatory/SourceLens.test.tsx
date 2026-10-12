@@ -49,6 +49,16 @@ const bundle = {
 } satisfies RunBundle;
 
 describe("source lens", () => {
+  it("reconciles a changed file deep link and does not invent an unreported zero delta", async () => {
+    const diff = vi.fn().mockResolvedValue({ diff: "diff --git a/.syndra b/.syndra\n@@ -1 +1 @@\n-before\n+after", truncated: false });
+    const props = { bundle, client: { diff } as unknown as StudioClient, onClose: vi.fn(), onLocateTask: vi.fn(), onSelectFile: vi.fn(), timeline: [] };
+    const { rerender } = render(<SourceLens {...props} initialPath="src/payment.ts" />);
+    await waitFor(() => expect(diff).toHaveBeenCalledWith("run-source-001", "src/payment.ts", expect.objectContaining({ force: true })));
+    rerender(<SourceLens {...props} initialPath=".syndra" />);
+    await waitFor(() => expect(diff).toHaveBeenCalledWith("run-source-001", ".syndra", expect.objectContaining({ force: true })));
+    expect(screen.getAllByText("Delta not reported").length).toBeGreaterThan(0);
+    expect(screen.queryByText("+0 / -0")).not.toBeInTheDocument();
+  });
   it("cross-links observed files without inventing an exact writer", async () => {
     const user = userEvent.setup();
     const locate = vi.fn();

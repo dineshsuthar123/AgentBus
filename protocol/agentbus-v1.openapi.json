@@ -1411,6 +1411,80 @@
         "title": "ContextRole",
         "type": "string"
       },
+      "DemoWorkspaceRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "default": "python-calculator",
+            "enum": [
+              "python-calculator",
+              "payment-safety"
+            ],
+            "title": "Profile",
+            "type": "string"
+          }
+        },
+        "title": "DemoWorkspaceRequest",
+        "type": "object"
+      },
+      "DemoWorkspaceResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "created_files": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Created Files",
+            "type": "array"
+          },
+          "execution_profile": {
+            "enum": [
+              "python-calculator-repair",
+              "payment-safety"
+            ],
+            "title": "Execution Profile",
+            "type": "string"
+          },
+          "network_used": {
+            "default": false,
+            "title": "Network Used",
+            "type": "boolean"
+          },
+          "profile": {
+            "enum": [
+              "python-calculator",
+              "payment-safety"
+            ],
+            "title": "Profile",
+            "type": "string"
+          },
+          "task": {
+            "title": "Task",
+            "type": "string"
+          },
+          "test_command": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Test Command",
+            "type": "array"
+          },
+          "workspace": {
+            "title": "Workspace",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile",
+          "execution_profile",
+          "workspace",
+          "task",
+          "created_files",
+          "test_command"
+        ],
+        "title": "DemoWorkspaceResponse",
+        "type": "object"
+      },
       "DependencyKind": {
         "enum": [
           "imports",
@@ -1490,6 +1564,7 @@
             "default": "python-calculator",
             "enum": [
               "python-calculator",
+              "python-calculator-repair",
               "payment-safety",
               "cancellation-two-task",
               "tool-safe-read",
@@ -3375,6 +3450,37 @@
       "ProviderSummary": {
         "additionalProperties": false,
         "properties": {
+          "check_status": {
+            "default": "not_checked",
+            "enum": [
+              "not_checked",
+              "passed",
+              "failed"
+            ],
+            "title": "Check Status",
+            "type": "string"
+          },
+          "checked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checked At"
+          },
+          "configuration_status": {
+            "default": "invalid",
+            "enum": [
+              "valid",
+              "invalid"
+            ],
+            "title": "Configuration Status",
+            "type": "string"
+          },
           "configured": {
             "title": "Configured",
             "type": "boolean"
@@ -3412,9 +3518,31 @@
             ],
             "title": "Model"
           },
+          "model_available": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Available"
+          },
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "reachable": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reachable"
           },
           "ready": {
             "title": "Ready",
@@ -4800,6 +4928,17 @@
       "RunListResponse": {
         "additionalProperties": false,
         "properties": {
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
           "runs": {
             "items": {
               "$ref": "#/components/schemas/RunSummary"
@@ -5421,6 +5560,45 @@
           "required_input_count"
         ],
         "title": "SpanReplayabilityResponse",
+        "type": "object"
+      },
+      "StudioLaunchRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "run_id": {
+            "anyOf": [
+              {
+                "pattern": "^[a-zA-Z0-9_-]{1,128}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          }
+        },
+        "title": "StudioLaunchRequest",
+        "type": "object"
+      },
+      "StudioLaunchResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "expires_in_seconds": {
+            "const": 30,
+            "default": 30,
+            "title": "Expires In Seconds",
+            "type": "integer"
+          },
+          "launch_url": {
+            "title": "Launch Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "launch_url"
+        ],
+        "title": "StudioLaunchResponse",
         "type": "object"
       },
       "SymbolKind": {
@@ -10849,6 +11027,61 @@
               "title": "Limit",
               "type": "integer"
             }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "search",
+            "required": false,
+            "schema": {
+              "default": "",
+              "maxLength": 512,
+              "title": "Search",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "history",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "History",
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -14071,6 +14304,202 @@
           }
         },
         "summary": "Worktrees"
+      }
+    },
+    "/api/v1/studio/demo-workspaces": {
+      "post": {
+        "operationId": "create_demo_workspace_api_v1_studio_demo_workspaces_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DemoWorkspaceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DemoWorkspaceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          }
+        },
+        "summary": "Create Demo Workspace"
+      }
+    },
+    "/api/v1/studio/launch": {
+      "post": {
+        "operationId": "studio_launch_api_v1_studio_launch_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StudioLaunchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudioLaunchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          }
+        },
+        "summary": "Studio Launch"
       }
     },
     "/api/v1/tools": {

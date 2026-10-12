@@ -1,7 +1,7 @@
 import type { EventEnvelope } from "../api/types";
 import type { MeshEdge, MeshNode } from "./model";
 
-export type InspectorView = "run" | "source" | "verifier" | "review" | "evidence" | "runtime";
+export type InspectorView = "run" | "planner" | "source" | "verifier" | "review" | "evidence" | "runtime";
 
 export type ObservatorySelection =
   | { kind: "node"; node: MeshNode }

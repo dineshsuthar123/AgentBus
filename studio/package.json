@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc -b && vite build",
+    "build:showcase": "tsc -b && vite build --config vite.showcase.config.ts && node scripts/prepare-showcase.mjs",
+    "test:showcase": "node scripts/showcase-smoke.mjs",
     "typecheck": "tsc -b --pretty false",
     "test": "vitest run --maxWorkers=1 --no-file-parallelism",
     "test:watch": "vitest",

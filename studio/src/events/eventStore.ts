@@ -131,6 +131,7 @@ export class StudioEventStore {
     for (const runId of affectedRuns) this.notifications += this.runListeners.get(runId)?.size ?? 0;
     this.snapshot = this.createSnapshot();
     this.rebuildRunSnapshots(affectedRuns);
+    this.trimRunSnapshots();
     this.notify(this.listeners);
     for (const runId of affectedRuns) this.notify(this.runListeners.get(runId));
   }
@@ -174,11 +175,25 @@ export class StudioEventStore {
   public getSnapshot = (): EventStoreSnapshot => this.snapshot;
 
   public getRunSnapshot(runId: string): RunEventSnapshot {
-    return this.runSnapshots.get(runId) ?? {
+    const existing = this.runSnapshots.get(runId);
+    if (existing) return existing;
+    // External-store readers must see the same object until their data changes.
+    const empty = Object.freeze({
       events: EMPTY_EVENTS,
       runId,
       version: this.version
-    };
+    });
+    this.runSnapshots.set(runId, empty);
+    this.trimRunSnapshots(runId);
+    return empty;
+  }
+
+  private trimRunSnapshots(currentRunId?: string): void {
+    const limit = this.maximumEvents + this.runListeners.size;
+    for (const [runId, snapshot] of this.runSnapshots) {
+      if (this.runSnapshots.size <= limit) break;
+      if (runId !== currentRunId && snapshot.events.length === 0 && !this.runListeners.has(runId)) this.runSnapshots.delete(runId);
+    }
   }
 
   private requestFlush(): void {

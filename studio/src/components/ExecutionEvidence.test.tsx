@@ -50,7 +50,9 @@ describe("execution evidence components", () => {
     expect(screen.getByText("mvn")).toBeInTheDocument();
     expect(screen.getByText("mvn -q -o test")).toBeInTheDocument();
     expect(screen.getByText("payment-demo/")).toBeInTheDocument();
-    expect(screen.queryByText("C:\\work\\payment-demo")).not.toBeInTheDocument();
+    expect(screen.getByText("C:\\work\\payment-demo")).not.toBeVisible();
+    await user.click(screen.getByText("Request scope and resource limits"));
+    expect(screen.getByText("C:\\work\\payment-demo")).toBeVisible();
     await user.type(screen.getByLabelText(/decision note/i), "Offline Maven execution reviewed.");
     await user.click(screen.getByRole("button", { name: /approve & continue/i }));
 

@@ -7,7 +7,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/dineshsuthar123/Syndra.git"
+    "url": "https://github.com/dineshsuthar123/AgentBus.git"
   },
   "private": true,
   "syndraCompatibility": {
@@ -34,6 +34,15 @@
     "developer tools"
   ],
   "main": "./out/extension.js",
+  "extensionKind": ["workspace"],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Help and installation guidance are available. Daemon startup, execution, repository inspection, and browser sessions require workspace trust.",
+      "restrictedConfigurations": ["agentbus.executablePath", "agentbus.pythonPath", "agentbus.configPath", "agentbus.registryPath", "agentbus.defaultProvider", "agentbus.defaultWorkflow", "agentbus.defaultDurable", "agentbus.defaultParallel"]
+    },
+    "virtualWorkspaces": {"supported": false, "description": "Syndra requires a local filesystem and Git repository."}
+  },
   "activationEvents": [
     "onView:agentbus.runs",
     "onView:agentbus.timeline",
@@ -49,6 +58,8 @@
   ],
   "contributes": {
     "commands": [
+      {"command": "agentbus.openStudio", "title": "Syndra: Open Studio"},
+      {"command": "agentbus.openRunInStudio", "title": "Syndra: Open Current Run in Studio"},
       {
         "command": "agentbus.getStarted",
         "title": "Syndra: Get Started"

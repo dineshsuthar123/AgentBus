@@ -53,6 +53,8 @@ def serve(
     daemon_id: str | None = None,
     log_level: str = "warning",
     failure_probe: FailureProbe | None = None,
+    studio: bool = False,
+    open_browser: bool = True,
 ) -> int:
     _startup_stage("serve-entered")
     normalized_host = validate_loopback_host(host)
@@ -169,6 +171,16 @@ def serve(
                 + "\n"
             )
             sys.stdout.flush()
+        if studio:
+            from agentbus.control.studio import launch_browser_exchange
+            import webbrowser
+
+            launch_url = launch_browser_exchange(app.state.browser_sessions)
+            if open_browser:
+                webbrowser.open(launch_url)
+            print(f"Syndra Studio: http://{normalized_host}:{actual_port}/studio/", flush=True)
+            if not open_browser:
+                print(f"Open within 30 seconds: {launch_url}", flush=True)
         server.run(sockets=[listener])
         return 0
     finally:

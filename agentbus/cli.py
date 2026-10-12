@@ -39,6 +39,7 @@ COMMANDS = (
     "migrate",
     "upgrade-check",
     "serve",
+    "studio",
     "daemon",
     "control-schema",
     "worktrees",
@@ -154,6 +155,8 @@ def main(argv: list[str] | None = None) -> int:
         return _upgrade_check_command(rest)
     if command == "serve":
         return _serve_command(rest)
+    if command == "studio":
+        return _studio_command(rest)
     if command == "daemon":
         return _daemon_command(rest)
     if command == "control-schema":
@@ -202,6 +205,7 @@ def _root_parser() -> argparse.ArgumentParser:
         "migrate": "Inspect and apply safe local database migrations.",
         "upgrade-check": "Check local package, schema, config, and extension compatibility.",
         "serve": "Start the authenticated local control-plane daemon.",
+        "studio": "Launch the installed local Studio and browser session.",
         "daemon": "Inspect or safely manage local daemons.",
         "control-schema": "Export generated control-protocol artifacts.",
         "worktrees": "Inspect or explicitly clean owned worktrees.",
@@ -640,6 +644,43 @@ def _upgrade_check_command(arguments: list[str]) -> int:
             if check.action:
                 print(f"    Action: {check.action}")
     return 0 if report.ok else 2
+
+
+def _studio_command(arguments: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="syndra studio")
+    parser.add_argument("--config")
+    parser.add_argument("--workspace", default=".")
+    parser.add_argument("--port", type=int, default=0)
+    parser.add_argument("--no-open", action="store_true")
+    parser.add_argument("--registry-path")
+    args = parser.parse_args(arguments)
+    try:
+        from agentbus.control.studio import studio_assets
+        from agentbus.control.registry import DaemonRegistry, process_matches
+        from agentbus.control.version import CONTROL_PROTOCOL_VERSION
+        from agentbus.control.server import serve
+
+        studio_assets()
+        config = resolve_configuration(config_file=args.config, workspace=args.workspace).config
+        registry = DaemonRegistry(args.registry_path)
+        active = [entry for entry in registry.list() if process_matches(entry)]
+        matching = [entry for entry in active if entry.protocol_version == CONTROL_PROTOCOL_VERSION
+                    and Path(entry.state_database).resolve() == config.state_database_path.resolve()
+                    and entry.agentbus_version == __version__]
+        if active and not matching:
+            raise RuntimeError("An active daemon has different state or version. Select its configuration or stop it explicitly.")
+        if matching:
+            raise RuntimeError(
+                "A compatible daemon is already running. The CLI has no authenticated "
+                "attachment credential and will not open an unverified endpoint. Use "
+                "Syndra: Open Studio from the connected extension, retain your existing "
+                "browser session, or explicitly stop the owned daemon before relaunching."
+            )
+        return serve(config=config, port=args.port, registry_path=args.registry_path,
+                     studio=True, open_browser=not args.no_open)
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(f"Studio error: {redact_diagnostic_text(str(exc))}", file=sys.stderr)
+        return 2
 
 
 def _serve_command(arguments: list[str]) -> int:

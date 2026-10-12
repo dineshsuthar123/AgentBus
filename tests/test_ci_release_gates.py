@@ -60,6 +60,25 @@ def test_ci_runs_product_acceptance_on_both_platforms_and_beta_readiness() -> No
     assert "continue-on-error" not in workflow
 
 
+def test_windows_full_suite_has_bounded_budget_without_skipping_checks() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    windows_job = workflow.split("  windows-core:", 1)[1].split(
+        "  package-audit:", 1
+    )[0]
+    timeout = re.search(r"(?m)^    timeout-minutes: (\d+)$", windows_job)
+
+    assert timeout is not None
+    # The growing Windows suite exceeded 25 minutes before completing all tests.
+    assert 30 <= int(timeout.group(1)) <= 45
+    assert 'python: ["3.11", "3.12", "3.13", "3.14"]' in windows_job
+    assert "fail-fast: false" in windows_job
+    assert "run: python -m pytest\n" in windows_job
+    assert "python -m compileall -q syndra agentbus" in windows_job
+    assert "--suite core-offline --variant durable-parallel-fake" in windows_job
+    assert "git diff --check" in windows_job
+    assert "continue-on-error" not in windows_job
+
+
 def test_v07_specialized_ci_gates_are_focused_and_mandatory() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
 

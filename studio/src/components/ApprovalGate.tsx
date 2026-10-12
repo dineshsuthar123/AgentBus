@@ -25,7 +25,7 @@ export function ApprovalGate({ approval, onDecision, busy = false }: {
           <dl className="gate-command">
             <div><dt>Tool</dt><dd><code>{approval.tool_name ?? "managed tool"}</code></dd></div>
             <div><dt>Executable</dt><dd><code>{approval.executable ?? approval.command?.[0] ?? "bounded action"}</code></dd></div>
-            <div className="gate-command-exact"><dt>Exact command</dt><dd><code>{displayCommand(approval.command)}</code></dd></div>
+            <div className="gate-command-exact"><dt>Command summary</dt><dd><code>{displayCommand(approval.command)}</code></dd></div>
           </dl>
           <dl className="technical-grid">
             <div><dt>Workspace scope</dt><dd title="Canonical path retained by Syndra">{displayWorkspace(approval.working_directory)}</dd></div>
@@ -36,6 +36,20 @@ export function ApprovalGate({ approval, onDecision, busy = false }: {
             <div><dt>Approval state</dt><dd>{approval.state}</dd></div>
           </dl>
           {approval.arguments_summary?.length ? <div className="gate-arguments"><span>Bounded argument summary</span>{approval.arguments_summary.map((item) => <code key={item}>{item}</code>)}</div> : null}
+          <details className="approval-request-details"><summary>Request scope and resource limits</summary>
+            <p>Bounded/redacted API summaries are not unrestricted tool arguments. Authorization binds to this persisted request and revision, not the displayed command summary, and grants no permanent permission.</p>
+            <dl className="technical-grid">
+              <div><dt>Run</dt><dd><code>{approval.run_id}</code></dd></div>
+              <div><dt>Working directory</dt><dd><code>{approval.working_directory ?? "Not persisted"}</code></dd></div>
+              <div><dt>Network destination</dt><dd><code>{approval.network_destination ?? "Not reported; inspect the capability scopes"}</code></dd></div>
+              <div><dt>Tool version</dt><dd>{approval.tool_version ? `${approval.tool_version.major}.${approval.tool_version.minor ?? 0}.${approval.tool_version.patch ?? 0}` : "Not persisted"}</dd></div>
+              <div><dt>Affected paths</dt><dd>{approval.affected_paths?.length ? <ul>{approval.affected_paths.map((path, index) => <li key={index}><code>{path}</code></li>)}</ul> : "No affected path list persisted"}</dd></div>
+            </dl>
+            <h3>Requested resource budgets</h3>
+            <p>These are requested limits. Platform support and observed enforcement are recorded separately with the invocation evidence.</p>
+            {approval.resource_budget ? <dl className="technical-grid">{Object.entries(approval.resource_budget).map(([key, value]) => <div key={key}><dt>{key.replaceAll("_", " ")}</dt><dd>{value == null ? "Not requested" : String(value)}</dd></div>)}</dl> : <p>No managed-tool resource budget was persisted.</p>}
+            {approval.proposed_constraints?.length ? <><h3>Proposed constraints</h3><CapabilityScope capabilities={approval.proposed_constraints} approvalRequired /></> : <p>No additional proposed constraints were persisted.</p>}
+          </details>
           <TraceIdentity label="Approval" value={approval.approval_id} />
         </div>
         <div className="gate-scope">

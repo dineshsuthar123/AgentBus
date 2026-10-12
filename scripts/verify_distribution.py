@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import runpy
@@ -17,6 +18,32 @@ FORBIDDEN = re.compile(
     r"\.(db|sqlite3?|jsonl|pyc)$",
     re.IGNORECASE,
 )
+
+
+def _verify_studio_assets(assets: dict[str, bytes]) -> dict[str, str]:
+    manifest = json.loads(assets["asset-manifest.json"])
+    if not isinstance(manifest, dict) or not manifest:
+        raise ValueError("Studio asset manifest must be a nonempty object.")
+    for relative, digest in manifest.items():
+        if (
+            not isinstance(relative, str)
+            or any(part in {"", ".", ".."} for part in relative.split("/"))
+            or "\\" in relative
+            or ":" in relative
+            or any(ord(char) < 32 for char in relative)
+        ):
+            raise ValueError("Studio asset manifest contains an unsafe path.")
+        if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+            raise ValueError("Studio asset manifest contains an invalid hash.")
+    if set(assets) != set(manifest) | {"asset-manifest.json"}:
+        raise ValueError("Packaged Studio assets must exactly match their manifest; rebuild from a fresh sdist.")
+    required = {"index.html", "LICENSE-fonts.txt", "LICENSE-plex-sans.txt"}
+    if not required <= manifest.keys():
+        raise ValueError("Studio asset manifest is missing its entry point or font licenses.")
+    for relative, digest in manifest.items():
+        if hashlib.sha256(assets[relative]).hexdigest() != digest:
+            raise ValueError("Packaged Studio asset failed its content hash.")
+    return manifest
 
 
 def audit(dist_dir: Path) -> dict:
@@ -36,8 +63,22 @@ def audit(dist_dir: Path) -> dict:
         )
         metadata = archive.read(metadata_name).decode("utf-8")
         entry_points = archive.read(entry_points_name).decode("utf-8")
+        prefix = "syndra/studio_assets/"
+        asset_manifest = _verify_studio_assets({
+            name[len(prefix):]: archive.read(name)
+            for name in wheel_names
+            if name.startswith(prefix) and not name.endswith("/")
+        })
     with tarfile.open(sdist, "r:gz") as archive:
         sdist_names = archive.getnames()
+        prefix = f"{sdist_names[0].split('/')[0]}/syndra/studio_assets/"
+        source_assets = {
+            member.name[len(prefix):]: archive.extractfile(member).read()
+            for member in archive.getmembers()
+            if member.name.startswith(prefix) and member.isfile()
+        }
+        if _verify_studio_assets(source_assets) != asset_manifest:
+            raise ValueError("Wheel and sdist Studio asset manifests differ.")
     forbidden = sorted(
         name
         for name in [*wheel_names, *sdist_names]
@@ -71,9 +112,14 @@ def audit(dist_dir: Path) -> dict:
         "agentbus/__init__.py",
         "agentbus/evaluation/real_repositories.json",
         "agentbus/evaluation/fixtures_data/python-feature/calculator.py",
+        "syndra/studio_assets/index.html",
+        "syndra/studio_assets/asset-manifest.json",
+        "syndra/studio_assets/LICENSE-fonts.txt",
     }
     if not required_wheel_files <= set(wheel_names):
         raise ValueError("Wheel is missing packaged evaluation resources.")
+    if not any(name.endswith("/syndra/studio_assets/index.html") for name in sdist_names):
+        raise ValueError("Source distribution is missing built Studio assets.")
     return {
         "status": "PASS",
         "summary": "Wheel and sdist contents, metadata, entry points, and resource hygiene passed.",
@@ -82,6 +128,7 @@ def audit(dist_dir: Path) -> dict:
         "sdist": sdist.name,
         "wheel_files": len(wheel_names),
         "sdist_files": len(sdist_names),
+        "studio_assets_verified": len(asset_manifest),
     }
 
 

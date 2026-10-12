@@ -29,12 +29,13 @@ export function durationBetween(start?: string | null, end?: string | null): str
 }
 
 export function statusTone(status?: string | null): "success" | "danger" | "approval" | "active" | "muted" | "replay" {
-  const value = status?.toLowerCase() ?? "";
-  if (["succeeded", "passed", "approved", "valid", "ready", "completed"].some((item) => value.includes(item))) return "success";
-  if (["failed", "rejected", "denied", "invalid", "cancelled", "incompatible"].some((item) => value.includes(item))) return "danger";
-  if (["approval", "waiting", "pending_input", "awaiting"].some((item) => value.includes(item))) return "approval";
-  if (["running", "active", "started", "retryable", "ready"].some((item) => value.includes(item))) return "active";
-  if (["replay", "reused", "simulated", "partial"].some((item) => value.includes(item))) return "replay";
+  const value = status?.trim().toLowerCase() ?? "";
+  // Substrings turn "invalid" and "not_approved" into misleading success.
+  if (["succeeded", "passed", "approved", "valid", "ready", "completed", "ok", "healthy", "connected"].includes(value)) return "success";
+  if (["failed", "rejected", "denied", "invalid", "cancelled", "incompatible", "expired"].includes(value)) return "danger";
+  if (["approval_required", "pending_input", "awaiting_approval", "pending_approval"].includes(value) || value.startsWith("waiting_for_")) return "approval";
+  if (["running", "active", "started", "retryable"].includes(value)) return "active";
+  if (["replay", "reused", "simulated", "partial"].includes(value)) return "replay";
   return "muted";
 }
 

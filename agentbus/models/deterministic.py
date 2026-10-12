@@ -38,6 +38,7 @@ _DELETE_PROFILE_SHA256 = hashlib.sha256(
 ).hexdigest()
 _RUNTIME_STEP_PATTERN = re.compile(r"--- Step (\d+) ---")
 _PROFILE_REQUIREMENTS: dict[str, list[str]] = {
+    "python-calculator-repair": ["filesystem.write", "git.read"],
     "payment-safety": [
         "filesystem.write",
         "git.read",
@@ -79,6 +80,7 @@ _ANALYSIS_READ_ONLY_CAPABILITIES = {
 _PAYMENT_SOURCE = "src/main/java/com/syndra/demo/PaymentService.java"
 _LEGACY_PAYMENT_SOURCE = "src/main/java/com/agentbus/demo/PaymentService.java"
 _PROFILE_OUTPUTS: dict[str, list[str]] = {
+    "python-calculator-repair": ["calculator.py"],
     "payment-safety": [_PAYMENT_SOURCE],
     "tool-atomic-write": ["profile_result.txt"],
     "tool-source-patch": ["module.py"],
@@ -670,6 +672,15 @@ class DeterministicProvider:
                     ["git.read"],
                     f"{task_id}:payment-git-diff",
                 ),
+            ],
+            "python-calculator-repair": [
+                _tool_action(
+                    "filesystem.patch",
+                    {"path": "calculator.py", "expected": "    return left - right\n", "replacement": "    return left + right\n", "expected_occurrences": 1},
+                    ["filesystem.write"],
+                    f"{task_id}:calculator-fixture-repair",
+                ),
+                _tool_action("git.diff", {}, ["git.read"], f"{task_id}:calculator-fixture-diff"),
             ],
             "tool-safe-read": [
                 _tool_action(

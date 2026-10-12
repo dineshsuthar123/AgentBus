@@ -46,6 +46,7 @@ function InspectorBody(props: ContextInspectorProps) {
   if (selection.kind === "event") return <EventInspector event={selection.event} />;
   if (selection.kind === "file") return <FileInspector bundle={bundle} path={selection.path} />;
   if (selection.kind === "view") {
+    if (selection.view === "planner") return <PlannerInspector bundle={bundle} />;
     if (selection.view === "evidence") return <EvidenceInspector {...props} />;
     if (selection.view === "review") return <ReviewInspector bundle={bundle} />;
     if (selection.view === "verifier") return <VerifierInspector bundle={bundle} />;
@@ -129,14 +130,14 @@ function VerifierInspector({ bundle, taskId, attemptId }: { bundle: RunBundle; t
   const attempt = attemptId ? bundle.attempts?.attempts.find((item) => item.attempt_id === attemptId) : undefined;
   const report = bundle.report?.report ?? {};
   const summary = textFrom(attempt?.observation_summary, report.verifier_summary, recordOf(report.verifier).summary);
-  const command = bundle.invocations?.invocations.find((item) => item.task_id === taskId && item.capabilities.some((capability) => capability.name === "test.execute"));
+  const command = [...(bundle.invocations?.invocations ?? [])].reverse().find((item) => (taskId ? item.task_id === taskId : item.caller_role === "verifier") && item.capabilities.some((capability) => capability.name === "test.execute"));
   return <div className="inspector-stack">
     <VerificationSeal status={attempt?.verifier_status ?? task?.verifier_status ?? bundle.run.verifier_status} summary={summary} />
     <DefinitionList rows={[
       ["Task", taskId ?? "Whole run"],
       ["Attempt", attempt?.attempt_number ?? "Latest"],
       ["Managed command", command?.tool_name ?? "Not reported"],
-      ["Exit", command?.status ?? "Not reported"]
+      ["Command status", command?.status ?? "Not reported"]
     ]} />
     <InspectorList title="Failing tests" items={attempt?.retry_evidence?.diagnostics.failing_tests ?? []} empty="No failing tests were persisted." />
     <InspectorList title="Exception details" items={attempt?.retry_evidence?.diagnostics.exception_details ?? []} empty="No exception details were persisted." />
@@ -147,7 +148,14 @@ function ReviewInspector({ bundle, taskId }: { bundle: RunBundle; taskId?: strin
   const task = taskId ? bundle.tasks.tasks.find((item) => item.task_id === taskId) : undefined;
   const report = bundle.report?.report ?? {};
   const reviewer = recordOf(report.reviewer);
-  const issues = arrayOfStrings(report.reviewer_issues ?? reviewer.issues);
+  const issueRecords = report.reviewer_issues ?? reviewer.issues;
+  const issues = Array.isArray(issueRecords) ? issueRecords.flatMap((issue) => {
+    if (typeof issue === "string") return [issue];
+    const record = recordOf(issue);
+    const description = textFrom(record.message, record.description, record.summary);
+    const file = textFrom(record.file, record.path);
+    return description ? [`${typeof record.severity === "string" ? `${record.severity}: ` : ""}${description}${file ? ` (${displayPath(file)})` : ""}`] : [];
+  }) : [];
   const fixes = arrayOfStrings(report.required_fixes ?? reviewer.required_fixes);
   const summary = textFrom(report.reviewer_summary, reviewer.summary, report.review_summary)
     ?? (taskId ? "No task-level review summary was persisted." : "Awaiting mandatory final review.");
@@ -210,7 +218,7 @@ function FileInspector({ bundle, path }: { bundle: RunBundle; path: string }) {
     <DefinitionList rows={[
       ["Classification", change?.classification ?? "Not reported"],
       ["Tracked", change?.tracked == null ? "Not reported" : change.tracked ? "Yes" : "No"],
-      ["Delta", change?.binary ? "Binary" : `+${change?.additions ?? 0} / -${change?.deletions ?? 0}`],
+      ["Delta", change?.binary ? "Binary" : change?.additions == null || change.deletions == null ? "Not reported" : `+${change.additions} / -${change.deletions}`],
       ["Task", task?.title ?? "No persisted task link"]
     ]} />
     <p className="inspector-footnote">Read and verifier timestamps are shown only when matching persisted events or artifacts exist.</p>

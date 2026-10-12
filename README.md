@@ -63,38 +63,30 @@ syndra runs
 
 ## Syndra Studio
 
-**See autonomous software engineering as it happens.**
+Studio uses [Kinetic Precision](docs/product/kinetic-precision.md): a short
+working queue, a broad artifact surface, and a distinct permission attachment.
+Task, Plan, Changes, Checks and Evidence inspect the same persisted run.
+An original, optional 3D Syndra object links inspection lenses without faking
+progress. Workspace unfolds connection and diagnostic information; there is
+no permanent feature-menu sidebar. Exact approvals remain server-authoritative.
 
-**Plan -> Execute -> Approve -> Verify -> Review -> Replay**
-
-![Syndra Studio showing verified execution evidence and an approved mandatory final review](docs/product/screenshots/07-verification-review.png)
-
-[Studio screenshot gallery](docs/product/screenshots/README.md)
-
-Syndra Studio is the execution observatory for durable runs. It exposes the
-real execution mesh, managed-tool timeline, exact approval gates, attempts,
-review, scoped Git diff, trace provenance, integrity verification, and offline
-replay. The browser never calls a model provider and keeps the one-time daemon
-token in memory only.
+Install a prepared wheel with the `ide` extra, then launch:
 
 ```powershell
-# Create the isolated payment fixture once.
-.venv\Scripts\syndra.exe demo create payment --output syndra-payment-demo --git --json
-
-# Terminal 1: start the authenticated loopback daemon.
-.venv\Scripts\syndra.exe serve --host 127.0.0.1 --port 8765 --json-ready
-
-# Terminal 2: start Studio and open http://127.0.0.1:5173.
-cd studio
-npm ci
-npm run dev
+.venv\Scripts\syndra.exe studio --workspace .
 ```
 
-Paste the `bearer_token` from the ready handshake into Studio, open **Payment
-Safety Demo**, and use the absolute demo repository path. The `payment-safety`
-deterministic profile makes a real Java patch and pauses the real `mvn -q -o
-test` invocation for exact approval. [Product overview](docs/product/product-overview.md)
-| [Demo walkthrough](docs/product/payment-demo.md) | [Screenshots](docs/product/screenshots/README.md)
+The installed browser uses packaged assets and a single-use launch exchange;
+no Node server or manual daemon-token entry is needed. Choose **New task**, then
+**Create calculator guided workspace** for a fixed offline repair with actual
+tests and mandatory final review. The fixture is not an intelligent model.
+Real tasks need a configured, explicitly checked live provider.
+
+Source contributors must build/stage Studio assets first. Existing-daemon CLI
+attachment currently fails closed when its credentials cannot be verified;
+the connected VS Code extension can open that daemon's Studio securely.
+[Studio launch and security](docs/product/studio.md) describes ownership,
+development setup and the remaining workflow limitations.
 
 ## Why Syndra
 

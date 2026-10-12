@@ -75,7 +75,17 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  const connectBrowserSession = useEffectEvent(() => {
+    void connect("").catch(() => undefined);
+  });
+  useEffect(() => {
+    if (!window.location.pathname.startsWith("/studio")) return;
+    const timer = window.setTimeout(connectBrowserSession, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+
   function disconnect(): void {
+    void client?.logout().catch(() => undefined);
     setClient(undefined);
     setConnection("disconnected");
     setConnectionMessage(undefined);
@@ -125,15 +135,25 @@ export function StudioProvider({ children }: { children: ReactNode }) {
       onStatus: setStreamStatus,
       onDrop: (reason) => eventStore.recordDrop(reason),
       onReconcile: reconcileFromStream,
+      onAuthenticationFailure: () => {
+        setClient(undefined);
+        setConnection("error");
+        setConnectionMessage("Studio session expired or was revoked. Launch syndra studio again, or reconnect from the extension.");
+      },
       onEvent: (event) => {
         eventStore.ingest(event);
-        window.clearTimeout(refreshTimer.current);
-        refreshTimer.current = window.setTimeout(() => void refreshFromEvent(), 240);
+        if (refreshTimer.current === undefined) {
+          refreshTimer.current = window.setTimeout(() => {
+            refreshTimer.current = undefined;
+            void refreshFromEvent();
+          }, 240);
+        }
       }
     });
     stream.start();
     return () => {
       window.clearTimeout(refreshTimer.current);
+      refreshTimer.current = undefined;
       stream.stop();
     };
   }, [client, eventStore]);

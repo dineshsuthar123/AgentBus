@@ -1,0 +1,148 @@
+# Folio implementation checkpoint
+
+Baseline: `373e3b50aadadf8a7fe5bd52c29a86401c20140c`, Python `0.6.0b1`,
+extension `0.6.0-beta.1`, control protocol `1.0`, state schema `6`.
+Public `syndra` delegates to the existing implementation; legacy identifiers
+and persistence contracts remain. API fields are additive and client bindings
+are generated from the Python contract.
+
+## Decisions and verified defects
+
+- Executable launch paths retain virtualenv semantics while canonical target,
+  link chain and virtualenv metadata are pinned and revalidated before Popen.
+  Sanitization, hashing and `shell=False` remain mandatory.
+- Durable single has an architectural conflict with AgentLoop's completion and
+  recovery contract. It now rejects explicitly before acceptance rather than
+  weakening accepted/planned identity. It is not implemented as durable multi.
+- Replay follows the actual backend session to terminal state, with bounded
+  stale/error handling and cancellation, rather than a fixed twelve polls.
+- Provider configuration no longer implies successful live readiness. Checks
+  are explicit and bounded; no loading-time provider call or demo fallback.
+- Both SSE clients handle arbitrary CR/LF boundaries and bounded frames;
+  authentication errors stop retrying. Run refresh serializes/coalesces reads
+  without starving under sustained events.
+- History searches/pages persisted state beyond the recent hundred, with
+  filter-bound keyset cursors and stable creation ordering.
+- The Windows cancellation failure was a five-second readiness barrier, not
+  evidence of a local-MCP cancellation defect. Tests now wait for actual entry,
+  propagate worker failures and preserve cleanup/resume assertions.
+- Changing a requested repository no longer retargets daemon-owned logs/state.
+  Execution workspace is scoped separately from authoritative storage paths.
+- The first browser fixture used a creation profile against an existing broken
+  calculator. The dedicated repair profile now patches only the function and
+  leaves its bundled unittest unchanged; actual verification/review completes.
+- Folio navigation keeps a bounded working set, run sections and reading
+  positions in memory. A real browser exposed scroll clamping during React
+  teardown; cleanup now preserves the last observed reading position rather
+  than overwriting it with the removed pane's layout. The ledger retains its
+  loaded cursor pages and filters while inspecting older runs.
+- Unresolved run scope no longer enables Repository against the daemon's
+  default workspace. The last saved run ID/section is restored only after an
+  authoritative lookup, with explicit deep links taking precedence.
+- Exact tickets render directly from approval records, independent of optional
+  graph records. A reproduced partial-snapshot regression hid the ticket when
+  its task was unavailable. Revisions, rejection, conflict refresh and resume
+  semantics remain server-bound. All available scopes and requested budgets
+  can be expanded; summaries are never labelled unrestricted exact arguments.
+- Incremental wheel-only builds retained stale frontend chunks in setuptools'
+  `build/lib`. The exact-membership audit reproduces and rejects that output;
+  CI now builds the wheel from a fresh sdist and audits both archives.
+- Cold direct links exposed React error 185 before the first SSE event: an
+  uncached empty run snapshot had a different identity on every external-store
+  read. Empty snapshots are now immutable, cached and bounded; subscribed runs
+  are protected from cache eviction. Regressions cover cold mounting, first
+  events, clearing and unrelated-event stability. The browser gate now requires
+  zero JavaScript errors and records only error categories/static-asset frames.
+- Real light-theme captures exposed inherited dark-only diff/capability colors
+  and an approval panel overflowing a fixed-height inspector grid. Semantic
+  colors, readable decision controls and natural artifact layout fix both;
+  changes and the exact attachment remain in separate desktop columns.
+
+## Ownership and security
+
+The CLI-owned foreground daemon is stopped deliberately by its terminal owner.
+A browser session closing does not stop execution. The extension preserves
+owned/attached lifecycle handling and opens Studio through an authenticated
+single-use exchange. CLI attachment without verifiable credentials is an
+explicit limitation, not an unverified port shortcut. Remote/virtual browser
+launch is unsupported. Exact approvals and repository/tool policy are unchanged.
+
+Browser sessions use hashed, ephemeral codes and HTTP-only same-origin cookies;
+restart requires reauthentication. No token URL or browser-storage credential
+is used. Managed storage is not hidden merely with a `runs/` gitignore entry.
+Failed runs preserve file artifacts; no destructive rollback was introduced.
+
+## Acceptance status
+
+Local evidence is generated by `studio/scripts/folio-smoke.mjs` against a real
+daemon serving packaged assets. It creates a disposable repository through
+the authenticated GUI, launches the fixed repair, requires verifier passed and
+reviewer approved, captures actual states and runs browser axe. Results and
+screenshots live in `.tmp/folio-evidence/`, not shipped sample data.
+
+Only label an execution **installed wheel** when the harness uses a fresh
+installed interpreter rather than an editable source checkout. Artifact build,
+hash audit and reproducibility comparison are separate gates. Unit tests do not
+prove installed Electron/VSIX acceptance; that result must be reported separately.
+
+The Windows full Python suite passed (1,992 passed, 11 skipped, one Starlette
+deprecation warning). A default-temp rerun could not set up fixtures because
+the shared Windows pytest directory denied access; the complete verified run
+used a new workspace-local `--basetemp` without deleting existing data. Control-plane
+true-offline and wheel-installed product acceptance passed. Studio's fresh
+wheel browser flow passed through `syndra studio --no-open`, with verifier
+passed, reviewer approved, no manual token entry and zero axe violations in
+22 captured states, including light/dark approvals, 320/390-pixel mobile views,
+and 720-CSS-pixel/2x-density zoom-equivalent reflow. This is not a claim of native
+browser zoom testing. Cold direct run links passed with no JavaScript errors.
+The installed journey also verified an exact approved
+deletion with real tests and final review, stale-revision rejection, rejected
+file preservation and resolution across two browser clients. Archive export/import
+and persisted comparison passed through the real daemon. Studio has 122 passing
+tests in 32 files. Wheel/sdist audits
+verified all 49 asset hashes and found no resource/credential leaks; the two
+builds passed the existing reproducibility comparison. Extension unit tests,
+protocol freshness, Electron integration, VSIX audit and all five installed fresh-profile stages
+(initial, recovery, multi-root stress, untrusted, trusted-recovery) passed.
+
+The offline RC acceptance harness passed all 22 gates, and the core-offline
+durable-parallel-fake evaluation passed 9/9 cases with no safety failures.
+The full release-check execution passed 23 technical gates but still reports
+FAIL for tracked Git cleanliness, plus an untracked-input warning. This work
+is intentionally uncommitted; no gate was waived and no release was published.
+
+Workspace Repository now exposes exact-run-scope index attach/build/update/
+verify/repair/cancel, paged search, symbols/dependencies, impact/test suggestions
+and context planning through existing APIs. Tools and policy are read-only;
+MCP checks require explicit diagnostic consent. Multiple pending approvals have
+one selected exact ticket rather than duplicated permissions.
+
+Evidence now exposes source-content-free validated archive export/import,
+bounded comparison paging, regression fixture capture and captured checkpoint
+forks. Modified-input/live verification forks intentionally remain in CLI/native
+controls rather than an unrestricted JSON editor in Studio.
+
+Native browser 200% zoom, a simultaneous installed VS Code plus Studio approval journey, the
+complete adversarial visual matrix, and whole-history attention aggregation
+remain acceptance limitations. The attention selector explicitly covers recent
+work, not all persisted history. The API still provides bounded/redacted tool
+argument summaries rather than an unrestricted payload or executable identity
+hash UI. Instrument Serif and the revised S-shaped mark are not yet bundled.
+No live Ollama/Azure task, Linux symlink-venv run, hosted deployment or public
+release is claimed by this Windows offline checkpoint.
+
+## Local evidence
+
+- Full Python results: `.tmp/folio-full-final.log` and `.tmp/folio-full-final.xml`.
+- Studio regressions: `.tmp/folio-studio-tests-final.log`.
+- Installed browser: `.tmp/folio-evidence/result.json`, `accessibility.json`,
+  `browser-errors.json` and state-labelled PNGs. A failed harness overwrites its
+  acceptance status; prior failure screenshots may remain for diagnosis.
+- Offline acceptance/evaluation: `.tmp/folio-rc-acceptance-final.log` and
+  `.tmp/folio-core-eval-final.log`.
+- Release gates: `.tmp/folio-release-check-full.json` and
+  `.tmp/folio-release-check-fast-final.json`; Git cleanliness remains failed.
+- Final non-published build sets: `.tmp/folio-verified-dist-one/` and
+  `.tmp/folio-verified-dist-two/`, with `.tmp/folio-final-package-audit.json`.
+- Native package: `extensions/vscode/syndra-vscode.vsix`; installation stages
+  are recorded in `.tmp/folio-extension-fresh-final.log`.

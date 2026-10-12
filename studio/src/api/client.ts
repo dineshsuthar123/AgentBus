@@ -81,7 +81,7 @@ export class StudioClient {
     origin = window.location.origin,
     fetcher?: FetchLike
   ) {
-    if (token.trim().length < 32) {
+    if (token && token.trim().length < 32) {
       throw new Error("The Syndra session token must contain at least 32 characters.");
     }
     this.origin = validateStudioOrigin(origin);
@@ -90,11 +90,38 @@ export class StudioClient {
 
   public info(options?: ReadRequestOptions) { return this.read<InfoResponse>("/api/v1/info", options); }
   public providers(options?: ReadRequestOptions) { return this.read<ProviderListResponse>("/api/v1/providers", options); }
+  public checkProvider(provider: string) {
+    return this.request<import("./types").ProviderSummary>("POST", "/api/v1/providers/check", { provider, live_consent: true });
+  }
+  public createDemoWorkspace(profile: "python-calculator" | "payment-safety") {
+    return this.request<import("./types").DemoWorkspaceResponse>("POST", "/api/v1/studio/demo-workspaces", { profile });
+  }
+  public tools(options?: ReadRequestOptions) { return this.read<import("./types").ToolListResponse>("/api/v1/tools", options); }
+  public policy(options?: ReadRequestOptions) { return this.read<import("./types").ToolPolicyResponse>("/api/v1/policy", options); }
+  public mcpServers(options?: ReadRequestOptions) { return this.read<import("./types").McpServerListResponse>("/api/v1/mcp/servers", options); }
+  public checkMcp(serverId: string) { return this.request<import("./types").McpServerCheckResponse>("POST", `/api/v1/mcp/servers/${segment(serverId)}/check`); }
+  public attachIndex(workspace: string) { return this.request<import("./types").WorkspaceIndexStatusResponse>("POST", "/api/v1/workspaces/index/attach", { workspace }); }
+  public buildIndex(workspace: string) { return this.request<import("./types").WorkspaceIndexMutationResponse>("POST", "/api/v1/workspaces/index", { workspace, workspace_trusted: true }); }
+  public indexStatus(workspaceId: string, options?: ReadRequestOptions) { return this.read<import("./types").WorkspaceIndexStatusResponse>(`/api/v1/workspaces/${segment(workspaceId)}/index`, options); }
+  public indexAction(workspaceId: string, action: "update" | "repair") { return this.request<import("./types").WorkspaceIndexMutationResponse>("POST", `/api/v1/workspaces/${segment(workspaceId)}/index/${action}`, { workspace_trusted: true }); }
+  public verifyIndex(workspaceId: string) { return this.request<import("./types").WorkspaceIndexVerificationResponse>("POST", `/api/v1/workspaces/${segment(workspaceId)}/index/verify`); }
+  public cancelIndex(workspaceId: string) { return this.request<import("./types").WorkspaceIndexCancellationResponse>("POST", `/api/v1/workspaces/${segment(workspaceId)}/index/cancel`); }
+  public searchIndex(workspaceId: string, query: string, offset = 0) { return this.request<import("./types").WorkspaceSearchResponse>("POST", `/api/v1/workspaces/${segment(workspaceId)}/search`, { query, offset, limit: 25 }); }
+  public symbol(workspaceId: string, symbolId: string, options?: ReadRequestOptions) { return this.read<import("./types").WorkspaceSymbolResponse>(`/api/v1/workspaces/${segment(workspaceId)}/symbols/${segment(symbolId)}`, options); }
+  public dependencies(workspaceId: string, symbolId: string, options?: ReadRequestOptions) { return this.read<import("./types").WorkspaceGraphResponse>(`/api/v1/workspaces/${segment(workspaceId)}/dependencies/${segment(symbolId)}?depth=1&limit=50`, options); }
+  public impact(workspaceId: string, subjects: string[]) { return this.request<import("./types").WorkspaceImpactResponse>("POST", `/api/v1/workspaces/${segment(workspaceId)}/impact`, { subjects, max_depth: 3, max_nodes: 100 }); }
+  public contextPlan(workspaceId: string, task: string) { return this.request<import("./types").WorkspaceContextPlanResponse>("POST", `/api/v1/workspaces/${segment(workspaceId)}/context-plan`, { task, byte_budget: 32768, token_budget: 8192 }); }
   public doctor(workspace?: string, options?: ReadRequestOptions) {
     const query = workspace ? `?workspace=${encodeURIComponent(workspace)}` : "";
     return this.read<DoctorResponse>(`/api/v1/doctor${query}`, options);
   }
   public runs(limit = 100, options?: ReadRequestOptions) { return this.read<RunListResponse>(`/api/v1/runs?limit=${limit}`, options); }
+  public history(search: string, status: string, cursor?: string, options?: ReadRequestOptions) {
+    const query = new URLSearchParams({ history: "true", limit: "50", search });
+    if (status !== "all") query.set("status", status);
+    if (cursor) query.set("cursor", cursor);
+    return this.read<RunListResponse>(`/api/v1/runs?${query}`, options);
+  }
   public run(runId: string, options?: ReadRequestOptions) { return this.read<RunSummary>(`/api/v1/runs/${segment(runId)}`, options); }
   public tasks(runId: string, options?: ReadRequestOptions) { return this.read<TaskListResponse>(`/api/v1/runs/${segment(runId)}/tasks`, options); }
   public attempts(runId: string, options?: ReadRequestOptions) { return this.read<AttemptListResponse>(`/api/v1/runs/${segment(runId)}/attempts?limit=500`, options); }
@@ -161,6 +188,15 @@ export class StudioClient {
     return this.request<ReplayAcceptedResponse>("POST", `/api/v1/runs/${segment(runId)}/replays`, body);
   }
 
+  public cancelReplay(replayId: string) {
+    return this.request<import("./types").ReplayCancelResponse>("POST", `/api/v1/replays/${segment(replayId)}/cancel`);
+  }
+  public exportTrace(traceId: string) { return this.read<import("./types").TraceArchiveExportResponse>(`/api/v1/traces/${segment(traceId)}/export?include_source_content=false`, { force: true }); }
+  public importTrace(archiveBase64: string) { return this.request<import("./types").TraceArchiveImportResponse>("POST", "/api/v1/traces/import", { archive_base64: archiveBase64, allow_source_content: false }); }
+  public captureFixture(runId: string) { return this.request<import("./types").RegressionFixtureCaptureResponse>("POST", `/api/v1/runs/${segment(runId)}/fixtures`, { include_source_content: false }); }
+  public compare(left: string, right: string) { return this.request<import("./types").ComparisonResponse>("POST", "/api/v1/comparisons?limit=100", { left, right }); }
+  public comparison(comparisonId: string, after: number) { return this.read<import("./types").ComparisonResponse>(`/api/v1/comparisons/${segment(comparisonId)}?after=${after}&limit=100`); }
+
   public resume(runId: string) {
     return this.request<{ run_id: string; status: string; resumed: boolean }>("POST", `/api/v1/runs/${segment(runId)}/resume`);
   }
@@ -180,7 +216,10 @@ export class StudioClient {
     return url;
   }
 
-  public authorizationHeader(): string { return `Bearer ${this.token}`; }
+  public authorizationHeader(): string { return this.token ? `Bearer ${this.token}` : ""; }
+  public async logout() {
+    await this.fetcher(new URL("/studio/session/logout", this.origin), { method: "POST", credentials: "same-origin" });
+  }
 
   public queryCacheSummary(): {
     cachedReads: number;
@@ -302,7 +341,7 @@ export class StudioClient {
         method,
         headers: {
           Accept: "application/json",
-          Authorization: this.authorizationHeader(),
+          ...(this.token ? { Authorization: this.authorizationHeader() } : {}),
           ...(body === undefined ? {} : { "Content-Type": "application/json" })
         },
         body: body === undefined ? undefined : JSON.stringify(body),

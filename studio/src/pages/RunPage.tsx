@@ -1,14 +1,17 @@
-import { Activity, CircleStop, FileCode2, Fingerprint, LoaderCircle, PanelRightOpen, RefreshCw, RotateCcw, ScrollText, ShieldCheck } from "lucide-react";
+import { Activity, CircleStop, FileCode2, LoaderCircle, RefreshCw, RotateCcw, ScrollText, ShieldCheck } from "lucide-react";
 import { lazy, Suspense, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
-import type { ApprovalSummary, TraceVerificationResponse } from "../api/types";
+import type { ApprovalSummary, ReplaySessionResponse, TraceVerificationResponse } from "../api/types";
+import { ReplaySession } from "../components/ReplaySession";
 import { loadRunBundle, type RunBundle } from "../api/runBundle";
+import { StudioApiError } from "../api/client";
 import { PanelBoundary } from "../components/PanelBoundary";
+import { ApprovalGate } from "../components/ApprovalGate";
+import { ExecutionOverview } from "../components/ExecutionOverview";
 import { ErrorPanel, LoadingState, StatusSignal, TraceIdentity } from "../components/Primitives";
 import { displayWorkspace, durationBetween, humanize } from "../lib/format";
 import { ContextInspector } from "../observatory/ContextInspector";
 import { ExecutionMesh } from "../observatory/ExecutionMesh";
 import { FlightRecorder, type TimelinePresentation } from "../observatory/FlightRecorder";
-import { IntegritySpine, type PresentationMode } from "../observatory/IntegritySpine";
 import { buildExecutionMesh, isPendingApproval, projectExecutionMesh, type MeshEdge, type MeshNode } from "../observatory/model";
 import type { InspectorView, ObservatorySelection } from "../observatory/selection";
 import { buildTimeline, type TimelineRecord } from "../observatory/timelineModel";
@@ -16,10 +19,11 @@ import { useLayoutPreferences } from "../state/layoutPreferences";
 import { useRunEvents, useStudio } from "../state/StudioContext";
 
 const SourceLens = lazy(() => import("../observatory/SourceLens").then((module) => ({ default: module.SourceLens })));
+const EvidenceWorkbench = lazy(() => import("../components/EvidenceWorkbench").then((module) => ({ default: module.EvidenceWorkbench })));
 const EMPTY_QUERY = new URLSearchParams();
 
 export function RunPage({ query = EMPTY_QUERY, runId }: { query?: URLSearchParams; runId: string }) {
-  const { client, streamStatus } = useStudio();
+  const { client } = useStudio();
   const runEvents = useRunEvents(runId);
   const [bundle, setBundle] = useState<RunBundle>();
   const [selection, setSelection] = useState<ObservatorySelection>({ kind: "view", view: "run" });
@@ -29,45 +33,72 @@ export function RunPage({ query = EMPTY_QUERY, runId }: { query?: URLSearchParam
   const [traceVerification, setTraceVerification] = useState<TraceVerificationResponse>();
   const [focusRequest, setFocusRequest] = useState(0);
   const [announcement, setAnnouncement] = useState("");
+  const [replaySession, setReplaySession] = useState<ReplaySessionResponse>();
   const [presentation, setPresentation] = useState<TimelinePresentation>({ mode: "live" });
   const [sourceOpen, setSourceOpen] = useState(false);
   const [preferences, setPreferences] = useLayoutPreferences();
-  const deepLinkApplied = useRef(false);
+  const deepLinkApplied = useRef<string | undefined>(undefined);
+  const scheduleReconciliation = useRef<(() => void) | undefined>(undefined);
   const eventVersion = runEvents.version;
+  const selectionQuery = ["view", "file", "node", "attempt"].map((key) => `${key}=${query.get(key) ?? ""}`).join("&");
+
+  const applyDeepLink = useEffectEvent((next: RunBundle) => {
+    if (deepLinkApplied.current === selectionQuery) return;
+    const linked = selectionFromDeepLink(query, next) ?? { selection: { kind: "view", view: "run" } as ObservatorySelection, sourceOpen: false };
+    setSelection(linked.selection);
+    setSourceOpen(linked.sourceOpen);
+    setPreferences((current) => ({ ...current, inspectorCollapsed: false }));
+    deepLinkApplied.current = selectionQuery;
+  });
+  const receiveBundle = useEffectEvent((next: RunBundle) => {
+    setBundle(next);
+    setError(undefined);
+    applyDeepLink(next);
+  });
+  const applyCurrentDeepLink = useEffectEvent(() => { if (bundle) applyDeepLink(bundle); });
+  useEffect(() => { applyCurrentDeepLink(); }, [selectionQuery]);
 
   useEffect(() => {
     if (!client) return;
     const controller = new AbortController();
-    const timer = window.setTimeout(() => {
+    let timer: number | undefined;
+    let inFlight = false;
+    let dirty = false;
+    let first = true;
+    function schedule() {
+      dirty = true;
+      if (inFlight || timer !== undefined || controller.signal.aborted) return;
+      timer = window.setTimeout(() => { void reconcile(); }, first ? 0 : 120);
+    }
+    async function reconcile() {
+      timer = undefined;
+      dirty = false;
+      inFlight = true;
       setRefreshing(true);
-      void loadRunBundle(client, runId, { force: eventVersion > 0, signal: controller.signal })
-        .then((next) => {
-          if (!controller.signal.aborted) {
-            setBundle(next);
-            setError(undefined);
-            if (!deepLinkApplied.current) {
-              const linked = selectionFromDeepLink(query, next);
-              if (linked) {
-                setSelection(linked.selection);
-                setSourceOpen(linked.sourceOpen);
-                setPreferences((current) => ({ ...current, inspectorCollapsed: false }));
-              }
-              deepLinkApplied.current = true;
-            }
-          }
-        })
-        .catch((reason: unknown) => {
-          if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : "Run state could not be loaded.");
-        })
-        .finally(() => {
-          if (!controller.signal.aborted) setRefreshing(false);
-        });
-    }, eventVersion > 0 ? 120 : 0);
+      try {
+        const next = await loadRunBundle(client!, runId, { force: !first, signal: controller.signal });
+        if (!controller.signal.aborted) receiveBundle(next);
+      } catch (reason) {
+        if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : "Run state could not be loaded.");
+      } finally {
+        inFlight = false;
+        first = false;
+        if (!controller.signal.aborted) {
+          setRefreshing(false);
+          if (dirty) schedule();
+        }
+      }
+    }
+    scheduleReconciliation.current = schedule;
+    schedule();
     return () => {
       window.clearTimeout(timer);
       controller.abort();
+      scheduleReconciliation.current = undefined;
     };
-  }, [client, eventVersion, query, runId, setPreferences]);
+  }, [client, runId]);
+
+  useEffect(() => { if (eventVersion > 0) scheduleReconciliation.current?.(); }, [eventVersion]);
 
   const model = useMemo(() => bundle ? buildExecutionMesh(bundle) : undefined, [bundle]);
   const timeline = useMemo(() => bundle ? buildTimeline(bundle, runEvents.events) : [], [bundle, runEvents.events]);
@@ -76,17 +107,20 @@ export function RunPage({ query = EMPTY_QUERY, runId }: { query?: URLSearchParam
     () => model && presentation.mode !== "live" ? projectExecutionMesh(model, presentationRecord?.timestamp) : model,
     [model, presentation.mode, presentationRecord?.timestamp]
   );
-  const pendingApproval = bundle?.approvals.approvals.find(isPendingApproval);
+  const pendingApprovals = bundle?.approvals.approvals.filter(isPendingApproval) ?? [];
+  const pendingApproval = pendingApprovals.find((approval) => approval.approval_id === query.get("approval")) ?? pendingApprovals[0];
   const pendingNode = pendingApproval && model?.nodes.find((node) => node.approvalId === pendingApproval.approval_id);
 
   async function refresh() {
-    if (!client) return;
+    if (!client) return false;
     setRefreshing(true);
     try {
       setBundle(await loadRunBundle(client, runId, { force: true }));
       setError(undefined);
+      return true;
     } catch (reason) {
       if (!(reason instanceof DOMException && reason.name === "AbortError")) setError(reason instanceof Error ? reason.message : "Run state could not be refreshed.");
+      return false;
     } finally {
       setRefreshing(false);
     }
@@ -102,7 +136,10 @@ export function RunPage({ query = EMPTY_QUERY, runId }: { query?: URLSearchParam
       await refresh();
       setAnnouncement(decision === "approve" ? "Approval confirmed by Syndra. Execution may continue." : "Rejection confirmed by Syndra. The run remains stopped.");
     } catch (reasonValue) {
-      setError(reasonValue instanceof Error ? reasonValue.message : "The approval decision was not accepted.");
+      if (reasonValue instanceof StudioApiError && reasonValue.status === 409) {
+        const current = await refresh();
+        setError(`This request changed or was resolved in another client. Your decision was not applied. ${current ? "Inspect the refreshed request before deciding." : "The snapshot is stale; refresh again before deciding."}`);
+      } else setError(reasonValue instanceof Error ? reasonValue.message : "The approval decision was not accepted.");
     } finally {
       setBusy(undefined);
     }
@@ -132,13 +169,8 @@ export function RunPage({ query = EMPTY_QUERY, runId }: { query?: URLSearchParam
     setSelection({ kind: "view", view: "evidence" });
     try {
       const accepted = await client.createReplay(runId, { mode: "offline" });
-      for (let attempt = 0; attempt < 12; attempt += 1) {
-        const session = await client.replay(accepted.replay_id, { force: true });
-        if (isTerminal(session.status)) break;
-        await new Promise((resolve) => window.setTimeout(resolve, 250));
-      }
-      await refresh();
-      setAnnouncement("Offline replay completed. Captured and dispatched work remain explicitly distinguished.");
+      setReplaySession(accepted);
+      setAnnouncement(`Offline replay accepted: ${accepted.replay_id}.`);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Offline replay could not be started.");
     } finally {
@@ -155,6 +187,24 @@ export function RunPage({ query = EMPTY_QUERY, runId }: { query?: URLSearchParam
     finally { setBusy(undefined); }
   }
 
+  function selectNode(node: MeshNode) {
+    setSelection({ kind: "node", node });
+    setPreferences((current) => ({ ...current, inspectorCollapsed: false }));
+    updateDeepLink(runId, { node: node.id, attempt: node.attemptNumber ? String(node.attemptNumber) : undefined });
+  }
+
+  function selectView(view: InspectorView) {
+    setSourceOpen(view === "source");
+    setSelection({ kind: "view", view });
+    setPreferences((current) => ({ ...current, inspectorCollapsed: false }));
+    updateDeepLink(runId, { view });
+  }
+
+  async function copyIdentity(value: string, message: string) {
+    await navigator.clipboard?.writeText(value);
+    setAnnouncement(message);
+  }
+
   const handleCommand = useEffectEvent((command: string) => {
     if (!bundle || !model) return;
     if (command === "focus-active") {
@@ -163,6 +213,11 @@ export function RunPage({ query = EMPTY_QUERY, runId }: { query?: URLSearchParam
       setFocusRequest((value) => value + 1);
     } else if (command === "approval") {
       if (pendingNode) selectNode(pendingNode);
+      if (pendingApproval) {
+        const heading = document.getElementById(`approval-title-${pendingApproval.approval_id}`);
+        heading?.scrollIntoView({ block: "nearest" });
+        heading?.focus({ preventScroll: true });
+      }
     } else if (command === "source") selectView("source");
     else if (command === "verifier") selectView("verifier");
     else if (command === "verify-trace") void verifyEvidence();
@@ -204,31 +259,12 @@ export function RunPage({ query = EMPTY_QUERY, runId }: { query?: URLSearchParam
   if (!bundle) return <div className="page"><ErrorPanel message={error ?? "Run not found."} action={<a className="text-link" href="#/history">Return to history</a>} /></div>;
 
   const terminal = isTerminal(bundle.run.status);
-  const mode: PresentationMode = presentation.mode === "replay" ? "REPLAY" : presentation.mode === "manual" || terminal ? "HISTORICAL" : "LIVE";
-  const effectiveSelection: ObservatorySelection = pendingNode ? { kind: "node", node: pendingNode } : selection;
+  const effectiveSelection = selection;
   const inspectorCollapsed = preferences.inspectorCollapsed && !pendingNode;
-
-  function selectNode(node: MeshNode) {
-    setSelection({ kind: "node", node });
-    setPreferences((current) => ({ ...current, inspectorCollapsed: false }));
-    updateDeepLink(runId, { node: node.id, attempt: node.attemptNumber ? String(node.attemptNumber) : undefined });
-  }
 
   function selectEdge(edge: MeshEdge) {
     setSelection({ kind: "edge", edge });
     setPreferences((current) => ({ ...current, inspectorCollapsed: false }));
-  }
-
-  function selectView(view: InspectorView) {
-    setSourceOpen(view === "source");
-    setSelection({ kind: "view", view });
-    setPreferences((current) => ({ ...current, inspectorCollapsed: false }));
-    updateDeepLink(runId, { view });
-  }
-
-  async function copyIdentity(value: string, message: string) {
-    await navigator.clipboard?.writeText(value);
-    setAnnouncement(message);
   }
 
   function selectTimelineRecord(record: TimelineRecord) {
@@ -265,7 +301,6 @@ export function RunPage({ query = EMPTY_QUERY, runId }: { query?: URLSearchParam
           <button type="button" onClick={() => selectView("source")}><FileCode2 size={14} /> Source</button>
           <button type="button" onClick={() => selectView("runtime")}><ScrollText size={14} /> Events</button>
           <button type="button" onClick={() => selectView("review")}><ShieldCheck size={14} /> Review</button>
-          <button type="button" onClick={() => selectView("evidence")}><Fingerprint size={14} /> Evidence</button>
           <button type="button" onClick={() => void refresh()} disabled={refreshing || busy !== undefined} aria-label="Refresh run">{refreshing ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />}</button>
           {!terminal && <button type="button" onClick={() => void cancel()} disabled={busy !== undefined} aria-label="Cancel run"><CircleStop size={14} /></button>}
           {isResumable(bundle) && <button type="button" onClick={() => void resume()} disabled={busy !== undefined}>{busy === "resume" ? <LoaderCircle className="spin" size={14} /> : <RotateCcw size={14} />} Resume</button>}
@@ -274,14 +309,24 @@ export function RunPage({ query = EMPTY_QUERY, runId }: { query?: URLSearchParam
 
       {error && <div className="run-error-strip"><ErrorPanel message={error} /></div>}
       {bundle.partialErrors && <div className="partial-state" role="status"><Activity size={13} /><span>Partial snapshot</span><strong>{Object.keys(bundle.partialErrors).join(", ")} unavailable</strong></div>}
-
-      <div className="observatory-grid">
-        <PanelBoundary name="Execution mesh"><div className={`execution-source-stage ${sourceOpen ? "source-is-open" : ""}`}><ExecutionMesh model={presentedModel!} selectedId={effectiveSelection.kind === "node" ? effectiveSelection.node.id : undefined} highlightTaskId={highlightedTaskId} onSelectNode={selectNode} onSelectEdge={selectEdge} focusRequest={focusRequest} />{sourceOpen && <Suspense fallback={<LoadingState label="Opening source lens" />}><SourceLens bundle={bundle} client={client} timeline={timeline} highlightTaskId={highlightedTaskId} initialPath={effectiveSelection.kind === "file" ? effectiveSelection.path : undefined} onSelectFile={selectFile} onLocateTask={locateTask} onClose={() => setSourceOpen(false)} /></Suspense>}</div></PanelBoundary>
-        {!inspectorCollapsed ? <PanelBoundary name={pendingApproval ? "Approval inspector" : "Context inspector"} safetyCritical={Boolean(pendingApproval)}><ContextInspector bundle={bundle} events={runEvents.events} selection={effectiveSelection} busy={busy} traceVerification={traceVerification} onDecision={decide} onReplay={replay} onVerify={verifyEvidence} onClose={pendingApproval ? undefined : () => setPreferences((current) => ({ ...current, inspectorCollapsed: true }))} /></PanelBoundary> : <button className="inspector-reopen" type="button" onClick={() => setPreferences((current) => ({ ...current, inspectorCollapsed: false }))}><PanelRightOpen size={15} /><span>Inspector</span></button>}
-        <IntegritySpine bundle={bundle} mode={mode} stream={streamStatus} onSelect={selectView} />
+      <nav className="run-sections" aria-label="Run sections">
+        {([["run", "Task"], ["planner", "Plan"], ["source", "Changes"], ["verifier", "Checks"], ["evidence", "Evidence"]] as const).map(([view, label]) => <button key={view} aria-pressed={selection.kind === "view" && selection.view === view || view === "source" && sourceOpen} onClick={() => selectView(view)}>{label}</button>)}
+      </nav>
+      {pendingApproval && <a className="approval-jump" href={`#approval-title-${pendingApproval.approval_id}`} onClick={(event) => { event.preventDefault(); const heading = document.getElementById(`approval-title-${pendingApproval.approval_id}`); heading?.scrollIntoView({ block: "nearest" }); heading?.focus({ preventScroll: true }); }}>Approval needed: inspect this exact request</a>}
+      {pendingApprovals.length > 1 && <label className="approval-selector">Pending permission requests ({pendingApprovals.length})<select value={pendingApproval!.approval_id} onChange={(event) => { const parameters = new URLSearchParams(query); parameters.set("approval", event.target.value); window.location.hash = `#/runs/${encodeURIComponent(runId)}?${parameters}`; }}>{pendingApprovals.slice(0, 100).map((approval) => <option key={approval.approval_id} value={approval.approval_id}>{approval.task_id}: {approval.requested_action} / revision {approval.revision}</option>)}</select>{pendingApprovals.length > 100 && <span>Showing the first 100 requests. Resolve these to reveal remaining work.</span>}</label>}
+      <div className={`artifact-spread ${pendingApproval ? "has-decision" : ""}`}>
+        <div className="folio-run-artifact">
+        {!sourceOpen && selection.kind === "view" && selection.view === "run" && <ExecutionOverview bundle={bundle} onView={selectView} onTask={locateTask} />}
+        {sourceOpen && <Suspense fallback={<LoadingState label="Opening changes" />}><SourceLens bundle={bundle} client={client} timeline={timeline} highlightTaskId={highlightedTaskId} initialPath={effectiveSelection.kind === "file" ? effectiveSelection.path : undefined} onSelectFile={selectFile} onLocateTask={locateTask} onClose={() => setSourceOpen(false)} /></Suspense>}
+        <PanelBoundary name="Run artifact"><ContextInspector bundle={bundle} events={runEvents.events} selection={pendingApproval ? selection.kind === "node" && selection.node.kind === "approval" ? { kind: "view", view: "run" } : selection : effectiveSelection} busy={busy} traceVerification={traceVerification} onDecision={decide} onReplay={replay} onVerify={verifyEvidence} /></PanelBoundary>
+        </div>
+        {pendingApproval && <PanelBoundary name="Exact approval" safetyCritical><aside className="context-inspector decision-attachment" aria-label="Selected exact request"><div className="inspector-scroll"><ApprovalGate approval={pendingApproval} busy={busy === `approval:${pendingApproval.approval_id}`} onDecision={(decision, reason) => decide(pendingApproval, decision, reason)} /></div></aside></PanelBoundary>}
       </div>
-
-      <FlightRecorder events={timeline} presentation={presentation} terminal={terminal} collapsed={preferences.timelineCollapsed} onChange={setPresentation} onSelect={selectTimelineRecord} onToggle={() => setPreferences((current) => ({ ...current, timelineCollapsed: !current.timelineCollapsed }))} />
+      {bundle.approvals.approvals.some((approval) => !isPendingApproval(approval)) && <details className="resolved-permissions"><summary>Resolved permission records</summary><p>A decision authorizes or rejects a request; it does not prove execution or verification succeeded.</p><ul>{bundle.approvals.approvals.filter((approval) => !isPendingApproval(approval)).slice(0, 100).map((approval) => <li key={approval.approval_id}><strong>{approval.requested_action}</strong><StatusSignal status={approval.state} /><code>{approval.approval_id}</code><span>Revision {approval.revision}</span></li>)}</ul></details>}
+      {client && selection.kind === "view" && selection.view === "evidence" && <Suspense fallback={<LoadingState label="Opening evidence management" />}><EvidenceWorkbench key={runId} bundle={bundle} client={client} /></Suspense>}
+      <details className="folio-dependencies"><summary>Dependencies and execution graph</summary><ExecutionMesh model={presentedModel!} selectedId={effectiveSelection.kind === "node" ? effectiveSelection.node.id : undefined} highlightTaskId={highlightedTaskId} onSelectNode={selectNode} onSelectEdge={selectEdge} focusRequest={focusRequest} /></details>
+      <details className="folio-activity"><summary>Activity and captured timeline</summary><FlightRecorder events={timeline} presentation={presentation} terminal={terminal} collapsed={preferences.timelineCollapsed} onChange={setPresentation} onSelect={selectTimelineRecord} onToggle={() => setPreferences((current) => ({ ...current, timelineCollapsed: !current.timelineCollapsed }))} /></details>
+      {replaySession && client && <ReplaySession key={replaySession.replay_id} client={client} initial={replaySession} />}
       <div className="sr-only" aria-live="polite" aria-atomic="true">{pendingApproval ? "Approval required. Execution is paused at the exact policy gate." : announcement}</div>
     </div>
   );
@@ -292,7 +337,7 @@ function isTerminal(status: string): boolean {
 }
 
 function isResumable(bundle: RunBundle): boolean {
-  return ["failed", "cancelled", "paused", "waiting_for_approval"].includes(bundle.run.status.toLowerCase()) && !bundle.approvals.approvals.some(isPendingApproval);
+  return bundle.run.workflow !== "single" && ["failed", "cancelled", "paused", "waiting_for_approval"].includes(bundle.run.status.toLowerCase()) && !bundle.approvals.approvals.some(isPendingApproval);
 }
 
 function isEditableTarget(target: EventTarget | null): boolean {
@@ -300,10 +345,11 @@ function isEditableTarget(target: EventTarget | null): boolean {
 }
 
 function updateDeepLink(runId: string, values: Record<string, string | undefined>) {
-  const query = new URLSearchParams();
+  const query = new URLSearchParams(window.location.hash.split("?")[1]);
+  for (const key of ["view", "file", "node", "attempt"]) query.delete(key);
   for (const [key, value] of Object.entries(values)) if (value) query.set(key, value);
   const suffix = query.size ? `?${query.toString()}` : "";
-  window.history.replaceState(null, "", `#/runs/${encodeURIComponent(runId)}${suffix}`);
+  window.location.hash = `#/runs/${encodeURIComponent(runId)}${suffix}`;
 }
 
 function selectionFromDeepLink(query: URLSearchParams, bundle: RunBundle): { selection: ObservatorySelection; sourceOpen: boolean } | undefined {
@@ -329,5 +375,5 @@ function selectionFromDeepLink(query: URLSearchParams, bundle: RunBundle): { sel
 }
 
 function isInspectorView(value: string): value is InspectorView {
-  return ["run", "source", "verifier", "review", "evidence", "runtime"].includes(value);
+  return ["run", "planner", "source", "verifier", "review", "evidence", "runtime"].includes(value);
 }

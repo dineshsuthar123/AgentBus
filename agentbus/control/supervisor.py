@@ -172,6 +172,9 @@ class AgentBusRunBackend:
             deterministic = {}
         return self.base_config.with_overrides(
             workspace_dir=run.workspace,
+            state_dir=str(self.base_config.state_directory_path),
+            state_db=str(self.base_config.state_database_path),
+            runs_dir=str(self.base_config.runs_path),
             provider_name=(
                 routing.get("provider")
                 if isinstance(routing, dict) and routing.get("provider")
@@ -258,6 +261,9 @@ class AgentBusRunBackend:
     def _config_for(self, request: RunCreateRequest) -> AgentBusConfig:
         return self.base_config.with_overrides(
             workspace_dir=request.workspace,
+            state_dir=str(self.base_config.state_directory_path),
+            state_db=str(self.base_config.state_database_path),
+            runs_dir=str(self.base_config.runs_path),
             provider_name=request.provider,
             fallback_provider_name=request.fallback_provider,
             enable_provider_fallback=request.fallback_enabled,

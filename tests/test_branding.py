@@ -41,6 +41,19 @@ def test_compatibility_policy_may_name_legacy_product(tmp_path: Path) -> None:
     assert audit_branding(tmp_path) == []
 
 
+def test_showcase_outputs_are_ignored_but_source_branding_is_enforced(tmp_path: Path) -> None:
+    output = tmp_path / "studio" / "showcase-dist" / "assets"
+    output.mkdir(parents=True)
+    (output / "index.js").write_text('const base = "/AgentBus/";\n', encoding="utf-8")
+    assert audit_branding(tmp_path) == []
+    source = tmp_path / "studio" / "src"
+    source.mkdir()
+    (source / "bad.tsx").write_text('<h1>AgentBus Studio</h1>\n', encoding="utf-8")
+    findings = audit_branding(tmp_path)
+    assert len(findings) == 1
+    assert findings[0].path == "studio/src/bad.tsx"
+
+
 def test_canonical_cli_help_and_protocol_metadata_use_syndra() -> None:
     for module in ("syndra", "syndra.cli"):
         completed = subprocess.run(

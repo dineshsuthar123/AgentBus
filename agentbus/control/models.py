@@ -63,6 +63,15 @@ class HealthResponse(ProtocolModel):
     protocol_version: str = CONTROL_PROTOCOL_VERSION
 
 
+class StudioLaunchRequest(ProtocolModel):
+    run_id: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9_-]{1,128}$")
+
+
+class StudioLaunchResponse(ProtocolModel):
+    launch_url: str
+    expires_in_seconds: Literal[30] = 30
+
+
 class InfoResponse(ProtocolModel):
     protocol_version: str = CONTROL_PROTOCOL_VERSION
     agentbus_version: str
@@ -245,6 +254,7 @@ class RoleModelOverrides(ProtocolModel):
 class DeterministicProviderOptions(ProtocolModel):
     profile: Literal[
         "python-calculator",
+        "python-calculator-repair",
         "payment-safety",
         "cancellation-two-task",
         "tool-safe-read",
@@ -286,6 +296,20 @@ class DeterministicProviderOptions(ProtocolModel):
         if len(value) != len(set(value)):
             raise ValueError("failure_calls must not contain duplicates")
         return value
+
+
+class DemoWorkspaceRequest(ProtocolModel):
+    profile: Literal["python-calculator", "payment-safety"] = "python-calculator"
+
+
+class DemoWorkspaceResponse(ProtocolModel):
+    profile: Literal["python-calculator", "payment-safety"]
+    execution_profile: Literal["python-calculator-repair", "payment-safety"]
+    workspace: str
+    task: str
+    created_files: list[str]
+    test_command: list[str]
+    network_used: bool = False
 
 
 class RunCreateRequest(ProtocolModel):
@@ -333,6 +357,11 @@ class RunCreateRequest(ProtocolModel):
 
     @model_validator(mode="after")
     def execution_modes_are_compatible(self) -> "RunCreateRequest":
+        if self.durable and self.workflow == WorkflowMode.SINGLE:
+            raise ValueError(
+                "durable single-agent execution is not supported; use non-durable "
+                "single mode or explicitly select durable multi-agent mode"
+            )
         if self.parallel and not (
             self.durable and self.workflow == WorkflowMode.MULTI
         ):
@@ -341,6 +370,8 @@ class RunCreateRequest(ProtocolModel):
             raise ValueError("max_workers greater than one requires parallel execution")
         if self.create_pr and not self.commit_changes:
             raise ValueError("PR creation requires commit_changes")
+        if self.workflow == WorkflowMode.SINGLE and (self.commit_changes or self.create_pr):
+            raise ValueError("single-agent mode has no final review; commit and PR creation require multi-agent mode")
         if self.fallback_enabled and self.fallback_provider is None:
             raise ValueError("fallback_enabled requires a fallback_provider")
         if self.provider == "azure" and not self.live_provider_consent:
@@ -408,6 +439,7 @@ class RunSummary(ProtocolModel):
 class RunListResponse(ProtocolModel):
     runs: list[RunSummary]
     total: int = Field(ge=0)
+    next_cursor: str | None = None
 
 
 class TaskSummary(ProtocolModel):
@@ -1262,6 +1294,11 @@ class ProviderSummary(ProtocolModel):
     name: str
     configured: bool
     ready: bool
+    configuration_status: Literal["valid", "invalid"] = "invalid"
+    check_status: Literal["not_checked", "passed", "failed"] = "not_checked"
+    reachable: bool | None = None
+    model_available: bool | None = None
+    checked_at: datetime | None = None
     model: str | None = None
     endpoint_host: str | None = None
     message: str | None = None

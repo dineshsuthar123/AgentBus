@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState, type ReactNode, type UIEvent } from "react";
+import { useReadingPosition } from "../state/folioNavigation";
 
 export interface VirtualScrollState {
   atEnd: boolean;
@@ -8,19 +9,22 @@ export interface VirtualScrollState {
 export interface VirtualListProps {
   ariaLabel: string;
   className?: string;
+  contentWidth?: string;
   height: number;
   itemCount: number;
   onScrollState?: (state: VirtualScrollState) => void;
   overscan?: number;
   renderItem: (index: number) => ReactNode;
   rowHeight: number;
+  readingKey?: string;
   scrollRevision?: number;
   scrollToIndex?: number;
 }
 
-export function VirtualList({ ariaLabel, className = "", height, itemCount, onScrollState, overscan = 8, renderItem, rowHeight, scrollRevision = 0, scrollToIndex }: VirtualListProps) {
+export function VirtualList({ ariaLabel, className = "", contentWidth, height, itemCount, onScrollState, overscan = 8, readingKey, renderItem, rowHeight, scrollRevision = 0, scrollToIndex }: VirtualListProps) {
   const viewport = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
+  useReadingPosition(readingKey, viewport);
   const start = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan);
   const visibleCount = Math.ceil(height / rowHeight) + overscan * 2;
   const end = Math.min(itemCount, start + visibleCount);
@@ -43,8 +47,8 @@ export function VirtualList({ ariaLabel, className = "", height, itemCount, onSc
     setScrollTop(target);
   }, [height, itemCount, rowHeight, scrollRevision, scrollToIndex]);
 
-  return <div className={`virtual-list ${className}`} ref={viewport} role="list" aria-label={ariaLabel} onScroll={scroll} style={{ height, overflow: "auto" }}>
-    <div className="virtual-list-spacer" style={{ height: itemCount * rowHeight, position: "relative" }}>
+  return <div className={`virtual-list ${className}`} ref={viewport} role="list" tabIndex={0} aria-label={ariaLabel} onScroll={scroll} style={{ height, overflow: "auto" }}>
+    <div className="virtual-list-spacer" style={{ height: itemCount * rowHeight, minWidth: contentWidth, position: "relative" }}>
       {visible.map((index) => <div aria-posinset={index + 1} aria-setsize={itemCount} className="virtual-row" key={index} role="listitem" style={{ height: rowHeight, position: "absolute", top: index * rowHeight, width: "100%" }}>{renderItem(index)}</div>)}
     </div>
   </div>;

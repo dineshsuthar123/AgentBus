@@ -8,10 +8,11 @@ describe("Syndra Studio connection", () => {
   it("explains the authenticated memory-only loopback session before connecting", () => {
     render(<StudioProvider><App /></StudioProvider>);
 
-    expect(screen.getByRole("heading", { name: /see the agent/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /your intent.*made real/i })).toBeInTheDocument();
     expect(screen.getByLabelText("Session token")).toHaveAttribute("type", "password");
-    expect(screen.getByText(/token stays in browser memory/i)).toBeInTheDocument();
-    expect(screen.getByText(/syndra serve --port 8765 --json-ready/i)).toBeInTheDocument();
+    expect(screen.getByText(/bearer credentials stay in memory/i)).toBeInTheDocument();
+    expect(screen.getByText(/syndra studio --workspace/i)).toBeInTheDocument();
+    expect(screen.getByText(/developer recovery: bearer connection/i).closest("details")).not.toHaveAttribute("open");
   });
 
   it("preserves a durable deep link across reauthentication", () => {

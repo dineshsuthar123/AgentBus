@@ -12,6 +12,12 @@ may include documented breaking changes. See the
 
 ### Added
 
+- Installed Syndra Studio with single-use loopback session bootstrap, durable
+  run inspection, exact approvals, source artifacts, and evidence workbench.
+- The interactive Living Workshop, bounded 3D ribbon, direct shape and camera
+  controls, local-only examples, flat rendering, and reduced-motion support.
+- A separate public showcase build with no control-plane clients or network
+  connections, plus free GitHub Pages deployment and local installation guidance.
 - Offline-first `setup`, deterministic `quickstart`, demo repositories, layered
   configuration commands, stable product errors, and actionable `doctor` checks.
 - Explicit package, Python, protocol, schema, migration, daemon, and VS Code

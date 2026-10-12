@@ -112,6 +112,8 @@ def test_executable_symlink_is_pinned_to_its_canonical_interpreter(
 ) -> None:
     expected = Path(sys.executable).resolve()
     launcher = tmp_path / "python-link"
+    redirect = tmp_path / "redirect"
+    redirect.symlink_to(expected)
     launcher.symlink_to(expected)
     catalog = ExecutableCatalog({"python-link": launcher})
     supervisor = ControlledProcessSupervisor(tmp_path, catalog=catalog)
@@ -122,10 +124,17 @@ def test_executable_symlink_is_pinned_to_its_canonical_interpreter(
     )
 
     assert result.passed is True
-    assert result.executable.path == expected
+    assert result.executable.path == launcher.absolute()
+    assert result.executable.canonical_path == expected
     assert Path(result.stdout.strip()).resolve() == expected
     assert result.safe_diagnostic_metadata["launch_backend"] == "direct"
     assert result.safe_diagnostic_metadata["shell"] is False
+
+    # Even a retarget to the same binary changes the registered launch chain.
+    launcher.unlink()
+    launcher.symlink_to(redirect)
+    with pytest.raises(ExecutableValidationError, match="identity changed"):
+        catalog.resolve("python-link")
 
 
 def test_executable_permission_change_invalidates_pinned_identity(

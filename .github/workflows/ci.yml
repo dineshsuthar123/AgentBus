@@ -14,6 +14,65 @@ env:
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
 jobs:
+  studio:
+    name: Studio
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: studio/package-lock.json
+      - run: python -m pip install -e ".[dev,ide]"
+      - run: python -m syndra.cli control-schema export --check
+      - run: npm ci
+        working-directory: studio
+      - run: npm run typecheck
+        working-directory: studio
+      - run: npm run lint
+        working-directory: studio
+      - run: npm test
+        working-directory: studio
+      - run: npm run build
+        working-directory: studio
+      - run: npm run build:showcase
+        working-directory: studio
+      - run: python scripts/prepare_studio.py
+      - name: Build installed Studio wheel
+        run: python -m build --no-isolation --outdir .tmp/studio-wheel
+      - name: Audit installed Studio assets
+        run: python scripts/verify_distribution.py .tmp/studio-wheel
+      - name: Install wheel into a fresh environment
+        run: |
+          python -m venv .tmp/studio-wheel-venv
+          for wheel in .tmp/studio-wheel/*.whl; do
+            .tmp/studio-wheel-venv/bin/python -m pip install "${wheel}[ide]"
+          done
+      - name: Install browser for real-daemon acceptance
+        run: npx playwright install --with-deps chromium
+        working-directory: studio
+      - name: Verify installed Studio auth, guided run, and accessibility
+        run: node studio/scripts/folio-smoke.mjs
+        env:
+          SYNDRA_ACCEPTANCE_PYTHON: ${{ github.workspace }}/.tmp/studio-wheel-venv/bin/python
+      - name: Verify public showcase has no control-plane connection
+        run: npm run test:showcase
+        working-directory: studio
+      - uses: actions/upload-artifact@v4
+        with:
+          name: syndra-studio-assets
+          path: syndra/studio_assets/
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: syndra-studio-browser-evidence
+          path: .tmp/folio-evidence/
+
   python-core:
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest
@@ -69,7 +128,8 @@ jobs:
   windows-core:
     name: Windows Core / ${{ matrix.python }}
     runs-on: windows-latest
-    timeout-minutes: 25
+    # Allow the complete Windows suite plus setup and offline evaluation.
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
@@ -95,10 +155,15 @@ jobs:
 
   package-audit:
     name: Package Audit
+    needs: studio
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: syndra-studio-assets
+          path: syndra/studio_assets/
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -122,6 +187,7 @@ jobs:
 
   product-acceptance:
     name: Product Acceptance / ${{ matrix.platform }}
+    needs: studio
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
@@ -134,6 +200,10 @@ jobs:
             platform: Windows
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: syndra-studio-assets
+          path: syndra/studio_assets/
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -148,10 +218,15 @@ jobs:
 
   rc-acceptance:
     name: RC Acceptance
+    needs: studio
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: syndra-studio-assets
+          path: syndra/studio_assets/
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -530,12 +605,12 @@ jobs:
       - name: Capture local performance baseline
         run: >-
           python -m syndra.cli benchmark all
-          --files 20 --iterations 1
+          --files 20 --iterations 5
           --output "${{ runner.temp }}/syndra-performance-baseline.json" --json
       - name: Compare local performance smoke
         run: >-
           python -m syndra.cli benchmark all
-          --files 20 --iterations 1
+          --files 20 --iterations 5
           --baseline "${{ runner.temp }}/syndra-performance-baseline.json" --json
       - name: Check patch whitespace
         run: git diff --check

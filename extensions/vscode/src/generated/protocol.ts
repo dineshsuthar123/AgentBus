@@ -235,10 +235,24 @@ export interface DaemonRegistryEntry {
   "log_path"?: string | null;
 }
 
+export interface DemoWorkspaceRequest {
+  "profile"?: "python-calculator" | "payment-safety";
+}
+
+export interface DemoWorkspaceResponse {
+  "profile": "python-calculator" | "payment-safety";
+  "execution_profile": "python-calculator-repair" | "payment-safety";
+  "workspace": string;
+  "task": string;
+  "created_files": Array<string>;
+  "test_command": Array<string>;
+  "network_used"?: boolean;
+}
+
 export type DependencyKind = "imports" | "exports" | "calls" | "references" | "inherits" | "implements" | "instantiates" | "reads" | "writes" | "configures" | "tests" | "owns" | "generated_from";
 
 export interface DeterministicProviderOptions {
-  "profile"?: "python-calculator" | "payment-safety" | "cancellation-two-task" | "tool-safe-read" | "tool-atomic-write" | "tool-source-patch" | "tool-pytest" | "tool-git-diff" | "tool-git-commit" | "tool-delete-approval" | "tool-deny-outside-read" | "tool-deny-credential-read" | "tool-process-timeout" | "tool-process-cancel" | "tool-excessive-output" | "tool-budget-exhaustion" | "tool-local-mcp" | "tool-loop-limit" | "tool-control-acceptance";
+  "profile"?: "python-calculator" | "python-calculator-repair" | "payment-safety" | "cancellation-two-task" | "tool-safe-read" | "tool-atomic-write" | "tool-source-patch" | "tool-pytest" | "tool-git-diff" | "tool-git-commit" | "tool-delete-approval" | "tool-deny-outside-read" | "tool-deny-credential-read" | "tool-process-timeout" | "tool-process-cancel" | "tool-excessive-output" | "tool-budget-exhaustion" | "tool-local-mcp" | "tool-loop-limit" | "tool-control-acceptance";
   "latency_seconds"?: number;
   "latency_roles"?: Array<"planner" | "coder" | "reviewer" | "summarizer">;
   "failure_kind"?: "output_error" | "timeout" | "service_unavailable";
@@ -580,6 +594,11 @@ export interface ProviderSummary {
   "name": string;
   "configured": boolean;
   "ready": boolean;
+  "configuration_status"?: "valid" | "invalid";
+  "check_status"?: "not_checked" | "passed" | "failed";
+  "reachable"?: boolean | null;
+  "model_available"?: boolean | null;
+  "checked_at"?: string | null;
   "model"?: string | null;
   "endpoint_host"?: string | null;
   "message"?: string | null;
@@ -812,6 +831,7 @@ export interface RunCreateRequest {
 export interface RunListResponse {
   "runs": Array<RunSummary>;
   "total": number;
+  "next_cursor"?: string | null;
 }
 
 export interface RunReplayabilityResponse {
@@ -911,6 +931,15 @@ export interface SpanReplayabilityResponse {
   "substitution_kinds"?: Array<string>;
   "requires_isolated_workspace"?: boolean;
   "live_provider_consent_required"?: boolean;
+}
+
+export interface StudioLaunchRequest {
+  "run_id"?: string | null;
+}
+
+export interface StudioLaunchResponse {
+  "launch_url": string;
+  "expires_in_seconds"?: 30;
 }
 
 export type SymbolKind = "module" | "package" | "namespace" | "class" | "interface" | "enum" | "record" | "function" | "method" | "constructor" | "field" | "property" | "variable" | "constant" | "type_alias" | "endpoint" | "test" | "configuration_unit";

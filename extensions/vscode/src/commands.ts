@@ -98,6 +98,8 @@ export class CommandController implements vscode.Disposable {
     const command = (name: string, callback: (...args: unknown[]) => unknown) =>
       this.disposables.push(vscode.commands.registerCommand(name, callback));
     command("agentbus.startTask", () => this.start(false, false));
+    command("agentbus.openStudio", () => this.openStudio(false));
+    command("agentbus.openRunInStudio", () => this.openStudio(true));
     command("agentbus.startDurableTask", () => this.start(true, false));
     command("agentbus.startParallelTask", () => this.start(true, true));
     command("agentbus.submitRun", (request) =>
@@ -221,7 +223,15 @@ export class CommandController implements vscode.Disposable {
           }
           this.refreshViews();
         },
-        { onReconnectFailure: () => this.refresh() }
+        { onReconnectFailure: () => this.refresh(),
+          onAuthenticationFailure: () => {
+            this.status.text = "$(debug-disconnect) Syndra session expired";
+            this.output.appendLine("Syndra session expired or was revoked. Reconnect to the daemon.");
+          },
+          onRetryExhausted: () => {
+            this.status.text = "$(debug-disconnect) Syndra stream stale";
+            this.output.appendLine("Syndra event stream retry budget exhausted. Reconnect to reconcile persisted state.");
+          } }
       );
       this.stream.start();
       await this.refresh();
@@ -247,6 +257,22 @@ export class CommandController implements vscode.Disposable {
 
   private refreshViews(): void {
     for (const provider of this.refreshers) provider.refresh();
+  }
+
+  private async openStudio(currentRun: boolean): Promise<void> {
+    if (vscode.env.remoteName) {
+      throw new Error("Browser Studio requires a local extension host. Remote daemon browser transport is not supported.");
+    }
+    const folder = await selectWorkspace(true);
+    if (!folder) return;
+    const run = currentRun ? await this.chooseRun() : undefined;
+    if (currentRun && !run) return;
+    const response = await (await this.client()).launchStudio(run?.run_id);
+    const url = new URL(response.launch_url);
+    if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || url.pathname !== "/" || url.search || url.hash || url.username || url.password) {
+      throw new Error("Daemon returned an invalid local Studio launch URL.");
+    }
+    await vscode.env.openExternal(vscode.Uri.parse(url.href));
   }
 
   private async start(durable: boolean, parallel: boolean): Promise<void> {
@@ -277,6 +303,9 @@ export class CommandController implements vscode.Disposable {
     const workflow = parallel
       ? "multi"
       : config.get<"single" | "multi">("defaultWorkflow", "multi");
+    if (durable && workflow === "single") {
+      throw new Error("Durable single-agent execution is not supported. Select multi-agent mode or start a non-durable single task.");
+    }
     const client = await this.client();
     const validation = await client.validateWorkspace({
       workspace,

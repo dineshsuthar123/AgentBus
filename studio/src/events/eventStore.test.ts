@@ -14,6 +14,30 @@ function event(sequence: number, runId = "run-a"): EventEnvelope {
 }
 
 describe("StudioEventStore", () => {
+  it("returns a stable empty snapshot before SSE arrives and after clearing", () => {
+    const store = new StudioEventStore(10, () => undefined);
+    const empty = store.getRunSnapshot("cold-run");
+    expect(store.getRunSnapshot("cold-run")).toBe(empty);
+    store.ingest(event(1, "unrelated-run"));
+    store.flush();
+    expect(store.getRunSnapshot("cold-run")).toBe(empty);
+    store.clear();
+    const cleared = store.getRunSnapshot("cold-run");
+    expect(cleared).not.toBe(empty);
+    expect(store.getRunSnapshot("cold-run")).toBe(cleared);
+  });
+
+  it("bounds empty snapshot retention without evicting a subscribed run", () => {
+    const store = new StudioEventStore(2, () => undefined);
+    const unsubscribe = store.subscribeRun("selected", vi.fn());
+    const selected = store.getRunSnapshot("selected");
+    const obsolete = store.getRunSnapshot("obsolete");
+    for (let index = 0; index < 20; index += 1) store.getRunSnapshot(`unopened-${index}`);
+    expect(store.getRunSnapshot("selected")).toBe(selected);
+    expect(store.getRunSnapshot("obsolete")).not.toBe(obsolete);
+    unsubscribe();
+  });
+
   it("batches a burst into one notification and scopes run subscribers", () => {
     const scheduled: Array<() => void> = [];
     const store = new StudioEventStore(100, (callback) => scheduled.push(callback));

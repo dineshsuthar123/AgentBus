@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from urllib.parse import parse_qs, urlsplit
 from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -12,7 +13,7 @@ from typing import Any
 try:
     from fastapi import FastAPI, Query, Request
     from fastapi.exceptions import RequestValidationError
-    from fastapi.responses import JSONResponse, Response, StreamingResponse
+    from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
     from starlette.exceptions import HTTPException as StarletteHTTPException
 except ImportError as exc:  # pragma: no cover - exercised by the CLI dependency test
     raise RuntimeError(
@@ -26,7 +27,7 @@ from agentbus.control.authentication import (
     safe_error_message,
     validate_origin,
 )
-from agentbus.control.errors import ControlPlaneError
+from agentbus.control.errors import ControlPlaneError, ControlPlaneForbiddenError
 from agentbus.control.event_stream import (
     ControlEventReader,
     parse_event_cursor,
@@ -43,6 +44,8 @@ from agentbus.control.models import (
     ComparisonCreateRequest,
     ComparisonResponse,
     DiffResponse,
+    DemoWorkspaceRequest,
+    DemoWorkspaceResponse,
     DoctorResponse,
     ErrorBody,
     ErrorResponse,
@@ -70,6 +73,8 @@ from agentbus.control.models import (
     RunReplayabilityResponse,
     RunReportResponse,
     RunSummary,
+    StudioLaunchRequest,
+    StudioLaunchResponse,
     SchedulerResponse,
     TaskListResponse,
     TraceArchiveExportResponse,
@@ -113,6 +118,7 @@ from agentbus.control.models import (
 from agentbus.control.replay_supervisor import BackgroundReplaySupervisor
 from agentbus.control.services import ControlQueryService
 from agentbus.control.supervisor import BackgroundRunSupervisor
+from agentbus.control.studio import BrowserSessions, launch_browser_exchange, loopback_origin, studio_assets
 from agentbus.execution.engine import DurableExecutionEngine
 from agentbus.execution.models import ApprovalOutcome
 from agentbus.execution.state_store import StateStoreError
@@ -150,6 +156,7 @@ def create_app(
         query_service
     )
     authenticator = BearerAuthenticator(token)
+    browser_sessions = BrowserSessions(loopback_origin(context.host, context.port))
     event_reader = ControlEventReader(query_service.store)
     mcp_server = AgentBusMcpServer(
         query_service,
@@ -189,6 +196,7 @@ def create_app(
     app.state.replay_supervisor = replay_supervisor
     app.state.mcp_server = mcp_server
     app.state.last_activity = time.monotonic()
+    app.state.browser_sessions = browser_sessions
 
     @app.middleware("http")
     async def secure_local_request(request: Request, call_next):
@@ -203,8 +211,22 @@ def create_app(
                     message="The request body exceeds the control-plane limit.",
                     status_code=413,
                 )
-            if request.url.path != "/health":
-                authenticator.authenticate(request.headers)
+            public_studio = request.url.path == "/studio" or (
+                request.url.path.startswith("/studio/") and not request.url.path.startswith("/studio/session/")
+            )
+            public_exchange = request.url.path == "/studio/session/exchange"
+            if request.url.path != "/health" and not public_studio and not public_exchange:
+                if request.headers.get("authorization") or not request.cookies.get("syndra_session"):
+                    authenticator.authenticate(request.headers)
+                else:
+                    if request.headers.get("host") != urlsplit(browser_sessions.origin).netloc:
+                        raise ControlPlaneForbiddenError("Studio host does not match this daemon.")
+                    browser_sessions.authenticate(
+                        request.cookies.get("syndra_session"),
+                        origin=request.headers.get("origin"),
+                        fetch_site=request.headers.get("sec-fetch-site"),
+                        mutation=request.method not in {"GET", "HEAD", "OPTIONS"},
+                    )
             body_is_bounded = await _buffer_bounded_request_body(request)
         except (ControlPlaneError, ValueError) as exc:
             status_code = getattr(exc, "status_code", 400)
@@ -283,6 +305,58 @@ def create_app(
     @app.get("/health", response_model=HealthResponse)
     async def health() -> HealthResponse:
         return HealthResponse()
+
+    @app.post(f"{API_PREFIX}/studio/launch", response_model=StudioLaunchResponse)
+    def studio_launch(request: StudioLaunchRequest):
+        if request.run_id:
+            query_service.get_run(request.run_id)
+        return StudioLaunchResponse(launch_url=launch_browser_exchange(browser_sessions, request.run_id))
+
+    @app.post(f"{API_PREFIX}/studio/demo-workspaces", response_model=DemoWorkspaceResponse)
+    def create_demo_workspace(request: DemoWorkspaceRequest):
+        return query_service.create_demo_workspace(request.profile)
+
+    @app.post("/studio/session/exchange", include_in_schema=False)
+    async def studio_exchange(request: Request):
+        if request.headers.get("host") != urlsplit(browser_sessions.origin).netloc:
+            raise ControlPlaneForbiddenError("Studio host does not match this daemon.")
+        if request.headers.get("content-type", "").split(";", 1)[0] != "application/x-www-form-urlencoded":
+            raise ControlPlaneError("Invalid Studio exchange format.")
+        body = await request.body()
+        if len(body) > 2048:
+            raise ControlPlaneError("Studio exchange exceeds limit.")
+        try:
+            values = parse_qs(body.decode("ascii"), strict_parsing=True, max_num_fields=1)
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise ControlPlaneError("Invalid Studio exchange.") from exc
+        if set(values) != {"code"} or len(values["code"]) != 1:
+            raise ControlPlaneError("Invalid Studio exchange.")
+        session, destination = browser_sessions.redeem(values["code"][0], request.headers.get("origin"))
+        response = RedirectResponse(destination, status_code=303)
+        response.set_cookie("syndra_session", session, httponly=True, samesite="strict", max_age=7200, path="/")
+        return response
+
+    @app.post("/studio/session/logout", include_in_schema=False)
+    def studio_logout(request: Request):
+        browser_sessions.logout(request.cookies.get("syndra_session"))
+        response = Response(status_code=204)
+        response.delete_cookie("syndra_session", path="/")
+        return response
+
+    @app.get("/studio", include_in_schema=False)
+    def studio_root():
+        return RedirectResponse("/studio/")
+
+    @app.get("/studio/{asset_path:path}", include_in_schema=False)
+    def studio_asset(asset_path: str):
+        root = studio_assets()
+        candidate = (root / (asset_path or "index.html")).resolve()
+        if not candidate.is_relative_to(root) or not candidate.is_file() or candidate.is_symlink():
+            return Response(status_code=404)
+        response = FileResponse(candidate)
+        response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; form-action 'self'; base-uri 'self'"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        return response
 
     @app.get(f"{API_PREFIX}/info", response_model=InfoResponse)
     async def info() -> InfoResponse:
@@ -539,13 +613,8 @@ def create_app(
         return query_service.providers()
 
     @app.post(f"{API_PREFIX}/providers/check", response_model=ProviderSummary)
-    async def check_provider(request: ProviderCheckRequest) -> ProviderSummary:
-        if request.live_consent:
-            raise ControlPlaneError(
-                "Live provider checks are not exposed by the local control API."
-            )
-        values = query_service.providers().providers
-        return next(item for item in values if item.name == request.provider)
+    def check_provider(request: ProviderCheckRequest) -> ProviderSummary:
+        return query_service.check_provider(request.provider, live_consent=request.live_consent)
 
     @app.get(f"{API_PREFIX}/doctor", response_model=DoctorResponse)
     async def doctor(workspace: str | None = None) -> DoctorResponse:
@@ -594,8 +663,15 @@ def create_app(
         return supervisor.submit(request)
 
     @app.get(f"{API_PREFIX}/runs", response_model=RunListResponse)
-    async def list_runs(limit: int = Query(default=100, ge=1, le=1000)):
-        return query_service.list_runs(limit)
+    async def list_runs(
+        limit: int = Query(default=100, ge=1, le=1000),
+        cursor: str | None = Query(default=None, max_length=2048),
+        search: str = Query(default="", max_length=512),
+        status: str | None = Query(default=None, max_length=64),
+        history: bool = False,
+    ):
+        return query_service.list_runs(limit, cursor=cursor, search=search,
+                                       status=status, history=history)
 
     @app.get(f"{API_PREFIX}/runs/{{run_id}}", response_model=RunSummary)
     async def get_run(run_id: str) -> RunSummary:

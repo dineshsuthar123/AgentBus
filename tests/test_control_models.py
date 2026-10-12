@@ -19,6 +19,24 @@ def test_protocol_version_and_prefix_are_stable() -> None:
     assert API_PREFIX == "/api/v1"
 
 
+@pytest.mark.parametrize("workflow", ["single", "multi"])
+@pytest.mark.parametrize("durable", [False, True])
+@pytest.mark.parametrize("parallel", [False, True])
+def test_supported_workflow_matrix(workflow: str, durable: bool, parallel: bool) -> None:
+    supported = not (durable and workflow == "single") and (
+        not parallel or (durable and workflow == "multi")
+    )
+    values = dict(task="Bounded task", workspace="/repo", workflow=workflow,
+                  durable=durable, parallel=parallel)
+    if supported:
+        request = RunCreateRequest(**values)
+        assert request.workflow == workflow
+        assert request.durable == durable
+    else:
+        with pytest.raises(ValidationError):
+            RunCreateRequest(**values)
+
+
 def test_run_request_accepts_parallel_durable_multi_agent_mode() -> None:
     request = RunCreateRequest(
         task="Implement a bounded API.",
@@ -39,6 +57,8 @@ def test_run_request_accepts_parallel_durable_multi_agent_mode() -> None:
         ({"parallel": True}, "parallel execution requires"),
         ({"max_workers": 2}, "max_workers greater than one"),
         ({"create_pr": True}, "PR creation requires"),
+        ({"workflow": "single", "commit_changes": True}, "single-agent mode has no final review"),
+        ({"workflow": "single", "commit_changes": True, "create_pr": True}, "single-agent mode has no final review"),
         ({"fallback_enabled": True}, "requires a fallback_provider"),
         (
             {"provider": "azure"},

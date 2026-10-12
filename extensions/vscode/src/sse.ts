@@ -3,6 +3,7 @@ import type { SyndraClient } from "./apiClient";
 
 export class SseParser {
   private buffer = "";
+  private afterCarriageReturn = false;
   private eventType = "message";
   private eventId: string | undefined;
   private data: string[] = [];
@@ -12,11 +13,19 @@ export class SseParser {
     event: string;
     data: string;
   }> {
-    this.buffer += chunk.replace(/\r\n/g, "\n");
+    for (const character of chunk) {
+      if (character === "\n" && this.afterCarriageReturn) {
+        this.afterCarriageReturn = false;
+        continue;
+      }
+      this.afterCarriageReturn = character === "\r";
+      this.buffer += this.afterCarriageReturn ? "\n" : character;
+    }
     const output: Array<{ id?: string; event: string; data: string }> = [];
     let boundary = this.buffer.indexOf("\n\n");
     while (boundary >= 0) {
       const block = this.buffer.slice(0, boundary);
+      if (block.length > 1_048_576) throw new Error("SSE frame exceeds size limit");
       this.buffer = this.buffer.slice(boundary + 2);
       for (const line of block.split("\n")) {
         if (!line || line.startsWith(":")) {
@@ -28,7 +37,7 @@ export class SseParser {
           separator < 0
             ? ""
             : line.slice(separator + 1).replace(/^ /, "");
-        if (field === "id") {
+        if (field === "id" && !value.includes("\0")) {
           this.eventId = value;
         } else if (field === "event") {
           this.eventType = value;
@@ -47,6 +56,7 @@ export class SseParser {
       this.data = [];
       boundary = this.buffer.indexOf("\n\n");
     }
+    if (this.buffer.length > 1_048_576) throw new Error("SSE frame exceeds size limit");
     return output;
   }
 }
@@ -54,6 +64,9 @@ export class SseParser {
 export interface SseClientOptions {
   reconnectDelayMs?: number;
   onReconnectFailure?: () => Promise<void>;
+  onAuthenticationFailure?: () => void;
+  onRetryExhausted?: () => void;
+  maximumReconnectAttempts?: number;
   fetcher?: typeof fetch;
 }
 
@@ -62,6 +75,8 @@ export class ReconnectingSseClient {
   private running = false;
   private connected = false;
   private lastSequence = 0;
+  private consecutiveFailures = 0;
+  private reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
 
   public constructor(
     private readonly client: SyndraClient,
@@ -81,6 +96,7 @@ export class ReconnectingSseClient {
     this.running = false;
     this.connected = false;
     this.controller?.abort();
+    void this.reader?.cancel().catch(() => undefined);
   }
 
   public get cursor(): number {
@@ -106,15 +122,27 @@ export class ReconnectingSseClient {
           },
           signal: this.controller.signal
         });
+        if (response.status === 401 || response.status === 403) {
+          this.stop();
+          this.options.onAuthenticationFailure?.();
+          return;
+        }
         if (!response.ok || !response.body) {
           throw new Error(`SSE connection failed with HTTP ${response.status}.`);
         }
         this.connected = true;
         await this.consume(response.body);
         this.connected = false;
+        if (this.running) throw new Error("SSE stream ended.");
       } catch {
         this.connected = false;
         if (!this.running || this.controller.signal.aborted) {
+          return;
+        }
+        this.consecutiveFailures += 1;
+        if (this.consecutiveFailures >= (this.options.maximumReconnectAttempts ?? 8)) {
+          this.running = false;
+          this.options.onRetryExhausted?.();
           return;
         }
         try {
@@ -122,7 +150,7 @@ export class ReconnectingSseClient {
         } catch {
           // The daemon may still be restarting; the next reconnect retries safely.
         }
-        await delay(this.options.reconnectDelayMs ?? 1_000);
+        await delay(Math.min(15_000, (this.options.reconnectDelayMs ?? 1_000) * (2 ** (this.consecutiveFailures - 1))), this.controller.signal);
       }
     }
   }
@@ -131,26 +159,47 @@ export class ReconnectingSseClient {
     const parser = new SseParser();
     const decoder = new TextDecoder();
     const reader = stream.getReader();
-    while (true) {
+    this.reader = reader;
+    try {
+      while (this.running) {
       const { done, value } = await reader.read();
       if (done) {
         return;
       }
       for (const parsed of parser.push(decoder.decode(value, { stream: true }))) {
-        const event = JSON.parse(parsed.data) as EventEnvelope;
+        let event: EventEnvelope;
+        try { event = JSON.parse(parsed.data) as EventEnvelope; } catch { continue; }
         if (
+          !event || typeof event.event_type !== "string" || typeof event.timestamp !== "string" ||
+          (parsed.id && Number(parsed.id) !== event.sequence) ||
           !Number.isInteger(event.sequence) ||
           event.sequence <= this.lastSequence
         ) {
           continue;
         }
+        if (this.lastSequence > 0 && event.sequence > this.lastSequence + 1) await this.options.onReconnectFailure?.();
+        this.consecutiveFailures = 0;
         this.lastSequence = event.sequence;
         this.onEvent(event);
       }
+      }
+    } finally {
+      await reader.cancel().catch(() => undefined);
+      reader.releaseLock();
+      this.reader = undefined;
     }
   }
 }
 
-function delay(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+function delay(milliseconds: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) { resolve(); return; }
+    const timer = setTimeout(finish, milliseconds);
+    signal.addEventListener("abort", finish, { once: true });
+    function finish() {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", finish);
+      resolve();
+    }
+  });
 }

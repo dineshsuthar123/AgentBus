@@ -1,0 +1,12 @@
+.showcase-notice { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px clamp(20px, 5vw, 88px); border-bottom: 1px solid var(--line); font: 10px/1.5 var(--mono); color: var(--muted); }
+.showcase-notice button { min-height: 36px; border: 0; border-radius: 0; padding: 8px; font: 11px var(--mono); background: transparent; }
+.showcase-install > p:not(.eyebrow) { color: var(--muted); font-size: 13px; }
+.showcase-install > a { margin: 12px 0; }
+.showcase-install p.showcase-release-note { font-size: 11px; margin-top: 16px; }
+.showcase-platforms { display: flex; flex-wrap: wrap; gap: 8px; margin: 24px 0 18px; }
+.showcase-platforms button { border-radius: 0; font-size: 12px; }
+.showcase-platforms [aria-pressed="true"], .showcase-platforms button[aria-pressed="true"]:hover { color: var(--paper); background: var(--text); border-color: var(--text); }
+.showcase-command { white-space: pre-wrap; overflow-wrap: anywhere; border-radius: 0; }
+.showcase-command code { font-size: 11px; }
+.showcase-install .showcase-copy-status { min-height: 22px; margin-top: 10px; font-size: 11px; }
+.showcase-install .showcase-cost { border-top: 1px solid var(--line); padding-top: 16px; margin-top: 16px; }

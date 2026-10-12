@@ -316,6 +316,25 @@ class GitWorktreeManager:
         purpose: WorktreePurpose,
         worker_id: str | None,
     ) -> WorktreeRecord:
+        # Canonical checks and ownership reservation must not race another creator's mkdir/Git setup.
+        with self._git_lock:
+            return self._create_locked(
+                run_id=run_id,
+                task_id=task_id,
+                base_commit=base_commit,
+                purpose=purpose,
+                worker_id=worker_id,
+            )
+
+    def _create_locked(
+        self,
+        *,
+        run_id: str,
+        task_id: str | None,
+        base_commit: str,
+        purpose: WorktreePurpose,
+        worker_id: str | None,
+    ) -> WorktreeRecord:
         resolved_base = self._run_git(
             ["rev-parse", "--verify", f"{base_commit}^{{commit}}"],
             cwd=self.repository_root,

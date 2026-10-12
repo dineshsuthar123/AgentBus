@@ -1545,6 +1545,80 @@
       "title": "DaemonRegistryEntry",
       "type": "object"
     },
+    "DemoWorkspaceRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "profile": {
+          "default": "python-calculator",
+          "enum": [
+            "python-calculator",
+            "payment-safety"
+          ],
+          "title": "Profile",
+          "type": "string"
+        }
+      },
+      "title": "DemoWorkspaceRequest",
+      "type": "object"
+    },
+    "DemoWorkspaceResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "created_files": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Created Files",
+          "type": "array"
+        },
+        "execution_profile": {
+          "enum": [
+            "python-calculator-repair",
+            "payment-safety"
+          ],
+          "title": "Execution Profile",
+          "type": "string"
+        },
+        "network_used": {
+          "default": false,
+          "title": "Network Used",
+          "type": "boolean"
+        },
+        "profile": {
+          "enum": [
+            "python-calculator",
+            "payment-safety"
+          ],
+          "title": "Profile",
+          "type": "string"
+        },
+        "task": {
+          "title": "Task",
+          "type": "string"
+        },
+        "test_command": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Test Command",
+          "type": "array"
+        },
+        "workspace": {
+          "title": "Workspace",
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile",
+        "execution_profile",
+        "workspace",
+        "task",
+        "created_files",
+        "test_command"
+      ],
+      "title": "DemoWorkspaceResponse",
+      "type": "object"
+    },
     "DependencyKind": {
       "enum": [
         "imports",
@@ -1624,6 +1698,7 @@
           "default": "python-calculator",
           "enum": [
             "python-calculator",
+            "python-calculator-repair",
             "payment-safety",
             "cancellation-two-task",
             "tool-safe-read",
@@ -3622,6 +3697,38 @@
     "ProviderSummary": {
       "additionalProperties": false,
       "properties": {
+        "check_status": {
+          "default": "not_checked",
+          "enum": [
+            "not_checked",
+            "passed",
+            "failed"
+          ],
+          "title": "Check Status",
+          "type": "string"
+        },
+        "checked_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Checked At"
+        },
+        "configuration_status": {
+          "default": "invalid",
+          "enum": [
+            "valid",
+            "invalid"
+          ],
+          "title": "Configuration Status",
+          "type": "string"
+        },
         "configured": {
           "title": "Configured",
           "type": "boolean"
@@ -3662,9 +3769,33 @@
           "default": null,
           "title": "Model"
         },
+        "model_available": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model Available"
+        },
         "name": {
           "title": "Name",
           "type": "string"
+        },
+        "reachable": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reachable"
         },
         "ready": {
           "title": "Ready",
@@ -5142,6 +5273,18 @@
     "RunListResponse": {
       "additionalProperties": false,
       "properties": {
+        "next_cursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Next Cursor"
+        },
         "runs": {
           "items": {
             "$ref": "#/$defs/RunSummary"
@@ -5771,6 +5914,46 @@
         "required_input_count"
       ],
       "title": "SpanReplayabilityResponse",
+      "type": "object"
+    },
+    "StudioLaunchRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "anyOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Run Id"
+        }
+      },
+      "title": "StudioLaunchRequest",
+      "type": "object"
+    },
+    "StudioLaunchResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "expires_in_seconds": {
+          "const": 30,
+          "default": 30,
+          "title": "Expires In Seconds",
+          "type": "integer"
+        },
+        "launch_url": {
+          "title": "Launch Url",
+          "type": "string"
+        }
+      },
+      "required": [
+        "launch_url"
+      ],
+      "title": "StudioLaunchResponse",
       "type": "object"
     },
     "SymbolKind": {

@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="An independent Syndra design study. Interactive sample data, not a live execution client.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self'; connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'">
+  <title>Syndra / Kinetic Precision</title>
+  <link rel="icon" href="mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <a href="#main" class="skip">Skip to content</a>
+  <header class="global-header">
+    <a href="#experience" class="brand" aria-label="Syndra design study home"><img src="mark.svg" alt=""><span>syndra<span class="brand-period">.</span></span></a>
+    <nav aria-label="Design study surfaces" class="surface-nav">
+      <a href="#experience" data-surface="experience">Experience <span aria-hidden="true">01</span></a>
+      <a href="#studio" data-surface="studio">Studio <span aria-hidden="true">02</span></a>
+    </nav>
+    <div class="header-tools">
+      <span class="study-label">DESIGN STUDY / 01</span>
+      <button class="icon-button" id="motion-toggle" aria-label="Pause ambient motion" aria-pressed="false" title="Pause ambient motion"></button>
+      <button class="icon-button" id="theme-toggle" aria-label="Switch to dark appearance" title="Switch appearance"></button>
+    </div>
+  </header>
+  <main id="main" tabindex="-1"></main>
+  <footer class="study-footer"><span><i></i> Interactive concept. Sample data. No tools or models execute.</span><button id="open-notes">Design rationale <span aria-hidden="true">&#8599;</span></button></footer>
+  <dialog id="overlay" aria-labelledby="dialog-title"><div id="dialog-content"></div></dialog>
+  <div class="toast" role="status" aria-live="polite" aria-atomic="true" hidden></div>
+  <noscript><p class="noscript">This interactive design study needs JavaScript. No backend connection is required.</p></noscript>
+</body>
+</html>

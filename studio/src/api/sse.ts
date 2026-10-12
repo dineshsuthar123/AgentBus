@@ -3,23 +3,34 @@ import { bindBrowserFetch, StudioClient } from "./client";
 
 export class SseParser {
   private buffer = "";
+  private afterCarriageReturn = false;
 
   public push(chunk: string): Array<{ id?: string; data: string }> {
-    this.buffer += chunk.replace(/\r\n/g, "\n");
+    for (const character of chunk) {
+      if (character === "\n" && this.afterCarriageReturn) {
+        this.afterCarriageReturn = false;
+        continue;
+      }
+      this.afterCarriageReturn = character === "\r";
+      this.buffer += this.afterCarriageReturn ? "\n" : character;
+    }
     const messages: Array<{ id?: string; data: string }> = [];
     let boundary = this.buffer.indexOf("\n\n");
     while (boundary >= 0) {
       const block = this.buffer.slice(0, boundary);
+      if (block.length > 1_048_576) throw new Error("SSE frame exceeds size limit");
       this.buffer = this.buffer.slice(boundary + 2);
       let id: string | undefined;
       const data: string[] = [];
       for (const line of block.split("\n")) {
-        if (line.startsWith("id:")) id = line.slice(3).trim();
-        if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
+        if (line.startsWith("id:") && !line.includes("\0")) id = line.slice(3).replace(/^ /, "");
+        if (line === "data") data.push("");
+        if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""));
       }
       if (data.length) messages.push({ id, data: data.join("\n") });
       boundary = this.buffer.indexOf("\n\n");
     }
+    if (this.buffer.length > 1_048_576) throw new Error("SSE frame exceeds size limit");
     return messages;
   }
 }
@@ -30,6 +41,8 @@ export interface EventStreamOptions {
   onStatus?: (status: StreamStatus) => void;
   onDrop?: (reason: "duplicate" | "out_of_order" | "invalid") => void;
   onReconcile?: (cursor: number) => Promise<void> | void;
+  onAuthenticationFailure?: () => void;
+  maximumReconnectAttempts?: number;
   fetcher?: typeof fetch;
   reconnectDelayMs?: number;
   maximumReconnectDelayMs?: number;
@@ -58,6 +71,8 @@ export class StudioEventStream {
   private active = false;
   private cursor = 0;
   private reconnectCount = 0;
+  private consecutiveFailures = 0;
+  private reader?: ReadableStreamDefaultReader<Uint8Array>;
   private status: StreamStatus = {
     connected: false,
     cursor: 0,
@@ -80,6 +95,7 @@ export class StudioEventStream {
   public stop(): void {
     this.active = false;
     this.controller?.abort();
+    void this.reader?.cancel().catch(() => undefined);
     this.options.onState(false);
     this.publish("stopped", false);
   }
@@ -96,11 +112,16 @@ export class StudioEventStream {
         const response = await fetcher(this.client.eventsUrl(runId, this.cursor), {
           headers: {
             Accept: "text/event-stream",
-            Authorization: this.client.authorizationHeader(),
+            ...(this.client.authorizationHeader() ? { Authorization: this.client.authorizationHeader() } : {}),
             ...(this.cursor ? { "Last-Event-ID": String(this.cursor) } : {})
           },
           signal: this.controller.signal
         });
+        if (response.status === 401 || response.status === 403) {
+          this.stop();
+          this.options.onAuthenticationFailure?.();
+          return;
+        }
         if (!response.ok || !response.body) throw new Error("SSE unavailable");
         this.options.onState(true);
         if (this.reconnectCount > 0) {
@@ -114,6 +135,11 @@ export class StudioEventStream {
         this.options.onState(false);
         if (!this.active || this.controller.signal.aborted) return;
         this.publish("degraded", false);
+        this.consecutiveFailures += 1;
+        if (this.consecutiveFailures >= (this.options.maximumReconnectAttempts ?? 8)) {
+          this.active = false;
+          return;
+        }
         this.reconnectCount += 1;
         const delayMs = this.reconnectDelay();
         this.publish("reconnecting", false, delayMs);
@@ -126,7 +152,9 @@ export class StudioEventStream {
     const parser = new SseParser();
     const decoder = new TextDecoder();
     const reader = stream.getReader();
-    while (this.active) {
+    this.reader = reader;
+    try {
+      while (this.active) {
       const { done, value } = await reader.read();
       if (done) return;
       for (const message of parser.push(decoder.decode(value, { stream: true }))) {
@@ -145,10 +173,17 @@ export class StudioEventStream {
           this.options.onDrop?.(event.sequence === this.cursor ? "duplicate" : "out_of_order");
           continue;
         }
+        if (this.cursor > 0 && event.sequence > this.cursor + 1) await this.options.onReconcile?.(this.cursor);
+        this.consecutiveFailures = 0;
         this.cursor = event.sequence;
         this.status = { ...this.status, cursor: this.cursor };
         this.options.onEvent(event);
       }
+      }
+    } finally {
+      await reader.cancel().catch(() => undefined);
+      reader.releaseLock();
+      this.reader = undefined;
     }
   }
 

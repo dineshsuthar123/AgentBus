@@ -204,9 +204,16 @@ def run_benchmark(
                 root / "repository-index.sqlite3",
             )
             if "index" in selected_groups or "search" in selected_groups:
-                operations.append(
-                    _measure("initial_index", "index", service.build, 1)
-                )
+                # Each cold sample needs its own index; repeat builds would measure cache hits.
+                # Disposable sample storage must not inflate the persistent-storage metric.
+                with tempfile.TemporaryDirectory(prefix="syndra-index-samples-") as samples:
+                    cold_services = iter([
+                        RepositoryIntelligenceService(workspace, Path(samples) / f"index-{sample}.sqlite3")
+                        for sample in range(iterations - 1)
+                    ] + [service])
+                    operations.append(
+                        _measure("initial_index", "index", lambda: next(cold_services).build(), iterations)
+                    )
             if "index" in selected_groups:
                 _touch_incremental_file(workspace, seed)
                 operations.append(

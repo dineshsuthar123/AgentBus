@@ -34,6 +34,35 @@ def _git(workspace: Path, *arguments: str) -> None:
     assert result.returncode == 0, result.stderr
 
 
+def test_provider_readiness_requires_explicit_check_and_never_logs_errors(tmp_path, monkeypatch):
+    from agentbus.models.router import ModelRouter
+
+    service = ControlQueryService(AgentBusConfig(workspace_dir=str(tmp_path), state_db=str(tmp_path / "state.db")))
+    calls = []
+
+    def generate(router, *args, **kwargs):
+        calls.append(router.config)
+
+    monkeypatch.setattr(ModelRouter, "generate_json", generate)
+    configured = next(item for item in service.providers().providers if item.name == "ollama")
+    assert configured.configured and not configured.ready
+    assert configured.reachable is None and configured.checked_at is None
+    service.check_provider("ollama")
+    assert calls == []
+    checked = service.check_provider("ollama", live_consent=True)
+    assert checked.ready and checked.check_status == "passed" and checked.checked_at
+    assert calls[0].model_max_retries == 0 and calls[0].model_timeout_seconds == 10
+    assert not calls[0].enable_provider_fallback
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("RAW_PROVIDER_BODY secret-must-not-leak")
+
+    monkeypatch.setattr(ModelRouter, "generate_json", fail)
+    failed = service.check_provider("ollama", live_consent=True)
+    assert not failed.ready and failed.check_status == "failed"
+    assert "secret-must-not-leak" not in failed.model_dump_json()
+
+
 def _git_output(workspace: Path, *arguments: str) -> str:
     result = subprocess.run(
         ["git", *arguments],

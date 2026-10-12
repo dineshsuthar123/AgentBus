@@ -1,0 +1,6 @@
+{
+  "name": "syndra-kinetic-precision-study",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --test geometry.test.mjs", "verify": "node verify.mjs" }
+}
