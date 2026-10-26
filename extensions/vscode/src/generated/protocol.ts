@@ -1,6 +1,7 @@
 /* Generated from protocol/agentbus-v1.schema.json. Do not edit. */
 
 export const CONTROL_PROTOCOL_VERSION = "1.0" as const;
+export const STATE_SCHEMA_VERSION = 7 as const;
 
 export interface ApprovalDecisionRequest {
   "revision": number;
@@ -235,6 +236,17 @@ export interface DaemonRegistryEntry {
   "log_path"?: string | null;
 }
 
+export interface DemoProof {
+  "fixture"?: "purchase-access/v1";
+  "broken_handler_granted_access"?: false;
+  "fixed_handler_granted_access"?: true;
+  "historical_missing_before_fix": number;
+  "historical_missing_after_fix": number;
+  "before_code": string;
+  "after_code": string;
+  "provider_calls"?: 0;
+}
+
 export interface DemoWorkspaceRequest {
   "profile"?: "python-calculator" | "payment-safety";
 }
@@ -307,6 +319,12 @@ export interface FileContentResponse {
   "content": string;
   "revision": "before" | "after";
   "truncated"?: boolean;
+}
+
+export interface FixReference {
+  "before_revision": string;
+  "after_revision": string;
+  "review_confirmed": true;
 }
 
 export interface GraphEdgeSummary {
@@ -604,6 +622,21 @@ export interface ProviderSummary {
   "message"?: string | null;
 }
 
+export interface PurchaseEvidence {
+  "purchase_id": string;
+  "payment_id": string;
+  "tenant_id": string;
+  "account_id": string | null;
+  "entitlement": string;
+  "paid_at": string;
+  "payment_state": "paid" | "refunded" | "cancelled" | "unknown";
+  "access_present": boolean | null;
+  "mapping_verified": boolean;
+  "history_complete": boolean;
+  "evidence_ids": Array<string>;
+  "revision": number;
+}
+
 export interface ReadyHandshake {
   "protocol_version"?: string;
   "host": string;
@@ -632,6 +665,175 @@ export interface RegressionFixtureCaptureResponse {
   "replay_command": string;
   "assertions_validated"?: true;
   "replay_started"?: false;
+}
+
+export interface RepairAccountResponse {
+  "purchase_id": string;
+  "account_id": string | null;
+  "allowed": boolean | null;
+  "observed_at": string;
+  "message": string;
+}
+
+export interface RepairApplyRequest {
+  "preview_id": string;
+  "preview_fingerprint": string;
+  "request_id": string;
+  "purchase_ids": Array<string>;
+  "confirmation": "APPLY_SELECTED_CORRECTIONS";
+}
+
+export interface RepairBatch {
+  "request_id": string;
+  "case_id": string;
+  "preview_id": string;
+  "created_at": string;
+  "status": "completed" | "needs_attention";
+  "selected_count": number;
+  "restored_count": number;
+  "skipped_count": number;
+  "unresolved_count": number;
+  "results": Array<RepairResult>;
+}
+
+export interface RepairBatchListResponse {
+  "batches": Array<RepairBatch>;
+}
+
+export interface RepairBatchResponse {
+  "batch": RepairBatch;
+}
+
+export interface RepairCase {
+  "summary": RepairCaseSummary;
+  "snapshot": RepairSnapshot;
+  "demo_proof"?: DemoProof | null;
+}
+
+export interface RepairCaseListResponse {
+  "cases": Array<RepairCaseSummary>;
+}
+
+export interface RepairCaseResponse {
+  "case": RepairCase;
+}
+
+export interface RepairCaseSummary {
+  "case_id": string;
+  "title": string;
+  "mode": "local_demo" | "imported_snapshot";
+  "created_at": string;
+  "coverage_complete": boolean;
+  "record_count": number;
+  "batch_count"?: number;
+}
+
+export interface RepairCounts {
+  "total"?: number;
+  "repairable"?: number;
+  "already_correct"?: number;
+  "ineligible"?: number;
+  "unresolved"?: number;
+  "out_of_scope"?: number;
+}
+
+export interface RepairDemoChangeRequest {
+  "action": "support_corrects_five" | "refund_one";
+}
+
+export interface RepairDemoChangeResponse {
+  "affected_count": number;
+}
+
+export interface RepairEvent {
+  "sequence": number;
+  "kind": "created" | "previewed" | "support_corrected" | "refunded" | "applied";
+  "created_at": string;
+  "affected_count": number;
+}
+
+export interface RepairEventListResponse {
+  "events": Array<RepairEvent>;
+}
+
+export interface RepairExportRequest {
+  "preview_id": string;
+}
+
+export interface RepairImportRequest {
+  "snapshot": RepairSnapshot;
+}
+
+export interface RepairObservation {
+  "purchase_id": string;
+  "tenant_id": string;
+  "account_id": string | null;
+  "entitlement": string;
+  "disposition": "repairable" | "already_correct" | "ineligible" | "unresolved" | "out_of_scope";
+  "reason": string;
+  "evidence_ids": Array<string>;
+  "observed_revision": number;
+  "before_access": boolean | null;
+  "proposed_access": boolean | null;
+}
+
+export interface RepairPackage {
+  "format"?: "syndra.repair-package/v1";
+  "case_id": string;
+  "mode": "local_demo" | "imported_snapshot";
+  "snapshot": RepairSnapshot;
+  "preview": RepairPreview;
+  "batches": Array<RepairBatch>;
+  "checksum": string;
+}
+
+export interface RepairPackageResponse {
+  "package": RepairPackage;
+}
+
+export interface RepairPolicy {
+  "contract"?: "purchase-access/v1";
+  "refunded_access"?: "do_not_restore";
+  "cancelled_access"?: "do_not_restore";
+  "operation"?: "restore_missing_access";
+}
+
+export interface RepairPreview {
+  "preview_id": string;
+  "case_id": string;
+  "fingerprint": string;
+  "snapshot_fingerprint": string;
+  "observed_at": string;
+  "created_at": string;
+  "expires_at": string;
+  "policy": RepairPolicy;
+  "coverage_complete": boolean;
+  "counts": RepairCounts;
+  "observations": Array<RepairObservation>;
+}
+
+export interface RepairPreviewResponse {
+  "preview": RepairPreview | null;
+}
+
+export interface RepairResult {
+  "purchase_id": string;
+  "outcome": "restored" | "already_correct" | "ineligible" | "unresolved" | "conflict";
+  "reason": string;
+  "verified_access": boolean | null;
+  "operation_id"?: string | null;
+}
+
+export interface RepairSnapshot {
+  "format"?: "syndra.purchase-access/v1";
+  "title": string;
+  "incident_start": string;
+  "incident_end": string;
+  "observed_at": string;
+  "coverage_complete": boolean;
+  "fix": FixReference;
+  "policy"?: RepairPolicy;
+  "purchases": Array<PurchaseEvidence>;
 }
 
 export interface ReplayAcceptedResponse {

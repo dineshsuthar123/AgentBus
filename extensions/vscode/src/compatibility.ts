@@ -1,8 +1,8 @@
-import { CONTROL_PROTOCOL_VERSION } from "./generated/protocol";
+import { CONTROL_PROTOCOL_VERSION, STATE_SCHEMA_VERSION } from "./generated/protocol";
 
 export const MINIMUM_SYNDRA_MINOR = [0, 6] as const;
 export const MAXIMUM_SYNDRA_MINOR_EXCLUSIVE = [0, 7] as const;
-export const EXPECTED_STATE_SCHEMA = 6;
+export const EXPECTED_STATE_SCHEMA = STATE_SCHEMA_VERSION;
 
 export type CompatibilityCode =
   | "compatible"

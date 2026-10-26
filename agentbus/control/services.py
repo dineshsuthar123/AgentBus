@@ -678,12 +678,14 @@ class ControlQueryService:
             records, next_cursor = self.store.page_runs(
                 limit=limit, cursor=cursor, search=search, status=status,
             )
-            runs = [self.run_summary(run) for run in records]
-            return RunListResponse(runs=runs, total=len(runs), next_cursor=next_cursor)
-        runs = [self.run_summary(run) for run in self.store.list_runs(limit=limit)]
-        return RunListResponse(runs=runs, total=len(runs))
+        else:
+            records = self.store.list_runs(limit=limit)
+            next_cursor = None
+        cancellations = self.store.get_cancellation_states([run.run_id for run in records])
+        runs = [self.run_summary(run, cancellation=cancellations[run.run_id]) for run in records]
+        return RunListResponse(runs=runs, total=len(runs), next_cursor=next_cursor)
 
-    def run_summary(self, run: RunRecord) -> RunSummary:
+    def run_summary(self, run: RunRecord, *, cancellation: CancellationState | None = None) -> RunSummary:
         return RunSummary(
             run_id=run.run_id,
             status=run.status.value,
@@ -699,7 +701,7 @@ class ControlQueryService:
             changed_files=run.changed_files,
             version=run.version,
             cancellation=cancellation_lifecycle(
-                self.store.get_cancellation_state(run.run_id)
+                cancellation if cancellation is not None else self.store.get_cancellation_state(run.run_id)
             ),
         )
 

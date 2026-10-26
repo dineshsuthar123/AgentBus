@@ -118,7 +118,11 @@ class StateStoreError(RuntimeError):
 
 
 class StateStoreBusyError(StateStoreError):
-    """Raised after bounded retries cannot acquire the durable-state writer lock."""
+    """Durable storage remained busy after a bounded wait or transaction retry."""
+
+
+class InvalidRunHistoryError(StateStoreError):
+    """Invalid history filters or a cursor that does not belong to them."""
 
 
 class RunNotFoundError(StateStoreError):
@@ -396,9 +400,13 @@ class StateStore:
             connection.execute("PRAGMA foreign_keys = ON")
             connection.execute(f"PRAGMA busy_timeout = {self.busy_timeout_ms}")
             yield connection
-        except StateStoreError:
+        except StateStoreError as exc:
+            if not isinstance(exc, StateStoreBusyError) and isinstance(exc.__cause__, sqlite3.Error) and is_sqlite_busy_error(exc.__cause__):
+                raise StateStoreBusyError("Durable storage remained busy after the configured wait.") from exc
             raise
         except sqlite3.Error as exc:
+            if is_sqlite_busy_error(exc):
+                raise StateStoreBusyError("Durable storage remained busy after the configured wait.") from exc
             raise StateStoreError(
                 f"Unable to access state database '{self.database_path}'."
             ) from exc
@@ -636,15 +644,18 @@ class StateStore:
         search: str = "", status: str | None = None,
     ) -> tuple[list[RunRecord], str | None]:
         """Keyset history ordered by immutable creation identity, not update time."""
-        if not 1 <= limit <= 1000 or len(search) > 512:
-            raise StateStoreError("Invalid run history bounds.")
+        if type(limit) is not int or not 1 <= limit <= 1000 or not isinstance(search, str) or len(search) > 512:
+            raise InvalidRunHistoryError("Invalid run history bounds.")
+        filter_digest = hashlib.sha256(json.dumps(
+            [search, status], ensure_ascii=False, separators=(",", ":"),
+        ).encode("utf-8")).hexdigest()
         clauses: list[str] = []
         parameters: list[Any] = []
         if status:
             try:
                 RunStatus(status)
             except ValueError as exc:
-                raise StateStoreError("Invalid run history status.") from exc
+                raise InvalidRunHistoryError("Invalid run history status.") from exc
             clauses.append("status = ?")
             parameters.append(status)
         if search:
@@ -656,29 +667,40 @@ class StateStore:
             try:
                 if len(cursor) > 2048:
                     raise ValueError("oversized cursor")
-                created, run_id, prior_search, prior_status = json.loads(
+                payload = json.loads(
                     base64.b64decode(cursor, altchars=b"-_", validate=True)
                 )
-                if not isinstance(created, str) or not isinstance(run_id, str):
+                if isinstance(payload, list) and len(payload) == 4:
+                    created, run_id, prior_search, prior_status = payload
+                    matches = (prior_search, prior_status) == (search, status)
+                elif isinstance(payload, dict) and payload.get("v") == 1:
+                    created, run_id = payload.get("created_at"), payload.get("run_id")
+                    matches = payload.get("filters") == filter_digest
+                else:
+                    raise ValueError("invalid cursor version")
+                if not isinstance(created, str) or not isinstance(run_id, str) or not run_id:
                     raise ValueError("invalid identity")
                 datetime.fromisoformat(created)
-                if (prior_search, prior_status) != (search, status):
+                if not matches:
                     raise ValueError("filters changed")
             except (ValueError, TypeError) as exc:
-                raise StateStoreError("Invalid run history cursor or changed filters.") from exc
-            clauses.append("(created_at < ? OR (created_at = ? AND run_id > ?))")
+                raise InvalidRunHistoryError("Invalid run history cursor or changed filters.") from exc
+            clauses.append("(created_at <= ? AND (created_at < ? OR run_id > ?))")
             parameters.extend([created, created, run_id])
         query = "SELECT * FROM runs"
         if clauses:
             query += " WHERE " + " AND ".join(clauses)
         query += " ORDER BY created_at DESC, run_id ASC LIMIT ?"
         with self._connection() as connection:
-            rows = connection.execute(query, [*parameters, limit + 1]).fetchall()
+            try:
+                rows = connection.execute(query, [*parameters, limit + 1]).fetchall()
+            except sqlite3.Error as exc:
+                raise StateStoreError("Unable to read durable run history.") from exc
         next_cursor = None
         if len(rows) > limit:
             last = rows[limit - 1]
             next_cursor = base64.urlsafe_b64encode(json.dumps(
-                [last["created_at"], last["run_id"], search, status],
+                {"v": 1, "created_at": last["created_at"], "run_id": last["run_id"], "filters": filter_digest},
                 separators=(",", ":"),
             ).encode()).decode()
         return [self._run_from_row(row) for row in rows[:limit]], next_cursor
@@ -4679,16 +4701,35 @@ class StateStore:
         return self.get_cancellation_state(run_id)
 
     def get_cancellation_state(self, run_id: str) -> CancellationState:
-        _require_id(run_id, "run")
+        return self.get_cancellation_states([run_id])[run_id]
+
+    def get_cancellation_states(self, run_ids: list[str]) -> dict[str, CancellationState]:
+        """Read a bounded run page's cancellation state with one connection."""
+        if len(run_ids) > 1000:
+            raise StateStoreError("Cancellation state batches support at most 1000 runs.")
+        for run_id in run_ids:
+            _require_id(run_id, "run")
+        identities = list(dict.fromkeys(run_ids))
+        if not identities:
+            return {}
+        states: dict[str, CancellationState] = {}
         with self._connection() as connection:
-            self._require_run_row(connection, run_id)
-            row = connection.execute(
-                "SELECT * FROM cancellations WHERE run_id = ?",
-                (run_id,),
-            ).fetchone()
-        if row is None:
-            return CancellationState()
-        return self._cancellation_from_row(row)
+            for offset in range(0, len(identities), 500):
+                batch = identities[offset:offset + 500]
+                placeholders = ",".join("?" for _ in batch)
+                rows = connection.execute(
+                    "SELECT r.run_id AS durable_run_id, c.* FROM runs r "
+                    "LEFT JOIN cancellations c ON c.run_id = r.run_id "
+                    f"WHERE r.run_id IN ({placeholders})", batch,
+                ).fetchall()
+                for row in rows:
+                    states[row["durable_run_id"]] = (
+                        self._cancellation_from_row(row) if row["run_id"] is not None
+                        else CancellationState()
+                    )
+        if len(states) != len(identities):
+            raise RunNotFoundError("A requested durable run was not found.")
+        return states
 
     def list_events(
         self,

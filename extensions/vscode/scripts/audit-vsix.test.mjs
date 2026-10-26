@@ -59,12 +59,12 @@ function fixture() {
       syndraCompatibility: {
         python: ">=0.6.0b1,<0.7.0",
         controlProtocol: "1.0",
-        stateSchema: 6
+        stateSchema: 7
       },
       agentbusCompatibility: {
         python: ">=0.6.0b1,<0.7.0",
         controlProtocol: "1.0",
-        stateSchema: 6
+        stateSchema: 7
       }
     })
   );

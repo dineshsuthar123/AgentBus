@@ -59,6 +59,7 @@ export interface ReadRequestOptions {
 interface CachedRead {
   storedAt: number;
   value: unknown;
+  size: number;
 }
 
 interface InflightRead {
@@ -66,7 +67,12 @@ interface InflightRead {
   controller: AbortController;
   promise: Promise<unknown>;
   settled: boolean;
+  generation: number;
 }
+
+const MAX_CACHED_READS = 128;
+const MAX_CACHE_BYTES = 4 * 1024 * 1024;
+const MAX_CACHED_RESPONSE_BYTES = 512 * 1024;
 
 export class StudioClient {
   private readonly origin: URL;
@@ -75,9 +81,13 @@ export class StudioClient {
   private readonly inflight = new Map<string, InflightRead>();
   private cacheHits = 0;
   private deduplicatedReads = 0;
+  private cacheBytes = 0;
+  private generation = 0;
+  private disposed = false;
+  private readonly activeRequests = new Set<AbortController>();
 
   public constructor(
-    private readonly token: string,
+    private token: string,
     origin = window.location.origin,
     fetcher?: FetchLike
   ) {
@@ -96,6 +106,20 @@ export class StudioClient {
   public createDemoWorkspace(profile: "python-calculator" | "payment-safety") {
     return this.request<import("./types").DemoWorkspaceResponse>("POST", "/api/v1/studio/demo-workspaces", { profile });
   }
+  public repairCases(offset = 0, options?: ReadRequestOptions) { return this.read<import("./types").RepairCaseListResponse>(`/api/v1/customer-repair/cases?limit=50&offset=${offset}`, options); }
+  public repairCase(caseId: string, options?: ReadRequestOptions) { return this.read<import("./types").RepairCaseResponse>(`/api/v1/customer-repair/cases/${segment(caseId)}`, options); }
+  public createRepairDemo() { return this.request<import("./types").RepairCaseResponse>("POST", "/api/v1/customer-repair/demo"); }
+  public repairTemplate(options?: ReadRequestOptions) { return this.read<import("./types").RepairImportRequest>("/api/v1/customer-repair/template", options); }
+  public importRepair(snapshot: unknown) { return this.request<import("./types").RepairCaseResponse>("POST", "/api/v1/customer-repair/cases", { snapshot }); }
+  public currentRepairPreview(caseId: string, options?: ReadRequestOptions) { return this.read<import("./types").RepairPreviewResponse>(`/api/v1/customer-repair/cases/${segment(caseId)}/preview`, options); }
+  public previewRepair(caseId: string) { return this.request<import("./types").RepairPreviewResponse>("POST", `/api/v1/customer-repair/cases/${segment(caseId)}/preview`); }
+  public applyRepair(caseId: string, body: import("./types").RepairApplyRequest) { return this.request<import("./types").RepairBatchResponse>("POST", `/api/v1/customer-repair/cases/${segment(caseId)}/apply`, body); }
+  public repairBatch(caseId: string, requestId: string, options?: ReadRequestOptions) { return this.read<import("./types").RepairBatchResponse>(`/api/v1/customer-repair/cases/${segment(caseId)}/batches/${segment(requestId)}`, options); }
+  public repairBatches(caseId: string, options?: ReadRequestOptions) { return this.read<import("./types").RepairBatchListResponse>(`/api/v1/customer-repair/cases/${segment(caseId)}/batches`, options); }
+  public repairEvents(caseId: string, options?: ReadRequestOptions) { return this.read<import("./types").RepairEventListResponse>(`/api/v1/customer-repair/cases/${segment(caseId)}/events`, options); }
+  public exportRepair(caseId: string, previewId: string) { return this.request<import("./types").RepairPackageResponse>("POST", `/api/v1/customer-repair/cases/${segment(caseId)}/export`, { preview_id: previewId }); }
+  public repairDemoChange(caseId: string, action: "support_corrects_five" | "refund_one") { return this.request<import("./types").RepairDemoChangeResponse>("POST", `/api/v1/customer-repair/cases/${segment(caseId)}/demo-change`, { action }); }
+  public repairAccount(caseId: string, purchaseId: string, options?: ReadRequestOptions) { return this.read<import("./types").RepairAccountResponse>(`/api/v1/customer-repair/cases/${segment(caseId)}/demo-account/${segment(purchaseId)}`, options); }
   public tools(options?: ReadRequestOptions) { return this.read<import("./types").ToolListResponse>("/api/v1/tools", options); }
   public policy(options?: ReadRequestOptions) { return this.read<import("./types").ToolPolicyResponse>("/api/v1/policy", options); }
   public mcpServers(options?: ReadRequestOptions) { return this.read<import("./types").McpServerListResponse>("/api/v1/mcp/servers", options); }
@@ -218,7 +242,28 @@ export class StudioClient {
 
   public authorizationHeader(): string { return this.token ? `Bearer ${this.token}` : ""; }
   public async logout() {
-    await this.fetcher(new URL("/studio/session/logout", this.origin), { method: "POST", credentials: "same-origin" });
+    this.dispose();
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 5_000);
+    try {
+      const response = await this.fetcher(new URL("/studio/session/logout", this.origin), {
+        method: "POST", credentials: "same-origin", redirect: "error", signal: controller.signal,
+      });
+      if (!response.ok) throw new StudioApiError("logout_unconfirmed", "Session revocation was not confirmed by the local runtime.", response.status);
+    } finally {
+      window.clearTimeout(timer);
+    }
+  }
+
+  public dispose(): void {
+    this.disposed = true;
+    this.token = "";
+    this.generation += 1;
+    for (const entry of this.inflight.values()) entry.controller.abort();
+    for (const controller of this.activeRequests) controller.abort();
+    this.inflight.clear();
+    this.cache.clear();
+    this.cacheBytes = 0;
   }
 
   public queryCacheSummary(): {
@@ -226,31 +271,56 @@ export class StudioClient {
     cacheHits: number;
     deduplicatedReads: number;
     inflightReads: number;
+    cachedBytes: number;
   } {
     return {
       cachedReads: this.cache.size,
       cacheHits: this.cacheHits,
       deduplicatedReads: this.deduplicatedReads,
-      inflightReads: this.inflight.size
+      inflightReads: this.inflight.size,
+      cachedBytes: this.cacheBytes
     };
   }
 
   public invalidate(pathPrefix = "/api/v1/"): void {
+    this.generation += 1;
     for (const key of this.cache.keys()) {
-      if (key.startsWith(pathPrefix)) this.cache.delete(key);
+      if (key.startsWith(pathPrefix)) this.evict(key);
     }
   }
 
+  private evict(path: string): void {
+    this.cacheBytes -= this.cache.get(path)?.size ?? 0;
+    this.cache.delete(path);
+  }
+
+  private cacheRead(path: string, value: unknown): void {
+    const size = (JSON.stringify(value) ?? "").length * 2;
+    if (size > MAX_CACHED_RESPONSE_BYTES) return;
+    this.evict(path);
+    while (this.cache.size >= MAX_CACHED_READS || this.cacheBytes + size > MAX_CACHE_BYTES) {
+      const oldest = this.cache.keys().next().value;
+      if (oldest === undefined) break;
+      this.evict(oldest);
+    }
+    this.cache.set(path, { storedAt: Date.now(), value, size });
+    this.cacheBytes += size;
+  }
+
   private read<T>(path: string, options: ReadRequestOptions = {}): Promise<T> {
+    if (this.disposed) return Promise.reject(sessionClosedError());
+    if (options.signal?.aborted) return Promise.reject(abortError());
     const staleTime = Math.max(0, options.staleTimeMilliseconds ?? 500);
     const cached = this.cache.get(path);
     if (!options.force && cached && Date.now() - cached.storedAt <= staleTime) {
       this.cacheHits += 1;
+      this.cache.delete(path);
+      this.cache.set(path, cached);
       return abortedOrValue(cached.value as T, options.signal);
     }
 
     let entry = this.inflight.get(path);
-    if (entry?.controller.signal.aborted) {
+    if (entry && (entry.controller.signal.aborted || entry.generation !== this.generation)) {
       this.inflight.delete(path);
       entry = undefined;
     }
@@ -260,11 +330,12 @@ export class StudioClient {
         consumers: new Set<symbol>(),
         controller,
         promise: Promise.resolve(undefined),
-        settled: false
+        settled: false,
+        generation: this.generation
       };
       created.promise = this.readFromNetwork<T>(path, controller.signal, options.timeoutMilliseconds)
         .then((value) => {
-          this.cache.set(path, { storedAt: Date.now(), value });
+          if (!this.disposed && !controller.signal.aborted && created.generation === this.generation) this.cacheRead(path, value);
           return value;
         })
         .finally(() => {
@@ -322,7 +393,12 @@ export class StudioClient {
   }
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
-    return this.fetchJson<T>(method, path, body, undefined, 30_000);
+    this.invalidate();
+    try {
+      return await this.fetchJson<T>(method, path, body, undefined, 30_000);
+    } finally {
+      this.invalidate();
+    }
   }
 
   private async fetchJson<T>(
@@ -332,10 +408,14 @@ export class StudioClient {
     externalSignal: AbortSignal | undefined,
     timeoutMilliseconds: number
   ): Promise<T> {
+    if (this.disposed) throw sessionClosedError();
+    if (externalSignal?.aborted) throw abortError();
     const controller = new AbortController();
+    this.activeRequests.add(controller);
     const abort = () => controller.abort();
     externalSignal?.addEventListener("abort", abort, { once: true });
-    const timer = window.setTimeout(abort, Math.max(1, timeoutMilliseconds));
+    let timedOut = false;
+    const timer = window.setTimeout(() => { timedOut = true; controller.abort(); }, Math.max(1, timeoutMilliseconds));
     try {
       const response = await this.fetcher(new URL(path, this.origin), {
         method,
@@ -345,22 +425,40 @@ export class StudioClient {
           ...(body === undefined ? {} : { "Content-Type": "application/json" })
         },
         body: body === undefined ? undefined : JSON.stringify(body),
-        signal: controller.signal
+        signal: controller.signal,
+        credentials: "same-origin",
+        redirect: "error",
+        cache: "no-store"
       });
+      if (controller.signal.aborted) throw abortError();
       if (!response.ok) {
         let payload: ControlErrorBody = {};
-        try { payload = await response.json() as ControlErrorBody; } catch { /* bounded fallback */ }
+        try {
+          const candidate: unknown = await response.json();
+          if (candidate && typeof candidate === "object" && !Array.isArray(candidate)) payload = candidate as ControlErrorBody;
+        } catch { /* A missing or malformed error envelope has a safe HTTP fallback. */ }
         throw new StudioApiError(
-          payload.error?.code ?? "http_error",
-          payload.error?.message ?? `Syndra request failed with HTTP ${response.status}.`,
+          typeof payload.error?.code === "string" ? payload.error.code.slice(0, 128) : "http_error",
+          typeof payload.error?.message === "string" ? payload.error.message.slice(0, 2_000) : `Syndra request failed with HTTP ${response.status}.`,
           response.status,
-          payload.error?.retryable ?? response.status >= 500
+          typeof payload.error?.retryable === "boolean" ? payload.error.retryable : response.status >= 500
         );
       }
-      return await response.json() as T;
+      const value = await response.json() as T;
+      if (controller.signal.aborted) throw abortError();
+      return value;
+    } catch (error) {
+      if (timedOut && !externalSignal?.aborted && !this.disposed) {
+        throw new StudioApiError("request_timeout", method === "GET"
+          ? "The local runtime did not respond in time. Retry this read when it is available."
+          : "The runtime did not confirm this action. Check the run before trying again; the action was not retried.",
+        408, method === "GET");
+      }
+      throw error;
     } finally {
       window.clearTimeout(timer);
       externalSignal?.removeEventListener("abort", abort);
+      this.activeRequests.delete(controller);
     }
   }
 }
@@ -391,6 +489,10 @@ function abortedOrValue<T>(value: T, signal?: AbortSignal): Promise<T> {
 
 function abortError(): DOMException {
   return new DOMException("Syndra request was cancelled.", "AbortError");
+}
+
+function sessionClosedError(): StudioApiError {
+  return new StudioApiError("session_closed", "This Studio session has closed. Reconnect to the local runtime.", 401);
 }
 
 function isRetryableReadError(error: unknown): boolean {

@@ -67,10 +67,9 @@ def begin_immediate_with_retry(
 
 def is_sqlite_busy_error(error: sqlite3.Error) -> bool:
     code = getattr(error, "sqlite_errorcode", None)
-    if isinstance(code, int) and (code & 0xFF) in {
-        sqlite3.SQLITE_BUSY,
-        sqlite3.SQLITE_LOCKED,
-    }:
-        return True
+    if isinstance(code, int):
+        return (code & 0xFF) in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}
+    if not isinstance(error, sqlite3.OperationalError):
+        return False
     message = str(error).casefold()
     return "locked" in message or "busy" in message

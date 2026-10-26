@@ -75,6 +75,104 @@ def test_history_cursor_rejects_changed_filters_and_malformed_input(tmp_path):
         store.page_runs(cursor="not-a-cursor")
 
 
+def test_history_unicode_search_has_bounded_filter_bound_cursor(tmp_path):
+    import base64
+
+    store = StateStore(tmp_path / "history.db")
+    search = "\u6d4b" * 512
+    for index in range(3):
+        store.create_run(make_run(f"unicode-{index}").model_copy(
+            update={"original_task": search}
+        ))
+
+    first, cursor = store.page_runs(limit=1, search=search)
+
+    assert cursor is not None and len(cursor) <= 2048
+    assert search not in base64.urlsafe_b64decode(cursor).decode()
+    remaining, _ = store.page_runs(limit=2, search=search, cursor=cursor)
+    assert len({run.run_id for run in [*first, *remaining]}) == 3
+    with pytest.raises(StateStoreError, match="cursor"):
+        store.page_runs(search="different", cursor=cursor)
+
+
+def test_history_accepts_existing_cursor_format_and_breaks_timestamp_ties(tmp_path):
+    import base64
+
+    store = StateStore(tmp_path / "history.db")
+    timestamp = make_run().created_at
+    for run_id in ("c", "a", "b"):
+        store.create_run(make_run(run_id).model_copy(update={"created_at": timestamp}))
+    first, _ = store.page_runs(limit=1)
+    legacy = base64.urlsafe_b64encode(json.dumps(
+        [first[0].created_at.isoformat(), "a", "", None]
+    ).encode()).decode()
+
+    remaining, _ = store.page_runs(cursor=legacy)
+
+    assert first[0].run_id == "a"
+    assert [run.run_id for run in remaining] == ["b", "c"]
+
+
+def test_history_indexes_survive_v6_upgrade_without_changing_records(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "state.db"
+    store = StateStore(path)
+    store.create_run(make_run("preserved"))
+    with sqlite3.connect(path) as connection:
+        connection.execute("DROP INDEX IF EXISTS idx_runs_history")
+        connection.execute("DROP INDEX IF EXISTS idx_runs_status_history")
+        connection.execute("UPDATE schema_metadata SET value = '6' WHERE key = 'schema_version'")
+
+    upgraded = StateStore(path)
+
+    assert upgraded.get_run("preserved").original_task == "Build feature"
+    assert upgraded.schema_version == SCHEMA_VERSION
+    with upgraded._connection() as connection:
+        plans = [
+            connection.execute("EXPLAIN QUERY PLAN SELECT run_id FROM runs " + sql).fetchall()
+            for sql in (
+                "ORDER BY created_at DESC, run_id ASC LIMIT 50",
+                "WHERE status = 'running' ORDER BY created_at DESC, run_id ASC LIMIT 50",
+            )
+        ]
+    for plan, index in zip(plans, ("idx_runs_history", "idx_runs_status_history")):
+        detail = " ".join(row["detail"] for row in plan)
+        assert index in detail
+        assert "TEMP B-TREE" not in detail
+
+
+def test_cancellation_batch_defaults_and_missing_run_are_explicit(tmp_path):
+    store = StateStore(tmp_path / "state.db")
+    store.create_run(make_run("a"))
+    store.create_run(make_run("b"))
+
+    states = store.get_cancellation_states(["a", "b", "a"])
+
+    assert set(states) == {"a", "b"}
+    assert all(not state.requested for state in states.values())
+    assert states["a"] is not states["b"]
+    assert store.get_cancellation_states([]) == {}
+    with pytest.raises(RunNotFoundError):
+        store.get_cancellation_states(["a", "missing"])
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_busy_reads_remain_distinguishable_from_storage_corruption(tmp_path, wrapped):
+    import sqlite3
+    from agentbus.execution.state_store import StateStoreBusyError
+
+    store = StateStore(tmp_path / "state.db")
+    with pytest.raises(StateStoreBusyError):
+        with store._connection():
+            try:
+                raise sqlite3.OperationalError("database is locked")
+            except sqlite3.Error as exc:
+                if wrapped:
+                    raise StateStoreError("Unable to list runs.") from exc
+                raise
+
+
 def test_schema_initializes_and_enables_foreign_keys(tmp_path):
     store = StateStore(tmp_path / "state.db")
 

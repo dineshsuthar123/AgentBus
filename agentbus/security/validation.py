@@ -23,6 +23,7 @@ from pydantic import ValidationError
 
 from agentbus import __version__
 from agentbus.execution.models import RunRecord
+from agentbus.execution.schema import SCHEMA_VERSION
 from agentbus.execution.state_store import StateStore
 from agentbus.git.repository import (
     GitRepository,
@@ -1011,7 +1012,7 @@ def _write_vsix(path: Path, *, include_source: bool = False) -> None:
         "syndraCompatibility": {
             "python": ">=0.6.0b1,<0.7.0",
             "controlProtocol": "1.0",
-            "stateSchema": 6,
+            "stateSchema": SCHEMA_VERSION,
         },
     }
     entries: dict[str, str] = {
@@ -1108,7 +1109,7 @@ def _audit_vsix(path: Path) -> tuple[str, ...]:
                 if compatibility != {
                     "python": ">=0.6.0b1,<0.7.0",
                     "controlProtocol": "1.0",
-                    "stateSchema": 6,
+                    "stateSchema": SCHEMA_VERSION,
                 }:
                     findings.append("VSIX compatibility metadata mismatch")
                 version = package.get("version")

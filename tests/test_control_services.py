@@ -34,6 +34,38 @@ def _git(workspace: Path, *arguments: str) -> None:
     assert result.returncode == 0, result.stderr
 
 
+def test_run_lists_batch_cancellation_reads_without_per_run_queries(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+
+    store = StateStore(tmp_path / "state.db")
+    for index in range(30):
+        store.create_run(RunRecord(
+            run_id=f"batch-{index}", original_task="Inspect batched state",
+            model="fake", workspace=str(tmp_path),
+        ))
+    service = ControlQueryService(AgentBusConfig(workspace_dir=str(tmp_path)), store)
+    connections = []
+    original = store._connection
+
+    @contextmanager
+    def counted_connection():
+        connections.append(1)
+        with original() as connection:
+            yield connection
+
+    def individual_read(_run_id):
+        raise AssertionError("Run lists must not issue one cancellation read per run")
+
+    monkeypatch.setattr(store, "_connection", counted_connection)
+    monkeypatch.setattr(store, "get_cancellation_state", individual_read)
+
+    response = service.list_runs(limit=30, history=True)
+
+    assert len(response.runs) == 30
+    assert all(not run.cancellation.requested for run in response.runs)
+    assert len(connections) == 2
+
+
 def test_provider_readiness_requires_explicit_check_and_never_logs_errors(tmp_path, monkeypatch):
     from agentbus.models.router import ModelRouter
 

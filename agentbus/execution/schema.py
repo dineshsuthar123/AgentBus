@@ -1,4 +1,4 @@
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 SCHEMA_SQL = """
@@ -464,10 +464,18 @@ BEFORE DELETE ON trace_comparisons
 BEGIN
     SELECT RAISE(ABORT, 'trace comparisons are immutable');
 END;
+
+CREATE INDEX IF NOT EXISTS idx_runs_history ON runs(created_at DESC, run_id ASC);
+CREATE INDEX IF NOT EXISTS idx_runs_status_history
+    ON runs(status, created_at DESC, run_id ASC);
 """
 
 
 MIGRATIONS: dict[int, tuple[str, ...]] = {
+    6: (
+        "CREATE INDEX IF NOT EXISTS idx_runs_history ON runs(created_at DESC, run_id ASC)",
+        "CREATE INDEX IF NOT EXISTS idx_runs_status_history ON runs(status, created_at DESC, run_id ASC)",
+    ),
     1: (
         """CREATE TABLE worktrees (
             worktree_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, task_id TEXT,

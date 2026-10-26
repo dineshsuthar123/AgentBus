@@ -1,4 +1,4 @@
-import { Activity, CheckCheck, Command, FileCode2, Fingerprint, Gauge, History, Play, Plus, Search, ShieldCheck } from "lucide-react";
+import { Activity, CheckCheck, Command, FileCode2, Fingerprint, Gauge, History, Play, Plus, Search, ShieldCheck, Wrench, Compass } from "lucide-react";
 import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { RunSummary } from "../api/types";
 
@@ -23,6 +23,7 @@ export function CommandPalette({ currentRun }: { currentRun?: RunSummary }) {
   const filtered = commands.filter((command) => `${command.label} ${command.keywords}`.toLowerCase().includes(normalized));
 
   const toggleShortcut = useEffectEvent((event: KeyboardEvent) => {
+    if (event.repeat || event.isComposing) return;
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
       event.preventDefault();
       if (!open) {
@@ -51,11 +52,16 @@ export function CommandPalette({ currentRun }: { currentRun?: RunSummary }) {
     }
   }, [open]);
 
+  useLayoutEffect(() => {
+    if (open) dialog.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView?.({ block: "nearest" });
+  }, [open, activeIndex, query]);
+
   function close() {
     setOpen(false);
   }
 
   function keyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.nativeEvent.isComposing) return;
     if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
@@ -110,6 +116,8 @@ function createCommands(currentRun: RunSummary | undefined, close: () => void): 
   return [
     { id: "new", label: "New run", keywords: "launch task", shortcut: "N", icon: <Plus size={14} />, action: navigate("#/new") },
     { id: "open-run", label: "Open run", keywords: "history durable", icon: <History size={14} />, action: navigate("#/history") },
+    { id: "customer-repair", label: "Repair customer impact", keywords: "access purchase accounts consequences", icon: <Wrench size={14} />, action: navigate("#/repair") },
+    { id: "explore", label: "Explore Syndra", keywords: "workshop introduction", icon: <Compass size={14} />, action: navigate("#/workshop") },
     { id: "repository", label: "Open repository", keywords: "workspace source", icon: <FileCode2 size={14} />, action: openWorkspace("repository") },
     { id: "focus-active", label: "Focus active execution", keywords: "mesh current", shortcut: "F", icon: <Activity size={14} />, action: dispatch("focus-active") },
     { id: "approval", label: "Jump to approval", keywords: "gate policy", icon: <ShieldCheck size={14} />, action: dispatch("approval") },

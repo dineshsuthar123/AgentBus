@@ -141,6 +141,78 @@ def _auth() -> dict[str, str]:
     return {"Authorization": f"Bearer {TOKEN}"}
 
 
+def test_history_invalid_filters_are_client_errors(tmp_path):
+    client, _ = _client(tmp_path)
+    for parameters in ({"cursor": "not-a-cursor"}, {"status": "not-a-status"}):
+        response = client.get("/api/v1/runs", params={"history": "true", **parameters}, headers=_auth())
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "invalid_run_history"
+        assert response.json()["error"]["retryable"] is False
+
+
+def test_busy_storage_has_safe_retryable_response(tmp_path, monkeypatch):
+    from agentbus.execution.state_store import StateStoreBusyError
+
+    client, _ = _client(tmp_path)
+
+    def busy(*_args, **_kwargs):
+        raise StateStoreBusyError("raw-private-database-location")
+
+    monkeypatch.setattr(client.app.state.query_service, "list_runs", busy)
+    response = client.get("/api/v1/runs", headers=_auth())
+
+    assert response.status_code == 503
+    assert response.headers["Retry-After"] == "1"
+    assert response.json()["error"]["retryable"] is True
+    assert "raw-private" not in response.text
+
+
+def test_blocking_read_projections_do_not_run_on_the_event_loop(tmp_path):
+    import inspect
+
+    client, _ = _client(tmp_path)
+    names = {"list_runs", "get_run", "doctor", "tasks", "attempts", "report", "changes", "diff", "file_content"}
+    routes = {route.name: route for route in client.app.routes if getattr(route, "name", None) in names}
+
+    assert routes.keys() == names
+    assert all(not inspect.iscoroutinefunction(route.endpoint) for route in routes.values())
+
+
+def test_health_remains_available_while_a_history_read_is_waiting(tmp_path, monkeypatch):
+    import asyncio
+    import threading
+    import httpx
+    from agentbus.control.models import RunListResponse
+
+    client, _ = _client(tmp_path)
+    released = []
+
+    async def scenario():
+        started = asyncio.Event()
+        release = threading.Event()
+        loop = asyncio.get_running_loop()
+
+        def held_read(*_args, **_kwargs):
+            loop.call_soon_threadsafe(started.set)
+            released.append(release.wait(timeout=5))
+            return RunListResponse(runs=[], total=0)
+
+        monkeypatch.setattr(client.app.state.query_service, "list_runs", held_read)
+        transport = httpx.ASGITransport(app=client.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as connection:
+            listing = asyncio.create_task(connection.get("/api/v1/runs", headers=_auth()))
+            try:
+                await asyncio.wait_for(started.wait(), timeout=5)
+                response = await asyncio.wait_for(connection.get("/health"), timeout=5)
+                assert response.status_code == 200
+            finally:
+                release.set()
+                await listing
+
+    asyncio.run(scenario())
+    assert released == [True]
+
+
 def _record_control_trace(
     client: TestClient,
     *,

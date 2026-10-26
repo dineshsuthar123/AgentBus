@@ -18,6 +18,7 @@ const NewRunPage = lazy(() => import("./pages/NewRunPage").then((module) => ({ d
 const RunPage = lazy(() => import("./pages/RunPage").then((module) => ({ default: module.RunPage })));
 const RuntimePage = lazy(() => import("./pages/RuntimePage").then((module) => ({ default: module.RuntimePage })));
 const WorkshopPage = lazy(() => import("./pages/WorkshopPage").then((module) => ({ default: module.WorkshopPage })));
+const RepairPage = lazy(() => import("./pages/RepairPage").then((module) => ({ default: module.RepairPage })));
 const DiagnosticsOverlay = lazy(() => import("./components/DiagnosticsOverlay").then((module) => ({ default: module.DiagnosticsOverlay })));
 
 interface RouteState {
@@ -30,7 +31,10 @@ export function App() {
   const route = useHashRoute();
   const runMatch = /^\/runs\/([^/]+)$/.exec(route.path);
   const runId = runMatch ? decodeHashSegment(runMatch[1]) : undefined;
-  const ledgerVisible = !runId && !["/new", "/runtime", "/demo", "/workshop"].includes(route.path);
+  const repairMatch = /^\/repair\/([^/]+)$/.exec(route.path);
+  const repairId = repairMatch ? decodeHashSegment(repairMatch[1]) : undefined;
+  const repairVisible = route.path === "/repair" || !!repairMatch;
+  const ledgerVisible = !runId && !repairVisible && !["/new", "/runtime", "/demo", "/workshop"].includes(route.path);
   const [ledgerOpened, setLedgerOpened] = useState(ledgerVisible);
   if (ledgerVisible && !ledgerOpened) setLedgerOpened(true);
   const [openedRun, setOpenedRun] = useState<RunSummary>();
@@ -59,6 +63,7 @@ export function App() {
   const currentRun = recentRun ?? (openedRun?.run_id === runId ? openedRun : undefined);
   let page: ReactNode;
   if (runId) page = <RunPage key={runId} runId={runId} query={route.query} />;
+  else if (repairVisible) page = <RepairPage key={repairId ?? "repair-entry"} caseId={repairId} />;
   else if (route.path === "/new") page = null;
   else if (route.path === "/history") page = null;
   else if (route.path === "/runtime") page = <RuntimePage />;

@@ -12,6 +12,7 @@ short operational path.
 - [Local control plane and VS Code](../adr/0007-local-control-plane-and-vscode.md)
 - [Cooperative cancellation](../adr/0008-cooperative-cancellation-and-real-local-execution.md)
 - [Capability tool runtime](../adr/0009-capability-tool-runtime.md)
+- [Local demo data and request boundaries](../adr/0012-local-demo-data-and-request-boundaries.md)
 
 ## Evidence and intelligence
 

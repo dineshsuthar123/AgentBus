@@ -7,6 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from agentbus.control.models import ReplayCreateRequest
+from agentbus.execution.schema import SCHEMA_VERSION
 from agentbus.control.protocol import (
     build_json_schema,
     build_openapi,
@@ -33,6 +34,8 @@ def test_json_schema_generates_typescript_from_shared_models() -> None:
     assert "export interface RunCreateRequest" in generated
     assert "export interface ErrorResponse" in generated
     assert 'export const CONTROL_PROTOCOL_VERSION = "1.0"' in generated
+    assert schema["x-syndra-state-schema"] == SCHEMA_VERSION
+    assert f"export const STATE_SCHEMA_VERSION = {SCHEMA_VERSION} as const" in generated
 
 
 def test_cancellation_lifecycle_is_backward_compatible_protocol_extension() -> None:

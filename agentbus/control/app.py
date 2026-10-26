@@ -12,6 +12,7 @@ from typing import Any
 
 try:
     from fastapi import FastAPI, Query, Request
+    from fastapi.concurrency import run_in_threadpool
     from fastapi.exceptions import RequestValidationError
     from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
     from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -121,7 +122,7 @@ from agentbus.control.supervisor import BackgroundRunSupervisor
 from agentbus.control.studio import BrowserSessions, launch_browser_exchange, loopback_origin, studio_assets
 from agentbus.execution.engine import DurableExecutionEngine
 from agentbus.execution.models import ApprovalOutcome
-from agentbus.execution.state_store import StateStoreError
+from agentbus.execution.state_store import InvalidRunHistoryError, StateStoreBusyError, StateStoreError
 from agentbus.git.repository import GitRepositoryError
 from agentbus.mcp.server import AgentBusMcpServer
 from agentbus.replay.session import ReplaySessionStatus
@@ -187,6 +188,7 @@ def create_app(
             413: {"model": ErrorResponse, "description": "Request too large"},
             422: {"model": ErrorResponse, "description": "Validation error"},
             500: {"model": ErrorResponse, "description": "Internal error"},
+            503: {"model": ErrorResponse, "description": "Durable storage temporarily busy"},
         },
         lifespan=lifespan,
     )
@@ -197,6 +199,22 @@ def create_app(
     app.state.mcp_server = mcp_server
     app.state.last_activity = time.monotonic()
     app.state.browser_sessions = browser_sessions
+
+    from agentbus.control.repair import repair_router
+    from agentbus.repair.service import RepairError, RepairService
+
+    app.state.customer_repair = None
+
+    def customer_repair_service():
+        if app.state.customer_repair is None:
+            app.state.customer_repair = RepairService(query_service.config.state_directory_path / "customer-repair")
+        return app.state.customer_repair
+
+    app.include_router(repair_router(customer_repair_service))
+
+    @app.exception_handler(RepairError)
+    async def repair_error_handler(_request: Request, exc: RepairError):
+        return _error_json(JSONResponse, code=exc.code, message=str(exc), status_code=exc.status)
 
     @app.middleware("http")
     async def secure_local_request(request: Request, call_next):
@@ -290,6 +308,20 @@ def create_app(
             code="control_service_error",
             message=safe_error_message(exc),
             status_code=409,
+        )
+
+    @app.exception_handler(InvalidRunHistoryError)
+    async def history_error_handler(_request: Request, exc: InvalidRunHistoryError):
+        return _error_json(
+            JSONResponse, code="invalid_run_history", message=str(exc), status_code=400,
+        )
+
+    @app.exception_handler(StateStoreBusyError)
+    async def storage_busy_handler(_request: Request, _exc: StateStoreBusyError):
+        return _error_json(
+            JSONResponse, code="state_store_busy",
+            message="Durable storage is busy. Read the current run state before retrying an action.",
+            retryable=True, status_code=503, headers={"Retry-After": "1"},
         )
 
     @app.exception_handler(Exception)
@@ -415,7 +447,7 @@ def create_app(
                 "error": {"code": -32700, "message": "Parse error"},
             }
             return JSONResponse(content=response)
-        response = mcp_server.handle(
+        response = await run_in_threadpool(mcp_server.handle,
             payload,
             protocol_version=request.headers.get("MCP-Protocol-Version"),
             require_protocol_header=True,
@@ -428,7 +460,7 @@ def create_app(
         f"{API_PREFIX}/workspaces/validate",
         response_model=WorkspaceValidationResponse,
     )
-    async def validate_workspace(
+    def validate_workspace(
         request: WorkspaceValidationRequest,
     ) -> WorkspaceValidationResponse:
         return query_service.workspace_service.validate(request)
@@ -609,7 +641,7 @@ def create_app(
         return query_service.intelligence.context_plan(workspace_id, request)
 
     @app.get(f"{API_PREFIX}/providers", response_model=ProviderListResponse)
-    async def providers() -> ProviderListResponse:
+    def providers() -> ProviderListResponse:
         return query_service.providers()
 
     @app.post(f"{API_PREFIX}/providers/check", response_model=ProviderSummary)
@@ -617,29 +649,29 @@ def create_app(
         return query_service.check_provider(request.provider, live_consent=request.live_consent)
 
     @app.get(f"{API_PREFIX}/doctor", response_model=DoctorResponse)
-    async def doctor(workspace: str | None = None) -> DoctorResponse:
+    def doctor(workspace: str | None = None) -> DoctorResponse:
         return query_service.doctor(workspace)
 
     @app.get(f"{API_PREFIX}/tools", response_model=ToolListResponse)
-    async def tools() -> ToolListResponse:
+    def tools() -> ToolListResponse:
         return query_service.tools()
 
     @app.get(
         f"{API_PREFIX}/tools/{{tool_name}}",
         response_model=ToolDescriptorDetail,
     )
-    async def tool(tool_name: str) -> ToolDescriptorDetail:
+    def tool(tool_name: str) -> ToolDescriptorDetail:
         return query_service.tool(tool_name)
 
     @app.get(f"{API_PREFIX}/policy", response_model=ToolPolicyResponse)
-    async def tool_policy() -> ToolPolicyResponse:
+    def tool_policy() -> ToolPolicyResponse:
         return query_service.tool_policy()
 
     @app.post(
         f"{API_PREFIX}/policy/evaluate",
         response_model=ToolPolicyEvaluationResponse,
     )
-    async def evaluate_tool_policy(
+    def evaluate_tool_policy(
         request: ToolPolicyEvaluationRequest,
     ) -> ToolPolicyEvaluationResponse:
         return query_service.evaluate_tool_policy(request)
@@ -659,11 +691,11 @@ def create_app(
         return query_service.check_mcp_server(server_id)
 
     @app.post(f"{API_PREFIX}/runs", response_model=RunAcceptedResponse, status_code=202)
-    async def create_run(request: RunCreateRequest) -> RunAcceptedResponse:
+    def create_run(request: RunCreateRequest) -> RunAcceptedResponse:
         return supervisor.submit(request)
 
     @app.get(f"{API_PREFIX}/runs", response_model=RunListResponse)
-    async def list_runs(
+    def list_runs(
         limit: int = Query(default=100, ge=1, le=1000),
         cursor: str | None = Query(default=None, max_length=2048),
         search: str = Query(default="", max_length=512),
@@ -674,28 +706,28 @@ def create_app(
                                        status=status, history=history)
 
     @app.get(f"{API_PREFIX}/runs/{{run_id}}", response_model=RunSummary)
-    async def get_run(run_id: str) -> RunSummary:
+    def get_run(run_id: str) -> RunSummary:
         return query_service.run_summary(query_service.get_run(run_id))
 
     @app.get(
         f"{API_PREFIX}/runs/{{run_id}}/trace",
         response_model=TraceResponse,
     )
-    async def run_trace(run_id: str) -> TraceResponse:
+    def run_trace(run_id: str) -> TraceResponse:
         return query_service.trace(run_id)
 
     @app.post(
         f"{API_PREFIX}/runs/{{run_id}}/trace/verify",
         response_model=TraceVerificationResponse,
     )
-    async def verify_run_trace(run_id: str) -> TraceVerificationResponse:
+    def verify_run_trace(run_id: str) -> TraceVerificationResponse:
         return query_service.verify_trace(run_id)
 
     @app.get(
         f"{API_PREFIX}/runs/{{run_id}}/trace/spans",
         response_model=TraceSpanListResponse,
     )
-    async def run_trace_spans(
+    def run_trace_spans(
         run_id: str,
         after: int = Query(default=0, ge=0),
         limit: int = Query(default=100, ge=1, le=500),
@@ -710,7 +742,7 @@ def create_app(
         f"{API_PREFIX}/runs/{{run_id}}/trace/spans/{{span_id}}",
         response_model=TraceSpanDetailResponse,
     )
-    async def run_trace_span(
+    def run_trace_span(
         run_id: str,
         span_id: str,
     ) -> TraceSpanDetailResponse:
@@ -720,14 +752,14 @@ def create_app(
         f"{API_PREFIX}/runs/{{run_id}}/provenance",
         response_model=ProvenanceResponse,
     )
-    async def run_provenance(run_id: str) -> ProvenanceResponse:
+    def run_provenance(run_id: str) -> ProvenanceResponse:
         return query_service.provenance(run_id)
 
     @app.get(
         f"{API_PREFIX}/runs/{{run_id}}/replayability",
         response_model=RunReplayabilityResponse,
     )
-    async def run_replayability(
+    def run_replayability(
         run_id: str,
         after: int = Query(default=0, ge=0),
         limit: int = Query(default=100, ge=1, le=500),
@@ -743,14 +775,14 @@ def create_app(
         response_model=ReplayAcceptedResponse,
         status_code=202,
     )
-    async def create_replay(
+    def create_replay(
         run_id: str,
         request: ReplayCreateRequest,
     ) -> ReplayAcceptedResponse:
         return replay_supervisor.submit(run_id, request)
 
     @app.get(f"{API_PREFIX}/replays", response_model=ReplayListResponse)
-    async def list_replays(
+    def list_replays(
         source_trace_id: str | None = None,
         status: str | None = Query(
             default=None,
@@ -771,14 +803,14 @@ def create_app(
         f"{API_PREFIX}/replays/{{replay_id}}",
         response_model=ReplaySessionResponse,
     )
-    async def get_replay(replay_id: str) -> ReplaySessionResponse:
+    def get_replay(replay_id: str) -> ReplaySessionResponse:
         return query_service.replay(replay_id)
 
     @app.post(
         f"{API_PREFIX}/replays/{{replay_id}}/cancel",
         response_model=ReplayCancelResponse,
     )
-    async def cancel_replay(replay_id: str) -> ReplayCancelResponse:
+    def cancel_replay(replay_id: str) -> ReplayCancelResponse:
         return replay_supervisor.cancel(replay_id)
 
     @app.post(
@@ -786,7 +818,7 @@ def create_app(
         response_model=ComparisonResponse,
         status_code=201,
     )
-    async def create_comparison(
+    def create_comparison(
         request: ComparisonCreateRequest,
         after: int = Query(default=0, ge=0),
         limit: int = Query(default=100, ge=1, le=500),
@@ -802,7 +834,7 @@ def create_app(
         f"{API_PREFIX}/comparisons/{{comparison_id}}",
         response_model=ComparisonResponse,
     )
-    async def get_comparison(
+    def get_comparison(
         comparison_id: str,
         after: int = Query(default=0, ge=0),
         limit: int = Query(default=100, ge=1, le=500),
@@ -818,7 +850,7 @@ def create_app(
         response_model=TraceArchiveImportResponse,
         status_code=201,
     )
-    async def import_trace(
+    def import_trace(
         request: TraceArchiveImportRequest,
     ) -> TraceArchiveImportResponse:
         return query_service.import_trace_archive(request)
@@ -827,7 +859,7 @@ def create_app(
         f"{API_PREFIX}/traces/{{trace_id}}/export",
         response_model=TraceArchiveExportResponse,
     )
-    async def export_trace(
+    def export_trace(
         trace_id: str,
         include_source_content: bool = False,
     ) -> TraceArchiveExportResponse:
@@ -841,32 +873,32 @@ def create_app(
         response_model=RegressionFixtureCaptureResponse,
         status_code=201,
     )
-    async def capture_regression_fixture(
+    def capture_regression_fixture(
         run_id: str,
         request: RegressionFixtureCaptureRequest,
     ) -> RegressionFixtureCaptureResponse:
         return query_service.capture_regression_fixture(run_id, request)
 
     @app.post(f"{API_PREFIX}/runs/{{run_id}}/resume", response_model=ResumeResponse)
-    async def resume_run(run_id: str) -> ResumeResponse:
+    def resume_run(run_id: str) -> ResumeResponse:
         return supervisor.resume(run_id)
 
     @app.post(f"{API_PREFIX}/runs/{{run_id}}/cancel", response_model=CancelResponse)
-    async def cancel_run(
+    def cancel_run(
         run_id: str,
         request: RunActionRequest | None = None,
     ) -> CancelResponse:
         return supervisor.cancel(run_id, request.reason if request else None)
 
     @app.get(f"{API_PREFIX}/runs/{{run_id}}/tasks", response_model=TaskListResponse)
-    async def tasks(run_id: str) -> TaskListResponse:
+    def tasks(run_id: str) -> TaskListResponse:
         return query_service.tasks(run_id)
 
     @app.get(
         f"{API_PREFIX}/runs/{{run_id}}/attempts",
         response_model=AttemptListResponse,
     )
-    async def attempts(
+    def attempts(
         run_id: str,
         limit: int = Query(default=100, ge=1, le=500),
     ) -> AttemptListResponse:
@@ -876,25 +908,25 @@ def create_app(
         f"{API_PREFIX}/runs/{{run_id}}/scheduler",
         response_model=SchedulerResponse,
     )
-    async def scheduler(run_id: str) -> SchedulerResponse:
+    def scheduler(run_id: str) -> SchedulerResponse:
         return query_service.scheduler(run_id)
 
     @app.get(
         f"{API_PREFIX}/runs/{{run_id}}/worktrees",
         response_model=WorktreeListResponse,
     )
-    async def worktrees(run_id: str) -> WorktreeListResponse:
+    def worktrees(run_id: str) -> WorktreeListResponse:
         return query_service.worktrees(run_id)
 
     @app.get(f"{API_PREFIX}/runs/{{run_id}}/usage", response_model=UsageResponse)
-    async def usage(run_id: str) -> UsageResponse:
+    def usage(run_id: str) -> UsageResponse:
         return query_service.usage(run_id)
 
     @app.get(
         f"{API_PREFIX}/runs/{{run_id}}/tool-invocations",
         response_model=ToolInvocationListResponse,
     )
-    async def tool_invocations(
+    def tool_invocations(
         run_id: str,
         after: int = Query(default=0, ge=0),
         limit: int = Query(default=100, ge=1, le=500),
@@ -909,7 +941,7 @@ def create_app(
         f"{API_PREFIX}/runs/{{run_id}}/tool-invocations/{{invocation_id}}",
         response_model=ToolInvocationDetail,
     )
-    async def tool_invocation(
+    def tool_invocation(
         run_id: str,
         invocation_id: str,
     ) -> ToolInvocationDetail:
@@ -919,7 +951,7 @@ def create_app(
         f"{API_PREFIX}/runs/{{run_id}}/tool-invocations/{{invocation_id}}/cancel",
         response_model=ToolInvocationCancelResponse,
     )
-    async def cancel_tool_invocation(
+    def cancel_tool_invocation(
         run_id: str,
         invocation_id: str,
         request: ToolInvocationCancelRequest | None = None,
@@ -950,7 +982,7 @@ def create_app(
         f"{API_PREFIX}/runs/{{run_id}}/tool-audit",
         response_model=ToolAuditListResponse,
     )
-    async def tool_audit(
+    def tool_audit(
         run_id: str,
         after: int = Query(default=0, ge=0),
         limit: int = Query(default=100, ge=1, le=500),
@@ -965,7 +997,7 @@ def create_app(
         f"{API_PREFIX}/runs/{{run_id}}/report",
         response_model=RunReportResponse,
     )
-    async def report(run_id: str) -> RunReportResponse:
+    def report(run_id: str) -> RunReportResponse:
         return query_service.report(run_id)
 
     def event_response(request: Request, run_id: str | None = None):
@@ -992,7 +1024,7 @@ def create_app(
         return event_response(request)
 
     @app.get(f"{API_PREFIX}/runs/{{run_id}}/events")
-    async def run_events(run_id: str, request: Request):
+    def run_events(run_id: str, request: Request):
         query_service.get_run(run_id)
         return event_response(request, run_id)
 
@@ -1000,14 +1032,14 @@ def create_app(
         f"{API_PREFIX}/runs/{{run_id}}/approvals",
         response_model=ApprovalListResponse,
     )
-    async def approvals(run_id: str) -> ApprovalListResponse:
+    def approvals(run_id: str) -> ApprovalListResponse:
         return query_service.approvals(run_id)
 
     @app.post(
         f"{API_PREFIX}/runs/{{run_id}}/approvals/{{approval_id}}/approve",
         response_model=ApprovalDecisionResponse,
     )
-    async def approve(
+    def approve(
         run_id: str,
         approval_id: str,
         request: ApprovalDecisionRequest,
@@ -1023,7 +1055,7 @@ def create_app(
         f"{API_PREFIX}/runs/{{run_id}}/approvals/{{approval_id}}/reject",
         response_model=ApprovalDecisionResponse,
     )
-    async def reject(
+    def reject(
         run_id: str,
         approval_id: str,
         request: ApprovalDecisionRequest,
@@ -1039,11 +1071,11 @@ def create_app(
         f"{API_PREFIX}/runs/{{run_id}}/changes",
         response_model=ChangeListResponse,
     )
-    async def changes(run_id: str) -> ChangeListResponse:
+    def changes(run_id: str) -> ChangeListResponse:
         return query_service.repository.list_changes(query_service.get_run(run_id))
 
     @app.get(f"{API_PREFIX}/runs/{{run_id}}/diff", response_model=DiffResponse)
-    async def diff(
+    def diff(
         run_id: str,
         path: str | None = None,
         byte_limit: int = Query(default=30_000, ge=1, le=MAX_REQUEST_BYTES),
@@ -1058,7 +1090,7 @@ def create_app(
         f"{API_PREFIX}/runs/{{run_id}}/changes/{{path:path}}",
         response_model=FileContentResponse,
     )
-    async def file_content(
+    def file_content(
         run_id: str,
         path: str,
         revision: str = Query(default="after", pattern="^(before|after)$"),

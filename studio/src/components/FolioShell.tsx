@@ -1,7 +1,7 @@
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from "react";
+import { useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from "react";
 import type { RunSummary } from "../api/types";
 import { CommandPalette } from "./CommandPalette";
-import { ArrowDownLeft, Compass, History, LogOut, Plus, Radio, SlidersHorizontal, X } from "lucide-react";
+import { ArrowDownLeft, Compass, History, LogOut, Plus, Radio, SlidersHorizontal, Wrench, X } from "lucide-react";
 import { StatusSignal } from "./Primitives";
 import { displayWorkspace, shortId } from "../lib/format";
 import { FolioMemoryContext, FolioWorkingSet, folioLocation, ledgerLocation, saveResumeFolio, useReadingPosition } from "../state/folioNavigation";
@@ -35,7 +35,7 @@ export function FolioShell({ runs, selected, phase, drawer, children, onDisconne
   useLayoutEffect(() => { if (ledgerHref) memory.visitLedger(ledgerHref); }, [ledgerHref, memory]);
   useLayoutEffect(() => { memory.receiveSummaries(runs); }, [runs, selected, memory]);
   useLayoutEffect(() => { if (drawerOpen) drawerHeading.current?.focus({ preventScroll: true }); }, [drawerOpen]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     document.documentElement.dataset.theme = theme;
     try { localStorage.setItem("syndra.studio.theme", theme); } catch { /* Session appearance still works when storage is unavailable. */ }
   }, [theme]);
@@ -85,6 +85,7 @@ export function FolioShell({ runs, selected, phase, drawer, children, onDisconne
     <footer className="workspace-edge">
       <a href="#/new" className="edge-new"><Plus size={17} />New task</a>
       <a href={memory.ledgerHref}><History size={17} />All runs</a>
+      <a href="#/repair" className="edge-repair"><Wrench size={17} />Customer repair</a>
       <a href="#/workshop" className="edge-explore"><Compass size={17} />Explore Syndra</a>
       <label>Needs attention <select value="" onChange={(event) => { if (event.target.value) window.location.hash = `#/runs/${encodeURIComponent(event.target.value)}`; }}><option value="">{attention.length} in recent work</option>{attention.map((run) => <option key={run.run_id} value={run.run_id}>{run.status}: {run.original_task}</option>)}</select></label>
       <a ref={edge} href={drawerLink(!drawerOpen)} aria-expanded={drawerOpen}><SlidersHorizontal size={17} />Workspace<ArrowDownLeft size={14} /></a>

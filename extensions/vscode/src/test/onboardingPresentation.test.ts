@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { EXPECTED_STATE_SCHEMA } from "../compatibility";
 import {
   assessInstallationOutput,
   detectIndexState,
@@ -12,7 +13,7 @@ function versionOutput(overrides: Record<string, unknown> = {}): string {
   return JSON.stringify({
     version: "0.6.0b1",
     protocols: { control: "1.0" },
-    schemas: { state: 6 },
+    schemas: { state: EXPECTED_STATE_SCHEMA },
     ...overrides
   });
 }
@@ -30,7 +31,7 @@ test("installation assessment validates product protocol and state schema", () =
     "incompatible"
   );
   assert.equal(
-    assessInstallationOutput(versionOutput({ schemas: { state: 7 } })).state,
+    assessInstallationOutput(versionOutput({ schemas: { state: EXPECTED_STATE_SCHEMA + 1 } })).state,
     "incompatible"
   );
 });

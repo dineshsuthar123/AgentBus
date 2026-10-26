@@ -1411,6 +1411,59 @@
         "title": "ContextRole",
         "type": "string"
       },
+      "DemoProof": {
+        "additionalProperties": false,
+        "properties": {
+          "after_code": {
+            "title": "After Code",
+            "type": "string"
+          },
+          "before_code": {
+            "title": "Before Code",
+            "type": "string"
+          },
+          "broken_handler_granted_access": {
+            "const": false,
+            "default": false,
+            "title": "Broken Handler Granted Access",
+            "type": "boolean"
+          },
+          "fixed_handler_granted_access": {
+            "const": true,
+            "default": true,
+            "title": "Fixed Handler Granted Access",
+            "type": "boolean"
+          },
+          "fixture": {
+            "const": "purchase-access/v1",
+            "default": "purchase-access/v1",
+            "title": "Fixture",
+            "type": "string"
+          },
+          "historical_missing_after_fix": {
+            "title": "Historical Missing After Fix",
+            "type": "integer"
+          },
+          "historical_missing_before_fix": {
+            "title": "Historical Missing Before Fix",
+            "type": "integer"
+          },
+          "provider_calls": {
+            "const": 0,
+            "default": 0,
+            "title": "Provider Calls",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "historical_missing_before_fix",
+          "historical_missing_after_fix",
+          "before_code",
+          "after_code"
+        ],
+        "title": "DemoProof",
+        "type": "object"
+      },
       "DemoWorkspaceRequest": {
         "additionalProperties": false,
         "properties": {
@@ -1742,6 +1795,33 @@
           "revision"
         ],
         "title": "FileContentResponse",
+        "type": "object"
+      },
+      "FixReference": {
+        "additionalProperties": false,
+        "properties": {
+          "after_revision": {
+            "pattern": "^[a-f0-9]{7,64}$",
+            "title": "After Revision",
+            "type": "string"
+          },
+          "before_revision": {
+            "pattern": "^[a-f0-9]{7,64}$",
+            "title": "Before Revision",
+            "type": "string"
+          },
+          "review_confirmed": {
+            "const": true,
+            "title": "Review Confirmed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "before_revision",
+          "after_revision",
+          "review_confirmed"
+        ],
+        "title": "FixReference",
         "type": "object"
       },
       "GraphEdgeSummary": {
@@ -3557,6 +3637,109 @@
         "title": "ProviderSummary",
         "type": "object"
       },
+      "PurchaseEvidence": {
+        "additionalProperties": false,
+        "properties": {
+          "access_present": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Access Present"
+          },
+          "account_id": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "entitlement": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+            "title": "Entitlement",
+            "type": "string"
+          },
+          "evidence_ids": {
+            "items": {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+              "type": "string"
+            },
+            "maxItems": 20,
+            "minItems": 1,
+            "title": "Evidence Ids",
+            "type": "array"
+          },
+          "history_complete": {
+            "title": "History Complete",
+            "type": "boolean"
+          },
+          "mapping_verified": {
+            "title": "Mapping Verified",
+            "type": "boolean"
+          },
+          "paid_at": {
+            "format": "date-time",
+            "title": "Paid At",
+            "type": "string"
+          },
+          "payment_id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+            "title": "Payment Id",
+            "type": "string"
+          },
+          "payment_state": {
+            "enum": [
+              "paid",
+              "refunded",
+              "cancelled",
+              "unknown"
+            ],
+            "title": "Payment State",
+            "type": "string"
+          },
+          "purchase_id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+            "title": "Purchase Id",
+            "type": "string"
+          },
+          "revision": {
+            "maximum": 2147483647.0,
+            "minimum": 1.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "tenant_id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+            "title": "Tenant Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "purchase_id",
+          "payment_id",
+          "tenant_id",
+          "account_id",
+          "entitlement",
+          "paid_at",
+          "payment_state",
+          "access_present",
+          "mapping_verified",
+          "history_complete",
+          "evidence_ids",
+          "revision"
+        ],
+        "title": "PurchaseEvidence",
+        "type": "object"
+      },
       "RegressionFixtureCaptureRequest": {
         "additionalProperties": false,
         "properties": {
@@ -3657,6 +3840,858 @@
           "replay_command"
         ],
         "title": "RegressionFixtureCaptureResponse",
+        "type": "object"
+      },
+      "RepairAccountResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "allowed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allowed"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "title": "Observed At",
+            "type": "string"
+          },
+          "purchase_id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+            "title": "Purchase Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "purchase_id",
+          "account_id",
+          "allowed",
+          "observed_at",
+          "message"
+        ],
+        "title": "RepairAccountResponse",
+        "type": "object"
+      },
+      "RepairApplyRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "confirmation": {
+            "const": "APPLY_SELECTED_CORRECTIONS",
+            "title": "Confirmation",
+            "type": "string"
+          },
+          "preview_fingerprint": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Preview Fingerprint",
+            "type": "string"
+          },
+          "preview_id": {
+            "pattern": "^[a-f0-9]{32}$",
+            "title": "Preview Id",
+            "type": "string"
+          },
+          "purchase_ids": {
+            "items": {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+              "type": "string"
+            },
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Purchase Ids",
+            "type": "array"
+          },
+          "request_id": {
+            "pattern": "^[a-f0-9]{32}$",
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "preview_id",
+          "preview_fingerprint",
+          "request_id",
+          "purchase_ids",
+          "confirmation"
+        ],
+        "title": "RepairApplyRequest",
+        "type": "object"
+      },
+      "RepairBatch": {
+        "additionalProperties": false,
+        "properties": {
+          "case_id": {
+            "title": "Case Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "preview_id": {
+            "title": "Preview Id",
+            "type": "string"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "restored_count": {
+            "title": "Restored Count",
+            "type": "integer"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/RepairResult"
+            },
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Results",
+            "type": "array"
+          },
+          "selected_count": {
+            "title": "Selected Count",
+            "type": "integer"
+          },
+          "skipped_count": {
+            "title": "Skipped Count",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "completed",
+              "needs_attention"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "unresolved_count": {
+            "title": "Unresolved Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "request_id",
+          "case_id",
+          "preview_id",
+          "created_at",
+          "status",
+          "selected_count",
+          "restored_count",
+          "skipped_count",
+          "unresolved_count",
+          "results"
+        ],
+        "title": "RepairBatch",
+        "type": "object"
+      },
+      "RepairBatchListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "batches": {
+            "items": {
+              "$ref": "#/components/schemas/RepairBatch"
+            },
+            "title": "Batches",
+            "type": "array"
+          }
+        },
+        "required": [
+          "batches"
+        ],
+        "title": "RepairBatchListResponse",
+        "type": "object"
+      },
+      "RepairBatchResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "batch": {
+            "$ref": "#/components/schemas/RepairBatch"
+          }
+        },
+        "required": [
+          "batch"
+        ],
+        "title": "RepairBatchResponse",
+        "type": "object"
+      },
+      "RepairCase": {
+        "additionalProperties": false,
+        "properties": {
+          "demo_proof": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DemoProof"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "snapshot": {
+            "$ref": "#/components/schemas/RepairSnapshot"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/RepairCaseSummary"
+          }
+        },
+        "required": [
+          "summary",
+          "snapshot"
+        ],
+        "title": "RepairCase",
+        "type": "object"
+      },
+      "RepairCaseListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "cases": {
+            "items": {
+              "$ref": "#/components/schemas/RepairCaseSummary"
+            },
+            "title": "Cases",
+            "type": "array"
+          }
+        },
+        "required": [
+          "cases"
+        ],
+        "title": "RepairCaseListResponse",
+        "type": "object"
+      },
+      "RepairCaseResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "case": {
+            "$ref": "#/components/schemas/RepairCase"
+          }
+        },
+        "required": [
+          "case"
+        ],
+        "title": "RepairCaseResponse",
+        "type": "object"
+      },
+      "RepairCaseSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "batch_count": {
+            "default": 0,
+            "title": "Batch Count",
+            "type": "integer"
+          },
+          "case_id": {
+            "title": "Case Id",
+            "type": "string"
+          },
+          "coverage_complete": {
+            "title": "Coverage Complete",
+            "type": "boolean"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "mode": {
+            "enum": [
+              "local_demo",
+              "imported_snapshot"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "record_count": {
+            "title": "Record Count",
+            "type": "integer"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "case_id",
+          "title",
+          "mode",
+          "created_at",
+          "coverage_complete",
+          "record_count"
+        ],
+        "title": "RepairCaseSummary",
+        "type": "object"
+      },
+      "RepairCounts": {
+        "additionalProperties": false,
+        "properties": {
+          "already_correct": {
+            "default": 0,
+            "title": "Already Correct",
+            "type": "integer"
+          },
+          "ineligible": {
+            "default": 0,
+            "title": "Ineligible",
+            "type": "integer"
+          },
+          "out_of_scope": {
+            "default": 0,
+            "title": "Out Of Scope",
+            "type": "integer"
+          },
+          "repairable": {
+            "default": 0,
+            "title": "Repairable",
+            "type": "integer"
+          },
+          "total": {
+            "default": 0,
+            "title": "Total",
+            "type": "integer"
+          },
+          "unresolved": {
+            "default": 0,
+            "title": "Unresolved",
+            "type": "integer"
+          }
+        },
+        "title": "RepairCounts",
+        "type": "object"
+      },
+      "RepairDemoChangeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "enum": [
+              "support_corrects_five",
+              "refund_one"
+            ],
+            "title": "Action",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "title": "RepairDemoChangeRequest",
+        "type": "object"
+      },
+      "RepairDemoChangeResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "affected_count": {
+            "title": "Affected Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "affected_count"
+        ],
+        "title": "RepairDemoChangeResponse",
+        "type": "object"
+      },
+      "RepairEvent": {
+        "additionalProperties": false,
+        "properties": {
+          "affected_count": {
+            "title": "Affected Count",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "created",
+              "previewed",
+              "support_corrected",
+              "refunded",
+              "applied"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "sequence": {
+            "title": "Sequence",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sequence",
+          "kind",
+          "created_at",
+          "affected_count"
+        ],
+        "title": "RepairEvent",
+        "type": "object"
+      },
+      "RepairEventListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/RepairEvent"
+            },
+            "title": "Events",
+            "type": "array"
+          }
+        },
+        "required": [
+          "events"
+        ],
+        "title": "RepairEventListResponse",
+        "type": "object"
+      },
+      "RepairExportRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "preview_id": {
+            "pattern": "^[a-f0-9]{32}$",
+            "title": "Preview Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "preview_id"
+        ],
+        "title": "RepairExportRequest",
+        "type": "object"
+      },
+      "RepairImportRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "snapshot": {
+            "$ref": "#/components/schemas/RepairSnapshot"
+          }
+        },
+        "required": [
+          "snapshot"
+        ],
+        "title": "RepairImportRequest",
+        "type": "object"
+      },
+      "RepairObservation": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "before_access": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Before Access"
+          },
+          "disposition": {
+            "enum": [
+              "repairable",
+              "already_correct",
+              "ineligible",
+              "unresolved",
+              "out_of_scope"
+            ],
+            "title": "Disposition",
+            "type": "string"
+          },
+          "entitlement": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+            "title": "Entitlement",
+            "type": "string"
+          },
+          "evidence_ids": {
+            "items": {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+              "type": "string"
+            },
+            "title": "Evidence Ids",
+            "type": "array"
+          },
+          "observed_revision": {
+            "title": "Observed Revision",
+            "type": "integer"
+          },
+          "proposed_access": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proposed Access"
+          },
+          "purchase_id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+            "title": "Purchase Id",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 500,
+            "title": "Reason",
+            "type": "string"
+          },
+          "tenant_id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+            "title": "Tenant Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "purchase_id",
+          "tenant_id",
+          "account_id",
+          "entitlement",
+          "disposition",
+          "reason",
+          "evidence_ids",
+          "observed_revision",
+          "before_access",
+          "proposed_access"
+        ],
+        "title": "RepairObservation",
+        "type": "object"
+      },
+      "RepairPackage": {
+        "additionalProperties": false,
+        "properties": {
+          "batches": {
+            "items": {
+              "$ref": "#/components/schemas/RepairBatch"
+            },
+            "maxItems": 100,
+            "title": "Batches",
+            "type": "array"
+          },
+          "case_id": {
+            "title": "Case Id",
+            "type": "string"
+          },
+          "checksum": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Checksum",
+            "type": "string"
+          },
+          "format": {
+            "const": "syndra.repair-package/v1",
+            "default": "syndra.repair-package/v1",
+            "title": "Format",
+            "type": "string"
+          },
+          "mode": {
+            "enum": [
+              "local_demo",
+              "imported_snapshot"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "preview": {
+            "$ref": "#/components/schemas/RepairPreview"
+          },
+          "snapshot": {
+            "$ref": "#/components/schemas/RepairSnapshot"
+          }
+        },
+        "required": [
+          "case_id",
+          "mode",
+          "snapshot",
+          "preview",
+          "batches",
+          "checksum"
+        ],
+        "title": "RepairPackage",
+        "type": "object"
+      },
+      "RepairPackageResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "package": {
+            "$ref": "#/components/schemas/RepairPackage"
+          }
+        },
+        "required": [
+          "package"
+        ],
+        "title": "RepairPackageResponse",
+        "type": "object"
+      },
+      "RepairPolicy": {
+        "additionalProperties": false,
+        "properties": {
+          "cancelled_access": {
+            "const": "do_not_restore",
+            "default": "do_not_restore",
+            "title": "Cancelled Access",
+            "type": "string"
+          },
+          "contract": {
+            "const": "purchase-access/v1",
+            "default": "purchase-access/v1",
+            "title": "Contract",
+            "type": "string"
+          },
+          "operation": {
+            "const": "restore_missing_access",
+            "default": "restore_missing_access",
+            "title": "Operation",
+            "type": "string"
+          },
+          "refunded_access": {
+            "const": "do_not_restore",
+            "default": "do_not_restore",
+            "title": "Refunded Access",
+            "type": "string"
+          }
+        },
+        "title": "RepairPolicy",
+        "type": "object"
+      },
+      "RepairPreview": {
+        "additionalProperties": false,
+        "properties": {
+          "case_id": {
+            "title": "Case Id",
+            "type": "string"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/RepairCounts"
+          },
+          "coverage_complete": {
+            "title": "Coverage Complete",
+            "type": "boolean"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "fingerprint": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Fingerprint",
+            "type": "string"
+          },
+          "observations": {
+            "items": {
+              "$ref": "#/components/schemas/RepairObservation"
+            },
+            "maxItems": 500,
+            "title": "Observations",
+            "type": "array"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "title": "Observed At",
+            "type": "string"
+          },
+          "policy": {
+            "$ref": "#/components/schemas/RepairPolicy"
+          },
+          "preview_id": {
+            "title": "Preview Id",
+            "type": "string"
+          },
+          "snapshot_fingerprint": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Snapshot Fingerprint",
+            "type": "string"
+          }
+        },
+        "required": [
+          "preview_id",
+          "case_id",
+          "fingerprint",
+          "snapshot_fingerprint",
+          "observed_at",
+          "created_at",
+          "expires_at",
+          "policy",
+          "coverage_complete",
+          "counts",
+          "observations"
+        ],
+        "title": "RepairPreview",
+        "type": "object"
+      },
+      "RepairPreviewResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "preview": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RepairPreview"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "preview"
+        ],
+        "title": "RepairPreviewResponse",
+        "type": "object"
+      },
+      "RepairResult": {
+        "additionalProperties": false,
+        "properties": {
+          "operation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation Id"
+          },
+          "outcome": {
+            "enum": [
+              "restored",
+              "already_correct",
+              "ineligible",
+              "unresolved",
+              "conflict"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "purchase_id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+            "title": "Purchase Id",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 500,
+            "title": "Reason",
+            "type": "string"
+          },
+          "verified_access": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verified Access"
+          }
+        },
+        "required": [
+          "purchase_id",
+          "outcome",
+          "reason",
+          "verified_access"
+        ],
+        "title": "RepairResult",
+        "type": "object"
+      },
+      "RepairSnapshot": {
+        "additionalProperties": false,
+        "properties": {
+          "coverage_complete": {
+            "title": "Coverage Complete",
+            "type": "boolean"
+          },
+          "fix": {
+            "$ref": "#/components/schemas/FixReference"
+          },
+          "format": {
+            "const": "syndra.purchase-access/v1",
+            "default": "syndra.purchase-access/v1",
+            "title": "Format",
+            "type": "string"
+          },
+          "incident_end": {
+            "format": "date-time",
+            "title": "Incident End",
+            "type": "string"
+          },
+          "incident_start": {
+            "format": "date-time",
+            "title": "Incident Start",
+            "type": "string"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "title": "Observed At",
+            "type": "string"
+          },
+          "policy": {
+            "$ref": "#/components/schemas/RepairPolicy"
+          },
+          "purchases": {
+            "items": {
+              "$ref": "#/components/schemas/PurchaseEvidence"
+            },
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Purchases",
+            "type": "array"
+          },
+          "title": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "incident_start",
+          "incident_end",
+          "observed_at",
+          "coverage_complete",
+          "fix",
+          "purchases"
+        ],
+        "title": "RepairSnapshot",
         "type": "object"
       },
       "ReplayAcceptedResponse": {
@@ -9713,6 +10748,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Create Comparison"
@@ -9835,9 +10880,1635 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Get Comparison"
+      }
+    },
+    "/api/v1/customer-repair/cases": {
+      "get": {
+        "operationId": "cases_api_v1_customer_repair_cases_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "maximum": 10000,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepairCaseListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
+          }
+        },
+        "summary": "Cases",
+        "tags": [
+          "Customer repair"
+        ]
+      },
+      "post": {
+        "operationId": "import_case_api_v1_customer_repair_cases_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RepairImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepairCaseResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
+          }
+        },
+        "summary": "Import Case",
+        "tags": [
+          "Customer repair"
+        ]
+      }
+    },
+    "/api/v1/customer-repair/cases/{case_id}": {
+      "get": {
+        "operationId": "case_api_v1_customer_repair_cases__case_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "case_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-f0-9]{32}$",
+              "title": "Case Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepairCaseResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
+          }
+        },
+        "summary": "Case",
+        "tags": [
+          "Customer repair"
+        ]
+      }
+    },
+    "/api/v1/customer-repair/cases/{case_id}/apply": {
+      "post": {
+        "operationId": "apply_api_v1_customer_repair_cases__case_id__apply_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "case_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-f0-9]{32}$",
+              "title": "Case Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RepairApplyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepairBatchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
+          }
+        },
+        "summary": "Apply",
+        "tags": [
+          "Customer repair"
+        ]
+      }
+    },
+    "/api/v1/customer-repair/cases/{case_id}/batches": {
+      "get": {
+        "operationId": "batches_api_v1_customer_repair_cases__case_id__batches_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "case_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-f0-9]{32}$",
+              "title": "Case Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepairBatchListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
+          }
+        },
+        "summary": "Batches",
+        "tags": [
+          "Customer repair"
+        ]
+      }
+    },
+    "/api/v1/customer-repair/cases/{case_id}/batches/{request_id}": {
+      "get": {
+        "operationId": "batch_api_v1_customer_repair_cases__case_id__batches__request_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "case_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-f0-9]{32}$",
+              "title": "Case Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-f0-9]{32}$",
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepairBatchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
+          }
+        },
+        "summary": "Batch",
+        "tags": [
+          "Customer repair"
+        ]
+      }
+    },
+    "/api/v1/customer-repair/cases/{case_id}/demo-account/{purchase_id}": {
+      "get": {
+        "operationId": "demo_account_api_v1_customer_repair_cases__case_id__demo_account__purchase_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "case_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-f0-9]{32}$",
+              "title": "Case Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "purchase_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+              "title": "Purchase Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepairAccountResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
+          }
+        },
+        "summary": "Demo Account",
+        "tags": [
+          "Customer repair"
+        ]
+      }
+    },
+    "/api/v1/customer-repair/cases/{case_id}/demo-change": {
+      "post": {
+        "operationId": "demo_change_api_v1_customer_repair_cases__case_id__demo_change_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "case_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-f0-9]{32}$",
+              "title": "Case Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RepairDemoChangeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepairDemoChangeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
+          }
+        },
+        "summary": "Demo Change",
+        "tags": [
+          "Customer repair"
+        ]
+      }
+    },
+    "/api/v1/customer-repair/cases/{case_id}/events": {
+      "get": {
+        "operationId": "events_api_v1_customer_repair_cases__case_id__events_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "case_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-f0-9]{32}$",
+              "title": "Case Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepairEventListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
+          }
+        },
+        "summary": "Events",
+        "tags": [
+          "Customer repair"
+        ]
+      }
+    },
+    "/api/v1/customer-repair/cases/{case_id}/export": {
+      "post": {
+        "operationId": "export_api_v1_customer_repair_cases__case_id__export_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "case_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-f0-9]{32}$",
+              "title": "Case Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RepairExportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepairPackageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
+          }
+        },
+        "summary": "Export",
+        "tags": [
+          "Customer repair"
+        ]
+      }
+    },
+    "/api/v1/customer-repair/cases/{case_id}/preview": {
+      "get": {
+        "operationId": "current_preview_api_v1_customer_repair_cases__case_id__preview_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "case_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-f0-9]{32}$",
+              "title": "Case Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepairPreviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
+          }
+        },
+        "summary": "Current Preview",
+        "tags": [
+          "Customer repair"
+        ]
+      },
+      "post": {
+        "operationId": "preview_api_v1_customer_repair_cases__case_id__preview_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "case_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-f0-9]{32}$",
+              "title": "Case Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepairPreviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
+          }
+        },
+        "summary": "Preview",
+        "tags": [
+          "Customer repair"
+        ]
+      }
+    },
+    "/api/v1/customer-repair/demo": {
+      "post": {
+        "operationId": "create_demo_api_v1_customer_repair_demo_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepairCaseResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
+          }
+        },
+        "summary": "Create Demo",
+        "tags": [
+          "Customer repair"
+        ]
+      }
+    },
+    "/api/v1/customer-repair/template": {
+      "get": {
+        "operationId": "template_api_v1_customer_repair_template_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepairImportRequest"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
+          }
+        },
+        "summary": "Template",
+        "tags": [
+          "Customer repair"
+        ]
       }
     },
     "/api/v1/doctor": {
@@ -9941,6 +12612,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Doctor"
@@ -10027,6 +12708,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Events"
@@ -10115,6 +12806,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Info"
@@ -10203,6 +12904,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Mcp Servers"
@@ -10302,6 +13013,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Check Mcp Server"
@@ -10390,6 +13111,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Tool Policy"
@@ -10488,6 +13219,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Evaluate Tool Policy"
@@ -10576,6 +13317,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Providers"
@@ -10674,6 +13425,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Check Provider"
@@ -10809,6 +13570,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "List Replays"
@@ -10908,6 +13679,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Get Replay"
@@ -11007,6 +13788,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Cancel Replay"
@@ -11164,6 +13955,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "List Runs"
@@ -11260,6 +14061,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Create Run"
@@ -11359,6 +14170,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Get Run"
@@ -11458,6 +14279,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Approvals"
@@ -11576,6 +14407,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Approve"
@@ -11694,6 +14535,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Reject"
@@ -11805,6 +14656,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Attempts"
@@ -11921,6 +14782,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Cancel Run"
@@ -12020,6 +14891,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Changes"
@@ -12139,6 +15020,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "File Content"
@@ -12266,6 +15157,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Diff"
@@ -12363,6 +15264,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Run Events"
@@ -12472,6 +15383,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Capture Regression Fixture"
@@ -12571,6 +15492,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Run Provenance"
@@ -12693,6 +15624,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Run Replayability"
@@ -12802,6 +15743,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Create Replay"
@@ -12901,6 +15852,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Report"
@@ -13000,6 +15961,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Resume Run"
@@ -13099,6 +16070,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Scheduler"
@@ -13198,6 +16179,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Tasks"
@@ -13320,6 +16311,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Tool Audit"
@@ -13442,6 +16443,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Tool Invocations"
@@ -13550,6 +16561,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Tool Invocation"
@@ -13675,6 +16696,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Cancel Tool Invocation"
@@ -13774,6 +16805,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Run Trace"
@@ -13896,6 +16937,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Run Trace Spans"
@@ -14004,6 +17055,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Run Trace Span"
@@ -14103,6 +17164,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Verify Run Trace"
@@ -14202,6 +17273,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Usage"
@@ -14301,6 +17382,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Worktrees"
@@ -14399,6 +17490,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Create Demo Workspace"
@@ -14497,6 +17598,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Studio Launch"
@@ -14585,6 +17696,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Tools"
@@ -14684,6 +17805,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Tool"
@@ -14782,6 +17913,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Import Trace"
@@ -14891,6 +18032,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Export Trace"
@@ -14989,6 +18140,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Build Workspace Index"
@@ -15087,6 +18248,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Attach Workspace Index"
@@ -15185,6 +18356,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Validate Workspace"
@@ -15294,6 +18475,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Workspace Context Plan"
@@ -15458,6 +18649,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Workspace Dependencies"
@@ -15622,6 +18823,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Workspace Dependents"
@@ -15731,6 +18942,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Workspace Impact"
@@ -15830,6 +19051,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Workspace Index Status"
@@ -15929,6 +19160,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Cancel Workspace Index"
@@ -16038,6 +19279,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Repair Workspace Index"
@@ -16147,6 +19398,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Update Workspace Index"
@@ -16246,6 +19507,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Verify Workspace Index"
@@ -16355,6 +19626,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Search Workspace"
@@ -16473,6 +19754,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Workspace Symbol"
@@ -16582,6 +19873,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Workspace Tests"
@@ -16670,6 +19971,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "security": [],
@@ -16757,6 +20068,16 @@
               }
             },
             "description": "Internal error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Durable storage temporarily busy"
           }
         },
         "summary": "Mcp"

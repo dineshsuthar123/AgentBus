@@ -1,6 +1,12 @@
 # Syndra
 
-**Safe execution infrastructure for autonomous software engineering.**
+**Fix the bug. Finish the work for the people it affected.**
+
+Syndra Studio includes a customer-repair workflow for purchase-to-access incidents:
+inspect affected records, review proposed corrections, and verify the results.
+The working local application demonstrates actual account changes with synthetic
+data. Imported snapshots support analysis and correction-package export; live
+customer-system adapters are not included.
 
 Syndra is a local execution runtime for software-engineering agents. It plans
 repository tasks, executes capability-bound tools, pauses consequential actions

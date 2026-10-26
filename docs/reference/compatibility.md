@@ -51,4 +51,9 @@ trace archives continue to validate and replay under the Syndra CLI.
   destructive state relocation are never automatic.
 - Trace exports are validated as untrusted archives.
 
+The local demo data improvements introduce state schema 7 with an index-only
+migration. The extension's expected state schema is generated from the shared
+protocol metadata. Rebuild the extension with the matching Python checkout;
+older-schema and newer-schema daemons still fail the compatibility check.
+
 See [the changelog](../../CHANGELOG.md) for milestone-specific changes.

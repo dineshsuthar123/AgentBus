@@ -147,4 +147,110 @@ describe("StudioClient", () => {
     });
     expect(fetcher).toHaveBeenCalledOnce();
   });
+
+  it("does not dispatch a read whose consumer was already cancelled", async () => {
+    const fetcher = vi.fn<FetchLike>();
+    const client = new StudioClient(TOKEN, "http://127.0.0.1:5173", fetcher);
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(client.run("obsolete", { signal: controller.signal })).rejects.toMatchObject({ name: "AbortError" });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("bounds cached query identities across long browsing sessions", async () => {
+    const fetcher = vi.fn<FetchLike>(async () => new Response(JSON.stringify({ run_id: "fixture" })));
+    const client = new StudioClient(TOKEN, "http://127.0.0.1:5173", fetcher);
+    for (let index = 0; index < 150; index += 1) await client.run(`run-${index}`);
+
+    expect(client.queryCacheSummary().cachedReads).toBeLessThanOrEqual(128);
+  });
+
+  it("does not cache large file responses", async () => {
+    const fetcher = vi.fn<FetchLike>(async () => new Response(JSON.stringify({ content: "x".repeat(600_000) })));
+    const client = new StudioClient(TOKEN, "http://127.0.0.1:5173", fetcher);
+    await client.file("run", "large.txt", "after");
+
+    expect(client.queryCacheSummary().cachedReads).toBe(0);
+  });
+
+  it("invalidates reads after a mutation without replaying the action", async () => {
+    let status = "running";
+    const fetcher = vi.fn<FetchLike>(async (_url, init) => {
+      if (init?.method === "POST") status = "cancelled";
+      return new Response(JSON.stringify({ run_id: "run", status }));
+    });
+    const client = new StudioClient(TOKEN, "http://127.0.0.1:5173", fetcher);
+    await client.run("run");
+    await client.cancel("run", "Explicit cancellation");
+
+    await expect(client.run("run")).resolves.toMatchObject({ status: "cancelled" });
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+
+  it("never lets a pre-invalidation response repopulate the cache", async () => {
+    let release: (response: Response) => void = () => undefined;
+    const fetcher = vi.fn<FetchLike>()
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => { release = resolve; }))
+      .mockImplementation(async () => new Response(JSON.stringify({ status: "succeeded" })));
+    const client = new StudioClient(TOKEN, "http://127.0.0.1:5173", fetcher);
+    const older = client.run("run");
+    client.invalidate();
+    release(new Response(JSON.stringify({ status: "running" })));
+    await older;
+
+    await expect(client.run("run")).resolves.toMatchObject({ status: "succeeded" });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it("disposes pending reads, cached data, and authorization together", async () => {
+    const fetcher = vi.fn<FetchLike>((_url, init) => new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+    }));
+    const client = new StudioClient(TOKEN, "http://127.0.0.1:5173", fetcher);
+    const pending = client.run("run");
+    client.dispose();
+
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    expect(client.authorizationHeader()).toBe("");
+    expect(client.queryCacheSummary().cachedReads).toBe(0);
+    await expect(client.run("run")).rejects.toMatchObject({ code: "session_closed" });
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it("handles a malformed error envelope with a safe HTTP fallback", async () => {
+    const fetcher = vi.fn<FetchLike>(async () => new Response("null", { status: 409 }));
+    const client = new StudioClient(TOKEN, "http://127.0.0.1:5173", fetcher);
+
+    await expect(client.cancel("run", "stop")).rejects.toMatchObject({ code: "http_error", status: 409 });
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it("bounds the total serialized cache footprint as well as its entry count", async () => {
+    const fetcher = vi.fn<FetchLike>(async () => new Response(JSON.stringify({ content: "x".repeat(100_000) })));
+    const client = new StudioClient(TOKEN, "http://127.0.0.1:5173", fetcher);
+    for (let index = 0; index < 30; index += 1) await client.file("run", `file-${index}.txt`, "after");
+
+    expect(client.queryCacheSummary().cachedBytes).toBeLessThanOrEqual(4 * 1024 * 1024);
+    expect(client.queryCacheSummary().cachedReads).toBeGreaterThan(0);
+  });
+
+  it("reports an ambiguous mutation timeout without replaying the action", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetcher = vi.fn<FetchLike>((_url, init) => new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+      }));
+      const client = new StudioClient(TOKEN, "http://127.0.0.1:5173", fetcher);
+      const result = expect(client.cancel("run", "Explicit cancellation")).rejects.toMatchObject({
+        code: "request_timeout", status: 408, retryable: false,
+        message: expect.stringContaining("the action was not retried"),
+      });
+      await vi.advanceTimersByTimeAsync(30_000);
+      await result;
+      expect(fetcher).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

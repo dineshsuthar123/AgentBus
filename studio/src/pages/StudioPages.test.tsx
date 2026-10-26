@@ -125,6 +125,41 @@ describe("Studio pages", () => {
     expect(screen.getByText("Server-read history snapshot.")).toBeInTheDocument();
   });
 
+  it("keeps older loaded pages marked stale when a later cursor page arrives", async () => {
+    const user = userEvent.setup();
+    const history = vi.fn(async (_query: string, _status: string, cursor?: string) => ({
+      runs: cursor ? [runs[1]] : [runs[0]], total: 1, next_cursor: cursor ? null : "second",
+    }));
+    const client = { history } as unknown as StudioClient;
+    mockedUseStudio.mockReturnValue(studioValue({ client, eventRevision: 0 }));
+    const { rerender } = render(<HistoryPage />);
+    await screen.findByText("Repair order reconciliation");
+    mockedUseStudio.mockReturnValue(studioValue({ client, eventRevision: 1 }));
+    rerender(<HistoryPage />);
+    await user.click(screen.getByRole("button", { name: "Load more runs" }));
+    await screen.findByText("Make payment confirmation idempotent");
+
+    expect(screen.getByText(/the saved history snapshot may be stale/)).toBeInTheDocument();
+    expect(history).toHaveBeenCalledTimes(2);
+  });
+
+  it("filters from recent signals and resets a no-match search without losing saved work", async () => {
+    const user = userEvent.setup();
+    const history = vi.fn(async (search: string, status: string) => ({
+      runs: runs.filter((run) => run.original_task.includes(search) && (status === "all" || run.status === status)), total: 0, next_cursor: null,
+    }));
+    mockedUseStudio.mockReturnValue(studioValue({ client: { history } as unknown as StudioClient }));
+    render(<HistoryPage />);
+    await screen.findByText("Repair order reconciliation");
+    expect(screen.getByRole("region", { name: "Recent run signals" })).toHaveTextContent("not the complete history");
+    await user.click(screen.getByRole("button", { name: /Needs approval/ }));
+    await screen.findByText("No matching runs");
+    expect(screen.getByRole("combobox", { name: "Status" })).toHaveValue("waiting_for_approval");
+    await user.click(screen.getByRole("button", { name: "Reset filters" }));
+    await screen.findByText("Repair order reconciliation");
+    expect(history).toHaveBeenLastCalledWith("", "all", undefined, expect.anything());
+  });
+
   it("launches the payment preset only after repository validation", async () => {
     const user = userEvent.setup();
     const workspace = "C:\\work\\syndra-payment-demo";

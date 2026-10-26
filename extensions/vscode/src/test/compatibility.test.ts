@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   assessDaemonCompatibility,
-  assessStateSchema
+  assessStateSchema,
+  EXPECTED_STATE_SCHEMA
 } from "../compatibility";
 
 test("daemon compatibility accepts the 0.6 beta line", () => {
@@ -27,7 +28,7 @@ test("daemon compatibility distinguishes protocol old and new failures", () => {
 });
 
 test("state schema compatibility gives actionable migration direction", () => {
-  assert.equal(assessStateSchema(6).compatible, true);
-  assert.equal(assessStateSchema(5).code, "schema_too_old");
-  assert.equal(assessStateSchema(7).code, "schema_too_new");
+  assert.equal(assessStateSchema(EXPECTED_STATE_SCHEMA).compatible, true);
+  assert.equal(assessStateSchema(EXPECTED_STATE_SCHEMA - 1).code, "schema_too_old");
+  assert.equal(assessStateSchema(EXPECTED_STATE_SCHEMA + 1).code, "schema_too_new");
 });

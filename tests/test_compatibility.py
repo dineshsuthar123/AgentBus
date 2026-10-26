@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from agentbus import cli
+from agentbus.execution.schema import SCHEMA_VERSION
 from agentbus.product.compatibility import (
     SUPPORTED_PYTHON_VERSIONS,
     compatibility_manifest,
@@ -24,7 +25,7 @@ def test_compatibility_manifest_covers_product_protocols_and_schemas():
         "repository_intelligence": "1.0",
     }
     assert payload["schemas"] == {
-        "state": 6,
+        "state": SCHEMA_VERSION,
         "trace": 1,
         "repository_intelligence": 1,
     }
@@ -40,6 +41,15 @@ def test_extension_declares_matching_syndra_compatibility():
     assert metadata["version"] == "0.6.0-beta.1"
     assert metadata["python"] == ">=0.6.0b1,<0.7.0"
     assert validate_extension_package(path) == []
+
+
+def test_stale_extension_state_schema_is_rejected(tmp_path):
+    document = json.loads((ROOT / "extensions/vscode/package.json").read_text(encoding="utf-8"))
+    document["syndraCompatibility"]["stateSchema"] = SCHEMA_VERSION - 1
+    path = tmp_path / "stale-package.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    assert "State schema compatibility is stale" in validate_extension_package(path)
 
 
 def test_version_cli_exposes_complete_machine_readable_contract(capsys):

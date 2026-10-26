@@ -71,6 +71,18 @@ from agentbus.trace import ReplayMode, StateStoreTraceSink, TraceRecorder
 _STRESS_RUN_ID = "sqlite-stress"
 _WORK_ITEMS_PER_CATEGORY = 3
 
+
+def test_busy_classification_uses_error_codes_without_relabeling_corruption():
+    known_nonbusy = sqlite3.OperationalError("a busy-named object failed")
+    known_nonbusy.sqlite_errorcode = sqlite3.SQLITE_CORRUPT
+    extended_busy = sqlite3.OperationalError("extended result")
+    extended_busy.sqlite_errorcode = sqlite3.SQLITE_BUSY | (1 << 8)
+
+    assert not sqlite_runtime.is_sqlite_busy_error(known_nonbusy)
+    assert not sqlite_runtime.is_sqlite_busy_error(sqlite3.IntegrityError("busy column constraint"))
+    assert sqlite_runtime.is_sqlite_busy_error(extended_busy)
+    assert sqlite_runtime.is_sqlite_busy_error(sqlite3.OperationalError("database is locked"))
+
 _INTERRUPT_EVENT_SCRIPT = r"""
 import os
 import sqlite3

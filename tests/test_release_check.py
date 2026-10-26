@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from agentbus.cli import main
+from agentbus.execution.schema import SCHEMA_VERSION
 from agentbus.product.release_check import (
     CommandOutcome,
     GateStatus,
@@ -199,7 +200,7 @@ def _release_repository(root: Path) -> Path:
                 "syndraCompatibility": {
                     "python": ">=0.6.0b1,<0.7.0",
                     "controlProtocol": "1.0",
-                    "stateSchema": 6,
+                    "stateSchema": SCHEMA_VERSION,
                 },
             }
         ),

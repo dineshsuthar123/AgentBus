@@ -91,6 +91,7 @@ try {
   allowedOrigins.add(new URL(launch.launch_url).origin);
   await page.goto(launch.launch_url);
   await page.getByRole("heading", { name: "All runs", exact: true }).waitFor();
+  await page.getByRole("heading", { name: "No runs yet", exact: true }).waitFor();
   await page.screenshot({ path: path.join(output, "empty-light.png"), fullPage: true });
   async function checkAccessibility(state, target = page) {
     await target.evaluate(await readFile(path.join(root, "studio/node_modules/axe-core/axe.min.js"), "utf8"));
@@ -98,6 +99,11 @@ try {
     accessibility.push({ state, violations: result.violations.map((violation) => ({ id: violation.id, impact: violation.impact, nodes: violation.nodes.map((node) => ({ target: node.target, failure: node.failureSummary })) })) });
     await writeFile(path.join(output, "accessibility.json"), JSON.stringify(accessibility, null, 2));
     if (await target.evaluate(() => globalThis.document.documentElement.scrollWidth > globalThis.innerWidth + 1 || [...globalThis.document.querySelectorAll(".folio-paper")].some((element) => element.scrollWidth > element.clientWidth + 1))) throw new Error(`Page-wide horizontal overflow in ${state}`);
+    if (await target.evaluate(() => {
+      const work = globalThis.document.querySelector(".folio-paper");
+      if (!work || globalThis.innerWidth > 420) return false;
+      return work.getBoundingClientRect().top > globalThis.innerHeight * .35 || work.getBoundingClientRect().height < globalThis.innerHeight * .5;
+    })) throw new Error(`Mobile navigation crowded out the work surface in ${state}`);
     if (await target.evaluate(() => {
       const annotation = globalThis.document.querySelector(".sculpture-annotation");
       if (!annotation || !annotation.getClientRects().length) return false;
@@ -115,6 +121,21 @@ try {
     await page.getByRole("button", { name: "Return to run", exact: true }).click();
   }
   await checkAccessibility("empty-light");
+  const firstRun = page.getByRole("region", { name: "First run guide" });
+  await firstRun.getByRole("button", { name: "03 Prove", exact: true }).click();
+  await firstRun.getByText("Inspect what actually happened.", { exact: true }).waitFor();
+  await firstRun.getByRole("button", { name: "02 Execute", exact: true }).click();
+  await firstRun.getByText("Real work, not a dashboard animation.", { exact: true }).waitFor();
+  rendering.first_run_orientation = true;
+  await appearance("dark");
+  await page.screenshot({ path: path.join(output, "empty-dark.png"), fullPage: true });
+  await checkAccessibility("empty-dark");
+  await page.setViewportSize({ width: 320, height: 740 });
+  await firstRun.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: path.join(output, "first-run-mobile-dark.png"), fullPage: true });
+  await checkAccessibility("first-run-mobile-dark");
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await appearance("light");
   const storyWrites = [];
   const recordStoryWrite = (request) => { if (new URL(request.url()).pathname.startsWith("/api/") && !["GET", "HEAD"].includes(request.method())) storyWrites.push(request.method()); };
   page.on("request", recordStoryWrite);
@@ -460,19 +481,19 @@ try {
   await page.getByRole("link", { name: "All runs", exact: true }).click();
   await page.getByRole("heading", { name: "All runs", exact: true }).waitFor();
   await page.getByRole("button", { name: "Refresh history", exact: true }).click();
-  await page.waitForFunction(() => globalThis.document.querySelectorAll(".history-page .table-row").length === 50);
+  await page.waitForFunction(() => globalThis.document.querySelectorAll(".history-page .ledger-record").length === 50);
   await page.getByRole("button", { name: "Load more runs", exact: true }).click();
-  await page.waitForFunction(() => globalThis.document.querySelectorAll(".history-page .table-row").length === 100);
+  await page.waitForFunction(() => globalThis.document.querySelectorAll(".history-page .ledger-record").length === 100);
   await page.getByRole("button", { name: "Load more runs", exact: true }).click();
   await page.getByText("End of history", { exact: true }).waitFor();
-  const historyIds = await page.locator(".history-page .table-row").evaluateAll((rows) => rows.map((row) => row.getAttribute("href")));
+  const historyIds = await page.locator(".history-page .ledger-record").evaluateAll((rows) => rows.map((row) => row.getAttribute("href")));
   if (historyIds.length !== 123 || new Set(historyIds).size !== 123) throw new Error("Cursor history lost or duplicated persisted runs");
   const ledgerPosition = await page.locator(".folio-paper").evaluate((element) => { element.scrollTop = element.scrollHeight - element.clientHeight; element.dispatchEvent(new globalThis.Event("scroll")); return element.scrollTop; });
   await page.getByRole("link", { name: /Acceptance history fixture 000:/ }).click();
   await page.getByRole("heading", { name: /Acceptance history fixture 000:/ }).waitFor();
   await page.goBack();
   await page.getByText("End of history", { exact: true }).waitFor();
-  if (await page.locator(".history-page .table-row").count() !== 123) throw new Error("Inspecting a run discarded loaded ledger pages");
+  if (await page.locator(".history-page .ledger-record").count() !== 123) throw new Error("Inspecting a run discarded loaded ledger pages");
   await writeFile(path.join(output, "ledger-reading.json"), JSON.stringify({ expected: ledgerPosition, ...await page.locator(".folio-paper").evaluate((element) => ({ actual: element.scrollTop, height: element.scrollHeight, viewport: element.clientHeight })) }, null, 2));
   await page.waitForFunction((top) => Math.abs(globalThis.document.querySelector(".folio-paper").scrollTop - top) <= 1, ledgerPosition);
   await page.getByLabel("Search history").fill("Acceptance history fixture 000");
@@ -490,6 +511,18 @@ try {
   await page.getByRole("link", { name: /Acceptance history fixture 000:/ }).waitFor();
   await page.screenshot({ path: path.join(output, "ledger-dark.png"), fullPage: true });
   await checkAccessibility("ledger-dark");
+  await page.getByRole("button", { name: "Clear history search", exact: true }).click();
+  await page.getByRole("button", { name: "Reset filters", exact: true }).click();
+  await page.waitForFunction(() => globalThis.document.querySelectorAll(".history-page .ledger-record").length === 50);
+  await page.screenshot({ path: path.join(output, "ledger-unfiltered-dark.png"), fullPage: true });
+  await appearance("light");
+  await page.screenshot({ path: path.join(output, "ledger-light.png"), fullPage: true });
+  await checkAccessibility("ledger-light");
+  await page.setViewportSize({ width: 320, height: 740 });
+  await page.screenshot({ path: path.join(output, "ledger-mobile-light.png"), fullPage: true });
+  await checkAccessibility("ledger-mobile-light");
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await appearance("dark");
   await page.goto(`${origin}/studio/#/runs/${accepted.run_id}?view=evidence`);
   await page.getByRole("heading", { name: "Evidence management", exact: true }).waitFor();
   await page.getByRole("link", { name: "Syndra Studio", exact: true }).click();

@@ -12,6 +12,18 @@ may include documented breaking changes. See the
 
 ### Added
 
+- Customer repair for purchase-to-access incidents: a working synthetic local
+  application, strict snapshot imports, evidence maps, selected corrections,
+  revalidation of later refunds/manual changes, immutable previews and batches,
+  interrupted-response lookup, correction packages, and a local CLI. Imported
+  evidence remains read-only; production application adapters are not included.
+- Interactive first-run orientation, a source-backed execution ledger, explicit
+  snapshot freshness, richer review/check observations, and compact mobile
+  navigation with a reserved work surface.
+- Indexed state-schema-7 history, bounded Unicode-safe filter cursors, batched
+  cancellation projections, and generated extension schema compatibility.
+- Session-owned requests, bounded read caching, clipboard feedback, safe busy
+  responses, and non-blocking control-plane service dispatch.
 - Installed Syndra Studio with single-use loopback session bootstrap, durable
   run inspection, exact approvals, source artifacts, and evidence workbench.
 - The interactive Living Workshop, bounded 3D ribbon, direct shape and camera

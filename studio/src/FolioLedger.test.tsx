@@ -38,7 +38,7 @@ describe("Ledger continuity", () => {
     await within(ledger).findByText("Ledger fixture 99");
     await user.click(within(ledger).getByRole("button", { name: "Load more runs" }));
     await within(ledger).findByText("End of history");
-    expect(within(ledger).getAllByRole("link")).toHaveLength(121);
+    expect(within(within(ledger).getByRole("list", { name: "Run records" })).getAllByRole("link")).toHaveLength(121);
     const paper = screen.getByRole("main");
     paper.scrollTop = 750; fireEvent.scroll(paper);
     await user.click(within(ledger).getByRole("link", { name: /Ledger fixture 120/ }));
@@ -46,7 +46,7 @@ describe("Ledger continuity", () => {
     expect(ledger.closest("[hidden]")).not.toBeNull();
     await user.click(screen.getByRole("link", { name: "All runs" }));
     await screen.findByRole("heading", { name: "All runs" });
-    expect(within(ledger).getAllByRole("link")).toHaveLength(121);
+    expect(within(within(ledger).getByRole("list", { name: "Run records" })).getAllByRole("link")).toHaveLength(121);
     expect(paper.scrollTop).toBe(750);
     expect(history).toHaveBeenCalledTimes(3);
   });

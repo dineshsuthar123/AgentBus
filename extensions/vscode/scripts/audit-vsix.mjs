@@ -4,6 +4,7 @@ import { basename, resolve } from "node:path";
 import JSZip from "jszip";
 
 const input = resolve(process.argv[2] ?? "syndra-vscode.vsix");
+const sourceMetadata = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
 const archive = await JSZip.loadAsync(await readFile(input));
 const names = Object.keys(archive.files).sort();
 const required = [
@@ -107,7 +108,8 @@ if (packageItem && !packageItem.dir) {
   if (
     compatibility.python !== ">=0.6.0b1,<0.7.0" ||
     compatibility.controlProtocol !== "1.0" ||
-    compatibility.stateSchema !== 6
+    !Number.isInteger(sourceMetadata.syndraCompatibility?.stateSchema) ||
+    compatibility.stateSchema !== sourceMetadata.syndraCompatibility.stateSchema
   ) {
     violations.push("extension/package.json (Syndra compatibility metadata mismatch)");
   }

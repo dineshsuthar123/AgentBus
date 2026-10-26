@@ -1545,6 +1545,59 @@
       "title": "DaemonRegistryEntry",
       "type": "object"
     },
+    "DemoProof": {
+      "additionalProperties": false,
+      "properties": {
+        "after_code": {
+          "title": "After Code",
+          "type": "string"
+        },
+        "before_code": {
+          "title": "Before Code",
+          "type": "string"
+        },
+        "broken_handler_granted_access": {
+          "const": false,
+          "default": false,
+          "title": "Broken Handler Granted Access",
+          "type": "boolean"
+        },
+        "fixed_handler_granted_access": {
+          "const": true,
+          "default": true,
+          "title": "Fixed Handler Granted Access",
+          "type": "boolean"
+        },
+        "fixture": {
+          "const": "purchase-access/v1",
+          "default": "purchase-access/v1",
+          "title": "Fixture",
+          "type": "string"
+        },
+        "historical_missing_after_fix": {
+          "title": "Historical Missing After Fix",
+          "type": "integer"
+        },
+        "historical_missing_before_fix": {
+          "title": "Historical Missing Before Fix",
+          "type": "integer"
+        },
+        "provider_calls": {
+          "const": 0,
+          "default": 0,
+          "title": "Provider Calls",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "historical_missing_before_fix",
+        "historical_missing_after_fix",
+        "before_code",
+        "after_code"
+      ],
+      "title": "DemoProof",
+      "type": "object"
+    },
     "DemoWorkspaceRequest": {
       "additionalProperties": false,
       "properties": {
@@ -1967,6 +2020,33 @@
         "revision"
       ],
       "title": "FileContentResponse",
+      "type": "object"
+    },
+    "FixReference": {
+      "additionalProperties": false,
+      "properties": {
+        "after_revision": {
+          "pattern": "^[a-f0-9]{7,64}$",
+          "title": "After Revision",
+          "type": "string"
+        },
+        "before_revision": {
+          "pattern": "^[a-f0-9]{7,64}$",
+          "title": "Before Revision",
+          "type": "string"
+        },
+        "review_confirmed": {
+          "const": true,
+          "title": "Review Confirmed",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "before_revision",
+        "after_revision",
+        "review_confirmed"
+      ],
+      "title": "FixReference",
       "type": "object"
     },
     "GraphEdgeSummary": {
@@ -3810,6 +3890,109 @@
       "title": "ProviderSummary",
       "type": "object"
     },
+    "PurchaseEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "access_present": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Access Present"
+        },
+        "account_id": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Account Id"
+        },
+        "entitlement": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+          "title": "Entitlement",
+          "type": "string"
+        },
+        "evidence_ids": {
+          "items": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+            "type": "string"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "title": "Evidence Ids",
+          "type": "array"
+        },
+        "history_complete": {
+          "title": "History Complete",
+          "type": "boolean"
+        },
+        "mapping_verified": {
+          "title": "Mapping Verified",
+          "type": "boolean"
+        },
+        "paid_at": {
+          "format": "date-time",
+          "title": "Paid At",
+          "type": "string"
+        },
+        "payment_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+          "title": "Payment Id",
+          "type": "string"
+        },
+        "payment_state": {
+          "enum": [
+            "paid",
+            "refunded",
+            "cancelled",
+            "unknown"
+          ],
+          "title": "Payment State",
+          "type": "string"
+        },
+        "purchase_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+          "title": "Purchase Id",
+          "type": "string"
+        },
+        "revision": {
+          "maximum": 2147483647,
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "tenant_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+          "title": "Tenant Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "purchase_id",
+        "payment_id",
+        "tenant_id",
+        "account_id",
+        "entitlement",
+        "paid_at",
+        "payment_state",
+        "access_present",
+        "mapping_verified",
+        "history_complete",
+        "evidence_ids",
+        "revision"
+      ],
+      "title": "PurchaseEvidence",
+      "type": "object"
+    },
     "ReadyHandshake": {
       "additionalProperties": false,
       "properties": {
@@ -3971,6 +4154,860 @@
         "replay_command"
       ],
       "title": "RegressionFixtureCaptureResponse",
+      "type": "object"
+    },
+    "RepairAccountResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "account_id": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Account Id"
+        },
+        "allowed": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Allowed"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "purchase_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+          "title": "Purchase Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "purchase_id",
+        "account_id",
+        "allowed",
+        "observed_at",
+        "message"
+      ],
+      "title": "RepairAccountResponse",
+      "type": "object"
+    },
+    "RepairApplyRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "confirmation": {
+          "const": "APPLY_SELECTED_CORRECTIONS",
+          "title": "Confirmation",
+          "type": "string"
+        },
+        "preview_fingerprint": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Preview Fingerprint",
+          "type": "string"
+        },
+        "preview_id": {
+          "pattern": "^[a-f0-9]{32}$",
+          "title": "Preview Id",
+          "type": "string"
+        },
+        "purchase_ids": {
+          "items": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+            "type": "string"
+          },
+          "maxItems": 200,
+          "minItems": 1,
+          "title": "Purchase Ids",
+          "type": "array"
+        },
+        "request_id": {
+          "pattern": "^[a-f0-9]{32}$",
+          "title": "Request Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "preview_id",
+        "preview_fingerprint",
+        "request_id",
+        "purchase_ids",
+        "confirmation"
+      ],
+      "title": "RepairApplyRequest",
+      "type": "object"
+    },
+    "RepairBatch": {
+      "additionalProperties": false,
+      "properties": {
+        "case_id": {
+          "title": "Case Id",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "preview_id": {
+          "title": "Preview Id",
+          "type": "string"
+        },
+        "request_id": {
+          "title": "Request Id",
+          "type": "string"
+        },
+        "restored_count": {
+          "title": "Restored Count",
+          "type": "integer"
+        },
+        "results": {
+          "items": {
+            "$ref": "#/$defs/RepairResult"
+          },
+          "maxItems": 200,
+          "minItems": 1,
+          "title": "Results",
+          "type": "array"
+        },
+        "selected_count": {
+          "title": "Selected Count",
+          "type": "integer"
+        },
+        "skipped_count": {
+          "title": "Skipped Count",
+          "type": "integer"
+        },
+        "status": {
+          "enum": [
+            "completed",
+            "needs_attention"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "unresolved_count": {
+          "title": "Unresolved Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "request_id",
+        "case_id",
+        "preview_id",
+        "created_at",
+        "status",
+        "selected_count",
+        "restored_count",
+        "skipped_count",
+        "unresolved_count",
+        "results"
+      ],
+      "title": "RepairBatch",
+      "type": "object"
+    },
+    "RepairBatchListResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "batches": {
+          "items": {
+            "$ref": "#/$defs/RepairBatch"
+          },
+          "title": "Batches",
+          "type": "array"
+        }
+      },
+      "required": [
+        "batches"
+      ],
+      "title": "RepairBatchListResponse",
+      "type": "object"
+    },
+    "RepairBatchResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "batch": {
+          "$ref": "#/$defs/RepairBatch"
+        }
+      },
+      "required": [
+        "batch"
+      ],
+      "title": "RepairBatchResponse",
+      "type": "object"
+    },
+    "RepairCase": {
+      "additionalProperties": false,
+      "properties": {
+        "demo_proof": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DemoProof"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "snapshot": {
+          "$ref": "#/$defs/RepairSnapshot"
+        },
+        "summary": {
+          "$ref": "#/$defs/RepairCaseSummary"
+        }
+      },
+      "required": [
+        "summary",
+        "snapshot"
+      ],
+      "title": "RepairCase",
+      "type": "object"
+    },
+    "RepairCaseListResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "cases": {
+          "items": {
+            "$ref": "#/$defs/RepairCaseSummary"
+          },
+          "title": "Cases",
+          "type": "array"
+        }
+      },
+      "required": [
+        "cases"
+      ],
+      "title": "RepairCaseListResponse",
+      "type": "object"
+    },
+    "RepairCaseResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "case": {
+          "$ref": "#/$defs/RepairCase"
+        }
+      },
+      "required": [
+        "case"
+      ],
+      "title": "RepairCaseResponse",
+      "type": "object"
+    },
+    "RepairCaseSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "batch_count": {
+          "default": 0,
+          "title": "Batch Count",
+          "type": "integer"
+        },
+        "case_id": {
+          "title": "Case Id",
+          "type": "string"
+        },
+        "coverage_complete": {
+          "title": "Coverage Complete",
+          "type": "boolean"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "local_demo",
+            "imported_snapshot"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "record_count": {
+          "title": "Record Count",
+          "type": "integer"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "case_id",
+        "title",
+        "mode",
+        "created_at",
+        "coverage_complete",
+        "record_count"
+      ],
+      "title": "RepairCaseSummary",
+      "type": "object"
+    },
+    "RepairCounts": {
+      "additionalProperties": false,
+      "properties": {
+        "already_correct": {
+          "default": 0,
+          "title": "Already Correct",
+          "type": "integer"
+        },
+        "ineligible": {
+          "default": 0,
+          "title": "Ineligible",
+          "type": "integer"
+        },
+        "out_of_scope": {
+          "default": 0,
+          "title": "Out Of Scope",
+          "type": "integer"
+        },
+        "repairable": {
+          "default": 0,
+          "title": "Repairable",
+          "type": "integer"
+        },
+        "total": {
+          "default": 0,
+          "title": "Total",
+          "type": "integer"
+        },
+        "unresolved": {
+          "default": 0,
+          "title": "Unresolved",
+          "type": "integer"
+        }
+      },
+      "title": "RepairCounts",
+      "type": "object"
+    },
+    "RepairDemoChangeRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "support_corrects_five",
+            "refund_one"
+          ],
+          "title": "Action",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "title": "RepairDemoChangeRequest",
+      "type": "object"
+    },
+    "RepairDemoChangeResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "affected_count": {
+          "title": "Affected Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "affected_count"
+      ],
+      "title": "RepairDemoChangeResponse",
+      "type": "object"
+    },
+    "RepairEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "affected_count": {
+          "title": "Affected Count",
+          "type": "integer"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "created",
+            "previewed",
+            "support_corrected",
+            "refunded",
+            "applied"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "sequence": {
+          "title": "Sequence",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sequence",
+        "kind",
+        "created_at",
+        "affected_count"
+      ],
+      "title": "RepairEvent",
+      "type": "object"
+    },
+    "RepairEventListResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "events": {
+          "items": {
+            "$ref": "#/$defs/RepairEvent"
+          },
+          "title": "Events",
+          "type": "array"
+        }
+      },
+      "required": [
+        "events"
+      ],
+      "title": "RepairEventListResponse",
+      "type": "object"
+    },
+    "RepairExportRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "preview_id": {
+          "pattern": "^[a-f0-9]{32}$",
+          "title": "Preview Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "preview_id"
+      ],
+      "title": "RepairExportRequest",
+      "type": "object"
+    },
+    "RepairImportRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "snapshot": {
+          "$ref": "#/$defs/RepairSnapshot"
+        }
+      },
+      "required": [
+        "snapshot"
+      ],
+      "title": "RepairImportRequest",
+      "type": "object"
+    },
+    "RepairObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "account_id": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Account Id"
+        },
+        "before_access": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Before Access"
+        },
+        "disposition": {
+          "enum": [
+            "repairable",
+            "already_correct",
+            "ineligible",
+            "unresolved",
+            "out_of_scope"
+          ],
+          "title": "Disposition",
+          "type": "string"
+        },
+        "entitlement": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+          "title": "Entitlement",
+          "type": "string"
+        },
+        "evidence_ids": {
+          "items": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+            "type": "string"
+          },
+          "title": "Evidence Ids",
+          "type": "array"
+        },
+        "observed_revision": {
+          "title": "Observed Revision",
+          "type": "integer"
+        },
+        "proposed_access": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Proposed Access"
+        },
+        "purchase_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+          "title": "Purchase Id",
+          "type": "string"
+        },
+        "reason": {
+          "maxLength": 500,
+          "title": "Reason",
+          "type": "string"
+        },
+        "tenant_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+          "title": "Tenant Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "purchase_id",
+        "tenant_id",
+        "account_id",
+        "entitlement",
+        "disposition",
+        "reason",
+        "evidence_ids",
+        "observed_revision",
+        "before_access",
+        "proposed_access"
+      ],
+      "title": "RepairObservation",
+      "type": "object"
+    },
+    "RepairPackage": {
+      "additionalProperties": false,
+      "properties": {
+        "batches": {
+          "items": {
+            "$ref": "#/$defs/RepairBatch"
+          },
+          "maxItems": 100,
+          "title": "Batches",
+          "type": "array"
+        },
+        "case_id": {
+          "title": "Case Id",
+          "type": "string"
+        },
+        "checksum": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Checksum",
+          "type": "string"
+        },
+        "format": {
+          "const": "syndra.repair-package/v1",
+          "default": "syndra.repair-package/v1",
+          "title": "Format",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "local_demo",
+            "imported_snapshot"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "preview": {
+          "$ref": "#/$defs/RepairPreview"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/RepairSnapshot"
+        }
+      },
+      "required": [
+        "case_id",
+        "mode",
+        "snapshot",
+        "preview",
+        "batches",
+        "checksum"
+      ],
+      "title": "RepairPackage",
+      "type": "object"
+    },
+    "RepairPackageResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "package": {
+          "$ref": "#/$defs/RepairPackage"
+        }
+      },
+      "required": [
+        "package"
+      ],
+      "title": "RepairPackageResponse",
+      "type": "object"
+    },
+    "RepairPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "cancelled_access": {
+          "const": "do_not_restore",
+          "default": "do_not_restore",
+          "title": "Cancelled Access",
+          "type": "string"
+        },
+        "contract": {
+          "const": "purchase-access/v1",
+          "default": "purchase-access/v1",
+          "title": "Contract",
+          "type": "string"
+        },
+        "operation": {
+          "const": "restore_missing_access",
+          "default": "restore_missing_access",
+          "title": "Operation",
+          "type": "string"
+        },
+        "refunded_access": {
+          "const": "do_not_restore",
+          "default": "do_not_restore",
+          "title": "Refunded Access",
+          "type": "string"
+        }
+      },
+      "title": "RepairPolicy",
+      "type": "object"
+    },
+    "RepairPreview": {
+      "additionalProperties": false,
+      "properties": {
+        "case_id": {
+          "title": "Case Id",
+          "type": "string"
+        },
+        "counts": {
+          "$ref": "#/$defs/RepairCounts"
+        },
+        "coverage_complete": {
+          "title": "Coverage Complete",
+          "type": "boolean"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "fingerprint": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Fingerprint",
+          "type": "string"
+        },
+        "observations": {
+          "items": {
+            "$ref": "#/$defs/RepairObservation"
+          },
+          "maxItems": 500,
+          "title": "Observations",
+          "type": "array"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "policy": {
+          "$ref": "#/$defs/RepairPolicy"
+        },
+        "preview_id": {
+          "title": "Preview Id",
+          "type": "string"
+        },
+        "snapshot_fingerprint": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Snapshot Fingerprint",
+          "type": "string"
+        }
+      },
+      "required": [
+        "preview_id",
+        "case_id",
+        "fingerprint",
+        "snapshot_fingerprint",
+        "observed_at",
+        "created_at",
+        "expires_at",
+        "policy",
+        "coverage_complete",
+        "counts",
+        "observations"
+      ],
+      "title": "RepairPreview",
+      "type": "object"
+    },
+    "RepairPreviewResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "preview": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RepairPreview"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "preview"
+      ],
+      "title": "RepairPreviewResponse",
+      "type": "object"
+    },
+    "RepairResult": {
+      "additionalProperties": false,
+      "properties": {
+        "operation_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Operation Id"
+        },
+        "outcome": {
+          "enum": [
+            "restored",
+            "already_correct",
+            "ineligible",
+            "unresolved",
+            "conflict"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "purchase_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+          "title": "Purchase Id",
+          "type": "string"
+        },
+        "reason": {
+          "maxLength": 500,
+          "title": "Reason",
+          "type": "string"
+        },
+        "verified_access": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Verified Access"
+        }
+      },
+      "required": [
+        "purchase_id",
+        "outcome",
+        "reason",
+        "verified_access"
+      ],
+      "title": "RepairResult",
+      "type": "object"
+    },
+    "RepairSnapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "coverage_complete": {
+          "title": "Coverage Complete",
+          "type": "boolean"
+        },
+        "fix": {
+          "$ref": "#/$defs/FixReference"
+        },
+        "format": {
+          "const": "syndra.purchase-access/v1",
+          "default": "syndra.purchase-access/v1",
+          "title": "Format",
+          "type": "string"
+        },
+        "incident_end": {
+          "format": "date-time",
+          "title": "Incident End",
+          "type": "string"
+        },
+        "incident_start": {
+          "format": "date-time",
+          "title": "Incident Start",
+          "type": "string"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "policy": {
+          "$ref": "#/$defs/RepairPolicy"
+        },
+        "purchases": {
+          "items": {
+            "$ref": "#/$defs/PurchaseEvidence"
+          },
+          "maxItems": 500,
+          "minItems": 1,
+          "title": "Purchases",
+          "type": "array"
+        },
+        "title": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "incident_start",
+        "incident_end",
+        "observed_at",
+        "coverage_complete",
+        "fix",
+        "purchases"
+      ],
+      "title": "RepairSnapshot",
       "type": "object"
     },
     "ReplayAcceptedResponse": {
@@ -10011,5 +11048,6 @@
   },
   "$id": "https://agentbus.invalid/protocol/agentbus-v1.schema.json",
   "title": "Syndra Control Protocol v1",
-  "x-agentbus-protocol-version": "1.0"
+  "x-agentbus-protocol-version": "1.0",
+  "x-syndra-state-schema": 7
 }

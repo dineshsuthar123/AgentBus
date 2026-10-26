@@ -17,6 +17,17 @@ const run: RunSummary = {
 };
 
 describe("Studio command palette", () => {
+  it("ignores held shortcuts and composition Enter without triggering navigation", () => {
+    window.location.hash = "#/history";
+    render(<CommandPalette currentRun={run} />);
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true, repeat: true });
+    const input = screen.getByRole("combobox", { name: "Search Studio commands" });
+    fireEvent.keyDown(input, { key: "Enter", isComposing: true });
+
+    expect(window.location.hash).toBe("#/history");
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
   it("establishes modal focus before paint without a delayed frame stealing Tab navigation", () => {
     const frame = vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 1);
     try {

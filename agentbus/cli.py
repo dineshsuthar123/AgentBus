@@ -28,6 +28,7 @@ COMMANDS = (
     "setup",
     "quickstart",
     "demo",
+    "repair",
     "cleanup",
     "logs",
     "support-bundle",
@@ -131,6 +132,10 @@ def main(argv: list[str] | None = None) -> int:
         return _quickstart_command(rest)
     if command == "demo":
         return _demo_command(rest)
+    if command == "repair":
+        from agentbus.repair.commands import repair_command
+
+        return repair_command(rest)
     if command == "cleanup":
         return _cleanup_command(rest)
     if command == "logs":
@@ -194,6 +199,7 @@ def _root_parser() -> argparse.ArgumentParser:
         "setup": "Guide first-run product configuration with an offline default.",
         "quickstart": "Complete a temporary deterministic first task offline.",
         "demo": "List, create, or preflight compact Syndra demo repositories.",
+        "repair": "Inspect and correct customer consequences of supported bug fixes.",
         "cleanup": "Remove only proven Syndra-owned stale runtime artifacts.",
         "logs": "Inspect bounded redacted product and run logs.",
         "support-bundle": "Create a sanitized local diagnostic ZIP.",

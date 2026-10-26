@@ -45,30 +45,69 @@ export function StudioProvider({ children }: { children: ReactNode }) {
   const [refreshing, setRefreshing] = useState(false);
   const [eventStore] = useState(() => new StudioEventStore());
   const refreshTimer = useRef<number | undefined>(undefined);
+  const sessionGeneration = useRef(0);
+  const activeClient = useRef<StudioClient | undefined>(undefined);
+  const sessionController = useRef<AbortController | undefined>(undefined);
 
-  async function load(candidate: StudioClient, force = false): Promise<void> {
-    const options = { force };
+  async function load(candidate: StudioClient, force = false, signal?: AbortSignal) {
+    const options = { force, signal };
     const [nextInfo, nextProviders, nextDoctor, nextRuns] = await Promise.all([
       candidate.info(options),
       candidate.providers(options),
       candidate.doctor(undefined, options),
       candidate.runs(100, options)
     ]);
-    setInfo(nextInfo);
-    setProviders(nextProviders.providers);
-    setDoctor(nextDoctor);
-    setRuns(nextRuns.runs);
+    return { info: nextInfo, providers: nextProviders.providers, doctor: nextDoctor, runs: nextRuns.runs };
+  }
+
+  function commitSnapshot(snapshot: Awaited<ReturnType<typeof load>>): void {
+    setInfo(snapshot.info);
+    setProviders(snapshot.providers);
+    setDoctor(snapshot.doctor);
+    setRuns(snapshot.runs);
+  }
+
+  function retireSession(): StudioClient | undefined {
+    sessionGeneration.current += 1;
+    sessionController.current?.abort();
+    const previous = activeClient.current;
+    activeClient.current = undefined;
+    previous?.dispose();
+    return previous;
+  }
+
+  function clearSessionState(): void {
+    setClient(undefined);
+    setInfo(undefined);
+    setProviders([]);
+    setDoctor(undefined);
+    setRuns([]);
+    setRefreshing(false);
+    setStreamConnected(false);
+    setStreamStatus({ connected: false, cursor: 0, phase: "stopped", reconnectCount: 0 });
+    setEventRevision(0);
+    eventStore.clear();
   }
 
   async function connect(token: string): Promise<void> {
+    retireSession();
+    clearSessionState();
+    const generation = sessionGeneration.current;
     setConnection("connecting");
     setConnectionMessage(undefined);
     try {
       const candidate = new StudioClient(token.trim());
-      await load(candidate);
+      const controller = new AbortController();
+      activeClient.current = candidate;
+      sessionController.current = controller;
+      const snapshot = await load(candidate, false, controller.signal);
+      if (generation !== sessionGeneration.current) throw new DOMException("Studio connection was cancelled.", "AbortError");
+      commitSnapshot(snapshot);
       setClient(candidate);
       setConnection("connected");
     } catch (error) {
+      if (generation !== sessionGeneration.current) throw error;
+      retireSession();
       setConnection("error");
       setConnectionMessage(error instanceof Error ? error.message : "Syndra Studio could not connect.");
       throw error;
@@ -84,42 +123,53 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     return () => window.clearTimeout(timer);
   }, []);
 
+  useEffect(() => () => {
+    sessionGeneration.current += 1;
+    sessionController.current?.abort();
+    activeClient.current?.dispose();
+    activeClient.current = undefined;
+  }, []);
+
   function disconnect(): void {
-    void client?.logout().catch(() => undefined);
-    setClient(undefined);
+    const previous = retireSession();
+    const generation = sessionGeneration.current;
+    clearSessionState();
     setConnection("disconnected");
     setConnectionMessage(undefined);
-    setInfo(undefined);
-    setProviders([]);
-    setDoctor(undefined);
-    setRuns([]);
-    setStreamConnected(false);
-    setStreamStatus({ connected: false, cursor: 0, phase: "stopped", reconnectCount: 0 });
-    eventStore.clear();
+    void previous?.logout().catch(() => {
+      if (generation === sessionGeneration.current) setConnectionMessage("Disconnected in this browser. The runtime did not confirm session revocation; close this window and relaunch Studio to establish a new session.");
+    });
   }
 
   async function refresh(): Promise<void> {
-    if (!client) return;
+    if (!client || activeClient.current !== client) return;
+    const generation = sessionGeneration.current;
     setRefreshing(true);
     try {
-      await load(client, true);
+      const snapshot = await load(client, true, sessionController.current?.signal);
+      if (generation !== sessionGeneration.current) return;
+      commitSnapshot(snapshot);
       setConnection("connected");
       setConnectionMessage(undefined);
     } catch (error) {
+      if (generation !== sessionGeneration.current) return;
       setConnection("error");
       setConnectionMessage(error instanceof Error ? error.message : "Runtime refresh failed.");
     } finally {
-      setRefreshing(false);
+      if (generation === sessionGeneration.current) setRefreshing(false);
     }
   }
 
   const refreshFromEvent = useEffectEvent(async () => {
-    if (!client) return;
+    if (!client || activeClient.current !== client) return;
+    const generation = sessionGeneration.current;
     try {
-      const nextRuns = await client.runs(100, { force: true });
+      const nextRuns = await client.runs(100, { force: true, signal: sessionController.current?.signal });
+      if (generation !== sessionGeneration.current) return;
       setRuns(nextRuns.runs);
       setEventRevision((value) => value + 1);
     } catch (error) {
+      if (generation !== sessionGeneration.current) return;
       setConnectionMessage(error instanceof Error ? error.message : "Run reconciliation failed.");
     }
   });
@@ -128,19 +178,24 @@ export function StudioProvider({ children }: { children: ReactNode }) {
     await refresh();
   });
 
+  const authenticationFailed = useEffectEvent((source: StudioClient) => {
+    if (activeClient.current !== source) return;
+    retireSession();
+    clearSessionState();
+    setConnection("error");
+    setConnectionMessage("Studio session expired or was revoked. Launch syndra studio again, or reconnect from the extension.");
+  });
+
   useEffect(() => {
     if (!client) return;
     const stream = new StudioEventStream(client, {
-      onState: setStreamConnected,
-      onStatus: setStreamStatus,
-      onDrop: (reason) => eventStore.recordDrop(reason),
+      onState: (value) => { if (activeClient.current === client) setStreamConnected(value); },
+      onStatus: (value) => { if (activeClient.current === client) setStreamStatus(value); },
+      onDrop: (reason) => { if (activeClient.current === client) eventStore.recordDrop(reason); },
       onReconcile: reconcileFromStream,
-      onAuthenticationFailure: () => {
-        setClient(undefined);
-        setConnection("error");
-        setConnectionMessage("Studio session expired or was revoked. Launch syndra studio again, or reconnect from the extension.");
-      },
+      onAuthenticationFailure: () => authenticationFailed(client),
       onEvent: (event) => {
+        if (activeClient.current !== client) return;
         eventStore.ingest(event);
         if (refreshTimer.current === undefined) {
           refreshTimer.current = window.setTimeout(() => {

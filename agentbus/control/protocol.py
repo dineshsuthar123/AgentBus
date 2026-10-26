@@ -12,6 +12,7 @@ from agentbus.control.models import (
     CONTROL_PROTOCOL_VERSION,
     ProtocolModel,
 )
+from agentbus.execution.schema import SCHEMA_VERSION
 
 
 def build_openapi() -> dict[str, Any]:
@@ -53,15 +54,20 @@ def build_json_schema() -> dict[str, Any]:
     )
     schema["$id"] = "https://agentbus.invalid/protocol/agentbus-v1.schema.json"
     schema["x-agentbus-protocol-version"] = CONTROL_PROTOCOL_VERSION
+    schema["x-syndra-state-schema"] = SCHEMA_VERSION
     return schema
 
 
 def generate_typescript(schema: dict[str, Any]) -> str:
     definitions = schema.get("$defs", {})
+    state_schema = schema.get("x-syndra-state-schema", SCHEMA_VERSION)
+    if type(state_schema) is not int or state_schema < 1:
+        raise ValueError("The protocol must declare a positive integer state schema.")
     lines = [
         "/* Generated from protocol/agentbus-v1.schema.json. Do not edit. */",
         "",
         f"export const CONTROL_PROTOCOL_VERSION = {json.dumps(CONTROL_PROTOCOL_VERSION)} as const;",
+        f"export const STATE_SCHEMA_VERSION = {state_schema} as const;",
         "",
     ]
     for name in sorted(definitions):
