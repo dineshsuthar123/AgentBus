@@ -79,6 +79,22 @@ The debugger-independent regression holds the handle across the exit.
 Control acceptance keeps its local loopback session active while testing
 cooperative replay from the client. The final idle-shutdown check stays intact.
 
+## WebKit and validation environment
+
+Packaged Studio reproduced mixed light and dark colors when the Connections
+drawer switched themes. Several text elements retained the light foreground
+while their containers used the dark palette. Queue IDs, trace labels, loading
+messages, partial-state messages and the appearance label now resolve their
+foreground directly from the active theme tokens. The browser journey waits for
+the actual Connections content and verifies the drawer background before it
+captures and scans the dark state. Axe and browser error checks remain enabled.
+
+The full Python rerun uses a clean checkout of the candidate and a short
+temporary fixture root. An earlier Windows run hit Git's metadata path limit
+while creating disposable worktrees. The same checkout also timed out scanning
+its ignored evidence for the release report. Both failed runs and the Windows
+fixture state databases remain available in the local evidence directory.
+
 ## Indexing
 
 The 10,000-file profiler counts file reads, parser reuse, graph invalidation,

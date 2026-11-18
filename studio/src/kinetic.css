@@ -39,9 +39,12 @@
   .run-command-meta strong, .run-command-actions button, .run-sections button,
   .inspector-header strong, .inspector-copy, .inspector-definitions dd, .inspector-list li,
   .folio-dependencies summary, .folio-activity summary, .workspace-drawer header button,
+  .workspace-drawer > label,
   .drawer-sections button, .source-tools input, .source-tools button, .source-files code,
   .source-detail-head code, .file-activity strong, .runtime-hero dd,
   .doctor-check strong, .runtime-providers strong, .runtime-providers code) { color: var(--text); }
+:where(.queue-run-meta > code, .trace-identity > span, .loading-state > span) { color: var(--muted); }
+:where(.partial-state > span, .partial-state > strong) { color: var(--amber); }
 html, body, #root { min-width: 320px; min-height: 100%; }
 body { margin: 0; background: var(--desk); color: var(--text); font-size: 15px; line-height: 1.55; }
 button, input, select, textarea { font: inherit; color: var(--text); }

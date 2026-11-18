@@ -44,9 +44,13 @@ const accessibility = [];
 const browserErrors = [];
 const rendering = {};
 const externalRequests = new Set();
-function diagnose(context) {
+function diagnose(context, scenario) {
   context.on("page", (client) => client.on("pageerror", (error) => {
-    browserErrors.push({ name: error.name, react_code: /Minified React error #(\d+)/.exec(error.message)?.[1], frames: [...(error.stack ?? "").matchAll(/http:\/\/127\.0\.0\.1:\d+\/studio\/assets\/[a-zA-Z0-9_-]+\.js:\d+:\d+/g)].map((frame) => frame[0]).slice(0, 24) });
+    const failedReadPath = /127\.0\.0\.1:\d+(\/api\/v1\/[a-zA-Z0-9/_-]+)/.exec(error.message)?.[1];
+    browserErrors.push({ name: error.name, scenario, previous_accessibility_state: accessibility.at(-1)?.state,
+      failed_read_path: failedReadPath?.replace(/[a-f0-9]{32}/g, "[fixture-run]"),
+      react_code: /Minified React error #(\d+)/.exec(error.message)?.[1],
+      frames: [...(error.stack ?? "").matchAll(/http:\/\/127\.0\.0\.1:\d+\/studio\/assets\/[a-zA-Z0-9_-]+\.js:\d+:\d+/g)].map((frame) => frame[0]).slice(0, 24) });
   }));
 }
 try {
@@ -88,7 +92,7 @@ try {
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, colorScheme: "light", reducedMotion: "reduce" });
   const allowedOrigins = new Set([origin]);
   context.on("request", (request) => { const url = new URL(request.url()); if (["http:", "https:"].includes(url.protocol) && !allowedOrigins.has(url.origin)) externalRequests.add(url.origin); });
-  diagnose(context);
+  diagnose(context, "authenticated");
   page = await context.newPage();
   const launch = installed ? ready : await api("/api/v1/studio/launch", {});
   allowedOrigins.add(new URL(launch.launch_url).origin);
@@ -99,7 +103,7 @@ try {
   async function checkAccessibility(state, target = page) {
     await target.evaluate(await readFile(path.join(root, "studio/node_modules/axe-core/axe.min.js"), "utf8"));
     const result = await target.evaluate(async () => globalThis.axe.run(globalThis.document, { runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21aa"] } }));
-    accessibility.push({ state, violations: result.violations.map((violation) => ({ id: violation.id, impact: violation.impact, nodes: violation.nodes.map((node) => ({ target: node.target, failure: node.failureSummary })) })) });
+    accessibility.push({ state, violations: result.violations.map((violation) => ({ id: violation.id, impact: violation.impact, nodes: violation.nodes.map((node) => ({ target: node.target, html: node.html, failure: node.failureSummary })) })) });
     if (result.violations.length) {
       const colors = await target.evaluate(() => ({ theme: globalThis.document.documentElement.dataset.theme,
         elements: ["html", "body", "#root", ".folio-desk", ".workspace-clasp", ".folio-brand", ".folio-brand strong"].map((selector) => {
@@ -249,7 +253,7 @@ try {
   if (storyWrites.length) throw new Error("Illustrative workshop issued a control-plane mutation");
   rendering.workshop_local_only = true;
   const entryContext = await browser.newContext({ viewport: { width: 1440, height: 1000 }, reducedMotion: "reduce", colorScheme: "light" });
-  diagnose(entryContext);
+  diagnose(entryContext, "public-entry");
   entryContext.on("request", (request) => { const url = new URL(request.url()); if (["http:", "https:"].includes(url.protocol) && !allowedOrigins.has(url.origin)) externalRequests.add(url.origin); });
   const entryPage = await entryContext.newPage();
   await entryPage.goto(`${origin}/studio/#/runs/retained-run?view=source`);
@@ -299,7 +303,9 @@ try {
   await page.screenshot({ path: path.join(output, "plan-light.png"), fullPage: true });
   await page.getByRole("link", { name: "Workspace", exact: true }).click();
   await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  await expect(page.getByRole("heading", { name: "Runtime health", exact: true })).toBeVisible();
   await page.getByLabel("Appearance").selectOption("dark");
+  await expect(page.getByRole("region", { name: "Workspace", exact: true })).toHaveCSS("background-color", "rgb(33, 40, 35)");
   await page.screenshot({ path: path.join(output, "connections-dark.png"), fullPage: true });
   await checkAccessibility("connections-dark");
   await page.getByRole("button", { name: "Return to run", exact: true }).click();
@@ -400,7 +406,7 @@ try {
   await checkAccessibility("changes-light");
   await appearance("dark");
   const zoomContext = await browser.newContext({ viewport: { width: 720, height: 500 }, deviceScaleFactor: 2, storageState: await context.storageState(), reducedMotion: "reduce" });
-  diagnose(zoomContext);
+  diagnose(zoomContext, "viewport-reflow");
   const zoomPage = await zoomContext.newPage();
   await zoomPage.goto(`${origin}/studio/#/runs/${accepted.run_id}?view=source`);
   await zoomPage.getByRole("region", { name: "Source lens" }).waitFor();
