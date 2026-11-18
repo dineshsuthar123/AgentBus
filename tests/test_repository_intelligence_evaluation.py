@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from agentbus.eval import main as evaluation_main
 from agentbus.evaluation.fixtures import OWNERSHIP_FILE
 from agentbus.evaluation.runner import EvaluationRunner
 from agentbus.evaluation.suites import builtin_suites, builtin_variants
+from agentbus.intelligence import RepositoryIntelligenceService
 
 
 FIXTURE_ROOT = (
@@ -20,6 +22,35 @@ FIXTURE_ROOT = (
 class _UnexpectedProviderBackend:
     def execute(self, *args, **kwargs):
         raise AssertionError("normal agent/provider backend must not run")
+
+
+def test_generated_exclusion_fixture_is_created_only_in_the_owned_copy(tmp_path: Path) -> None:
+    from agentbus.evaluation.fixtures import FixtureRepositoryManager
+    from agentbus.evaluation.intelligence import _materialize_generated_bundle
+
+    source = tmp_path / "source"
+    shutil.copytree(FIXTURE_ROOT / "repository-intelligence-mixed", source)
+    bundle = source / "dist" / "bundle.js"
+    if bundle.exists():
+        bundle.unlink()
+    case = builtin_suites()["repository-intelligence"].cases[0].model_copy(
+        update={"fixture_repository_source": str(source)}
+    )
+    manager = FixtureRepositoryManager(tmp_path, tmp_path / "owned")
+    fixture = manager.create(case, "generated-exclusion")
+    try:
+        _materialize_generated_bundle(fixture.repository)
+        generated = fixture.repository / "dist" / "bundle.js"
+        assert generated.is_file()
+        assert not bundle.exists()
+        service = RepositoryIntelligenceService(fixture.repository, tmp_path / "index.sqlite3")
+        built = service.build()
+        assert "dist/bundle.js" not in {
+            file.relative_path for file in service.store.list_files(built.snapshot.snapshot_id)
+        }
+        assert not bundle.exists()
+    finally:
+        manager.cleanup(fixture)
 
 
 def test_repository_intelligence_suite_and_variant_are_offline() -> None:

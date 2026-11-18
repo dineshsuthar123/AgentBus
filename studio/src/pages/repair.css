@@ -90,6 +90,7 @@
 .repair-map-caption h3 { font-size: 26px; overflow-wrap: anywhere; margin: 18px 0; }
 .repair-map-caption p { color: var(--muted); font-size: 14px; }
 .repair-map-caption dl > div { grid-template-columns: 90px minmax(0, 1fr); }
+.repair-map-caption dd { color: var(--text); }
 .repair-map-caption small { color: var(--muted); }
 .repair-account-peek { display: flex; align-items: center; flex-wrap: wrap; gap: 18px; padding: 24px; border: 1px solid var(--line); border-top: 0; background: var(--recess); }
 .repair-account-peek > div { flex: 1 1 240px; min-width: 0; }
@@ -197,3 +198,28 @@
   .repair-impact-map button { border-color: CanvasText; }
   .repair-impact-map [aria-selected=true] button { outline: 2px solid Highlight; }
 }
+.repair-connected, .repair-connections { border: 1px solid var(--line); border-radius: 22px; padding: clamp(16px, 3vw, 34px); margin-block: 24px; min-width: 0; background: linear-gradient(135deg, var(--success-wash), var(--paper) 60%); }
+.repair-connected h2, .repair-connections h2 { font-family: var(--display); max-width: 22ch; }
+.repair-connected fieldset { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 16px; margin-block: 20px; padding: 16px; border: 1px solid var(--line, #b5baae); border-radius: 14px; }
+.repair-connected label { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.repair-connected fieldset > label { flex-direction: column; align-items: stretch; }
+.repair-connected fieldset { min-inline-size: 0; }
+.repair-connected fieldset > label { min-width: 0; overflow: hidden; overflow-wrap: anywhere; padding: 6px; }
+.repair-connected select, .repair-connected input:not([type=checkbox]) { max-width: 100%; }
+.repair-connected input:not([type=checkbox]), .repair-connected select { width: 100%; min-height: 42px; min-width: 0; }
+.repair-connected code, .repair-connections code, .repair-connected li, .repair-connections dd { overflow-wrap: anywhere; word-break: break-word; }
+.repair-connected-records, .repair-plan-review ul { list-style: none; margin: 20px 0; padding: 0; }
+.repair-connected-records > li, .repair-plan-review li { padding: 16px 0; border-bottom: 1px solid var(--line, #b5baae); }
+.repair-target { display: grid; gap: 10px; padding-block: 18px; }
+.repair-environment { border: 1px solid currentColor; border-radius: 30px; padding: 3px 12px; width: max-content; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+.repair-environment.env-production { color: var(--coral); background: var(--failure-wash); }
+.repair-plan-review { margin-block: 24px; border-top: 3px solid var(--accent, #a13920); padding-top: 20px; }
+.repair-plan-digest { display: block; font-size: 12px; }
+.repair-connected .repair-counts { grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); }
+.repair-connected .repair-counts > div { display: grid; gap: 4px; padding: 12px; }
+.repair-connections article { border-top: 1px solid var(--line, #b5baae); padding-block: 20px; }
+.repair-connections article header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.repair-connections dl { display: grid; gap: 14px; }
+.repair-connected button, .repair-connections button { min-height: 44px; }
+.repair-connected-records { max-height: min(62vh, 700px); overflow: auto; overscroll-behavior: contain; padding-inline: 10px; scrollbar-gutter: stable; }
+.repair-connected-records:focus-visible { outline: 2px solid var(--accent, #a13920); outline-offset: 3px; }

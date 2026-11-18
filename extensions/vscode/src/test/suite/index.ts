@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import * as vscode from "vscode";
@@ -25,6 +27,7 @@ import type {
 type DeterministicProfile = NonNullable<
   NonNullable<RunCreateRequest["deterministic"]>["profile"]
 >;
+const execFileAsync = promisify(execFile);
 
 export async function run(): Promise<void> {
   const pythonPath = requiredEnvironment("SYNDRA_E2E_PYTHON");
@@ -224,16 +227,17 @@ export async function run(): Promise<void> {
     intelligenceLifecycle.workspaceId
   );
 
-  const approvalRun = await submitAfterWorkspaceRelease(
-    runRequest(
-      workspace,
-      "tool-delete-approval",
-      0,
-      [],
-      "Delete the deterministic target only after exact approval.",
-      false
-    )
-  );
+  // CLI, the actual Studio browser and this Extension Host use one durable run.
+  const cliRun = await execFileAsync(pythonPath, ["-m", "syndra.cli", "run", "--config", configPath,
+    "--workflow", "multi", "--provider", "deterministic", "--durable",
+    "Delete the deterministic target only after exact approval."], {
+    cwd: workspace, encoding: "utf8", shell: false, timeout: 60_000,
+    env: { ...process.env, SYNDRA_DETERMINISTIC_PROFILE: "tool-delete-approval",
+      SYNDRA_ENABLE_PROVIDER_FALLBACK: "false" }
+  });
+  const cliRunId = /^Run ID:\s+(\S+)/m.exec(cliRun.stdout)?.[1];
+  assert.ok(cliRunId, "CLI did not report its durable run ID");
+  const approvalRun = { run_id: cliRunId };
   assert.ok(approvalRun?.run_id);
   const approval = await waitForToolApproval(client, approvalRun.run_id);
   assert.equal(approval.tool_name, "filesystem.delete");
@@ -246,6 +250,7 @@ export async function run(): Promise<void> {
   assert.match(approvalConfirmation, /filesystem\.delete/);
   assert.match(approvalConfirmation, /delete_me\.txt/);
   await waitForEvent(api, approvalRun.run_id, "tool_approval_required");
+  await inspectCrossClientStudio(client, approvalRun.run_id, "pending");
   const approved = await client.decideApproval(
     approvalRun.run_id,
     approval.approval_id,
@@ -264,6 +269,11 @@ export async function run(): Promise<void> {
   );
   assert.equal(deletion.status, "succeeded");
   assert.equal(deletion.approval_id, approval.approval_id);
+  await inspectCrossClientStudio(client, approvalRun.run_id, "completed");
+  const cliInspection = await execFileAsync(pythonPath, ["-m", "syndra.cli", "show-run", approvalRun.run_id,
+    "--config", configPath], { cwd: workspace, encoding: "utf8", shell: false, timeout: 30_000 });
+  assert.ok(cliInspection.stdout.includes(approvalRun.run_id));
+  assert.match(cliInspection.stdout, /Status: succeeded/);
 
   const processRun = await submitAfterWorkspaceRelease(
     runRequest(
@@ -515,6 +525,19 @@ export async function run(): Promise<void> {
 interface RepositoryIntelligenceLifecycle {
   workspaceId: string;
   snapshotId: string;
+}
+
+async function inspectCrossClientStudio(
+  client: SyndraClient, runId: string, phase: "pending" | "completed"
+): Promise<void> {
+  const launch = await client.launchStudio(runId);
+  const operation = execFileAsync(requiredEnvironment("SYNDRA_E2E_NODE"),
+    [requiredEnvironment("SYNDRA_E2E_BROWSER_SCRIPT")], {
+      encoding: "utf8", shell: false, timeout: 60_000
+    });
+  operation.child.stdin?.end(JSON.stringify({ launch: launch.launch_url, run_id: runId, phase,
+    output: requiredEnvironment("SYNDRA_E2E_RELEASE_EVIDENCE") }));
+  await operation;
 }
 
 async function exerciseRepositoryIntelligence(

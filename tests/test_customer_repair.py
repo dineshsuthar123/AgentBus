@@ -60,6 +60,28 @@ def test_refund_after_preview_does_not_restore_access(tmp_path):
     assert batch.restored_count == 64
 
 
+def test_support_changes_and_refund_are_both_preserved_with_independent_database_oracle(tmp_path):
+    import sqlite3
+
+    service, case, preview = setup_case(tmp_path)
+    case_id = case.summary.case_id
+    assert service.demo_change(case_id, "support_corrects_five") == 5
+    assert service.demo_change(case_id, "refund_one") == 1
+    result = service.apply(case_id, **apply_arguments(preview))
+    # Six selected records receive no new grant: five support fixes and a refund.
+    assert (result.restored_count, result.skipped_count) == (59, 6)
+    refunded = next(row for row in result.results if row.purchase_id == "purchase-001")
+    assert refunded.outcome == "ineligible" and not refunded.verified_access
+    assert sum(row.outcome == "already_correct" for row in result.results) == 5
+    # Bypass service preview/analysis/reporting code when checking committed state.
+    with sqlite3.connect(service.root / "customer-repair.db") as database:
+        assert database.execute("SELECT COUNT(*) FROM repair_access WHERE case_id = ? AND present = 1 AND account_id GLOB 'account-[0-9][0-9][0-9]'", (case_id,)).fetchone()[0] == 79
+        assert database.execute("SELECT present FROM repair_access WHERE case_id = ? AND account_id = 'account-001'", (case_id,)).fetchone()[0] == 0
+    exported = service.export(case_id, preview.preview_id)
+    assert verify_package(exported)
+    assert exported.batches[0].restored_count == 59
+
+
 def test_repeated_request_returns_immutable_saved_result_after_restart(tmp_path):
     service, case, preview = setup_case(tmp_path)
     arguments = apply_arguments(preview)

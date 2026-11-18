@@ -5,8 +5,11 @@
 Syndra Studio includes a customer-repair workflow for purchase-to-access incidents:
 inspect affected records, review proposed corrections, and verify the results.
 The working local application demonstrates actual account changes with synthetic
-data. Imported snapshots support analysis and correction-package export; live
-customer-system adapters are not included.
+data. An installable [application correction integration](docs/product/production-customer-repair.md)
+connects imported candidates to authoritative application reads, exact approvals,
+conditional PostgreSQL domain corrections, durable receipts and normal access
+verification. Application owners must integrate the documented writer hooks;
+arbitrary applications and uncoordinated external payment races are not supported.
 
 Syndra is a local execution runtime for software-engineering agents. It plans
 repository tasks, executes capability-bound tools, pauses consequential actions

@@ -41,6 +41,7 @@ from agentbus.control.models import (
     ApprovalListResponse,
     AttemptListResponse,
     CancelResponse,
+    CancellationLifecycle,
     ChangeListResponse,
     ComparisonCreateRequest,
     ComparisonResponse,
@@ -120,6 +121,7 @@ from agentbus.control.replay_supervisor import BackgroundReplaySupervisor
 from agentbus.control.services import ControlQueryService
 from agentbus.control.supervisor import BackgroundRunSupervisor
 from agentbus.control.studio import BrowserSessions, launch_browser_exchange, loopback_origin, studio_assets
+from agentbus.control.admission import ControlAdmission, ControlAdmissionMiddleware
 from agentbus.execution.engine import DurableExecutionEngine
 from agentbus.execution.models import ApprovalOutcome
 from agentbus.execution.state_store import InvalidRunHistoryError, StateStoreBusyError, StateStoreError
@@ -211,6 +213,14 @@ def create_app(
         return app.state.customer_repair
 
     app.include_router(repair_router(customer_repair_service))
+
+    from agentbus.control.connected_repair import connected_repair_router
+    from agentbus.repair.live.service import ConnectedRepairService
+
+    def connected_repair_service():
+        return ConnectedRepairService(customer_repair_service(), query_service.config.workspace_path, query_service.store)
+
+    app.include_router(connected_repair_router(connected_repair_service))
 
     @app.exception_handler(RepairError)
     async def repair_error_handler(_request: Request, exc: RepairError):
@@ -881,6 +891,8 @@ def create_app(
 
     @app.post(f"{API_PREFIX}/runs/{{run_id}}/resume", response_model=ResumeResponse)
     def resume_run(run_id: str) -> ResumeResponse:
+        if query_service.get_run(run_id).workflow_type == "customer_repair":
+            raise RepairError("Use Customer repair to reconcile this plan. Coding resume cannot dispatch customer corrections.", status=409)
         return supervisor.resume(run_id)
 
     @app.post(f"{API_PREFIX}/runs/{{run_id}}/cancel", response_model=CancelResponse)
@@ -888,6 +900,11 @@ def create_app(
         run_id: str,
         request: RunActionRequest | None = None,
     ) -> CancelResponse:
+        if query_service.get_run(run_id).workflow_type == "customer_repair":
+            connected_repair_service().stop(run_id)
+            return CancelResponse(run_id=run_id, status=query_service.get_run(run_id).status.value, cancellation_requested=True,
+                cancellation=CancellationLifecycle(requested=True, acknowledged=True, scheduling_stopped=True,
+                    acknowledgement_source="application-target-plan-revocation", resume_eligible=False))
         return supervisor.cancel(run_id, request.reason if request else None)
 
     @app.get(f"{API_PREFIX}/runs/{{run_id}}/tasks", response_model=TaskListResponse)
@@ -1101,6 +1118,7 @@ def create_app(
             revision=revision,
         )
 
+    app.add_middleware(ControlAdmissionMiddleware, admission=ControlAdmission())
     return app
 
 

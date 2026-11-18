@@ -1,4 +1,4 @@
-import { chromium, expect } from "@playwright/test";
+import { chromium, firefox, webkit, expect } from "@playwright/test";
 import { spawn, spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -10,9 +10,17 @@ import { URL } from "node:url";
 import { setTimeout, clearTimeout } from "node:timers";
 
 const root = path.resolve(import.meta.dirname, "../..");
-const python = path.join(root, ".venv", process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
+const engine = process.env.SYNDRA_BROWSER_ENGINE ?? "chromium";
+const browserType = { chromium, firefox, webkit }[engine];
+if (!browserType) throw new Error("SYNDRA_BROWSER_ENGINE must be chromium, firefox, or webkit");
+const python = process.env.SYNDRA_ACCEPTANCE_PYTHON ?? path.join(root, ".venv", process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
+const installed = Boolean(process.env.SYNDRA_ACCEPTANCE_PYTHON);
+if (installed) {
+  const check = spawnSync(python, ["-I", "-c", "import syndra; from pathlib import Path; import sys; assert Path(syndra.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())"], { cwd: tmpdir(), shell: false, encoding: "utf8" });
+  if (check.status !== 0) throw new Error("Installed repair acceptance requires a wheel in a fresh interpreter");
+}
 const workspace = await mkdtemp(path.join(tmpdir(), "syndra-repair-"));
-const output = path.join(root, ".tmp", "customer-repair-acceptance");
+const output = path.join(root, ".tmp", process.env.SYNDRA_REPAIR_EVIDENCE ?? "customer-repair-acceptance");
 await mkdir(output, { recursive: true });
 for (const args of [["init"], ["config", "user.name", "Syndra Offline Acceptance"], ["config", "user.email", "offline@example.invalid"]]) {
   if (spawnSync("git", args, { cwd: workspace, shell: false }).status !== 0) throw new Error("Disposable repository initialization failed.");
@@ -53,7 +61,7 @@ try {
   const base = "/customer-repair";
   const launch = await api("/studio/launch", {});
   const allowedOrigins = new Set([origin, new URL(launch.launch_url).origin]);
-  browser = await chromium.launch({ channel: process.env.SYNDRA_BROWSER_CHANNEL ?? "chrome", headless: true });
+  browser = await browserType.launch({ ...(engine === "chromium" ? { channel: process.env.SYNDRA_BROWSER_CHANNEL ?? "chrome" } : {}), headless: true });
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, reducedMotion: "reduce", colorScheme: "light", acceptDownloads: true });
   context.on("request", (request) => { const url = new URL(request.url()); if (["http:", "https:"].includes(url.protocol) && !allowedOrigins.has(url.origin)) external.add(url.origin); });
   page = await context.newPage();
@@ -70,7 +78,10 @@ try {
     await writeFile(path.join(output, "accessibility.json"), JSON.stringify(accessibility, null, 2));
     await page.screenshot({ path: path.join(output, `${state}.png`), fullPage: true });
     if (violations.length) throw new Error(`Accessibility failure in ${state}.`);
-    if (await page.evaluate(() => globalThis.document.documentElement.scrollWidth > globalThis.innerWidth + 1 || [...globalThis.document.querySelectorAll(".folio-paper")].some((element) => element.scrollWidth > element.clientWidth + 1))) throw new Error(`Horizontal overflow in ${state}.`);
+    if (await page.evaluate(() => globalThis.document.documentElement.scrollWidth > globalThis.innerWidth + 1 || [...globalThis.document.querySelectorAll(".folio-paper")].some((element) => element.scrollWidth > element.clientWidth + 1))) {
+      await writeFile(path.join(output, `reflow-${state}.json`), JSON.stringify(await page.evaluate(() => ({ viewport: globalThis.innerWidth, document: globalThis.document.documentElement.scrollWidth, elements: [...globalThis.document.querySelectorAll("body *")].map((element) => ({ tag: element.tagName, class: typeof element.className === "string" ? element.className : "", width: element.getBoundingClientRect().width, right: element.getBoundingClientRect().right, scroll: element.scrollWidth, client: element.clientWidth })).filter((element) => element.right > globalThis.innerWidth + 1 || element.scroll > element.client + 1).slice(0, 100) })), null, 2));
+      throw new Error(`Horizontal overflow in ${state}.`);
+    }
   }
   async function appearance(theme) {
     await page.getByRole("link", { name: "Workspace", exact: true }).click();

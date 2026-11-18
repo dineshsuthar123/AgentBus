@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -79,11 +80,55 @@ def wait_for_pid(marker: Path, *, timeout_seconds: float = 3.0) -> int:
 
 
 def process_exists(pid: int) -> bool:
+    if os.name == "nt":
+        # Windows os.kill(pid, 0) calls TerminateProcess; it is not a probe.
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, wintypes.LPDWORD]
+        kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        handle = kernel32.OpenProcess(0x1000, False, pid)
+        if not handle:
+            return False
+        try:
+            code = wintypes.DWORD()
+            return bool(kernel32.GetExitCodeProcess(handle, ctypes.byref(code))) and code.value == 259
+        finally:
+            kernel32.CloseHandle(handle)
     try:
         os.kill(pid, 0)
     except OSError:
         return False
     return True
+
+
+def test_process_probe_observes_without_terminating_owned_peer() -> None:
+    child = subprocess.Popen(
+        [sys.executable, "-u", "-c", "import sys;print('ready',flush=True);print(sys.stdin.readline().strip(),flush=True)"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, shell=False,
+    )
+    try:
+        assert child.stdout is not None and child.stdin is not None
+        assert child.stdout.readline().strip() == "ready"
+        assert process_exists(child.pid)
+        child.stdin.write("still alive\n")
+        child.stdin.flush()
+        assert child.stdout.readline().strip() == "still alive"
+        assert child.wait(timeout=10) == 0
+        assert not process_exists(child.pid)
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait(timeout=10)
+        for stream in (child.stdin, child.stdout, child.stderr):
+            if stream:
+                stream.close()
 
 
 def assert_process_exits(pid: int, *, timeout_seconds: float = 3.0) -> None:

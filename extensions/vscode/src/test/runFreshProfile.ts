@@ -116,6 +116,9 @@ async function main(): Promise<void> {
   try {
     const vscodeExecutablePath = await downloadAndUnzipVSCode({
       version: "1.96.4",
+      ...(process.env.SYNDRA_VSCODE_TEST_CACHE
+        ? { cachePath: resolve(process.env.SYNDRA_VSCODE_TEST_CACHE) }
+        : {}),
       extensionDevelopmentPath: extensionPath
     });
     const stages: FreshStage[] = [

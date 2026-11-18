@@ -75,10 +75,13 @@ Syndra does not authenticate those claims or infer causal impact from an arbitra
 code diff. The supported business rule determines the proposed corrections.
 Counts cover supplied records. Partial evidence is labelled explicitly.
 
-Imports support analysis and export. There is no live application adapter in this
-release, so imported records cannot be applied from Studio or the CLI. The demo
-is the only writable adapter. A production integration needs its own identity,
-eligibility, current-state, idempotency, and read-after-write contracts.
+Unconnected imports support analysis and export, never writes. To execute a
+correction, attach a validated [application correction connection](production-customer-repair.md),
+rehydrate from authoritative records, review an exact bounded plan and approve it.
+The installable PostgreSQL reference integration implements domain corrections,
+durable receipts, outbox delivery and normal authorization checks. Application
+owners must integrate all relevant writer hooks; a matching CSV column is not
+enough. The original synthetic demo remains a separate writable target.
 
 ## Review and results
 

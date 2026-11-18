@@ -3,6 +3,16 @@
 export const CONTROL_PROTOCOL_VERSION = "1.0" as const;
 export const STATE_SCHEMA_VERSION = 7 as const;
 
+export interface AccessVerification {
+  "operation_id": string;
+  "status": "pending" | "passed" | "failed" | "superseded";
+  "method"?: "normal_authorization_path";
+  "observed_at": string;
+  "revision": number;
+  "allowed": boolean;
+  "reason": string;
+}
+
 export interface ApprovalDecisionRequest {
   "revision": number;
   "reason"?: string | null;
@@ -114,6 +124,20 @@ export interface CancellationLifecycle {
   "revision"?: number;
 }
 
+export interface Capabilities {
+  "identity": Identity;
+  "principal": string;
+  "permissions": Array<"read" | "approve" | "repair" | "verify" | "revoke">;
+  "workflow"?: "paid-purchase-access/v1";
+  "aggregate_serialization": boolean;
+  "semantic_receipts": boolean;
+  "normal_access_verification": boolean;
+  "coordinated_external_payments"?: boolean;
+  "receipt_retention"?: "indefinite";
+  "compensation"?: "unsupported";
+  "maximum_batch": number;
+}
+
 export interface CapabilityScope {
   "roots"?: Array<string>;
   "patterns"?: Array<string>;
@@ -187,6 +211,117 @@ export interface ComparisonSummaryResponse {
   "provenance_root_changed"?: boolean;
 }
 
+export interface ConditionalOperation {
+  "protocol"?: "syndra.correction/v1";
+  "operation_id": string;
+  "plan_id": string;
+  "workspace_digest": string;
+  "identity": Identity;
+  "connection_digest": string;
+  "policy": ConnectedRepairPolicy;
+  "policy_digest": string;
+  "purchase_id": string;
+  "payment_id": string;
+  "expected_revision": number;
+  "effect": Effect;
+  "logical_effect": string;
+  "deadline": string;
+  "payload_digest": string;
+}
+
+export interface ConnectedApprovalRequest {
+  "plan_digest": string;
+}
+
+export interface ConnectedExecutionRequest {
+  "retry_unknown"?: boolean;
+}
+
+export interface ConnectedPlan {
+  "plan": TargetPlan;
+  "case_id": string;
+  "status": string;
+  "stopped": boolean;
+  "approved": boolean;
+  "counts": Record<string, number>;
+  "outcomes": Array<RemoteOutcome>;
+}
+
+export interface ConnectedPlanRequest {
+  "scan_id": string;
+  "purchase_ids": Array<string>;
+  "workspace_trusted": boolean;
+}
+
+export interface ConnectedPlanResponse {
+  "result": ConnectedPlan;
+}
+
+export interface ConnectedPlansResponse {
+  "results": Array<ConnectedPlan>;
+}
+
+export interface ConnectedPreview {
+  "scan_id": string;
+  "case_id": string;
+  "connection_id": string;
+  "created_at": string;
+  "policy": ConnectedRepairPolicy;
+  "counts": Record<string, number>;
+  "examined": number;
+  "offset": number;
+  "decisions": Array<Decision>;
+}
+
+export interface ConnectedPreviewResponse {
+  "preview": ConnectedPreview | null;
+}
+
+export interface ConnectedRefreshRequest {
+  "connection_id": string;
+  "policy": ConnectedRepairPolicy;
+  "candidate_ids"?: Array<string> | null;
+}
+
+export interface ConnectedRepairPolicy {
+  "version"?: "paid-purchase-access/v1";
+  "payment_authority"?: "application" | "stripe";
+  "access_authority"?: "application";
+  "history_authority"?: "application";
+  "maximum_age_seconds"?: number;
+  "incident_start": string;
+  "incident_end": string;
+  "maximum_writes"?: number;
+  "requests_per_second"?: number;
+  "partial_refund"?: "investigate";
+  "dispute"?: "do_not_restore";
+  "expired_period"?: "investigate";
+  "effect"?: "grant_original_period_only";
+  "verification"?: "normal_authorization_path";
+}
+
+export interface ConnectionManifest {
+  "connection_id": string;
+  "identity": Identity;
+  "destination": string;
+  "approved_addresses": Array<string>;
+  "private_networks"?: Array<string>;
+  "credential_ref": string;
+  "revision": number;
+  "transport"?: "https" | "disposable_loopback";
+  "permissions": Array<"read" | "approve" | "repair" | "verify" | "revoke">;
+  "stripe"?: StripeConfiguration | null;
+}
+
+export interface ConnectionStatus {
+  "manifest": ConnectionManifest;
+  "configured": boolean;
+  "checked_at"?: string | null;
+  "capabilities"?: Capabilities | null;
+  "write_ready"?: boolean;
+  "reason": string;
+}
+
 export interface ContextCandidateSummary {
   "candidate_id": string;
   "relative_path": string;
@@ -234,6 +369,14 @@ export interface DaemonRegistryEntry {
   "registry_path": string;
   "idle_timeout_seconds"?: number;
   "log_path"?: string | null;
+}
+
+export interface Decision {
+  "purchase_id": string;
+  "disposition": "eligible" | "already_correct" | "subsequent_history" | "conflicted_stale" | "investigation_required";
+  "reason": string;
+  "state": PurchaseState | null;
+  "uncertainty"?: string | null;
 }
 
 export interface DemoProof {
@@ -285,6 +428,14 @@ export interface DiffResponse {
 export interface DoctorResponse {
   "status": string;
   "checks": Array<Record<string, unknown>>;
+}
+
+export interface Effect {
+  "account_id": string;
+  "feature": string;
+  "period_start": string;
+  "period_end": string;
+  "access_present"?: true;
 }
 
 export interface ErrorBody {
@@ -350,6 +501,14 @@ export interface GraphNodeSummary {
 export interface HealthResponse {
   "status"?: "ok";
   "protocol_version"?: string;
+}
+
+export interface Identity {
+  "application": string;
+  "tenant": string;
+  "environment": "sandbox" | "staging" | "production";
+  "configuration_revision": string;
+  "protocol"?: "syndra.correction/v1";
 }
 
 export interface ImpactResult {
@@ -637,6 +796,36 @@ export interface PurchaseEvidence {
   "revision": number;
 }
 
+export interface PurchaseState {
+  "identity": Identity;
+  "purchase_id": string;
+  "payment_id": string;
+  "account_id": string | null;
+  "feature": string;
+  "currency": string;
+  "amount_minor": number;
+  "refunded_minor": number;
+  "payment_state": "paid" | "authorized" | "pending" | "failed" | "cancelled" | "unknown";
+  "purchased_at": string;
+  "period_start": string;
+  "period_end": string;
+  "access_present": boolean | null;
+  "mapping_verified": boolean;
+  "history_complete": boolean;
+  "disputed": boolean;
+  "pending_payment_change": boolean;
+  "cancellation": "none" | "period_end" | "immediate";
+  "restriction": "none" | "suspended" | "deleted" | "manual_override" | "changed_product";
+  "revision": number;
+  "observed_at": string;
+  "evidence_ids": Array<string>;
+  "stripe_customer"?: string | null;
+  "stripe_invoice"?: string | null;
+  "stripe_subscription"?: string | null;
+  "stripe_product"?: string | null;
+  "stripe_feature"?: string | null;
+}
+
 export interface ReadyHandshake {
   "protocol_version"?: string;
   "host": string;
@@ -647,6 +836,21 @@ export interface ReadyHandshake {
   "registry_path": string;
   "bearer_token": string;
   "token_delivery"?: "parent_process_stdout";
+}
+
+export interface Receipt {
+  "operation_id": string;
+  "payload_digest": string;
+  "logical_effect": string;
+  "identity": Identity;
+  "purchase_id": string;
+  "payment_id": string;
+  "effect": Effect;
+  "outcome": "committed" | "not_applied";
+  "reason": "granted" | "already_correct" | "subsequent_history" | "conflict" | "logical_effect_exists";
+  "revision": number;
+  "committed_at": string;
+  "outbox_id": string | null;
 }
 
 export interface RegressionFixtureCaptureRequest {
@@ -665,6 +869,21 @@ export interface RegressionFixtureCaptureResponse {
   "replay_command": string;
   "assertions_validated"?: true;
   "replay_started"?: false;
+}
+
+export interface RemoteOutcome {
+  "operation_id": string;
+  "execution": "queued" | "dispatched" | "not_applied" | "committed" | "outcome_unknown";
+  "verification": "not_started" | "pending" | "passed" | "failed" | "superseded";
+  "attempts": number;
+  "receipt": Receipt | null;
+  "verification_evidence": AccessVerification | null;
+  "verification_error"?: RemoteVerificationError | null;
+}
+
+export interface RemoteVerificationError {
+  "code": string;
+  "at": string;
 }
 
 export interface RepairAccountResponse {
@@ -726,6 +945,14 @@ export interface RepairCaseSummary {
   "coverage_complete": boolean;
   "record_count": number;
   "batch_count"?: number;
+}
+
+export interface RepairConnectionResponse {
+  "connection": ConnectionStatus;
+}
+
+export interface RepairConnectionsResponse {
+  "connections": Array<ConnectionStatus>;
 }
 
 export interface RepairCounts {
@@ -1135,6 +1362,15 @@ export interface SpanReplayabilityResponse {
   "live_provider_consent_required"?: boolean;
 }
 
+export interface StripeConfiguration {
+  "credential_ref": string;
+  "platform_account": string;
+  "connected_account"?: string | null;
+  "livemode": boolean;
+  "api_version"?: "2026-08-26.dahlia";
+  "use_entitlements"?: boolean;
+}
+
 export interface StudioLaunchRequest {
   "run_id"?: string | null;
 }
@@ -1162,6 +1398,18 @@ export interface SymbolSummary {
   "test"?: boolean;
   "endpoint"?: string | null;
   "confidence": number;
+}
+
+export interface TargetPlan {
+  "plan_id": string;
+  "identity": Identity;
+  "connection_digest": string;
+  "workspace_digest": string;
+  "policy_digest": string;
+  "expires_at": string;
+  "operations": Array<ConditionalOperation>;
+  "maximum_writes": number;
+  "digest": string;
 }
 
 export interface TaskListResponse {

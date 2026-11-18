@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import threading
 import uuid
@@ -38,7 +39,7 @@ from agentbus.execution.models import (
     TaskStatus,
     utc_now,
 )
-from agentbus.execution.state_store import RunNotFoundError, StateStore
+from agentbus.execution.state_store import RunNotFoundError, StateStore, StateStoreError
 from agentbus.git.repository import GitRepository, GitRepositoryError
 from agentbus.memory.run_log import RunLogger
 from agentbus.models.errors import ModelCancellationError
@@ -47,6 +48,9 @@ from agentbus.runtime.intelligence import load_repository_intelligence_source
 from agentbus.runtime.orchestrator import MultiAgentOrchestrator
 from agentbus.tools.protocol import ToolResourceBudget
 from agentbus.tools.runtime import build_managed_tool_runtime
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class RunBackend(Protocol):
@@ -254,6 +258,11 @@ class AgentBusRunBackend:
 
     def shutdown(self) -> None:
         self.cancellations.shutdown()
+
+    def record_operation_failure(self, run_id: str, operation: str, error_type: str) -> None:
+        self.store.record_event(run_id, "control_operation_failed", {
+            "operation": operation, "error_type": error_type,
+        })
 
     def workspace_for(self, run_id: str) -> str:
         return self.store.get_run(run_id).workspace
@@ -606,6 +615,7 @@ class BackgroundRunSupervisor:
         self._workspace_owners: dict[str, str] = {}
         self._lock = threading.RLock()
         self._closed = False
+        self._max_background_runs = max_background_runs
 
     def submit(self, request: RunCreateRequest) -> RunAcceptedResponse:
         with self._lock:
@@ -624,6 +634,7 @@ class BackgroundRunSupervisor:
         )
         with self._lock:
             self._ensure_open()
+            self._ensure_capacity()
             self._claim_workspace(run_id, workspace.workspace)
             try:
                 prepare_submission = getattr(
@@ -653,7 +664,7 @@ class BackgroundRunSupervisor:
             )
             self._active[run_id] = active
             future.add_done_callback(
-                lambda _future, item=active: self._completed(item)
+                lambda _future, item=active: self._completion_callback(item)
             )
         return RunAcceptedResponse(
             run_id=run_id,
@@ -671,6 +682,7 @@ class BackgroundRunSupervisor:
             self._ensure_open()
             if run_id in self._active:
                 raise ControlPlaneConflictError("The run already has an active owner.")
+            self._ensure_capacity()
             self._claim_workspace(run_id, workspace)
             try:
                 future = self._executor.submit(self.backend.resume, run_id)
@@ -686,7 +698,7 @@ class BackgroundRunSupervisor:
             )
             self._active[run_id] = active
             future.add_done_callback(
-                lambda _future, item=active: self._completed(item)
+                lambda _future, item=active: self._completion_callback(item)
             )
         return ResumeResponse(run_id=run_id, status="running", resumed=True)
 
@@ -758,14 +770,49 @@ class BackgroundRunSupervisor:
         self._workspace_owners[key] = run_id
 
     def _completed(self, active: ActiveRun) -> None:
-        finalize = getattr(self.backend, "finalize_cancellation", None)
-        if finalize is not None:
-            try:
-                finalize(active.run_id)
-            except RunNotFoundError:
-                pass
         with self._lock:
-            self._release(active.run_id, active.workspace)
+            if self._active.get(active.run_id) is not active:
+                return
+        try:
+            # Future exceptions do not otherwise reach the daemon. Log only the
+            # type: exception messages can include provider data or credentials.
+            if not active.future.cancelled():
+                error = active.future.exception()
+                if error is not None:
+                    self._record_failure(active, active.operation, error)
+            finalize = getattr(self.backend, "finalize_cancellation", None)
+            if finalize is not None:
+                try:
+                    finalize(active.run_id)
+                except RunNotFoundError:
+                    pass
+        finally:
+            # A failed report/cleanup must not strand a finished worker's owner.
+            # Match the operation object so an old callback cannot fence out or
+            # release a newer resume of the same run.
+            with self._lock:
+                if self._active.get(active.run_id) is active:
+                    self._release(active.run_id, active.workspace)
+
+    def _completion_callback(self, active: ActiveRun) -> None:
+        try:
+            self._completed(active)
+        except Exception as error:
+            # Future callback logging otherwise prints the raw exception, which
+            # may contain private paths or tool/provider data. Keep a visible,
+            # durable failure category without persisting that payload.
+            self._record_failure(active, "completion", error)
+
+    def _record_failure(self, active: ActiveRun, operation: str, error: BaseException) -> None:
+        _LOGGER.error("Background %s failed for run %s (%s). Inspect run evidence.",
+                      operation, active.run_id, type(error).__name__)
+        record = getattr(self.backend, "record_operation_failure", None)
+        if record is not None:
+            try:
+                record(active.run_id, operation, type(error).__name__)
+            except (StateStoreError, OSError) as persistence_error:
+                _LOGGER.error("Could not persist background failure category (%s).",
+                              type(persistence_error).__name__)
 
     def _release(self, run_id: str, workspace: str) -> None:
         self._active.pop(run_id, None)
@@ -777,6 +824,12 @@ class BackgroundRunSupervisor:
         if self._closed:
             raise ControlPlaneUnavailableError(
                 "The control-plane supervisor is shutting down."
+            )
+
+    def _ensure_capacity(self) -> None:
+        if len(self._active) >= self._max_background_runs:
+            raise ControlPlaneUnavailableError(
+                "The background run capacity is reached. Retry after a run finishes."
             )
 
 

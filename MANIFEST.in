@@ -8,7 +8,9 @@ include SECURITY.md
 include SUPPORT.md
 recursive-include syndra/studio_assets *
 recursive-include docs *.md
+prune docs/release-readiness
 recursive-include examples *.md *.py .gitignore
+include tests/fixtures/connected_repair_crash.py
 recursive-exclude * __pycache__ *.py[cod]
 prune .syndra
 prune .agentbus

@@ -31,11 +31,22 @@
 
 /* Shared materials and controls. Only this stylesheet is loaded by Studio. */
 * { box-sizing: border-box; }
+/* Resolve default text against the live theme on text-bearing surfaces. WebKit
+   can retain an inherited foreground even when its parent and tokens update.
+   Zero specificity preserves explicit semantic/status colors. */
+:where(.folio-brand strong, .clasp-workspace strong, .command-trigger span,
+  .run-object strong, .workspace-edge > a, .folio-desk h1, .folio-desk h2,
+  .run-command-meta strong, .run-command-actions button, .run-sections button,
+  .inspector-header strong, .inspector-copy, .inspector-definitions dd, .inspector-list li,
+  .folio-dependencies summary, .folio-activity summary, .workspace-drawer header button,
+  .drawer-sections button, .source-tools input, .source-tools button, .source-files code,
+  .source-detail-head code, .file-activity strong, .runtime-hero dd,
+  .doctor-check strong, .runtime-providers strong, .runtime-providers code) { color: var(--text); }
 html, body, #root { min-width: 320px; min-height: 100%; }
 body { margin: 0; background: var(--desk); color: var(--text); font-size: 15px; line-height: 1.55; }
-button, input, select, textarea { font: inherit; color: inherit; }
+button, input, select, textarea { font: inherit; color: var(--text); }
 button, a { -webkit-tap-highlight-color: transparent; }
-a { color: inherit; text-decoration: none; }
+a { color: var(--text); text-decoration: none; }
 button { display: inline-flex; min-height: 44px; align-items: center; justify-content: center; gap: 8px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 5px; background: var(--paper); cursor: pointer; line-height: 1.35; }
 button:hover:not(:disabled) { background: var(--recess); border-color: var(--muted); }
 button:disabled { opacity: .55; cursor: not-allowed; }
@@ -103,6 +114,10 @@ small { font-size: 12px; }
 .run-object strong { font-size: 14px; line-height: 1.45; font-weight: 550; overflow-wrap: anywhere; }.run-object small { color: var(--muted); overflow-wrap: anywhere; }
 .run-object > button { position: absolute; right: 0; top: 5px; min-height: 28px; width: 26px; padding: 5px; border: 0; color: var(--muted); background: transparent; }
 .mobile-working-set, .mobile-attention { display: none; }.more-open-runs { display: none; }.queue-empty { padding: 12px; color: var(--muted); font-size: 14px; }
+/* Native option labels must not enlarge the mobile working-set container. */
+.mobile-working-set { min-width: 0; overflow: hidden; padding: 6px; }
+.more-open-runs { min-width: 0; max-width: 100%; }
+.more-open-runs select { max-width: 100%; text-overflow: ellipsis; }
 .workspace-edge { display: grid; flex-shrink: 0; gap: 4px; margin-top: auto; padding-top: 20px; }
 .workspace-edge a, .workspace-edge > button { display: flex; align-items: center; justify-content: start; gap: 10px; min-height: 44px; padding: 10px 12px; border: 0; border-radius: 4px; background: transparent; text-align: left; font-size: 14px; }.workspace-edge a:hover, .workspace-edge > button:hover { background: var(--recess); }.workspace-edge a svg:last-child:not(:first-child) { margin-left: auto; }
 .workspace-edge .edge-new { background: var(--accent); color: var(--paper); }.workspace-edge .edge-new:hover { background: var(--text); color: var(--paper); }

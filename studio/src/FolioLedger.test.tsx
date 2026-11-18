@@ -49,5 +49,6 @@ describe("Ledger continuity", () => {
     expect(within(within(ledger).getByRole("list", { name: "Run records" })).getAllByRole("link")).toHaveLength(121);
     expect(paper.scrollTop).toBe(750);
     expect(history).toHaveBeenCalledTimes(3);
-  });
+  // Rendering and navigating 121 accessible records is an integration check, not a performance budget.
+  }, 15_000);
 });

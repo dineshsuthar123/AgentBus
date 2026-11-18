@@ -214,3 +214,27 @@ def test_configuration_files_cannot_store_credentials(tmp_path):
 def test_unsafe_or_invalid_product_configuration_is_rejected(updates):
     with pytest.raises(ValueError):
         AgentBusConfig(**updates)
+@pytest.mark.parametrize("prefix", ["SYNDRA", "AGENTBUS"])
+def test_deterministic_environment_settings_reach_product_configuration(prefix, tmp_path):
+    resolved = resolve_configuration(discover=False, environ={
+        f"{prefix}_PROVIDER": "deterministic",
+        f"{prefix}_WORKSPACE": str(tmp_path),
+        f"{prefix}_DETERMINISTIC_PROFILE": "TOOL-DELETE-APPROVAL",
+        f"{prefix}_DETERMINISTIC_LATENCY_SECONDS": "0.25",
+        f"{prefix}_DETERMINISTIC_LATENCY_ROLES": "coder, reviewer",
+        f"{prefix}_DETERMINISTIC_FAILURE_KIND": "timeout",
+        f"{prefix}_DETERMINISTIC_FAILURE_CALLS": "1,3",
+        f"{prefix}_DETERMINISTIC_FAILURE_ROLES": "coder",
+    })
+    assert resolved.config.deterministic_profile == "tool-delete-approval"
+    assert resolved.config.deterministic_latency_seconds == 0.25
+    assert resolved.config.deterministic_latency_roles == ("coder", "reviewer")
+    assert resolved.config.deterministic_failure_kind == "timeout"
+    assert resolved.config.deterministic_failure_calls == (1, 3)
+    assert resolved.config.deterministic_failure_roles == ("coder",)
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "bad", "1,1", "01,1"])
+def test_product_configuration_rejects_invalid_deterministic_call_numbers(value):
+    with pytest.raises(ValueError, match="SYNDRA_DETERMINISTIC_FAILURE_CALLS"):
+        resolve_configuration(discover=False, environ={"SYNDRA_DETERMINISTIC_FAILURE_CALLS": value})

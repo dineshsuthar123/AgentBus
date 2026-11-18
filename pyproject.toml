@@ -48,12 +48,22 @@ ide = [
   "uvicorn>=0.34,<1",
 ]
 mcp = ["httpx>=0.28,<1"]
+repair = [
+  "fastapi>=0.115,<1",
+  "uvicorn>=0.34,<1",
+  "psycopg[binary]>=3.2,<4",
+  "stripe==15.6.1",
+  "keyring>=25,<26",
+]
 all = [
   "azure-identity>=1.17",
   "fastapi>=0.115,<1",
   "httpx>=0.28,<1",
   "openai>=1.66",
   "uvicorn>=0.34,<1",
+  "psycopg[binary]>=3.2,<4",
+  "stripe==15.6.1",
+  "keyring>=25,<26",
 ]
 
 [project.scripts]
@@ -84,3 +94,4 @@ agentbus = ["py.typed"]
   "fixtures_data/repository-intelligence-mixed/.gitignore",
 ]
 "agentbus.validation" = ["corpus.json"]
+"agentbus.repair.integration" = ["migrations/*.sql", "*.json"]
