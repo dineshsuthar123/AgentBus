@@ -14,11 +14,24 @@ from agentbus.control.models import DaemonRegistryEntry
 from agentbus.control.registry import (
     DaemonRegistry,
     executable_identity,
+    process_is_running,
     process_matches,
     process_start_identity,
     terminate_registered_daemon,
     wait_for_registered_daemon_exit,
 )
+
+
+def test_process_liveness_distinguishes_exit_from_retained_handle() -> None:
+    with subprocess.Popen(
+        [sys.executable, "-I", "-c", "import sys; sys.stdin.read()"],
+        stdin=subprocess.PIPE,
+    ) as child:
+        assert process_is_running(child.pid)
+        assert child.stdin is not None
+        child.stdin.close()
+        assert child.wait(timeout=10) == 0
+        assert not process_is_running(child.pid)
 
 
 def _entry(path: Path, *, daemon_id: str = "daemon-1") -> DaemonRegistryEntry:

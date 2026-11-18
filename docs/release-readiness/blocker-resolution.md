@@ -71,6 +71,14 @@ invocation attribution, error codes, thread and handle measurements and observed
 replacement state. Its evidence supplements the original one-hour failure and
 the standard soak gate. A clean extended run is required for release.
 
+Candidate validation also found a Windows liveness false positive in the
+release acceptance oracle. A child returned exit code zero while its Popen
+object retained the handle. The old probe still reported it as alive.
+Registry and release acceptance now use the process object's exit signal.
+The debugger-independent regression holds the handle across the exit.
+Control acceptance keeps its local loopback session active while testing
+cooperative replay from the client. The final idle-shutdown check stays intact.
+
 ## Indexing
 
 The 10,000-file profiler counts file reads, parser reuse, graph invalidation,

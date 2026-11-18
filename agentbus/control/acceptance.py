@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 import zipfile
+from concurrent.futures import ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Any
 
@@ -2187,12 +2188,17 @@ def _assert_trace_replay_lifecycle(
         mcp_environment_marker,
     )
 
-    cancelled_replay = _assert_cooperative_replay_cancellation(
-        config,
-        store,
-        trace_id=trace_id,
-        run_id=run_id,
-    )
+    # Cooperative replay runs in this client process, so the daemon cannot
+    # observe it as active work. Keep the authenticated session active until
+    # we can check the persisted result through the API.
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        replay_work = executor.submit(
+            _assert_cooperative_replay_cancellation, config, store,
+            trace_id=trace_id, run_id=run_id,
+        )
+        while not wait((replay_work,), timeout=0.5).done:
+            _request("GET", f"{base}/api/v1/info", headers=headers)
+        cancelled_replay = replay_work.result()
     cancelled_api = _request(
         "GET",
         f"{base}/api/v1/replays/{cancelled_replay['replay_id']}",

@@ -20,6 +20,8 @@ from agentbus.identity import discover_compatible_path
 
 _REGISTRY_VERSION = 1
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_SYNCHRONIZE = 0x00100000
+_WAIT_OBJECT_0 = 0
 
 
 def utc_now() -> datetime:
@@ -212,15 +214,24 @@ def _same_path(left: str, right: str) -> bool:
     )
 
 
-def _process_exists(pid: int) -> bool:
+def process_is_running(pid: int) -> bool:
+    """Check process liveness without sending a signal on Windows."""
     if pid <= 0:
         return False
     if os.name == "nt":
-        kernel32, handle = _open_windows_process(pid)
+        from ctypes import wintypes
+
+        kernel32, handle = _open_windows_process(pid, access=_SYNCHRONIZE)
         if not handle:
             return False
-        kernel32.CloseHandle(handle)
-        return True
+        try:
+            wait = kernel32.WaitForSingleObject
+            wait.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+            wait.restype = wintypes.DWORD
+            # A process object's handle can outlive process execution.
+            return wait(handle, 0) != _WAIT_OBJECT_0
+        finally:
+            kernel32.CloseHandle(handle)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -289,7 +300,7 @@ def _windows_process_start(pid: int) -> str:
         kernel32.CloseHandle(handle)
 
 
-def _open_windows_process(pid: int):
+def _open_windows_process(pid: int, *, access: int = _PROCESS_QUERY_LIMITED_INFORMATION):
     from ctypes import wintypes
 
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -304,14 +315,14 @@ def _open_windows_process(pid: int):
     close_handle.argtypes = [wintypes.HANDLE]
     close_handle.restype = wintypes.BOOL
     return kernel32, open_process(
-        _PROCESS_QUERY_LIMITED_INFORMATION,
+        access,
         False,
         pid,
     )
 
 
 def _process_identity_mismatches(entry: DaemonRegistryEntry) -> list[str]:
-    if not _process_exists(entry.pid):
+    if not process_is_running(entry.pid):
         return ["process missing"]
     if os.name != "nt" and _posix_process_owner(entry.pid) != os.geteuid():
         return ["process owner"]
