@@ -1,4 +1,4 @@
-import { chromium, expect } from "@playwright/test";
+import { chromium, firefox, webkit, expect } from "@playwright/test";
 import { spawn, spawnSync } from "node:child_process";
 import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -11,6 +11,9 @@ import { setTimeout, clearTimeout } from "node:timers";
 const root = path.resolve(import.meta.dirname, "../..");
 const python = process.env.SYNDRA_ACCEPTANCE_PYTHON ?? path.join(root, ".venv", process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
 const installed = Boolean(process.env.SYNDRA_ACCEPTANCE_PYTHON);
+const engine = process.env.SYNDRA_BROWSER_ENGINE ?? "chromium";
+const browserType = { chromium, firefox, webkit }[engine];
+if (!browserType) throw new Error("SYNDRA_BROWSER_ENGINE must be chromium, firefox, or webkit");
 if (installed) {
   const origin = spawnSync(python, ["-I", "-c", "import syndra; from pathlib import Path; import sys; p=Path(syndra.__file__).resolve(); assert p.is_relative_to(Path(sys.prefix).resolve()), 'Syndra is not installed in the acceptance environment'; print(p)"], { cwd: tmpdir(), shell: false, encoding: "utf8" });
   if (origin.status !== 0) throw new Error("Installed acceptance requires a fresh interpreter with Syndra under its own prefix, not a source checkout");
@@ -41,9 +44,13 @@ const accessibility = [];
 const browserErrors = [];
 const rendering = {};
 const externalRequests = new Set();
-function diagnose(context) {
+function diagnose(context, scenario) {
   context.on("page", (client) => client.on("pageerror", (error) => {
-    browserErrors.push({ name: error.name, react_code: /Minified React error #(\d+)/.exec(error.message)?.[1], frames: [...(error.stack ?? "").matchAll(/http:\/\/127\.0\.0\.1:\d+\/studio\/assets\/[a-zA-Z0-9_-]+\.js:\d+:\d+/g)].map((frame) => frame[0]).slice(0, 24) });
+    const failedReadPath = /127\.0\.0\.1:\d+(\/api\/v1\/[a-zA-Z0-9/_-]+)/.exec(error.message)?.[1];
+    browserErrors.push({ name: error.name, scenario, previous_accessibility_state: accessibility.at(-1)?.state,
+      failed_read_path: failedReadPath?.replace(/[a-f0-9]{32}/g, "[fixture-run]"),
+      react_code: /Minified React error #(\d+)/.exec(error.message)?.[1],
+      frames: [...(error.stack ?? "").matchAll(/http:\/\/127\.0\.0\.1:\d+\/studio\/assets\/[a-zA-Z0-9_-]+\.js:\d+:\d+/g)].map((frame) => frame[0]).slice(0, 24) });
   }));
 }
 try {
@@ -81,11 +88,11 @@ try {
     if (!response.ok) throw new Error(`Control request failed: ${response.status}`);
     return response.json();
   }
-  browser = await chromium.launch({ ...(process.env.SYNDRA_BROWSER_CHANNEL ? { channel: process.env.SYNDRA_BROWSER_CHANNEL } : {}), headless: true });
+  browser = await browserType.launch({ ...(engine === "chromium" && process.env.SYNDRA_BROWSER_CHANNEL ? { channel: process.env.SYNDRA_BROWSER_CHANNEL } : {}), headless: true });
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, colorScheme: "light", reducedMotion: "reduce" });
   const allowedOrigins = new Set([origin]);
   context.on("request", (request) => { const url = new URL(request.url()); if (["http:", "https:"].includes(url.protocol) && !allowedOrigins.has(url.origin)) externalRequests.add(url.origin); });
-  diagnose(context);
+  diagnose(context, "authenticated");
   page = await context.newPage();
   const launch = installed ? ready : await api("/api/v1/studio/launch", {});
   allowedOrigins.add(new URL(launch.launch_url).origin);
@@ -96,9 +103,28 @@ try {
   async function checkAccessibility(state, target = page) {
     await target.evaluate(await readFile(path.join(root, "studio/node_modules/axe-core/axe.min.js"), "utf8"));
     const result = await target.evaluate(async () => globalThis.axe.run(globalThis.document, { runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21aa"] } }));
-    accessibility.push({ state, violations: result.violations.map((violation) => ({ id: violation.id, impact: violation.impact, nodes: violation.nodes.map((node) => ({ target: node.target, failure: node.failureSummary })) })) });
+    accessibility.push({ state, violations: result.violations.map((violation) => ({ id: violation.id, impact: violation.impact, nodes: violation.nodes.map((node) => ({ target: node.target, html: node.html, failure: node.failureSummary })) })) });
+    if (result.violations.length) {
+      const colors = await target.evaluate(() => ({ theme: globalThis.document.documentElement.dataset.theme,
+        elements: ["html", "body", "#root", ".folio-desk", ".workspace-clasp", ".folio-brand", ".folio-brand strong"].map((selector) => {
+          const element = globalThis.document.querySelector(selector);
+          if (!element) return { selector };
+          const style = globalThis.getComputedStyle(element);
+          const rules = [...globalThis.document.styleSheets].flatMap((sheet) => {
+            try { return [...sheet.cssRules]; } catch { return []; }
+          }).filter((rule) => rule.selectorText && element.matches(rule.selectorText) && rule.style.color)
+            .map((rule) => ({ selector: rule.selectorText, color: rule.style.color }));
+          return { selector, color: style.color, text: style.getPropertyValue("--text"), background: style.backgroundColor,
+            inline: element.getAttribute("style"), rules };
+        }) }));
+      await writeFile(path.join(output, `theme-${state}.json`), JSON.stringify(colors, null, 2));
+    }
     await writeFile(path.join(output, "accessibility.json"), JSON.stringify(accessibility, null, 2));
-    if (await target.evaluate(() => globalThis.document.documentElement.scrollWidth > globalThis.innerWidth + 1 || [...globalThis.document.querySelectorAll(".folio-paper")].some((element) => element.scrollWidth > element.clientWidth + 1))) throw new Error(`Page-wide horizontal overflow in ${state}`);
+    if (await target.evaluate(() => globalThis.document.documentElement.scrollWidth > globalThis.innerWidth + 1 || [...globalThis.document.querySelectorAll(".folio-paper")].some((element) => element.scrollWidth > element.clientWidth + 1))) {
+      const reflow = await target.evaluate(() => ({ viewport: globalThis.innerWidth, document: globalThis.document.documentElement.scrollWidth, elements: [...globalThis.document.querySelectorAll("body *")].map((element) => ({ tag: element.tagName, class: typeof element.className === "string" ? element.className : "", left: element.getBoundingClientRect().left, right: element.getBoundingClientRect().right, width: element.getBoundingClientRect().width, scroll: element.scrollWidth, client: element.clientWidth })).filter((element) => element.right > globalThis.innerWidth + 1 || element.scroll > element.client + 1).slice(0, 100) }));
+      await writeFile(path.join(output, `reflow-${state}.json`), JSON.stringify(reflow, null, 2));
+      throw new Error(`Page-wide horizontal overflow in ${state}`);
+    }
     if (await target.evaluate(() => {
       const work = globalThis.document.querySelector(".folio-paper");
       if (!work || globalThis.innerWidth > 420) return false;
@@ -227,7 +253,7 @@ try {
   if (storyWrites.length) throw new Error("Illustrative workshop issued a control-plane mutation");
   rendering.workshop_local_only = true;
   const entryContext = await browser.newContext({ viewport: { width: 1440, height: 1000 }, reducedMotion: "reduce", colorScheme: "light" });
-  diagnose(entryContext);
+  diagnose(entryContext, "public-entry");
   entryContext.on("request", (request) => { const url = new URL(request.url()); if (["http:", "https:"].includes(url.protocol) && !allowedOrigins.has(url.origin)) externalRequests.add(url.origin); });
   const entryPage = await entryContext.newPage();
   await entryPage.goto(`${origin}/studio/#/runs/retained-run?view=source`);
@@ -277,7 +303,9 @@ try {
   await page.screenshot({ path: path.join(output, "plan-light.png"), fullPage: true });
   await page.getByRole("link", { name: "Workspace", exact: true }).click();
   await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+  await expect(page.getByRole("heading", { name: "Runtime health", exact: true })).toBeVisible();
   await page.getByLabel("Appearance").selectOption("dark");
+  await expect(page.getByRole("region", { name: "Workspace", exact: true })).toHaveCSS("background-color", "rgb(33, 40, 35)");
   await page.screenshot({ path: path.join(output, "connections-dark.png"), fullPage: true });
   await checkAccessibility("connections-dark");
   await page.getByRole("button", { name: "Return to run", exact: true }).click();
@@ -378,7 +406,7 @@ try {
   await checkAccessibility("changes-light");
   await appearance("dark");
   const zoomContext = await browser.newContext({ viewport: { width: 720, height: 500 }, deviceScaleFactor: 2, storageState: await context.storageState(), reducedMotion: "reduce" });
-  diagnose(zoomContext);
+  diagnose(zoomContext, "viewport-reflow");
   const zoomPage = await zoomContext.newPage();
   await zoomPage.goto(`${origin}/studio/#/runs/${accepted.run_id}?view=source`);
   await zoomPage.getByRole("region", { name: "Source lens" }).waitFor();
@@ -488,8 +516,13 @@ try {
   await page.getByText("End of history", { exact: true }).waitFor();
   const historyIds = await page.locator(".history-page .ledger-record").evaluateAll((rows) => rows.map((row) => row.getAttribute("href")));
   if (historyIds.length !== 123 || new Set(historyIds).size !== 123) throw new Error("Cursor history lost or duplicated persisted runs");
-  const ledgerPosition = await page.locator(".folio-paper").evaluate((element) => { element.scrollTop = element.scrollHeight - element.clientHeight; element.dispatchEvent(new globalThis.Event("scroll")); return element.scrollTop; });
-  await page.getByRole("link", { name: /Acceptance history fixture 000:/ }).click();
+  await page.locator(".folio-paper").evaluate((element) => { element.scrollTop = element.scrollHeight - element.clientHeight; element.dispatchEvent(new globalThis.Event("scroll")); });
+  const historyLink = page.locator(".history-page").getByRole("link", { name: /Acceptance history fixture 000:/ });
+  // WebKit brings a partly visible record into view before clicking it. The
+  // reading position to preserve is the user's position after that scroll.
+  await historyLink.scrollIntoViewIfNeeded();
+  const ledgerPosition = await page.locator(".folio-paper").evaluate((element) => element.scrollTop);
+  await historyLink.click();
   await page.getByRole("heading", { name: /Acceptance history fixture 000:/ }).waitFor();
   await page.goBack();
   await page.getByText("End of history", { exact: true }).waitFor();
@@ -498,17 +531,17 @@ try {
   await page.waitForFunction((top) => Math.abs(globalThis.document.querySelector(".folio-paper").scrollTop - top) <= 1, ledgerPosition);
   await page.getByLabel("Search history").fill("Acceptance history fixture 000");
   await page.getByLabel("Status", { exact: true }).selectOption("failed");
-  await page.getByRole("link", { name: /Acceptance history fixture 000:/ }).waitFor();
+  await historyLink.waitFor();
   await page.getByRole("link", { name: "Workspace", exact: true }).click();
   if (!page.url().includes("search=Acceptance+history+fixture+000")) throw new Error("Workspace drawer discarded the live ledger filter");
   await page.getByRole("button", { name: "Return to run", exact: true }).click();
-  await page.getByRole("link", { name: /Acceptance history fixture 000:/ }).click();
+  await historyLink.click();
   await page.getByRole("heading", { name: /Acceptance history fixture 000:/ }).waitFor();
   await page.goBack();
   await page.getByRole("heading", { name: "All runs", exact: true }).waitFor();
   if (await page.getByLabel("Search history").inputValue() !== "Acceptance history fixture 000" || await page.getByLabel("Status", { exact: true }).inputValue() !== "failed") throw new Error("Back navigation lost ledger filters");
   await page.reload();
-  await page.getByRole("link", { name: /Acceptance history fixture 000:/ }).waitFor();
+  await historyLink.waitFor();
   await page.screenshot({ path: path.join(output, "ledger-dark.png"), fullPage: true });
   await checkAccessibility("ledger-dark");
   await page.getByRole("button", { name: "Clear history search", exact: true }).click();

@@ -104,7 +104,7 @@ def test_schema_never_persists_complete_source_content():
 
 def test_stable_file_identity_can_be_retained_across_snapshots():
     connection = sqlite3.connect(":memory:")
-    apply_migrations(connection)
+    apply_migrations(connection, target_version=3)
     connection.execute(
         """
         INSERT INTO repositories(
@@ -169,11 +169,40 @@ def test_stable_file_identity_can_be_retained_across_snapshots():
             ),
         )
 
+    connection.commit()
+    apply_migrations(connection)
+    verify_schema(connection)
     rows = connection.execute(
         "SELECT snapshot_id, file_id FROM indexed_files ORDER BY snapshot_id"
     ).fetchall()
     assert len(rows) == 2
     assert rows[0][1] == rows[1][1]
+
+
+def test_retention_cascade_symbol_lookups_use_the_composite_keys():
+    connection = sqlite3.connect(":memory:")
+    apply_migrations(connection, target_version=3)
+    apply_migrations(connection)
+
+    by_file = connection.execute(
+        "EXPLAIN QUERY PLAN DELETE FROM indexed_files WHERE snapshot_id = ? AND file_id = ?",
+        ("snapshot", "file"),
+    )
+    assert any(
+        "idx_symbols_file_kind" in detail and "snapshot_id=?" in detail
+        for _, _, _, detail in by_file
+    )
+
+    by_parent = connection.execute(
+        "EXPLAIN QUERY PLAN DELETE FROM symbols WHERE snapshot_id = ? AND symbol_id = ?",
+        ("snapshot", "symbol"),
+    )
+    assert any(
+        "idx_symbols_snapshot_parent" in detail
+        and "snapshot_id=?" in detail
+        and "parent_symbol_id=?" in detail
+        for _, _, _, detail in by_parent
+    )
 
 
 def test_snapshot_delete_cascades_composite_identity_rows():

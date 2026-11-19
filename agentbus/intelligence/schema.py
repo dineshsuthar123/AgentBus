@@ -311,6 +311,21 @@ CREATE TABLE IF NOT EXISTS intelligence_cache (
 );
 """,
     ),
+    SchemaMigration(
+        version=4,
+        name="snapshot_symbol_cascade_indexes",
+        sql="""
+-- Use both columns of the file foreign key when it recurs across snapshots.
+DROP INDEX IF EXISTS idx_symbols_file_kind;
+CREATE INDEX IF NOT EXISTS idx_symbols_file_kind
+ON symbols(file_id, snapshot_id, kind);
+
+-- Find children within one snapshot without scanning its other symbols.
+CREATE INDEX IF NOT EXISTS idx_symbols_snapshot_parent
+ON symbols(snapshot_id, parent_symbol_id)
+WHERE parent_symbol_id IS NOT NULL;
+""",
+    ),
 )
 
 

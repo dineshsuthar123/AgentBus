@@ -326,6 +326,12 @@ class MultiAgentTaskExecutor:
             evidence = RetryEvidence.model_validate(existing)
             self._validate_retry_evidence_source(context, result, evidence)
             return result
+        if result.metadata.get("interruption_recovery") == "unchanged_baseline_before_tools":
+            baseline = self._repository_baselines(context).attempt
+            if not _baselines_have_same_candidate_state(self._capture_repository_baseline(), baseline):
+                raise RetryEvidenceSourceMismatch(
+                    "Interrupted workspace drifted from its checkpoint before recovery."
+                )
         evidence = self._build_retry_evidence(context, result)
         return result.model_copy(
             update={

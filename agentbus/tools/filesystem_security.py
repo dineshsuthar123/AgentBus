@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import stat
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -127,9 +128,18 @@ class ContainedPathResolver:
         parts = PurePosixPath(normalized).parts
         for index, part in enumerate(parts):
             current = current / part
-            if not os.path.lexists(current):
+            try:
+                observed = current.lstat()
+            except (FileNotFoundError, NotADirectoryError):
                 continue
-            is_link = current.is_symlink() or _is_junction(current)
+            except OSError as error:
+                raise FileSystemContainmentError(
+                    "Filesystem path component cannot be inspected safely."
+                ) from error
+            is_link = stat.S_ISLNK(observed.st_mode) or bool(
+                getattr(observed, "st_file_attributes", 0)
+                & _WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT
+            )
             if index == len(parts) - 1:
                 final_is_link = is_link
             if is_link:
@@ -277,18 +287,3 @@ def _reject_unsupported_root(root: str | Path) -> None:
         raise FileSystemSecurityError(
             "UNC and Windows device filesystem roots are not supported."
         )
-
-
-def _is_junction(path: Path) -> bool:
-    checker = getattr(path, "is_junction", None)
-    if checker is not None:
-        try:
-            if checker():
-                return True
-        except OSError:
-            pass
-    try:
-        attributes = getattr(path.lstat(), "st_file_attributes", 0)
-    except OSError:
-        return False
-    return bool(attributes & _WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT)

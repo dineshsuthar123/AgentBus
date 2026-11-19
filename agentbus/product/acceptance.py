@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from syndra import __version__
+from agentbus.control.registry import process_is_running
 from agentbus.release_packaging import audit_distributions
 from agentbus.security.redaction import redact_text
 
@@ -1409,23 +1410,7 @@ def _assert_private_marker_absent(root: Path, private_marker: str) -> None:
 
 
 def _process_exists(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    if os.name == "nt":
-        import ctypes
-
-        process = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
-        if not process:
-            return False
-        ctypes.windll.kernel32.CloseHandle(process)
-        return True
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
+    return process_is_running(pid)
 
 
 def _safe_detail(error: BaseException) -> str:

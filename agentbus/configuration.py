@@ -60,6 +60,12 @@ LEGACY_ENVIRONMENT_FIELDS: dict[str, str] = {
     "AGENTBUS_CODER_MODEL": "coder_model",
     "AGENTBUS_REVIEWER_MODEL": "reviewer_model",
     "AGENTBUS_SUMMARIZER_MODEL": "summarizer_model",
+    "AGENTBUS_DETERMINISTIC_PROFILE": "deterministic_profile",
+    "AGENTBUS_DETERMINISTIC_LATENCY_SECONDS": "deterministic_latency_seconds",
+    "AGENTBUS_DETERMINISTIC_LATENCY_ROLES": "deterministic_latency_roles",
+    "AGENTBUS_DETERMINISTIC_FAILURE_KIND": "deterministic_failure_kind",
+    "AGENTBUS_DETERMINISTIC_FAILURE_CALLS": "deterministic_failure_calls",
+    "AGENTBUS_DETERMINISTIC_FAILURE_ROLES": "deterministic_failure_roles",
     "AZURE_OPENAI_ENDPOINT": "azure_openai_endpoint",
     "AZURE_OPENAI_API_KEY": "azure_openai_api_key",
     "AZURE_OPENAI_AUTH_MODE": "azure_openai_auth_mode",
@@ -102,6 +108,7 @@ _INTEGER_FIELDS = {
     "log_retention_files",
 }
 _FLOAT_FIELDS = {
+    "deterministic_latency_seconds",
     "worker_lease_seconds",
     "worker_heartbeat_seconds",
     "model_timeout_seconds",
@@ -110,6 +117,8 @@ _FLOAT_FIELDS = {
     "azure_openai_timeout_seconds",
 }
 _LOWERCASE_FIELDS = {
+    "deterministic_profile",
+    "deterministic_failure_kind",
     "provider_name",
     "fallback_provider_name",
     "integration_strategy",
@@ -441,6 +450,18 @@ def _optional_path(value: Path | None) -> str | None:
 
 def _parse_environment_value(variable: str, field_name: str, raw: str) -> Any:
     value = raw.strip()
+    if field_name in {"deterministic_latency_roles", "deterministic_failure_roles", "deterministic_failure_calls"}:
+        values = tuple(item.strip().lower() for item in value.split(",") if item.strip())
+        if field_name == "deterministic_failure_calls":
+            try:
+                values = tuple(int(item) for item in values)
+            except ValueError:
+                raise ValueError(f"{variable} must contain positive call numbers") from None
+            if any(item < 1 for item in values):
+                raise ValueError(f"{variable} must contain positive call numbers")
+        if len(values) != len(set(values)):
+            raise ValueError(f"{variable} must not contain duplicate values")
+        return values
     if field_name in _BOOLEAN_FIELDS:
         normalized = value.lower()
         if normalized in {"1", "true", "yes", "on"}:

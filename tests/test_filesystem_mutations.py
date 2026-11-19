@@ -82,6 +82,63 @@ def test_write_records_before_and_after_hashes(tmp_path: Path) -> None:
     assert record.created is False
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Requires Windows file sharing semantics")
+@pytest.mark.parametrize("drift", [False, True])
+def test_atomic_update_after_transient_windows_reader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, drift: bool,
+) -> None:
+    target = tmp_path / "worker_00.py"
+    target.write_bytes(b"SOAK_CYCLE = 6\n")
+    replace = os.replace
+    blocked = []
+
+    def replace_with_concurrent_reader(source: Path, destination: Path) -> None:
+        if blocked:
+            replace(source, destination)
+            return
+        # RepositoryInventory.read_bytes uses this same binary read mode.
+        with target.open("rb") as reader:
+            assert reader.read() == b"SOAK_CYCLE = 6\n"
+            try:
+                replace(source, destination)
+            except PermissionError as error:
+                blocked.append(error)
+                assert source.read_bytes() == b"SOAK_CYCLE = 7\n"
+            else:
+                pytest.fail("The Windows read handle did not block replacement")
+        if drift:
+            target.write_bytes(b"external change\n")
+        raise blocked[0]
+
+    monkeypatch.setattr(os, "replace", replace_with_concurrent_reader)
+    filesystem = ContainedFileSystem(tmp_path)
+    if drift:
+        with pytest.raises(FileMutationConflict, match="changed"):
+            filesystem.write(target.name, b"SOAK_CYCLE = 7\n", **ATTRIBUTION)
+        assert target.read_bytes() == b"external change\n"
+    else:
+        record = filesystem.write(target.name, b"SOAK_CYCLE = 7\n", **ATTRIBUTION)
+        assert record.atomic
+        assert target.read_bytes() == b"SOAK_CYCLE = 7\n"
+    assert len(blocked) == 1
+    assert blocked[0].winerror in (5, 32)
+    assert list(tmp_path.iterdir()) == [target]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Requires Windows file sharing semantics")
+def test_atomic_update_leaves_original_when_windows_reader_stays_open(tmp_path: Path) -> None:
+    target = tmp_path / "worker_00.py"
+    target.write_bytes(b"before")
+
+    with target.open("rb") as reader:
+        with pytest.raises(PermissionError):
+            ContainedFileSystem(tmp_path).write(target.name, b"after", **ATTRIBUTION)
+        assert reader.read() == b"before"
+
+    assert target.read_bytes() == b"before"
+    assert list(tmp_path.iterdir()) == [target]
+
+
 def test_write_validates_content_and_expected_hash_types(tmp_path: Path) -> None:
     filesystem = ContainedFileSystem(tmp_path)
 

@@ -96,6 +96,8 @@ class RepositoryIntelligenceEvaluationBackend:
         source_before = _tree_fingerprint(fixture.source)
         if ".env" in benchmark.get("excluded_paths", []):
             _materialize_protected_env(fixture.repository)
+        if "dist/bundle.js" in benchmark.get("excluded_paths", []):
+            _materialize_generated_bundle(fixture.repository)
         broken_source_fixture = benchmark.get("broken_source_fixture")
         if isinstance(broken_source_fixture, str):
             details["broken_source"] = _materialize_broken_source(
@@ -1197,6 +1199,20 @@ def _materialize_protected_env(repository: Path) -> None:
         "AGENTBUS_EVALUATION_PRIVATE=synthetic-protected-marker\n",
         encoding="utf-8",
     )
+
+
+def _materialize_generated_bundle(repository: Path) -> None:
+    # Build outputs may be omitted by source archives or contributor cleanup.
+    # Exercise exclusion using a real file in the owned copy, never the source.
+    target = repository / "dist" / "bundle.js"
+    if not target.resolve().is_relative_to(repository.resolve()):
+        raise ValueError("generated fixture must remain inside the owned repository")
+    if not target.exists():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            "// Synthetic generated output that must not enter the index.\n",
+            encoding="utf-8",
+        )
 
 
 def _benchmark_metadata(case: EvaluationCase) -> dict[str, Any]:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 import time
 from pathlib import Path
@@ -260,7 +261,12 @@ def test_cancellation_terminates_spawned_descendants(tmp_path: Path) -> None:
 def test_child_process_budget_is_enforced_or_reported_unsupported(
     tmp_path: Path,
 ) -> None:
-    child_code = "import time; time.sleep(60)"
+    child_marker = tmp_path / "unauthorized-child-started.txt"
+    child_code = (
+        "from pathlib import Path; import time; "
+        f"Path({str(child_marker)!r}).write_text('started', encoding='utf-8'); "
+        "time.sleep(60)"
+    )
     parent_code = (
         "import subprocess, sys; "
         "\ntry:\n"
@@ -279,10 +285,19 @@ def test_child_process_budget_is_enforced_or_reported_unsupported(
     child_limit = result.resource_usage.limits["child_processes"]
 
     if result.process_tree is not None and result.process_tree.job_assigned:
+        # CPython 3.11/3.12 Windows venv redirectors need a second native process
+        # just to start the interpreter. A zero-child Job Object can refuse that
+        # launch before this payload runs, with exit 101 and no OS quota wording.
+        redirector_refused = (
+            os.name == "nt" and sys.prefix != sys.base_prefix
+            and result.exit_code == 101 and result.stdout == ""
+            and result.stderr.startswith("Unable to create process using ")
+        )
         assert result.stdout.strip() == "blocked" or (
             result.exit_code not in {None, 0}
             and "quota" in result.stderr.lower()
-        )
+        ) or redirector_refused
+        assert not child_marker.exists(), "A child performed an unauthorized side effect"
         assert child_limit.supported is True
         assert child_limit.enforced is True
     else:

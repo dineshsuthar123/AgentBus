@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import subprocess
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -12,7 +13,7 @@ from agentbus.control.errors import (
     ControlPlaneUnavailableError,
 )
 from agentbus.control.models import RunCreateRequest
-from agentbus.control.supervisor import AgentBusRunBackend, BackgroundRunSupervisor
+from agentbus.control.supervisor import ActiveRun, AgentBusRunBackend, BackgroundRunSupervisor
 from agentbus.execution.cancellation import CancellationState
 from agentbus.execution.models import RunRecord, RunStatus, utc_now
 from agentbus.intelligence import RepositoryIntelligenceService
@@ -138,6 +139,124 @@ def test_resume_has_single_active_owner(tmp_path: Path) -> None:
     supervisor.shutdown()
 
 
+def test_completion_releases_owner_even_when_finalization_fails(tmp_path: Path) -> None:
+    class FailingFinalizer(BlockingBackend):
+        def finalize_cancellation(self, run_id: str) -> RunStatus:
+            raise OSError("controlled persistence failure")
+
+    backend = FailingFinalizer()
+    supervisor = BackgroundRunSupervisor(backend)
+    future: Future[None] = Future()
+    future.set_result(None)
+    active = ActiveRun("run-1", str(tmp_path), utc_now(), future, "resume")
+    supervisor._active[active.run_id] = active
+    supervisor._claim_workspace(active.run_id, active.workspace)
+    try:
+        with pytest.raises(OSError, match="controlled persistence failure"):
+            supervisor._completed(active)
+        assert not supervisor.is_active(active.run_id)
+        assert not supervisor.has_active_runs()
+        # The worker has ended: cleanup failure must not strand the workspace.
+        supervisor._claim_workspace("run-2", active.workspace)
+    finally:
+        supervisor.shutdown()
+
+
+def test_completion_observes_worker_failure_without_logging_private_values(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    supervisor = BackgroundRunSupervisor(BlockingBackend())
+    future: Future[None] = Future()
+    future.set_exception(RuntimeError("private-worker-value-must-not-be-logged"))
+    active = ActiveRun("run-1", str(tmp_path), utc_now(), future, "resume")
+    supervisor._active[active.run_id] = active
+    supervisor._claim_workspace(active.run_id, active.workspace)
+    try:
+        supervisor._completed(active)
+        assert not supervisor.has_active_runs()
+        assert "RuntimeError" in caplog.text
+        assert "private-worker-value-must-not-be-logged" not in caplog.text
+    finally:
+        supervisor.shutdown()
+
+
+def test_completion_callback_reports_cleanup_failure_without_private_payload(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    class Backend(BlockingBackend):
+        def __init__(self):
+            super().__init__()
+            self.failures = []
+
+        def finalize_cancellation(self, _run_id):
+            raise OSError("private-finalizer-value-must-not-be-logged")
+
+        def record_operation_failure(self, *fields):
+            self.failures.append(fields)
+
+    backend = Backend()
+    supervisor = BackgroundRunSupervisor(backend)
+    future: Future[None] = Future()
+    future.set_result(None)
+    active = ActiveRun("run-1", str(tmp_path), utc_now(), future, "resume")
+    supervisor._active[active.run_id] = active
+    supervisor._claim_workspace(active.run_id, active.workspace)
+    try:
+        supervisor._completion_callback(active)
+        assert not supervisor.has_active_runs()
+        assert backend.failures == [("run-1", "completion", "OSError")]
+        assert "OSError" in caplog.text
+        assert "private-finalizer-value-must-not-be-logged" not in caplog.text
+    finally:
+        supervisor.shutdown()
+
+
+def test_concurrent_resume_requests_have_exactly_one_owner(tmp_path: Path) -> None:
+    backend = BlockingBackend()
+    backend.workspaces["run-1"] = str(tmp_path)
+    supervisor = BackgroundRunSupervisor(backend)
+    callers = 8
+    barrier = threading.Barrier(callers)
+
+    def resume() -> bool:
+        barrier.wait(timeout=5)
+        try:
+            return supervisor.resume("run-1").resumed
+        except ControlPlaneConflictError:
+            return False
+
+    try:
+        with ThreadPoolExecutor(max_workers=callers) as executor:
+            results = list(executor.map(lambda _: resume(), range(callers)))
+        assert results.count(True) == 1
+        assert results.count(False) == callers - 1
+        assert backend.started.wait(timeout=2)
+    finally:
+        backend.release.set()
+        supervisor.shutdown()
+    assert not supervisor.has_active_runs()
+
+
+def test_stale_completion_cannot_release_a_new_operation(tmp_path: Path) -> None:
+    backend = BlockingBackend()
+    backend.workspaces["run-1"] = str(tmp_path)
+    supervisor = BackgroundRunSupervisor(backend)
+    old_future: Future[None] = Future()
+    old_future.set_result(None)
+    old = ActiveRun("run-1", str(tmp_path), utc_now(), old_future, "create")
+    new = ActiveRun("run-1", str(tmp_path), utc_now(), Future(), "resume")
+    supervisor._active[new.run_id] = new
+    supervisor._claim_workspace(new.run_id, new.workspace)
+    try:
+        supervisor._completed(old)
+        assert supervisor.is_active(new.run_id)
+        with pytest.raises(ControlPlaneConflictError, match="active owner"):
+            supervisor.resume(new.run_id)
+    finally:
+        supervisor._release(new.run_id, new.workspace)
+        supervisor.shutdown()
+
+
 def test_cancel_delegates_to_persisted_backend(tmp_path: Path) -> None:
     backend = BlockingBackend()
     backend.workspaces["run-1"] = str(tmp_path)
@@ -162,6 +281,26 @@ def test_shutdown_refuses_new_work(tmp_path: Path) -> None:
 
     with pytest.raises(ControlPlaneUnavailableError, match="shutting down"):
         supervisor.submit(_request(tmp_path))
+
+
+def test_background_capacity_rejects_work_instead_of_queuing_unbounded_requests(tmp_path: Path) -> None:
+    backend = BlockingBackend()
+    supervisor = BackgroundRunSupervisor(backend, max_background_runs=1)
+    first = _isolated_repository(tmp_path / "first")
+    second = _isolated_repository(tmp_path / "second")
+    backend.workspaces["other-run"] = str(second)
+    try:
+        accepted = supervisor.submit(_request(first))
+        assert backend.started.wait(timeout=2)
+        with pytest.raises(ControlPlaneUnavailableError, match="capacity"):
+            supervisor.submit(_request(second))
+        with pytest.raises(ControlPlaneUnavailableError, match="capacity"):
+            supervisor.resume("other-run")
+        assert backend.executions == [accepted.run_id]
+        assert len(supervisor._active) == 1
+    finally:
+        backend.release.set()
+        supervisor.shutdown()
 
 
 def test_run_backend_propagates_the_request_tool_budget(tmp_path: Path) -> None:

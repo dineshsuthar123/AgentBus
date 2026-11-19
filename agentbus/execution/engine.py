@@ -154,6 +154,8 @@ class DurableExecutionEngine:
         return self.store.get_run(record.run_id)
 
     def run_until_blocked(self, run_id: str) -> ExecutionReport:
+        if self.store.get_run(run_id).workflow_type == "customer_repair":
+            raise ValueError("Customer corrections cannot execute through the coding task runner. Use the connected repair journal.")
         self._execution_fenced = False
         if self._cancellation_token(run_id).is_requested:
             return self.finalize_cancellation(run_id)
@@ -429,6 +431,8 @@ class DurableExecutionEngine:
 
     def resume(self, run_id: str) -> ExecutionReport:
         run = self.store.get_run(run_id)
+        if run.workflow_type == "customer_repair":
+            raise ValueError("Customer-repair operations must be reconciled through the connected repair journal, not the coding executor.")
         if run.status in {
             RunStatus.SUCCEEDED,
             RunStatus.FAILED,
@@ -1269,11 +1273,32 @@ class DurableExecutionEngine:
             if latest is not None:
                 attempt_number = latest.attempt_number
                 if latest.status == AttemptStatus.RUNNING:
+                    interrupted = TaskExecutionResult(
+                        succeeded=False, summary="Process ended before the attempt completed.",
+                        failure_category=FailureCategory.INTERRUPTED,
+                        error_message="Process ended before the attempt completed.",
+                        metadata=dict(latest.metadata),
+                    )
+                    # Before the first managed call there is no ambiguous tool
+                    # effect to replay. Reconstruct evidence only against the
+                    # exact checkpointed workspace; the executor rejects drift.
+                    if (self.task_executor is not None
+                            and isinstance(latest.metadata.get("repository_baselines"), dict)
+                            and not any(item.task_id == task.task_id
+                                        for item in self.store.list_tool_invocations(run_id))):
+                        interrupted.metadata["interruption_recovery"] = "unchanged_baseline_before_tools"
+                        interrupted = self._prepare_retry_result(TaskExecutionContext(
+                            run=snapshot.run, task=task.spec,
+                            attempt_number=latest.attempt_number, attempt_id=latest.attempt_id,
+                            previous_attempts=attempts[:-1], attempt_metadata=latest.metadata,
+                        ), interrupted)
+                    category = interrupted.failure_category or FailureCategory.INTERRUPTED
                     self.store.complete_attempt(
                         latest.attempt_id,
                         AttemptStatus.INTERRUPTED,
-                        error_category=FailureCategory.INTERRUPTED,
-                        error_message="Process ended before the attempt completed.",
+                        error_category=category,
+                        error_message=interrupted.error_message,
+                        metadata=interrupted.metadata,
                         event_type="interrupted_attempt_recovered",
                     )
                 elif latest.error_category is not None:

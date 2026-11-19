@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from collections.abc import Callable
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
-from agentbus.execution.cancellation import CancellationToken
+if TYPE_CHECKING:
+    from agentbus.execution.cancellation import CancellationToken
 from agentbus.tools.protocol import (
     ToolArtifact,
     ToolDescriptor,

@@ -721,6 +721,12 @@
     "package": "npm run compile && vsce package --no-dependencies -o syndra-vscode.vsix",
     "package:audit": "node scripts/audit-vsix.mjs syndra-vscode.vsix"
   },
+  "overrides": {
+    "@vscode/vsce": {
+      "glob": "14.0.2",
+      "minimatch": "11.0.9"
+    }
+  },
   "devDependencies": {
     "@eslint/js": "^9.30.0",
     "@types/node": "^22.15.0",

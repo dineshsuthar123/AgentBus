@@ -3,6 +3,7 @@ import { useState } from "react";
 import { ErrorPanel, PageIntro, StatusSignal } from "../components/Primitives";
 import { displayWorkspace, humanize, recordOf } from "../lib/format";
 import { useStudio } from "../state/StudioContext";
+import { RepairConnections } from "../components/RepairConnections";
 
 export function RuntimePage() {
   const { client, doctor, providers, info, streamConnected, connection, connectionMessage, refresh } = useStudio();
@@ -38,6 +39,7 @@ export function RuntimePage() {
           <div className="runtime-providers">{providers.map((provider) => <article key={provider.name}><span className="provider-glyph"><Server size={18} /></span><div><strong>{provider.name === "deterministic" ? "Guided demo" : humanize(provider.name)}</strong><p>{provider.model ?? "No model configured"}</p><p>{provider.message}</p>{provider.endpoint_host && <code>{provider.endpoint_host}</code>}<p>Configuration: {provider.configuration_status ?? (provider.configured ? "valid" : "invalid")}. Reachability: {provider.reachable === null || provider.reachable === undefined ? "unknown" : provider.reachable ? "reachable" : "unreachable"}. Model: {provider.model_available === null || provider.model_available === undefined ? "not checked" : provider.model_available ? "available" : "unavailable"}.</p><p>Last check: {provider.checked_at ? new Date(provider.checked_at).toLocaleString() : "Not checked"}</p>{provider.name !== "deterministic" && <button disabled={!provider.configured || checking !== undefined} onClick={() => void check(provider.name)}>{checking === provider.name ? "Checking model..." : "Check model (live request)"}</button>}</div><StatusSignal status={provider.ready ? "ready" : provider.check_status === "failed" ? "failed" : provider.configured ? "not checked" : "unavailable"} /></article>)}</div>
         </section>
       </div>
+      {client && <RepairConnections client={client} />}
       <section className="security-boundary"><ShieldCheck size={21} /><div><strong>Security boundary preserved</strong><p>Installed assets and API share an authenticated numeric-loopback origin. The contributor proxy is development-only. Cross-origin browser access stays rejected; secrets and unrestricted tool arguments are not rendered.</p></div></section>
     </div>
   );

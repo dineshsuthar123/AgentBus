@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import sqlite3
 import subprocess
+import sys
+import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -25,6 +27,7 @@ from agentbus.execution.state_store import StateStore
 from agentbus.execution.worker import LocalTaskWorker, WorkerStatus
 from agentbus.worktrees.errors import (
     WorktreeAlreadyExistsError,
+    WorktreeCommandTimeout,
     WorktreeDirtyError,
     WorktreeError,
     WorktreeOwnershipError,
@@ -409,19 +412,17 @@ def test_controlled_git_failure_is_bounded_and_preserves_ambiguous_state(
     monkeypatch.setattr(manager, "_run_git", original_run_git)
     monkeypatch.setenv("GIT_DIR", str(tmp_path / "must-not-be-used"))
     captured: dict[str, Any] = {}
-    original_subprocess_run = subprocess.run
+    original_popen = subprocess.Popen
 
     def failed_command(command, **kwargs):
         captured["command"] = command
         captured.update(kwargs)
-        return subprocess.CompletedProcess(
-            command,
-            1,
-            stdout="",
-            stderr="token=real-secret\n" + "x" * 20_000,
+        return original_popen(
+            [sys.executable, "-c", "import sys; sys.stderr.write('token=real-secret\\n' + 'x' * 20000); sys.exit(1)"],
+            **kwargs,
         )
 
-    monkeypatch.setattr(subprocess, "run", failed_command)
+    monkeypatch.setattr(subprocess, "Popen", failed_command)
     with pytest.raises(WorktreeError) as failure:
         manager._run_git(["status", "--porcelain"], cwd=source)
 
@@ -430,8 +431,83 @@ def test_controlled_git_failure_is_bounded_and_preserves_ambiguous_state(
     assert captured["shell"] is False
     assert "GIT_DIR" not in captured["env"]
     assert captured["env"]["GIT_CONFIG_GLOBAL"] == os.devnull
-    monkeypatch.setattr(subprocess, "run", original_subprocess_run)
+    monkeypatch.setattr(subprocess, "Popen", original_popen)
     _assert_repository_ok(source, base, run_git=original_run_git)
+
+
+def test_git_timeout_terminates_owned_process_with_inherited_output(tmp_path, monkeypatch):
+    source, _base = _repository(tmp_path / "repo")
+    store = _state(tmp_path / "state.db", source, ["timeout"])
+    phases = {}
+    manager = GitWorktreeManager(source, tmp_path / "worktrees", store, timing=phases.__setitem__)
+    manager.timeout_seconds = 1
+    ready = tmp_path / "child-started"
+    survived = tmp_path / "child-survived"
+    child = (
+        "from pathlib import Path; import sys, time; "
+        "Path(sys.argv[1]).touch(); time.sleep(3); Path(sys.argv[2]).touch()"
+    )
+    parent = (
+        "import subprocess, sys, time; "
+        "subprocess.Popen([sys.executable, '-c', sys.argv[1], *sys.argv[2:]]); time.sleep(12)"
+    )
+    original_popen = subprocess.Popen
+
+    def launch_owned_fixture(command, **kwargs):
+        if "--literal-pathspecs" not in command:
+            return original_popen(command, **kwargs)
+        return original_popen([sys.executable, "-c", parent, child, str(ready), str(survived)], **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", launch_owned_fixture)
+    started = time.monotonic()
+    with pytest.raises(WorktreeCommandTimeout, match="'worktree add' timed out"):
+        manager._run_git(["worktree", "add"], cwd=source)
+    assert time.monotonic() - started < 4
+    assert ready.is_file()
+    assert {"lock_wait", "launch", "git", "terminate"} <= phases.keys()
+    time.sleep(max(0, 3.5 - (time.monotonic() - started)))
+    assert not survived.exists()
+
+
+@pytest.mark.parametrize("partial", ["complete", "branch_only", "dirty_checkout"])
+def test_add_timeout_reconciles_only_proven_owned_git_state(tmp_path, monkeypatch, partial):
+    source, base = _repository(tmp_path / "repo")
+    store = _state(tmp_path / "state.db", source, ["timeout"])
+    manager = GitWorktreeManager(source, tmp_path / "worktrees", store)
+    original_run_git = manager._run_git
+    additions = []
+
+    def time_out_after_git_changes(arguments, *, cwd):
+        if arguments[:2] != ["worktree", "add"]:
+            return original_run_git(arguments, cwd=cwd)
+        additions.append(arguments)
+        if partial == "branch_only":
+            original_run_git(["update-ref", f"refs/heads/{arguments[3]}", base], cwd=cwd)
+        else:
+            original_run_git(arguments, cwd=cwd)
+            if partial == "dirty_checkout":
+                (Path(arguments[4]) / "unconfirmed.txt").touch()
+        raise WorktreeCommandTimeout("worktree add", tree_stopped=True)
+
+    monkeypatch.setattr(manager, "_run_git", time_out_after_git_changes)
+    if partial == "complete":
+        record = manager.create_task_worktree("run-1", "timeout", base, "worker")
+        assert record.status == WorktreeStatus.ACTIVE
+        manager.mark_cleanup_pending(record.worktree_id)
+        assert manager.remove(record.worktree_id).status == WorktreeStatus.REMOVED
+    else:
+        with pytest.raises(WorktreeCommandTimeout):
+            manager.create_task_worktree("run-1", "timeout", base, "worker")
+        record, = store.list_worktrees("run-1", task_id="timeout")
+        if partial == "branch_only":
+            assert record.status == WorktreeStatus.REMOVED
+            assert not _git(source, "for-each-ref", "--format=%(refname)", f"refs/heads/{record.branch_ref}")
+        else:
+            assert record.status == WorktreeStatus.ORPHANED
+            assert (Path(record.path) / "unconfirmed.txt").is_file()
+            with pytest.raises(WorktreeAlreadyExistsError, match="unresolved status"):
+                manager.create_task_worktree("run-1", "timeout", base, "worker")
+    assert len(additions) == 1
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows sharing semantics only")

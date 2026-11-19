@@ -8,6 +8,8 @@ import tarfile
 import zipfile
 from pathlib import Path
 
+import pytest
+
 from syndra import __version__
 from agentbus.release_packaging import (
     audit_distributions,
@@ -53,16 +55,30 @@ def test_distribution_comparison_ignores_archive_timestamps(tmp_path):
     assert findings[0].code == "NON_REPRODUCIBLE_CONTENT"
 
 
+@pytest.mark.parametrize("extras", [
+    ("all", "azure", "dev", "entra", "ide", "mcp"),
+    ("all", "azure", "dev", "entra", "ide", "mcp", "repair", "unexpected"),
+])
+def test_package_audit_rejects_missing_or_unexpected_extras(tmp_path, extras):
+    wheel, sdist = _distributions(tmp_path, extras=extras)
+
+    report = audit_distributions((wheel, sdist), root=tmp_path)
+
+    assert report.ok is False
+    assert "METADATA_EXTRAS" in {finding.code for finding in report.findings}
+
+
 def _distributions(
     root: Path,
     *,
     include_runtime: bool = False,
     tamper_record: bool = False,
+    extras: tuple[str, ...] | None = None,
 ) -> tuple[Path, Path]:
     wheel = root / f"syndra-{__version__}-py3-none-any.whl"
     sdist = root / f"syndra-{__version__}.tar.gz"
     dist_info = f"syndra-{__version__}.dist-info"
-    metadata = _metadata()
+    metadata = _metadata(extras=extras)
     entries = {
         "syndra/__init__.py": f'__version__ = "{__version__}"\n'.encode(),
         "syndra/py.typed": b"",
@@ -112,13 +128,13 @@ def _distributions(
     return wheel, sdist
 
 
-def _metadata() -> bytes:
+def _metadata(*, extras: tuple[str, ...] | None = None) -> bytes:
     lines = [
         "Metadata-Version: 2.4",
         "Name: syndra",
         f"Version: {__version__}",
         "Requires-Python: >=3.11",
-        *(f"Provides-Extra: {extra}" for extra in ("all", "azure", "dev", "entra", "ide", "mcp")),
+        *(f"Provides-Extra: {extra}" for extra in (extras if extras is not None else ("all", "azure", "dev", "entra", "ide", "mcp", "repair"))),
         'Requires-Dist: pytest>=8; extra == "dev"',
         "",
         "",

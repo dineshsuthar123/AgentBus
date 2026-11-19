@@ -17,7 +17,7 @@ from agentbus import __version__
 from agentbus.release_security import audit_release_security
 
 
-_EXPECTED_EXTRAS = {"all", "azure", "dev", "entra", "ide", "mcp"}
+_EXPECTED_EXTRAS = {"all", "azure", "dev", "entra", "ide", "mcp", "repair"}
 _MAX_EXPANDED_BYTES = 512 * 1024 * 1024
 _MAX_ENTRIES = 50_000
 

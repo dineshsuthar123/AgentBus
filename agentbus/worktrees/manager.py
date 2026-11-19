@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable
+from contextlib import contextmanager
 import os
 import re
 import subprocess
+import tempfile
 import threading
+import time
 import uuid
 import weakref
 from pathlib import Path
+from typing import Literal
 
 from agentbus.execution.state_store import (
     StateStore,
@@ -20,9 +25,12 @@ from agentbus.git.repository import (
     safe_git_environment,
 )
 from agentbus.sandbox.platform import ExecutableCatalog
+from agentbus.sandbox.process_tree import ManagedProcessTree
 from agentbus.security.redaction import redact_text
+from agentbus.tools.protocol import ToolResourceBudget
 from agentbus.worktrees.errors import (
     WorktreeAlreadyExistsError,
+    WorktreeCommandTimeout,
     WorktreeDirtyError,
     WorktreeError,
     WorktreeOwnershipError,
@@ -58,6 +66,7 @@ class GitWorktreeManager:
         timeout_seconds: int = 60,
         executable_catalog: ExecutableCatalog | None = None,
         maximum_command_output_chars: int = 65_536,
+        timing: Callable[[str, float], None] | None = None,
     ) -> None:
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be greater than zero")
@@ -76,6 +85,8 @@ class GitWorktreeManager:
             ("git",)
         )
         self.maximum_command_output_chars = maximum_command_output_chars
+        self._timing = timing
+        self._git_budget = ToolResourceBudget()
         self._git_lock = _git_lock_for(self.repository_root)
         try:
             GitRepository(
@@ -285,6 +296,10 @@ class GitWorktreeManager:
         return not status
 
     def remove(self, worktree_id: str) -> WorktreeRecord:
+        with self._locked_git(), self._measure("cleanup"):
+            return self._remove_locked(worktree_id)
+
+    def _remove_locked(self, worktree_id: str) -> WorktreeRecord:
         try:
             record = self.store.get_worktree(worktree_id)
         except StateStoreError as exc:
@@ -300,12 +315,17 @@ class GitWorktreeManager:
             raise WorktreeDirtyError(
                 f"Refusing to remove dirty worktree '{worktree_id}'."
             )
-        self._run_git(["worktree", "remove", str(path)], cwd=self.repository_root)
-        return self.store.update_worktree(
-            worktree_id,
-            status=WorktreeStatus.REMOVED,
-            event_type="worktree_removed",
-        )
+        try:
+            self._run_git(["worktree", "remove", str(path)], cwd=self.repository_root)
+        except WorktreeCommandTimeout as exc:
+            if not exc.tree_stopped or self._path_present(path) or self._registration(record)[0]:
+                raise
+        with self._measure("persist"):
+            return self.store.update_worktree(
+                worktree_id,
+                status=WorktreeStatus.REMOVED,
+                event_type="worktree_removed",
+            )
 
     def _create(
         self,
@@ -317,7 +337,7 @@ class GitWorktreeManager:
         worker_id: str | None,
     ) -> WorktreeRecord:
         # Canonical checks and ownership reservation must not race another creator's mkdir/Git setup.
-        with self._git_lock:
+        with self._locked_git():
             return self._create_locked(
                 run_id=run_id,
                 task_id=task_id,
@@ -371,38 +391,115 @@ class GitWorktreeManager:
             worker_id=worker_id,
         )
         try:
-            self.store.record_worktree(record)
+            with self._measure("persist"):
+                self.store.record_worktree(record)
         except WorktreeRecordConflictError as exc:
             raise WorktreeAlreadyExistsError(
                 "Another non-removed worktree already owns this run and task scope."
             ) from exc
         path.parent.mkdir(parents=True, exist_ok=True)
+        reconciled = False
         try:
-            self._run_git(
-                ["worktree", "add", "-b", branch_ref, str(path), resolved_base],
-                cwd=self.repository_root,
-            )
-            self.validate(record)
+            try:
+                self._run_git(
+                    ["worktree", "add", "-b", branch_ref, str(path), resolved_base],
+                    cwd=self.repository_root,
+                )
+            except WorktreeCommandTimeout as exc:
+                if not exc.tree_stopped:
+                    raise
+                outcome = self._reconcile_add_timeout(record, path)
+                if outcome == "absent":
+                    with self._measure("persist"):
+                        self.store.update_worktree(
+                            worktree_id, status=WorktreeStatus.REMOVED,
+                            event_type="worktree_create_timeout_reconciled",
+                        )
+                    raise
+                if outcome == "ambiguous":
+                    raise
+                reconciled = True
+            with self._measure("validate"):
+                self.validate(record)
         except Exception as exc:
-            self.store.update_worktree(
-                worktree_id,
-                status=WorktreeStatus.ORPHANED,
-                metadata_updates={"creation_error": str(exc)},
-                event_type="worktree_orphaned",
-            )
+            if self.store.get_worktree(worktree_id).status != WorktreeStatus.REMOVED:
+                with self._measure("persist"):
+                    self.store.update_worktree(
+                        worktree_id,
+                        status=WorktreeStatus.ORPHANED,
+                        metadata_updates={"creation_error": str(exc)},
+                        event_type="worktree_orphaned",
+                    )
             if isinstance(exc, WorktreeError):
                 raise
             raise WorktreeError(f"Unable to create worktree: {exc}") from exc
-        return self.store.update_worktree(
-            worktree_id,
-            status=(
-                WorktreeStatus.ACTIVE
-                if purpose == WorktreePurpose.TASK
-                else WorktreeStatus.READY
-            ),
-            worker_id=worker_id,
-            event_type="worktree_created",
+        with self._measure("persist"):
+            return self.store.update_worktree(
+                worktree_id,
+                status=(
+                    WorktreeStatus.ACTIVE
+                    if purpose == WorktreePurpose.TASK
+                    else WorktreeStatus.READY
+                ),
+                worker_id=worker_id,
+                event_type="worktree_create_timeout_reconciled" if reconciled else "worktree_created",
+            )
+
+    @staticmethod
+    def _path_present(path: Path) -> bool:
+        try:
+            path.lstat()
+        except FileNotFoundError:
+            return False
+        return True
+
+    def _registration(self, record: WorktreeRecord) -> tuple[bool, bool]:
+        entries = self._run_git(["worktree", "list", "--porcelain", "-z"], cwd=self.repository_root)
+        path = os.path.normcase(record.path)
+        branch = f"branch refs/heads/{record.branch_ref}"
+        fields = entries.split("\0")
+        return (
+            any(item.startswith("worktree ") and os.path.normcase(os.path.normpath(item[9:])) == path
+                for item in fields),
+            branch in fields,
         )
+
+    def _reconcile_add_timeout(self, record: WorktreeRecord, path: Path) -> Literal["complete", "absent", "ambiguous"]:
+        with self._measure("reconcile"):
+            registered, branch_in_use = self._registration(record)
+            if registered and branch_in_use and self._path_present(path):
+                # A complete checkout can be adopted only when its expected branch,
+                # commit, and all working files are intact after the child stopped.
+                if self.is_clean(record) and self._run_git(["rev-parse", "HEAD"], cwd=path) == record.base_commit:
+                    return "complete"
+            elif not registered and not branch_in_use and not self._path_present(path):
+                # Compare-and-delete only the newly reserved ref at its exact base.
+                # An absent ref is also safe. A moved ref must be preserved.
+                ref = f"refs/heads/{record.branch_ref}"
+                if self._run_git(["for-each-ref", "--format=%(refname)", ref], cwd=self.repository_root):
+                    self._run_git(["update-ref", "-d", ref, record.base_commit], cwd=self.repository_root)
+                return "absent"
+            return "ambiguous"
+
+    @contextmanager
+    def _measure(self, phase: str):
+        started = time.monotonic()
+        try:
+            yield
+        finally:
+            if self._timing is not None:
+                self._timing(phase, time.monotonic() - started)
+
+    @contextmanager
+    def _locked_git(self):
+        started = time.monotonic()
+        self._git_lock.acquire()
+        try:
+            if self._timing is not None:
+                self._timing("lock_wait", time.monotonic() - started)
+            yield
+        finally:
+            self._git_lock.release()
 
     def _common_git_dir(self, cwd: Path) -> Path:
         raw = self._run_git(["rev-parse", "--git-common-dir"], cwd=cwd)
@@ -414,7 +511,7 @@ class GitWorktreeManager:
     def _run_git(self, arguments: list[str], *, cwd: Path) -> str:
         if not arguments:
             raise WorktreeError("A Git worktree operation must be specified.")
-        operation = arguments[0]
+        operation = " ".join(arguments[:2]) if arguments[0] == "worktree" else arguments[0]
         identity = self.executable_catalog.resolve("git")
         command = identity.command(
             [
@@ -430,36 +527,45 @@ class GitWorktreeManager:
             ]
         )
         try:
-            with self._git_lock:
-                result = subprocess.run(
-                    command,
-                    cwd=cwd,
-                    capture_output=True,
-                    text=True,
-                    timeout=self.timeout_seconds,
-                    shell=False,
-                    env=safe_git_environment(),
-                )
-        except subprocess.TimeoutExpired as exc:
-            raise WorktreeError(
-                f"Git worktree operation '{operation}' timed out."
-            ) from exc
+            # Windows subprocess.run waits for inherited output pipes after killing
+            # only the parent. File output keeps descendant handles off that path.
+            with self._locked_git(), tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
+                with self._measure("launch"):
+                    process = subprocess.Popen(
+                        command, cwd=cwd, stdin=subprocess.DEVNULL, stdout=output, stderr=errors,
+                        shell=False, env=safe_git_environment(), **ManagedProcessTree.launch_options(),
+                    )
+                    tree = ManagedProcessTree.attach(process, self._git_budget)
+                try:
+                    with self._measure("git"):
+                        returncode = process.wait(timeout=self.timeout_seconds)
+                except subprocess.TimeoutExpired as exc:
+                    with self._measure("terminate"):
+                        tree.terminate(grace_seconds=0.5)
+                    stopped = process.poll() is not None and (os.name != "nt" or tree.metadata.job_assigned)
+                    raise WorktreeCommandTimeout(operation, tree_stopped=stopped) from exc
+                finally:
+                    tree.close()
+                output.seek(0)
+                errors.seek(0)
+                stdout = output.read(self.maximum_command_output_chars * 4 + 1).decode("utf-8", errors="replace")
+                stderr = errors.read(8_192).decode("utf-8", errors="replace")
         except OSError as exc:
             raise WorktreeError(
                 f"Git worktree operation '{operation}' could not run: "
                 f"{redact_text(type(exc).__name__, max_chars=128)}"
             ) from exc
-        if result.returncode != 0:
-            detail = result.stderr.strip() or result.stdout.strip()
+        if returncode != 0:
+            detail = stderr.strip() or stdout.strip()
             raise WorktreeError(
                 f"Git worktree operation '{operation}' failed: "
                 f"{redact_text(detail, max_chars=2_048)}"
             )
-        if len(result.stdout) > self.maximum_command_output_chars:
+        if len(stdout) > self.maximum_command_output_chars:
             raise WorktreeError(
                 f"Git worktree operation '{operation}' exceeded the output limit."
             )
-        return result.stdout.rstrip("\r\n")
+        return stdout.rstrip("\r\n")
 
     @staticmethod
     def _safe_component(value: str) -> str:

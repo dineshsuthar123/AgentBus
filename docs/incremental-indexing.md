@@ -84,6 +84,18 @@ not delete repository files or automatically remove the previous snapshot.
 - `index clear` is the only explicit destructive index operation. It affects the
   selected local index records, not repository content.
 
+Each changed source fingerprint can publish a complete snapshot, even when the
+dependency graph is identical. Plan index storage for the retained snapshots
+and any building or paused snapshots that `index gc` protects. Schedule GC
+between indexing operations. Archive the index and its separate trace evidence
+first when historical inspection is required.
+
+SQLite can reuse pages that GC frees. To reclaim disk space, quiesce index
+writers and use `VACUUM INTO` to create a compact copy at a fresh path with
+sufficient space. Verify the copy's integrity, foreign keys, and active snapshot
+before using it. Offline replay reads captured evidence from the trace store,
+and comparing against current intelligence uses the current index.
+
 Never commit `repository-index.sqlite3`, its WAL/SHM files, or local cache
 directories. The default database lives beside Syndra state rather than in the
 repository. Failed Syndra runs retain their filesystem edits for inspection;

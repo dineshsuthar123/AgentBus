@@ -77,6 +77,9 @@ async function main(): Promise<void> {
   try {
     await runTests({
       version: "1.96.4",
+      ...(process.env.SYNDRA_VSCODE_TEST_CACHE
+        ? { cachePath: resolve(process.env.SYNDRA_VSCODE_TEST_CACHE) }
+        : {}),
       extensionDevelopmentPath,
       extensionTestsPath: join(
         extensionDevelopmentPath,
@@ -91,7 +94,10 @@ async function main(): Promise<void> {
         SYNDRA_E2E_MCP_MARKER: mcpPrivateMarker,
         SYNDRA_E2E_REGISTRY: registryPath,
         SYNDRA_E2E_WORKSPACE: workspacePath,
-        SYNDRA_E2E_ARTIFACT_ROOT: artifactPath
+        SYNDRA_E2E_ARTIFACT_ROOT: artifactPath,
+        SYNDRA_E2E_BROWSER_SCRIPT: resolve(repositoryRoot, "studio", "scripts", "cross-client-smoke.mjs"),
+        SYNDRA_E2E_NODE: process.execPath,
+        SYNDRA_E2E_RELEASE_EVIDENCE: process.env.SYNDRA_E2E_RELEASE_EVIDENCE ?? artifactPath
       },
       launchArgs: [
         workspacePath,

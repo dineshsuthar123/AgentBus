@@ -129,6 +129,40 @@ def test_vscode_ci_installs_protocol_and_electron_python_dependencies() -> None:
         "  vsix-audit:", 1
     )[0]
 
-    assert "actions/setup-python@v5" in compile_job
+    assert re.search(r"uses: actions/setup-python@[a-f0-9]{40}\b", compile_job)
     assert 'python -m pip install -e ".[ide]"' in compile_job
     assert 'python -m pip install -e ".[dev,ide]"' in electron_job
+
+
+def test_workflows_pin_official_actions_and_preserve_read_only_permissions() -> None:
+    for path in (ROOT / ".github" / "workflows").glob("*.yml"):
+        workflow = path.read_text(encoding="utf-8")
+        uses = re.findall(r"uses:\s+(actions/[^\s#]+)", workflow)
+        assert uses
+        assert all(re.fullmatch(r"actions/[a-z-]+@[a-f0-9]{40}", action) for action in uses)
+        assert "contents: read" in workflow
+        assert "pull_request_target:" not in workflow
+
+
+def test_dependency_audits_are_required_and_updates_are_configured() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert "name: Dependency Security" in workflow
+    assert "python -m pip_audit --local --skip-editable" in workflow
+    assert "python -m bandit -r agentbus syndra" in workflow
+    assert workflow.count("npm audit --audit-level=high") == 2
+    assert 'exit "$status"' in workflow
+    updates = (ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8")
+    for ecosystem in ("pip", "npm", "github-actions"):
+        assert f"package-ecosystem: {ecosystem}" in updates
+
+
+def test_release_security_consumes_the_audited_builds() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    job = workflow.split("  release-security:", 1)[1].split(
+        "  performance-smoke:", 1
+    )[0]
+    assert "needs: [package-audit, vsix-audit]" in job
+    assert "syndra-python-release-candidate" in job
+    assert "syndra-vsix-release-candidate" in job
+    for artifact in ("*.whl", "*.tar.gz", "syndra-vscode.vsix"):
+        assert f"--artifact .tmp/release-security/{artifact}" in job

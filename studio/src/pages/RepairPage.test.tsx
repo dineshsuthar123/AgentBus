@@ -32,6 +32,9 @@ function fixture(mode: "local_demo" | "imported_snapshot" = "local_demo") {
     repairBatches: vi.fn(async () => ({ batches: [] as RepairBatch[] })),
     repairEvents: vi.fn(async () => ({ events: [] })),
     repairCases: vi.fn(async () => ({ cases: [] })),
+    repairConnections: vi.fn(async () => ({ connections: [] })),
+    connectedPreview: vi.fn(async () => ({ preview: null })),
+    connectedPlans: vi.fn(async () => ({ results: [] })),
     previewRepair: vi.fn(async () => ({ preview })),
     applyRepair: vi.fn<(id: string, request: RepairApplyRequest) => Promise<{ batch: RepairBatch }>>(async () => ({ batch })),
     repairBatch: vi.fn(async () => ({ batch })),
@@ -117,7 +120,7 @@ describe("Customer repair", () => {
     await screen.findByRole("heading", { name: "Take the proposed corrections with you." });
     expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Apply .*selected corrections/ })).not.toBeInTheDocument();
-    expect(screen.getByText(/Applying to a real application needs a supported adapter/)).toBeInTheDocument();
+    expect(screen.getByText(/Use Connected application repair above to authorize conditional corrections through your validated integration/)).toBeInTheDocument();
   });
 
   it("supports keyboard exploration and searchable evidence without changing the selection", async () => {

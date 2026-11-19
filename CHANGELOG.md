@@ -15,8 +15,15 @@ may include documented breaking changes. See the
 - Customer repair for purchase-to-access incidents: a working synthetic local
   application, strict snapshot imports, evidence maps, selected corrections,
   revalidation of later refunds/manual changes, immutable previews and batches,
-  interrupted-response lookup, correction packages, and a local CLI. Imported
-  evidence remains read-only; production application adapters are not included.
+  interrupted-response lookup, correction packages, and a local CLI.
+- Connected purchase-to-access repair through an installable application-owned
+  conditional API, PostgreSQL reference domain, immutable receipts and outbox,
+  scoped approvals, durable recovery and normal-access verification. Imports only
+  identify candidates; application owners must integrate and validate writer hooks.
+- Bounded, read-only official Stripe evidence, checked connection setup and
+  imported-case canary execution in Studio. The reference blocks Stripe-authoritative
+  writes because it cannot fence independent external refunds. No external
+  deployment or provider sandbox is certified by local integration tests.
 - Interactive first-run orientation, a source-backed execution ledger, explicit
   snapshot freshness, richer review/check observations, and compact mobile
   navigation with a reserved work surface.

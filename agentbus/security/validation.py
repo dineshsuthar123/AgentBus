@@ -940,7 +940,7 @@ def _package_metadata() -> bytes:
         "Requires-Python: >=3.11",
         *(
             f"Provides-Extra: {extra}"
-            for extra in ("all", "azure", "dev", "entra", "ide", "mcp")
+            for extra in ("all", "azure", "dev", "entra", "ide", "mcp", "repair")
         ),
         'Requires-Dist: pytest>=8; extra == "dev"',
         "",

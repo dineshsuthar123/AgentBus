@@ -58,15 +58,19 @@ def test_dependency_extras_keep_product_and_development_concerns_separate():
     base = set(project["dependencies"])
     extras = project["optional-dependencies"]
 
-    assert set(extras) == {"all", "azure", "dev", "entra", "ide", "mcp"}
+    assert set(extras) == {"all", "azure", "dev", "entra", "ide", "mcp", "repair"}
     assert not base.intersection(extras["all"])
     assert not base.intersection(extras["dev"])
     assert "pytest>=8" not in extras["all"]
     assert "hypothesis>=6.112" in extras["dev"]
     assert "hypothesis>=6.112" not in extras["all"]
-    assert set(extras["azure"] + extras["entra"] + extras["ide"] + extras["mcp"]) <= set(
+    assert set(extras["azure"] + extras["entra"] + extras["ide"] + extras["mcp"] + extras["repair"]) <= set(
         extras["all"]
     )
+    assert "stripe==15.6.1" in extras["repair"]
+    assert "psycopg[binary]>=3.2,<4" in extras["repair"]
+    assert not base.intersection(extras["repair"])
+    assert not set(extras["repair"]).intersection({"pytest>=8", "hypothesis>=6.112"})
 
 
 def test_version_is_shared_by_evaluation_and_durable_runtime(tmp_path):
@@ -132,6 +136,7 @@ def test_distribution_manifest_excludes_runtime_artifacts():
     for path in (".syndra", ".agentbus", ".git", ".venv", "build", "dist", "runs"):
         assert f"prune {path}" in manifest
     assert "recursive-exclude * __pycache__ *.py[cod]" in manifest
+    assert "include tests/fixtures/connected_repair_crash.py" in manifest
 
 
 def test_release_and_community_files_are_present():

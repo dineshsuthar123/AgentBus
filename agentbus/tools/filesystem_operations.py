@@ -5,6 +5,7 @@ import hashlib
 import os
 import stat as stat_module
 import tempfile
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
@@ -663,7 +664,7 @@ class ContainedFileSystem:
                 )
                 temporary.unlink()
             else:
-                os.replace(temporary, resolved.lexical_path)
+                self._replace_existing_file(temporary, resolved, before)
             temporary = None
             self._fsync_directory(resolved.lexical_path.parent)
         finally:
@@ -692,6 +693,37 @@ class ContainedFileSystem:
             created=before is None,
             atomic=True,
         )
+
+    def _replace_existing_file(
+        self,
+        temporary: Path,
+        resolved: ResolvedFileSystemPath,
+        before: _FileSnapshot,
+    ) -> None:
+        if os.name != "nt":
+            os.replace(temporary, resolved.lexical_path)
+            return
+
+        staged_identity = _stat_identity(temporary.stat(follow_symlinks=False))
+        # Windows can return ACCESS_DENIED when a read handle briefly blocks
+        # replacement. Retry only a failed publication, with the same inputs.
+        for delay in (0.01, 0.02, 0.04):
+            try:
+                os.replace(temporary, resolved.lexical_path)
+                return
+            except PermissionError as error:
+                if error.winerror not in (5, 32):
+                    raise
+            time.sleep(delay)
+            current = self.resolver.resolve(resolved.relative_path, reject_any_link=True)
+            self._require_unchanged(current, before)
+            staged = self.resolver.resolve(
+                temporary.relative_to(self.root).as_posix(), reject_any_link=True,
+            )
+            if _stat_identity(staged.lexical_path.stat(follow_symlinks=False)) != staged_identity:
+                raise FileMutationConflict("Staged mutation file changed before publication.")
+            self.resolver.validate_root_identity()
+        os.replace(temporary, resolved.lexical_path)
 
     def _confirm_temporary_descriptor(
         self,

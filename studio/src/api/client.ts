@@ -107,6 +107,18 @@ export class StudioClient {
     return this.request<import("./types").DemoWorkspaceResponse>("POST", "/api/v1/studio/demo-workspaces", { profile });
   }
   public repairCases(offset = 0, options?: ReadRequestOptions) { return this.read<import("./types").RepairCaseListResponse>(`/api/v1/customer-repair/cases?limit=50&offset=${offset}`, options); }
+  public repairConnections(options?: ReadRequestOptions) { return this.read<import("./types").RepairConnectionsResponse>("/api/v1/customer-repair/connections", options); }
+  public checkRepairConnection(id: string) { return this.request<import("./types").RepairConnectionResponse>("POST", `/api/v1/customer-repair/connections/${segment(id)}/check`); }
+  public connectedPreview(caseId: string, offset = 0, options?: ReadRequestOptions) { return this.read<import("./types").ConnectedPreviewResponse>(`/api/v1/customer-repair/cases/${segment(caseId)}/connected-preview?offset=${offset}`, options); }
+  public refreshConnectedRepair(caseId: string, request: import("./types").ConnectedRefreshRequest) { return this.request<import("./types").ConnectedPreviewResponse>("POST", `/api/v1/customer-repair/cases/${segment(caseId)}/connected-preview`, request); }
+  public createConnectedPlan(caseId: string, request: import("./types").ConnectedPlanRequest) { return this.request<import("./types").ConnectedPlanResponse>("POST", `/api/v1/customer-repair/cases/${segment(caseId)}/plans`, request); }
+  public connectedPlans(caseId: string, options?: ReadRequestOptions) { return this.read<import("./types").ConnectedPlansResponse>(`/api/v1/customer-repair/cases/${segment(caseId)}/plans`, options); }
+  public connectedPlan(id: string, options?: ReadRequestOptions) { return this.read<import("./types").ConnectedPlanResponse>(`/api/v1/customer-repair/plans/${segment(id)}`, options); }
+  public approveConnectedPlan(id: string, digest: string) { return this.request<import("./types").ConnectedPlanResponse>("POST", `/api/v1/customer-repair/plans/${segment(id)}/approve`, { plan_digest: digest }); }
+  public executeConnectedPlan(id: string, retryUnknown = false) { return this.request<import("./types").ConnectedPlanResponse>("POST", `/api/v1/customer-repair/plans/${segment(id)}/execute`, { retry_unknown: retryUnknown }); }
+  public stopConnectedPlan(id: string) { return this.request<import("./types").ConnectedPlanResponse>("POST", `/api/v1/customer-repair/plans/${segment(id)}/stop`); }
+  public reconcileConnectedPlan(id: string) { return this.request<import("./types").ConnectedPlanResponse>("POST", `/api/v1/customer-repair/plans/${segment(id)}/reconcile`); }
+  public pauseConnectedPlan(id: string, resume = false) { return this.request<import("./types").ConnectedPlanResponse>("POST", `/api/v1/customer-repair/plans/${segment(id)}/${resume ? "continue" : "pause"}`); }
   public repairCase(caseId: string, options?: ReadRequestOptions) { return this.read<import("./types").RepairCaseResponse>(`/api/v1/customer-repair/cases/${segment(caseId)}`, options); }
   public createRepairDemo() { return this.request<import("./types").RepairCaseResponse>("POST", "/api/v1/customer-repair/demo"); }
   public repairTemplate(options?: ReadRequestOptions) { return this.read<import("./types").RepairImportRequest>("/api/v1/customer-repair/template", options); }

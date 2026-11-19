@@ -11,7 +11,7 @@ import time
 import tracemalloc
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -257,6 +257,7 @@ class SoakCycleResult:
     cleanup_failure_count: int
     duration_seconds: float
     error: str | None = None
+    worktree_seconds: dict[str, float] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -277,6 +278,7 @@ class SoakCycleResult:
             "cleanup_failure_count": self.cleanup_failure_count,
             "duration_seconds": round(self.duration_seconds, 6),
             "error": self.error,
+            "worktree_seconds": self.worktree_seconds,
         }
 
 
@@ -460,7 +462,14 @@ def run_soak(
         store = StateStore(state_database)
         index = RepositoryIntelligenceService(workspace, index_database)
         index.build()
-        manager = GitWorktreeManager(workspace, worktree_root, store)
+        git_timings = threading.local()
+
+        def record_git_timing(phase: str, seconds: float) -> None:
+            phases = getattr(git_timings, "phases", None)
+            if phases is not None:
+                phases[phase] = phases.get(phase, 0.0) + seconds
+
+        manager = GitWorktreeManager(workspace, worktree_root, store, timing=record_git_timing)
         base_commit = GitRepository(str(workspace)).head_commit(short=False)
         trace, object_store = _replay_fixture(root)
         mcp_config, executable_catalog = _soak_mcp_configuration()
@@ -491,6 +500,7 @@ def run_soak(
                         return
                     cycle = next_cycle
                     next_cycle += 1
+                git_timings.phases = {}
                 result = _run_cycle(
                     cycle,
                     worker_id=worker_id,
@@ -507,6 +517,7 @@ def run_soak(
                     executable_catalog=executable_catalog,
                     mcp_config=mcp_config,
                     resources=resources,
+                    git_timings=git_timings.phases,
                 )
                 with results_lock:
                     results.append(result)
@@ -617,6 +628,7 @@ def _run_cycle(
     executable_catalog: ExecutableCatalog,
     mcp_config: McpServerConfig,
     resources: _ResourceTracker,
+    git_timings: dict[str, float],
 ) -> SoakCycleResult:
     started = time.monotonic()
     run_id = f"soak-{seed}-{cycle:05d}"
@@ -707,7 +719,9 @@ def _run_cycle(
         with index_lock:
             index.update()
         indexed = True
+        waiting_for_worktree = time.monotonic()
         with worktree_lock:
+            git_timings["soak_lock_wait"] = time.monotonic() - waiting_for_worktree
             worktree = None
             try:
                 worktree = manager.create_task_worktree(
@@ -767,6 +781,7 @@ def _run_cycle(
         cleanup_failure_count=cleanup_failure_count,
         duration_seconds=time.monotonic() - started,
         error=error,
+        worktree_seconds={key: round(value, 6) for key, value in git_timings.items()},
     )
 
 

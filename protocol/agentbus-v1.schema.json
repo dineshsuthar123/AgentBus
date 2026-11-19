@@ -1,5 +1,60 @@
 {
   "$defs": {
+    "AccessVerification": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed": {
+          "title": "Allowed",
+          "type": "boolean"
+        },
+        "method": {
+          "const": "normal_authorization_path",
+          "default": "normal_authorization_path",
+          "title": "Method",
+          "type": "string"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "operation_id": {
+          "pattern": "^[a-f0-9]{32}$",
+          "title": "Operation Id",
+          "type": "string"
+        },
+        "reason": {
+          "maxLength": 300,
+          "title": "Reason",
+          "type": "string"
+        },
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "status": {
+          "enum": [
+            "pending",
+            "passed",
+            "failed",
+            "superseded"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation_id",
+        "status",
+        "observed_at",
+        "revision",
+        "allowed",
+        "reason"
+      ],
+      "title": "AccessVerification",
+      "type": "object"
+    },
     "ApprovalDecisionRequest": {
       "additionalProperties": false,
       "properties": {
@@ -798,6 +853,86 @@
       "title": "CancellationLifecycle",
       "type": "object"
     },
+    "Capabilities": {
+      "additionalProperties": false,
+      "properties": {
+        "aggregate_serialization": {
+          "title": "Aggregate Serialization",
+          "type": "boolean"
+        },
+        "compensation": {
+          "const": "unsupported",
+          "default": "unsupported",
+          "title": "Compensation",
+          "type": "string"
+        },
+        "coordinated_external_payments": {
+          "default": false,
+          "title": "Coordinated External Payments",
+          "type": "boolean"
+        },
+        "identity": {
+          "$ref": "#/$defs/Identity"
+        },
+        "maximum_batch": {
+          "maximum": 200,
+          "minimum": 1,
+          "title": "Maximum Batch",
+          "type": "integer"
+        },
+        "normal_access_verification": {
+          "title": "Normal Access Verification",
+          "type": "boolean"
+        },
+        "permissions": {
+          "items": {
+            "enum": [
+              "read",
+              "approve",
+              "repair",
+              "verify",
+              "revoke"
+            ],
+            "type": "string"
+          },
+          "maxItems": 5,
+          "title": "Permissions",
+          "type": "array"
+        },
+        "principal": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+          "title": "Principal",
+          "type": "string"
+        },
+        "receipt_retention": {
+          "const": "indefinite",
+          "default": "indefinite",
+          "title": "Receipt Retention",
+          "type": "string"
+        },
+        "semantic_receipts": {
+          "title": "Semantic Receipts",
+          "type": "boolean"
+        },
+        "workflow": {
+          "const": "paid-purchase-access/v1",
+          "default": "paid-purchase-access/v1",
+          "title": "Workflow",
+          "type": "string"
+        }
+      },
+      "required": [
+        "identity",
+        "principal",
+        "permissions",
+        "aggregate_serialization",
+        "semantic_receipts",
+        "normal_access_verification",
+        "maximum_batch"
+      ],
+      "title": "Capabilities",
+      "type": "object"
+    },
     "CapabilityScope": {
       "additionalProperties": false,
       "properties": {
@@ -1246,6 +1381,597 @@
       "title": "ComparisonSummaryResponse",
       "type": "object"
     },
+    "ConditionalOperation": {
+      "additionalProperties": false,
+      "properties": {
+        "connection_digest": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Connection Digest",
+          "type": "string"
+        },
+        "deadline": {
+          "format": "date-time",
+          "title": "Deadline",
+          "type": "string"
+        },
+        "effect": {
+          "$ref": "#/$defs/Effect"
+        },
+        "expected_revision": {
+          "minimum": 1,
+          "title": "Expected Revision",
+          "type": "integer"
+        },
+        "identity": {
+          "$ref": "#/$defs/Identity"
+        },
+        "logical_effect": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Logical Effect",
+          "type": "string"
+        },
+        "operation_id": {
+          "pattern": "^[a-f0-9]{32}$",
+          "title": "Operation Id",
+          "type": "string"
+        },
+        "payload_digest": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Payload Digest",
+          "type": "string"
+        },
+        "payment_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+          "title": "Payment Id",
+          "type": "string"
+        },
+        "plan_id": {
+          "pattern": "^[a-f0-9]{32}$",
+          "title": "Plan Id",
+          "type": "string"
+        },
+        "policy": {
+          "$ref": "#/$defs/ConnectedRepairPolicy"
+        },
+        "policy_digest": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Policy Digest",
+          "type": "string"
+        },
+        "protocol": {
+          "const": "syndra.correction/v1",
+          "default": "syndra.correction/v1",
+          "title": "Protocol",
+          "type": "string"
+        },
+        "purchase_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+          "title": "Purchase Id",
+          "type": "string"
+        },
+        "workspace_digest": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Workspace Digest",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation_id",
+        "plan_id",
+        "workspace_digest",
+        "identity",
+        "connection_digest",
+        "policy",
+        "policy_digest",
+        "purchase_id",
+        "payment_id",
+        "expected_revision",
+        "effect",
+        "logical_effect",
+        "deadline",
+        "payload_digest"
+      ],
+      "title": "ConditionalOperation",
+      "type": "object"
+    },
+    "ConnectedApprovalRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "plan_digest": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Plan Digest",
+          "type": "string"
+        }
+      },
+      "required": [
+        "plan_digest"
+      ],
+      "title": "ConnectedApprovalRequest",
+      "type": "object"
+    },
+    "ConnectedExecutionRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "retry_unknown": {
+          "default": false,
+          "title": "Retry Unknown",
+          "type": "boolean"
+        }
+      },
+      "title": "ConnectedExecutionRequest",
+      "type": "object"
+    },
+    "ConnectedPlan": {
+      "additionalProperties": false,
+      "properties": {
+        "approved": {
+          "title": "Approved",
+          "type": "boolean"
+        },
+        "case_id": {
+          "title": "Case Id",
+          "type": "string"
+        },
+        "counts": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Counts",
+          "type": "object"
+        },
+        "outcomes": {
+          "items": {
+            "$ref": "#/$defs/RemoteOutcome"
+          },
+          "title": "Outcomes",
+          "type": "array"
+        },
+        "plan": {
+          "$ref": "#/$defs/TargetPlan"
+        },
+        "status": {
+          "title": "Status",
+          "type": "string"
+        },
+        "stopped": {
+          "title": "Stopped",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "plan",
+        "case_id",
+        "status",
+        "stopped",
+        "approved",
+        "counts",
+        "outcomes"
+      ],
+      "title": "ConnectedPlan",
+      "type": "object"
+    },
+    "ConnectedPlanRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "purchase_ids": {
+          "items": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+            "type": "string"
+          },
+          "maxItems": 200,
+          "minItems": 1,
+          "title": "Purchase Ids",
+          "type": "array"
+        },
+        "scan_id": {
+          "pattern": "^[a-f0-9]{32}$",
+          "title": "Scan Id",
+          "type": "string"
+        },
+        "workspace_trusted": {
+          "title": "Workspace Trusted",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "scan_id",
+        "purchase_ids",
+        "workspace_trusted"
+      ],
+      "title": "ConnectedPlanRequest",
+      "type": "object"
+    },
+    "ConnectedPlanResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "$ref": "#/$defs/ConnectedPlan"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "title": "ConnectedPlanResponse",
+      "type": "object"
+    },
+    "ConnectedPlansResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "results": {
+          "items": {
+            "$ref": "#/$defs/ConnectedPlan"
+          },
+          "title": "Results",
+          "type": "array"
+        }
+      },
+      "required": [
+        "results"
+      ],
+      "title": "ConnectedPlansResponse",
+      "type": "object"
+    },
+    "ConnectedPreview": {
+      "additionalProperties": false,
+      "properties": {
+        "case_id": {
+          "title": "Case Id",
+          "type": "string"
+        },
+        "connection_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+          "title": "Connection Id",
+          "type": "string"
+        },
+        "counts": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Counts",
+          "type": "object"
+        },
+        "created_at": {
+          "title": "Created At",
+          "type": "string"
+        },
+        "decisions": {
+          "items": {
+            "$ref": "#/$defs/Decision"
+          },
+          "title": "Decisions",
+          "type": "array"
+        },
+        "examined": {
+          "title": "Examined",
+          "type": "integer"
+        },
+        "offset": {
+          "title": "Offset",
+          "type": "integer"
+        },
+        "policy": {
+          "$ref": "#/$defs/ConnectedRepairPolicy"
+        },
+        "scan_id": {
+          "pattern": "^[a-f0-9]{32}$",
+          "title": "Scan Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scan_id",
+        "case_id",
+        "connection_id",
+        "created_at",
+        "policy",
+        "counts",
+        "examined",
+        "offset",
+        "decisions"
+      ],
+      "title": "ConnectedPreview",
+      "type": "object"
+    },
+    "ConnectedPreviewResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "preview": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConnectedPreview"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "preview"
+      ],
+      "title": "ConnectedPreviewResponse",
+      "type": "object"
+    },
+    "ConnectedRefreshRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate_ids": {
+          "anyOf": [
+            {
+              "items": {
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+                "type": "string"
+              },
+              "maxItems": 10000,
+              "minItems": 1,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Candidate Ids"
+        },
+        "connection_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+          "title": "Connection Id",
+          "type": "string"
+        },
+        "policy": {
+          "$ref": "#/$defs/ConnectedRepairPolicy"
+        }
+      },
+      "required": [
+        "connection_id",
+        "policy"
+      ],
+      "title": "ConnectedRefreshRequest",
+      "type": "object"
+    },
+    "ConnectedRepairPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "access_authority": {
+          "const": "application",
+          "default": "application",
+          "title": "Access Authority",
+          "type": "string"
+        },
+        "dispute": {
+          "const": "do_not_restore",
+          "default": "do_not_restore",
+          "title": "Dispute",
+          "type": "string"
+        },
+        "effect": {
+          "const": "grant_original_period_only",
+          "default": "grant_original_period_only",
+          "title": "Effect",
+          "type": "string"
+        },
+        "expired_period": {
+          "const": "investigate",
+          "default": "investigate",
+          "title": "Expired Period",
+          "type": "string"
+        },
+        "history_authority": {
+          "const": "application",
+          "default": "application",
+          "title": "History Authority",
+          "type": "string"
+        },
+        "incident_end": {
+          "format": "date-time",
+          "title": "Incident End",
+          "type": "string"
+        },
+        "incident_start": {
+          "format": "date-time",
+          "title": "Incident Start",
+          "type": "string"
+        },
+        "maximum_age_seconds": {
+          "default": 60,
+          "maximum": 300,
+          "minimum": 1,
+          "title": "Maximum Age Seconds",
+          "type": "integer"
+        },
+        "maximum_writes": {
+          "default": 1,
+          "maximum": 200,
+          "minimum": 1,
+          "title": "Maximum Writes",
+          "type": "integer"
+        },
+        "partial_refund": {
+          "const": "investigate",
+          "default": "investigate",
+          "title": "Partial Refund",
+          "type": "string"
+        },
+        "payment_authority": {
+          "default": "application",
+          "enum": [
+            "application",
+            "stripe"
+          ],
+          "title": "Payment Authority",
+          "type": "string"
+        },
+        "requests_per_second": {
+          "default": 2,
+          "maximum": 10,
+          "minimum": 1,
+          "title": "Requests Per Second",
+          "type": "integer"
+        },
+        "verification": {
+          "const": "normal_authorization_path",
+          "default": "normal_authorization_path",
+          "title": "Verification",
+          "type": "string"
+        },
+        "version": {
+          "const": "paid-purchase-access/v1",
+          "default": "paid-purchase-access/v1",
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "incident_start",
+        "incident_end"
+      ],
+      "title": "ConnectedRepairPolicy",
+      "type": "object"
+    },
+    "ConnectionManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "approved_addresses": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "title": "Approved Addresses",
+          "type": "array"
+        },
+        "connection_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+          "title": "Connection Id",
+          "type": "string"
+        },
+        "credential_ref": {
+          "pattern": "^(env:SYNDRA_REPAIR_[A-Z0-9_]{1,80}|keyring:[A-Za-z0-9_.-]{1,80})$",
+          "title": "Credential Ref",
+          "type": "string"
+        },
+        "destination": {
+          "maxLength": 400,
+          "title": "Destination",
+          "type": "string"
+        },
+        "identity": {
+          "$ref": "#/$defs/Identity"
+        },
+        "permissions": {
+          "items": {
+            "enum": [
+              "read",
+              "approve",
+              "repair",
+              "verify",
+              "revoke"
+            ],
+            "type": "string"
+          },
+          "maxItems": 5,
+          "minItems": 1,
+          "title": "Permissions",
+          "type": "array"
+        },
+        "private_networks": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 8,
+          "title": "Private Networks",
+          "type": "array"
+        },
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "stripe": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StripeConfiguration"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "transport": {
+          "default": "https",
+          "enum": [
+            "https",
+            "disposable_loopback"
+          ],
+          "title": "Transport",
+          "type": "string"
+        }
+      },
+      "required": [
+        "connection_id",
+        "identity",
+        "destination",
+        "approved_addresses",
+        "credential_ref",
+        "revision",
+        "permissions"
+      ],
+      "title": "ConnectionManifest",
+      "type": "object"
+    },
+    "ConnectionStatus": {
+      "additionalProperties": false,
+      "properties": {
+        "capabilities": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Capabilities"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "checked_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Checked At"
+        },
+        "configured": {
+          "title": "Configured",
+          "type": "boolean"
+        },
+        "manifest": {
+          "$ref": "#/$defs/ConnectionManifest"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "write_ready": {
+          "default": false,
+          "title": "Write Ready",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "manifest",
+        "configured",
+        "reason"
+      ],
+      "title": "ConnectionStatus",
+      "type": "object"
+    },
     "ContextCandidateSummary": {
       "additionalProperties": false,
       "properties": {
@@ -1543,6 +2269,63 @@
         "registry_path"
       ],
       "title": "DaemonRegistryEntry",
+      "type": "object"
+    },
+    "Decision": {
+      "additionalProperties": false,
+      "properties": {
+        "disposition": {
+          "enum": [
+            "eligible",
+            "already_correct",
+            "subsequent_history",
+            "conflicted_stale",
+            "investigation_required"
+          ],
+          "title": "Disposition",
+          "type": "string"
+        },
+        "purchase_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+          "title": "Purchase Id",
+          "type": "string"
+        },
+        "reason": {
+          "maxLength": 300,
+          "title": "Reason",
+          "type": "string"
+        },
+        "state": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PurchaseState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "uncertainty": {
+          "anyOf": [
+            {
+              "maxLength": 300,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Uncertainty"
+        }
+      },
+      "required": [
+        "purchase_id",
+        "disposition",
+        "reason",
+        "state"
+      ],
+      "title": "Decision",
       "type": "object"
     },
     "DemoProof": {
@@ -1850,6 +2633,45 @@
         "checks"
       ],
       "title": "DoctorResponse",
+      "type": "object"
+    },
+    "Effect": {
+      "additionalProperties": false,
+      "properties": {
+        "access_present": {
+          "const": true,
+          "default": true,
+          "title": "Access Present",
+          "type": "boolean"
+        },
+        "account_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+          "title": "Account Id",
+          "type": "string"
+        },
+        "feature": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+          "title": "Feature",
+          "type": "string"
+        },
+        "period_end": {
+          "format": "date-time",
+          "title": "Period End",
+          "type": "string"
+        },
+        "period_start": {
+          "format": "date-time",
+          "title": "Period Start",
+          "type": "string"
+        }
+      },
+      "required": [
+        "account_id",
+        "feature",
+        "period_start",
+        "period_end"
+      ],
+      "title": "Effect",
       "type": "object"
     },
     "ErrorBody": {
@@ -2202,6 +3024,49 @@
         }
       },
       "title": "HealthResponse",
+      "type": "object"
+    },
+    "Identity": {
+      "additionalProperties": false,
+      "properties": {
+        "application": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+          "title": "Application",
+          "type": "string"
+        },
+        "configuration_revision": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+          "title": "Configuration Revision",
+          "type": "string"
+        },
+        "environment": {
+          "enum": [
+            "sandbox",
+            "staging",
+            "production"
+          ],
+          "title": "Environment",
+          "type": "string"
+        },
+        "protocol": {
+          "const": "syndra.correction/v1",
+          "default": "syndra.correction/v1",
+          "title": "Protocol",
+          "type": "string"
+        },
+        "tenant": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+          "title": "Tenant",
+          "type": "string"
+        }
+      },
+      "required": [
+        "application",
+        "tenant",
+        "environment",
+        "configuration_revision"
+      ],
+      "title": "Identity",
       "type": "object"
     },
     "ImpactResult": {
@@ -3993,6 +4858,243 @@
       "title": "PurchaseEvidence",
       "type": "object"
     },
+    "PurchaseState": {
+      "additionalProperties": false,
+      "properties": {
+        "access_present": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Access Present"
+        },
+        "account_id": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Account Id"
+        },
+        "amount_minor": {
+          "exclusiveMinimum": 0,
+          "maximum": 1000000000000,
+          "title": "Amount Minor",
+          "type": "integer"
+        },
+        "cancellation": {
+          "enum": [
+            "none",
+            "period_end",
+            "immediate"
+          ],
+          "title": "Cancellation",
+          "type": "string"
+        },
+        "currency": {
+          "pattern": "^[a-z]{3}$",
+          "title": "Currency",
+          "type": "string"
+        },
+        "disputed": {
+          "title": "Disputed",
+          "type": "boolean"
+        },
+        "evidence_ids": {
+          "items": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+            "type": "string"
+          },
+          "maxItems": 30,
+          "minItems": 1,
+          "title": "Evidence Ids",
+          "type": "array"
+        },
+        "feature": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+          "title": "Feature",
+          "type": "string"
+        },
+        "history_complete": {
+          "title": "History Complete",
+          "type": "boolean"
+        },
+        "identity": {
+          "$ref": "#/$defs/Identity"
+        },
+        "mapping_verified": {
+          "title": "Mapping Verified",
+          "type": "boolean"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
+        "payment_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+          "title": "Payment Id",
+          "type": "string"
+        },
+        "payment_state": {
+          "enum": [
+            "paid",
+            "authorized",
+            "pending",
+            "failed",
+            "cancelled",
+            "unknown"
+          ],
+          "title": "Payment State",
+          "type": "string"
+        },
+        "pending_payment_change": {
+          "title": "Pending Payment Change",
+          "type": "boolean"
+        },
+        "period_end": {
+          "format": "date-time",
+          "title": "Period End",
+          "type": "string"
+        },
+        "period_start": {
+          "format": "date-time",
+          "title": "Period Start",
+          "type": "string"
+        },
+        "purchase_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+          "title": "Purchase Id",
+          "type": "string"
+        },
+        "purchased_at": {
+          "format": "date-time",
+          "title": "Purchased At",
+          "type": "string"
+        },
+        "refunded_minor": {
+          "maximum": 1000000000000,
+          "minimum": 0,
+          "title": "Refunded Minor",
+          "type": "integer"
+        },
+        "restriction": {
+          "enum": [
+            "none",
+            "suspended",
+            "deleted",
+            "manual_override",
+            "changed_product"
+          ],
+          "title": "Restriction",
+          "type": "string"
+        },
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "stripe_customer": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stripe Customer"
+        },
+        "stripe_feature": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stripe Feature"
+        },
+        "stripe_invoice": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stripe Invoice"
+        },
+        "stripe_product": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stripe Product"
+        },
+        "stripe_subscription": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stripe Subscription"
+        }
+      },
+      "required": [
+        "identity",
+        "purchase_id",
+        "payment_id",
+        "account_id",
+        "feature",
+        "currency",
+        "amount_minor",
+        "refunded_minor",
+        "payment_state",
+        "purchased_at",
+        "period_start",
+        "period_end",
+        "access_present",
+        "mapping_verified",
+        "history_complete",
+        "disputed",
+        "pending_payment_change",
+        "cancellation",
+        "restriction",
+        "revision",
+        "observed_at",
+        "evidence_ids"
+      ],
+      "title": "PurchaseState",
+      "type": "object"
+    },
     "ReadyHandshake": {
       "additionalProperties": false,
       "properties": {
@@ -4050,6 +5152,99 @@
         "bearer_token"
       ],
       "title": "ReadyHandshake",
+      "type": "object"
+    },
+    "Receipt": {
+      "additionalProperties": false,
+      "properties": {
+        "committed_at": {
+          "format": "date-time",
+          "title": "Committed At",
+          "type": "string"
+        },
+        "effect": {
+          "$ref": "#/$defs/Effect"
+        },
+        "identity": {
+          "$ref": "#/$defs/Identity"
+        },
+        "logical_effect": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Logical Effect",
+          "type": "string"
+        },
+        "operation_id": {
+          "pattern": "^[a-f0-9]{32}$",
+          "title": "Operation Id",
+          "type": "string"
+        },
+        "outbox_id": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{32}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Outbox Id"
+        },
+        "outcome": {
+          "enum": [
+            "committed",
+            "not_applied"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "payload_digest": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Payload Digest",
+          "type": "string"
+        },
+        "payment_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+          "title": "Payment Id",
+          "type": "string"
+        },
+        "purchase_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+          "title": "Purchase Id",
+          "type": "string"
+        },
+        "reason": {
+          "enum": [
+            "granted",
+            "already_correct",
+            "subsequent_history",
+            "conflict",
+            "logical_effect_exists"
+          ],
+          "title": "Reason",
+          "type": "string"
+        },
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "operation_id",
+        "payload_digest",
+        "logical_effect",
+        "identity",
+        "purchase_id",
+        "payment_id",
+        "effect",
+        "outcome",
+        "reason",
+        "revision",
+        "committed_at",
+        "outbox_id"
+      ],
+      "title": "Receipt",
       "type": "object"
     },
     "RegressionFixtureCaptureRequest": {
@@ -4154,6 +5349,105 @@
         "replay_command"
       ],
       "title": "RegressionFixtureCaptureResponse",
+      "type": "object"
+    },
+    "RemoteOutcome": {
+      "additionalProperties": false,
+      "properties": {
+        "attempts": {
+          "title": "Attempts",
+          "type": "integer"
+        },
+        "execution": {
+          "enum": [
+            "queued",
+            "dispatched",
+            "not_applied",
+            "committed",
+            "outcome_unknown"
+          ],
+          "title": "Execution",
+          "type": "string"
+        },
+        "operation_id": {
+          "pattern": "^[a-f0-9]{32}$",
+          "title": "Operation Id",
+          "type": "string"
+        },
+        "receipt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Receipt"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "verification": {
+          "enum": [
+            "not_started",
+            "pending",
+            "passed",
+            "failed",
+            "superseded"
+          ],
+          "title": "Verification",
+          "type": "string"
+        },
+        "verification_error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RemoteVerificationError"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "verification_evidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AccessVerification"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "operation_id",
+        "execution",
+        "verification",
+        "attempts",
+        "receipt",
+        "verification_evidence"
+      ],
+      "title": "RemoteOutcome",
+      "type": "object"
+    },
+    "RemoteVerificationError": {
+      "additionalProperties": false,
+      "properties": {
+        "at": {
+          "maxLength": 64,
+          "title": "At",
+          "type": "string"
+        },
+        "code": {
+          "maxLength": 64,
+          "pattern": "^[a-z_]+$",
+          "title": "Code",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "at"
+      ],
+      "title": "RemoteVerificationError",
       "type": "object"
     },
     "RepairAccountResponse": {
@@ -4455,6 +5749,36 @@
         "record_count"
       ],
       "title": "RepairCaseSummary",
+      "type": "object"
+    },
+    "RepairConnectionResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "connection": {
+          "$ref": "#/$defs/ConnectionStatus"
+        }
+      },
+      "required": [
+        "connection"
+      ],
+      "title": "RepairConnectionResponse",
+      "type": "object"
+    },
+    "RepairConnectionsResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "connections": {
+          "items": {
+            "$ref": "#/$defs/ConnectionStatus"
+          },
+          "title": "Connections",
+          "type": "array"
+        }
+      },
+      "required": [
+        "connections"
+      ],
+      "title": "RepairConnectionsResponse",
       "type": "object"
     },
     "RepairCounts": {
@@ -6953,6 +8277,56 @@
       "title": "SpanReplayabilityResponse",
       "type": "object"
     },
+    "StripeConfiguration": {
+      "additionalProperties": false,
+      "properties": {
+        "api_version": {
+          "const": "2026-08-26.dahlia",
+          "default": "2026-08-26.dahlia",
+          "title": "Api Version",
+          "type": "string"
+        },
+        "connected_account": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Connected Account"
+        },
+        "credential_ref": {
+          "pattern": "^(env:SYNDRA_REPAIR_[A-Z0-9_]{1,80}|keyring:[A-Za-z0-9_.-]{1,80})$",
+          "title": "Credential Ref",
+          "type": "string"
+        },
+        "livemode": {
+          "title": "Livemode",
+          "type": "boolean"
+        },
+        "platform_account": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$",
+          "title": "Platform Account",
+          "type": "string"
+        },
+        "use_entitlements": {
+          "default": false,
+          "title": "Use Entitlements",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "credential_ref",
+        "platform_account",
+        "livemode"
+      ],
+      "title": "StripeConfiguration",
+      "type": "object"
+    },
     "StudioLaunchRequest": {
       "additionalProperties": false,
       "properties": {
@@ -7141,6 +8515,72 @@
         "confidence"
       ],
       "title": "SymbolSummary",
+      "type": "object"
+    },
+    "TargetPlan": {
+      "additionalProperties": false,
+      "properties": {
+        "connection_digest": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Connection Digest",
+          "type": "string"
+        },
+        "digest": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Digest",
+          "type": "string"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "identity": {
+          "$ref": "#/$defs/Identity"
+        },
+        "maximum_writes": {
+          "maximum": 200,
+          "minimum": 1,
+          "title": "Maximum Writes",
+          "type": "integer"
+        },
+        "operations": {
+          "items": {
+            "$ref": "#/$defs/ConditionalOperation"
+          },
+          "maxItems": 200,
+          "minItems": 1,
+          "title": "Operations",
+          "type": "array"
+        },
+        "plan_id": {
+          "pattern": "^[a-f0-9]{32}$",
+          "title": "Plan Id",
+          "type": "string"
+        },
+        "policy_digest": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Policy Digest",
+          "type": "string"
+        },
+        "workspace_digest": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Workspace Digest",
+          "type": "string"
+        }
+      },
+      "required": [
+        "plan_id",
+        "identity",
+        "connection_digest",
+        "workspace_digest",
+        "policy_digest",
+        "expires_at",
+        "operations",
+        "maximum_writes",
+        "digest"
+      ],
+      "title": "TargetPlan",
       "type": "object"
     },
     "TaskListResponse": {
