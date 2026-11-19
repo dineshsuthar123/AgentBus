@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from unittest.mock import patch
 from urllib.parse import quote
 
 import pytest
 from fastapi.testclient import TestClient
-from hypothesis import given, settings, strategies as st
+from hypothesis import HealthCheck, given, settings, strategies as st
 
 from agentbus.config import AgentBusConfig
+from agentbus.control.admission import ControlAdmission
 from agentbus.control.app import ControlAppContext, create_app
 from agentbus.control.services import ControlQueryService
 from agentbus.execution.state_store import StateStore
@@ -21,6 +23,8 @@ FUZZ_SETTINGS = settings(
     deadline=None,
     derandomize=True,
     database=None,
+    # Each property owns its app. Examples share only its bounded fixture budget.
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
 )
 _UNICODE_TEXT = st.text(
     alphabet=st.characters(blacklist_categories=("Cs",)),
@@ -56,33 +60,42 @@ class _NoDispatchSupervisor:
         return None
 
 
-@pytest.fixture(scope="module")
-def control_client(
-    tmp_path_factory: pytest.TempPathFactory,
-):
-    root = tmp_path_factory.mktemp("control-protocol-fuzz")
+@pytest.fixture
+def control_client(tmp_path):
+    root = tmp_path
     store = StateStore(root / "state.db")
     config = AgentBusConfig(
         workspace_dir=str(root),
         state_db=str(root / "state.db"),
     )
     supervisor = _NoDispatchSupervisor()
-    app = create_app(
-        token=TOKEN,
-        query_service=ControlQueryService(config, store),
-        supervisor=supervisor,
-        context=ControlAppContext(
-            daemon_id="control-fuzz-daemon",
-            host="127.0.0.1",
-            port=43123,
-            started_at=datetime.now(timezone.utc),
-            state_database=str(root / "state.db"),
-        ),
-        shutdown_supervisor=False,
-    )
+    query_service = ControlQueryService(config, store)
+    # A frozen clock removes wall-clock refill. The largest property issues
+    # two requests per example. Production capacity has its own tests.
+    admission = ControlAdmission(burst=512, clock=lambda: 0.0)
+    with patch("agentbus.control.app.ControlAdmission", return_value=admission):
+        app = create_app(
+            token=TOKEN,
+            query_service=query_service,
+            supervisor=supervisor,
+            context=ControlAppContext(
+                daemon_id="control-fuzz-daemon",
+                host="127.0.0.1",
+                port=43123,
+                started_at=datetime.now(timezone.utc),
+                state_database=str(root / "state.db"),
+            ),
+            shutdown_supervisor=False,
+        )
     try:
-        with TestClient(app, raise_server_exceptions=False) as client:
+        with (
+            patch.object(query_service, "decide_approval", side_effect=AssertionError(
+                "invalid fuzz requests must not reach approval decisions"
+            )) as decide_approval,
+            TestClient(app, raise_server_exceptions=False) as client,
+        ):
             yield client, supervisor
+            decide_approval.assert_not_called()
     finally:
         app.state.replay_supervisor.shutdown(wait=True)
 
@@ -485,3 +498,12 @@ def test_control_plane_remains_healthy_after_fuzzing(control_client) -> None:
     assert supervisor.submissions == []
     assert supervisor.cancellations == []
     assert supervisor.resumptions == []
+
+
+def test_protocol_budget_is_bounded_and_independent_of_request_timing(control_client) -> None:
+    client, _ = control_client
+    for _ in range(512):
+        assert client.get("/health").status_code == 200
+    exhausted = client.get("/health")
+    assert exhausted.status_code == 429
+    assert exhausted.json()["error"]["code"] == "control_capacity"
