@@ -3,6 +3,7 @@ from pathlib import Path
 import shutil
 import socket
 import subprocess
+from contextlib import contextmanager
 
 import pytest
 
@@ -93,3 +94,33 @@ def test_loopback_port_conflict_preserves_existing_listener(tmp_path, monkeypatc
             client.close()
     artifact, = (tmp_path / "diag").glob("*-pg_ctl-start.json")
     assert "postgres" in artifact.read_text(encoding="utf-8")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX virtual environments use interpreter symlinks")
+def test_installed_acceptance_keeps_virtualenv_interpreter_path(tmp_path, monkeypatch):
+    from agentbus.repair.integration import acceptance
+
+    base_python = tmp_path / "base-python"
+    base_python.touch()
+    interpreter = tmp_path / "venv" / "bin" / "python"
+    interpreter.parent.mkdir(parents=True)
+    interpreter.symlink_to(base_python)
+    monkeypatch.chdir(tmp_path)
+
+    @contextmanager
+    def owned_cluster(_root):
+        yield "host=127.0.0.1", tmp_path
+
+    class ObservedInterpreter(Exception):
+        pass
+
+    def observe(command, **_kwargs):
+        assert command[0] == str(interpreter)
+        assert "--target" in command
+        raise ObservedInterpreter
+
+    monkeypatch.setattr(testing, "disposable_postgres", owned_cluster)
+    monkeypatch.setattr(subprocess, "run", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(subprocess, "Popen", observe)
+    with pytest.raises(ObservedInterpreter):
+        acceptance.main(["--python", "venv/bin/python", "--output", str(tmp_path / "evidence")])

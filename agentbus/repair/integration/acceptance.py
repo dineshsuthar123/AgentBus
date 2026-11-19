@@ -109,7 +109,9 @@ def main(argv=None):
     identity = Identity(application="owned-reference", tenant="acceptance", environment="sandbox", configuration_revision="v1")
     identity_file = output / "identity.json"
     identity_file.write_text(identity.model_dump_json())
-    python = str(Path(args.python).resolve())
+    # A POSIX virtual environment can expose Python through a symlink. Its
+    # invocation path must stay in the virtual environment to load the wheel.
+    python = str(Path(args.python).expanduser().absolute())
     environment = _offline_environment()
     environment["PYTHONPATH"] = ""
     environment["SYNDRA_REPAIR_APPLICATION_TOKEN"] = secrets.token_urlsafe(40)
