@@ -53,7 +53,7 @@ def disposable_postgres(root):
     directory.mkdir(mode=0o700, parents=True)
     data, log = directory / "data", directory / "postgres.log"
     port = _available_loopback_port()
-    password = secrets.token_urlsafe(32)
+    password: str = secrets.token_urlsafe(32)
     flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
     environment = {key: value for key, value in os.environ.items() if not key.upper().startswith("PG")}
 
